@@ -44,6 +44,14 @@ type Recorded struct {
 	Body   string
 }
 
+// Profile is the browser/OS pair a port was opened with. Tests assert on it to
+// prove a port really wears the template it was assigned, rather than trusting
+// that the right JSON was built.
+type Profile struct {
+	Browser string
+	OS      string
+}
+
 type failure struct {
 	status int
 	body   string
@@ -59,6 +67,7 @@ type Server struct {
 	gateways []Gateway
 	ca       []byte
 	ports    map[int]string // port -> upstream
+	profiles map[int]Profile
 	rotates  map[int]int
 	fails    map[string][]failure
 	seen     []Recorded
@@ -79,6 +88,7 @@ func New(t *testing.T) *Server {
 			JsSolverLiveProcs: 0,
 		},
 		ports:    map[int]string{},
+		profiles: map[int]Profile{},
 		rotates:  map[int]int{},
 		fails:    map[string][]failure{},
 		nextPort: 20000,
@@ -145,6 +155,13 @@ func (s *Server) UpstreamOf(port int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ports[port]
+}
+
+// ProfileOf reports the browser/OS pair a port is currently open with.
+func (s *Server) ProfileOf(port int) Profile {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.profiles[port]
 }
 
 // RotateCount reports how many times a port's profile was rotated.
@@ -316,6 +333,10 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 		up = "direct"
 	}
 	s.ports[req.Port] = up
+	s.profiles[req.Port] = Profile{
+		Browser: firstNonEmpty(req.Browser, "chrome"),
+		OS:      firstNonEmpty(req.OS, "windows"),
+	}
 	s.mu.Unlock()
 
 	proto := req.Protocol
@@ -342,6 +363,7 @@ func (s *Server) serveClose(w http.ResponseWriter, body []byte) {
 	_ = json.Unmarshal(body, &req)
 	s.mu.Lock()
 	delete(s.ports, req.Port)
+	delete(s.profiles, req.Port)
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "status": "closed"})
 }
