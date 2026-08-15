@@ -25,3 +25,9 @@
 /.idea/
 /.vscode/
 *.swp
+
+# internal working material — never published
+/docs/
+/.superpowers/
+/testdata-corpus/
+*.har
