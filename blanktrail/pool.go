@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -872,7 +873,16 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 
 	// Rotating after reopening guarantees a different fingerprint even if the
 	// proxy handed back the same one on open.
-	if _, err := p.cl.RotateProfile(ctx, pt.num); err != nil {
+	prof, err := p.cl.RotateProfile(ctx, pt.num)
+	if err != nil {
+		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: rotate: %w", pt.num, err))
+	}
+	// Whether the control API's rotation stays inside the browser/os filters the
+	// port was opened with is an assumption nobody has measured. If it does not,
+	// a mobile port comes back as whatever the profile database offered while
+	// the pool goes on calling it mobile — and a port that is quarantined is
+	// recoverable, where a mislabelled measurement is not.
+	if err := profileMatchesSpec(pt.spec, prof); err != nil {
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: rotate: %w", pt.num, err))
 	}
 
@@ -891,6 +901,24 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	p.stats.Renewals++
 	p.stats.ProfileRotations++
 	p.mu.Unlock()
+	return nil
+}
+
+// profileMatchesSpec reports whether a fingerprint the proxy handed back still
+// answers the filters the port was opened with.
+//
+// A field the spec left open is not checked, and neither is a field the proxy
+// did not report: the point is to catch a profile that contradicts the template,
+// not to quarantine a healthy port because a response omitted a key. Comparison
+// is case-insensitive — which spelling the API returns is not something to
+// quarantine a port over either.
+func profileMatchesSpec(spec PortSpec, prof Profile) error {
+	if spec.Browser != "" && prof.Browser != "" && !strings.EqualFold(spec.Browser, prof.Browser) {
+		return fmt.Errorf("profile is browser %q but the port was opened for %q", prof.Browser, spec.Browser)
+	}
+	if spec.OS != "" && prof.OS != "" && !strings.EqualFold(spec.OS, prof.OS) {
+		return fmt.Errorf("profile is OS %q but the port was opened for %q", prof.OS, spec.OS)
+	}
 	return nil
 }
 
