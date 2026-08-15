@@ -1,0 +1,27 @@
+# build output
+/bin/
+/dist/
+*.exe
+*.syso
+
+# runtime data
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# local config and secrets
+/config.yaml
+/proxies.txt
+*.local.yaml
+
+# exports
+/out/
+*.xlsx
+*.csv
+*.jsonl
+
+# editors
+/.idea/
+/.vscode/
+*.swp
