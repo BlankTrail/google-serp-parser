@@ -138,6 +138,115 @@ func TestPool_RenewalReopensAPortUnderItsOwnTemplate(t *testing.T) {
 	}
 }
 
+// mobilePort returns the pool's first port opened under the mobile template.
+func mobilePort(t *testing.T, p *Pool) *poolPort {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pt := range p.ports {
+		if pt.specName == "mobile" {
+			return pt
+		}
+	}
+	t.Fatal("the pool holds no mobile port")
+	return nil
+}
+
+func TestPool_RenewalRefusesAProfileThatDriftedOffItsTemplate(t *testing.T) {
+	// A renewal reopens the port under its own template and then rotates the
+	// fingerprint. Nothing checked what the rotation actually returned, so a
+	// control API whose rotate ignores the port's browser/os filters would turn
+	// a mobile port into a desktop one on every renewal while the pool went on
+	// reporting it as mobile — plausible numbers under the wrong label, which is
+	// the one failure this package cannot recover from.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.Specs = desktopMobile()
+	cfg.RenewAfterRequests = 1
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	fake.SetRotateDrift(true)
+	pt := mobilePort(t, pool)
+	pt.mu.Lock()
+	pt.requests = cfg.RenewAfterRequests
+	pt.mu.Unlock()
+
+	err = pool.renewIfDue(context.Background(), pt)
+	if err == nil {
+		t.Fatal("renewIfDue accepted a rotation that put the port on another OS")
+	}
+	if !strings.Contains(err.Error(), "android") {
+		t.Errorf("err=%q, want it to name the OS the port was opened for", err)
+	}
+	if got := fake.ProfileOf(pt.num).OS; !strings.Contains(err.Error(), got) {
+		t.Errorf("err=%q, want it to name the OS that came back (%q)", err, got)
+	} else if got == "android" {
+		t.Fatalf("the fake did not drift the port's OS; the test proves nothing")
+	}
+
+	pt.mu.Lock()
+	broken := pt.broken
+	pt.mu.Unlock()
+	if !broken {
+		t.Error("a port whose profile drifted was left usable; it must go back for repair")
+	}
+
+	// Keep drifting and the port is given up rather than handed out mislabelled.
+	// pool.cfg carries the defaulted strike budget; cfg is what the test set.
+	for i := 1; i < pool.cfg.MaxPortStrikes; i++ {
+		if err := pool.renewIfDue(context.Background(), pt); err == nil {
+			t.Fatalf("renewal %d succeeded while the fake was still drifting", i)
+		}
+	}
+	pt.mu.Lock()
+	quarantined := pt.quarantined
+	pt.mu.Unlock()
+	if !quarantined {
+		t.Error("a port that keeps rotating off its template was never quarantined")
+	}
+	if _, err := pool.AcquireSpec(context.Background(), "mobile"); !errors.Is(err, ErrPoolExhausted) {
+		t.Errorf("AcquireSpec(mobile) err=%v, want ErrPoolExhausted rather than a mislabelled port", err)
+	}
+}
+
+func TestPool_RenewalAcceptsARotationThatKeepsTheTemplate(t *testing.T) {
+	// The guard must not fire on the honest case, or every renewal quarantines
+	// its own port and the pool empties itself.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.Specs = desktopMobile()
+	cfg.RenewAfterRequests = 1
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	pt := mobilePort(t, pool)
+	before := fake.RotateCount(pt.num)
+	pt.mu.Lock()
+	pt.requests = cfg.RenewAfterRequests
+	pt.mu.Unlock()
+
+	if err := pool.renewIfDue(context.Background(), pt); err != nil {
+		t.Fatalf("renewIfDue: %v", err)
+	}
+	if fake.RotateCount(pt.num) <= before {
+		t.Error("the renewal did not rotate the profile at all")
+	}
+	if got := fake.ProfileOf(pt.num).OS; got != "android" {
+		t.Errorf("port came back on OS %q after a renewal, want android", got)
+	}
+}
+
 func TestPool_AcquireSpecOnlyHandsOutPortsOfThatTemplate(t *testing.T) {
 	fake := fakebt.New(t)
 	clock := newFakeClock()

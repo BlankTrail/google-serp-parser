@@ -62,16 +62,17 @@ type Server struct {
 	ts  *httptest.Server
 	key string
 
-	mu       sync.Mutex
-	license  License
-	gateways []Gateway
-	ca       []byte
-	ports    map[int]string // port -> upstream
-	profiles map[int]Profile
-	rotates  map[int]int
-	fails    map[string][]failure
-	seen     []Recorded
-	nextPort int
+	mu          sync.Mutex
+	license     License
+	gateways    []Gateway
+	ca          []byte
+	ports       map[int]string // port -> upstream
+	profiles    map[int]Profile
+	rotates     map[int]int
+	rotateDrift bool
+	fails       map[string][]failure
+	seen        []Recorded
+	nextPort    int
 }
 
 // New starts a fake control API and registers its shutdown with t.
@@ -162,6 +163,28 @@ func (s *Server) ProfileOf(port int) Profile {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.profiles[port]
+}
+
+// SetRotateDrift makes every profile rotation come back on a different OS than
+// the port was opened with — the behaviour of a control API whose rotation does
+// not constrain itself to the port's browser/os filters.
+//
+// Whether the live API does constrain itself is unmeasured, which is exactly
+// why this knob exists: a caller that only ever sees an obedient rotation
+// cannot tell a working guard from an absent one, and a port silently rotated
+// off its template keeps its label while its traffic changes device.
+func (s *Server) SetRotateDrift(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rotateDrift = on
+}
+
+// otherOS returns an OS that is deliberately not the one given.
+func otherOS(cur string) string {
+	if cur == "windows" {
+		return "linux"
+	}
+	return "windows"
 }
 
 // RotateCount reports how many times a port's profile was rotated.
@@ -400,15 +423,24 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 
 	switch action {
 	case "rotate":
+		// A rotation hands the port a fresh fingerprint of the same kind it was
+		// opened with, and the fake remembers it: hard-coding chrome/windows
+		// here, or leaving profiles untouched, made ProfileOf report the
+		// open-time value forever and let any rotation bug through unseen.
 		s.mu.Lock()
 		s.rotates[port]++
 		n := s.rotates[port]
+		prof := s.profiles[port]
+		if s.rotateDrift {
+			prof.OS = otherOS(prof.OS)
+		}
+		s.profiles[port] = prof
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]string{
-			"name":       "Chrome_145_win_" + strconv.Itoa(1000+n),
-			"user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/145.0.0.0",
-			"browser":    "chrome",
-			"os":         "windows",
+			"name":       prof.Browser + "_145_" + prof.OS + "_" + strconv.Itoa(1000+n),
+			"user_agent": "Mozilla/5.0 (" + prof.OS + ") " + prof.Browser + "/145.0.0.0",
+			"browser":    prof.Browser,
+			"os":         prof.OS,
 		})
 	case "upstream":
 		var req struct {
