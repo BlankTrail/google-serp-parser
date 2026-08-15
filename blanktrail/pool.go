@@ -18,6 +18,10 @@ import (
 // and there is nothing left to hand out.
 var ErrPoolExhausted = errors.New("blanktrail: every port in the pool is quarantined")
 
+// ErrUnknownSpec is returned by AcquireSpec when no port in the pool was opened
+// under the requested template name.
+var ErrUnknownSpec = errors.New("blanktrail: no port carries this spec name")
+
 // DeriveCooldown computes the default port cooldown from the ring the caller
 // described: with portsPerThread ports and a per-request delay somewhere in
 // [delayMin, delayMax], a port in a rigid ring would come back after
@@ -377,14 +381,33 @@ func (p *Pool) NextDelay() time.Duration {
 	return p.cfg.DelayMin + time.Duration(rand.Int63n(int64(spread)+1))
 }
 
-// Acquire leases the coldest ready port, waiting until one is available or ctx
-// is done. Always Release the lease.
+// Acquire leases the coldest ready port of any template, waiting until one is
+// available or ctx is done. Always Release the lease.
 func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
+	return p.acquire(ctx, "")
+}
+
+// AcquireSpec leases the coldest ready port opened under the named template.
+// It returns ErrUnknownSpec when no port carries that name — a typo has to fail
+// at once, because waiting for a port that can never arrive is indistinguishable
+// from a slow run — and ErrPoolExhausted when every port of that template is
+// quarantined, even if other templates are healthy.
+func (p *Pool) AcquireSpec(ctx context.Context, name string) (*Lease, error) {
+	if name == "" {
+		return p.acquire(ctx, "")
+	}
+	if !p.hasSpec(name) {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownSpec, name)
+	}
+	return p.acquire(ctx, name)
+}
+
+func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		pt, wait, err := p.take()
+		pt, wait, err := p.take(specName)
 		if err != nil {
 			return nil, err
 		}
@@ -400,7 +423,7 @@ func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
 			return &Lease{pt: pt, pool: p}, nil
 		}
 		if wait <= 0 {
-			wait = 5 * time.Millisecond // every port is leased right now
+			wait = 5 * time.Millisecond // every matching port is leased right now
 		}
 		if err := p.cfg.Sleep(ctx, wait); err != nil {
 			return nil, err
@@ -408,9 +431,21 @@ func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
 	}
 }
 
-// take returns the coldest available port, or nil plus how long until the
-// nearest one is ready.
-func (p *Pool) take() (*poolPort, time.Duration, error) {
+// hasSpec reports whether any port in the pool carries this template name.
+func (p *Pool) hasSpec(name string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pt := range p.ports {
+		if pt.specName == name {
+			return true
+		}
+	}
+	return false
+}
+
+// take returns the coldest available port carrying specName, or nil plus how
+// long until the nearest one is ready. An empty specName matches every port.
+func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -421,6 +456,9 @@ func (p *Pool) take() (*poolPort, time.Duration, error) {
 	alive := 0
 
 	for _, pt := range p.ports {
+		if specName != "" && pt.specName != specName {
+			continue
+		}
 		pt.mu.Lock()
 		quarantined, leased, last := pt.quarantined, pt.leased, pt.lastUsed
 		pt.mu.Unlock()
@@ -514,6 +552,10 @@ func (l *Lease) Do(req *http.Request) (*http.Response, error) { return l.pt.clie
 
 // Port is the port number backing this lease.
 func (l *Lease) Port() int { return l.pt.num }
+
+// SpecName is the named template the leased port was opened under, or the empty
+// string when the pool has a single unnamed template.
+func (l *Lease) SpecName() string { return l.pt.specName }
 
 // Egress is where this port currently sends its traffic.
 func (l *Lease) Egress() Egress { return l.pt.egress() }
