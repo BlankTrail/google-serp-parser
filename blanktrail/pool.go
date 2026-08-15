@@ -50,6 +50,9 @@ type PoolConfig struct {
 
 	// Spec is the fingerprint/behaviour template every port is opened with.
 	Spec PortSpec
+	// Specs, when non-empty, opens ports under several named templates and lets
+	// AcquireSpec ask for one by name. Spec is ignored when this is set.
+	Specs []NamedSpec
 	// Channels are the egress sources ports are spread over. Empty means direct.
 	Channels []Channel
 
@@ -124,6 +127,12 @@ type poolPort struct {
 	base   *http.Transport
 	client *http.Client
 	ch     Channel
+
+	// specName is the named template this port was opened under; empty when the
+	// pool has a single unnamed template. spec is that template, kept on the
+	// port so a renewal reopens it as itself rather than as the pool default.
+	specName string
+	spec     PortSpec
 
 	mu          sync.Mutex
 	eg          Egress
@@ -215,6 +224,17 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	if cfg.Spec.Browser == "" {
 		cfg.Spec = DefaultPortSpec()
 	}
+	// cfg is a copy but its slice is not: defaulting the templates in place
+	// would reach back into the caller's own slice.
+	if len(cfg.Specs) > 0 {
+		specs := append([]NamedSpec(nil), cfg.Specs...)
+		for i := range specs {
+			if specs[i].Spec.Browser == "" {
+				specs[i].Spec = DefaultPortSpec()
+			}
+		}
+		cfg.Specs = specs
+	}
 	if cfg.DelayMin <= 0 {
 		cfg.DelayMin = 3 * time.Second
 	}
@@ -259,6 +279,10 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	}
 
 	size := cfg.Size()
+	specNames, err := planSpecs(cfg.Specs, size)
+	if err != nil {
+		return nil, err
+	}
 	assigned := p.mixer.Assign(size)
 	if len(assigned) == 0 {
 		return nil, errors.New("blanktrail: no usable egress channel")
@@ -279,7 +303,11 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		}
 		used[num] = true
 
-		if _, err := p.cl.OpenPort(ctx, num, cfg.Spec, eg); err != nil {
+		spec := cfg.Spec
+		if specNames[i] != "" {
+			spec = specByName(cfg.Specs, specNames[i])
+		}
+		if _, err := p.cl.OpenPort(ctx, num, spec, eg); err != nil {
 			_ = p.Close()
 			return nil, fmt.Errorf("blanktrail: open port %d: %w", num, err)
 		}
@@ -288,6 +316,8 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 			num:       num,
 			ch:        ch,
 			eg:        eg,
+			specName:  specNames[i],
+			spec:      spec,
 			base:      newBaseTransport(host, num, cfg.CA, cfg.Insecure),
 			renewedAt: cfg.Now(),
 		}
@@ -658,7 +688,7 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	if err := p.cl.ClosePort(ctx, pt.num); err != nil {
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: close: %w", pt.num, err))
 	}
-	if _, err := p.cl.OpenPort(ctx, pt.num, p.cfg.Spec, eg); err != nil {
+	if _, err := p.cl.OpenPort(ctx, pt.num, pt.spec, eg); err != nil {
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: reopen: %w", pt.num, err))
 	}
 
