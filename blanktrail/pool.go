@@ -182,11 +182,25 @@ type Pool struct {
 	stats     Stats
 }
 
+// SpecStats is per-template port accounting, so a progress screen can say
+// "16 ports → 8 desktop, 8 mobile" instead of one opaque total, and so a
+// template running out of healthy ports is visible before the run's numbers
+// quietly become one-sided.
+type SpecStats struct {
+	Ports       int
+	Available   int
+	Quarantined int
+}
+
 // Stats is a snapshot of pool activity, for the progress screen and the logs.
 type Stats struct {
 	Ports       int // ports the pool holds
 	Available   int // ports not quarantined
 	Quarantined int
+
+	// Specs breaks the counts above down by template name. It is empty when the
+	// pool has a single unnamed template.
+	Specs map[string]SpecStats
 
 	Requests         int64
 	ProfileRotations int64
@@ -202,14 +216,32 @@ func (p *Pool) Stats() Stats {
 	st := p.stats
 	st.Ports = len(p.ports)
 	st.Quarantined = 0
+
+	var bySpec map[string]SpecStats
 	for _, pt := range p.ports {
 		pt.mu.Lock()
-		if pt.quarantined {
+		quarantined, name := pt.quarantined, pt.specName
+		pt.mu.Unlock()
+		if quarantined {
 			st.Quarantined++
 		}
-		pt.mu.Unlock()
+		if name == "" {
+			continue
+		}
+		if bySpec == nil {
+			bySpec = map[string]SpecStats{}
+		}
+		s := bySpec[name]
+		s.Ports++
+		if quarantined {
+			s.Quarantined++
+		} else {
+			s.Available++
+		}
+		bySpec[name] = s
 	}
 	st.Available = st.Ports - st.Quarantined
+	st.Specs = bySpec
 	return st
 }
 

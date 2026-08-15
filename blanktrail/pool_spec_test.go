@@ -247,3 +247,68 @@ func TestPool_AcquireSpecReportsExhaustionPerTemplate(t *testing.T) {
 	}
 	lease.Release()
 }
+
+func TestPool_StatsBreakDownByTemplate(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 2, 4) // 8 ports, 4 of each
+	cfg.Specs = desktopMobile()
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	st := pool.Stats()
+	if st.Ports != 8 {
+		t.Fatalf("Stats().Ports=%d, want 8", st.Ports)
+	}
+	if got := st.Specs["desktop"].Ports; got != 4 {
+		t.Errorf("desktop ports=%d, want 4", got)
+	}
+	if got := st.Specs["mobile"].Ports; got != 4 {
+		t.Errorf("mobile ports=%d, want 4", got)
+	}
+
+	// Quarantine two mobile ports; only the mobile line may move.
+	pool.mu.Lock()
+	quarantined := 0
+	for _, pt := range pool.ports {
+		if pt.specName == "mobile" && quarantined < 2 {
+			pt.mu.Lock()
+			pt.quarantined = true
+			pt.mu.Unlock()
+			quarantined++
+		}
+	}
+	pool.mu.Unlock()
+
+	st = pool.Stats()
+	if got := st.Specs["mobile"].Quarantined; got != 2 {
+		t.Errorf("mobile quarantined=%d, want 2", got)
+	}
+	if got := st.Specs["mobile"].Available; got != 2 {
+		t.Errorf("mobile available=%d, want 2", got)
+	}
+	if got := st.Specs["desktop"].Quarantined; got != 0 {
+		t.Errorf("desktop quarantined=%d, want 0 — quarantine must not leak across templates", got)
+	}
+	if st.Quarantined != 2 {
+		t.Errorf("pool-wide quarantined=%d, want 2", st.Quarantined)
+	}
+}
+
+func TestPool_StatsHasNoSpecMapWhenThereAreNoTemplates(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	pool, err := NewPool(context.Background(), testPoolConfig(t, fake, clock, 1, 2))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	if got := pool.Stats().Specs; len(got) != 0 {
+		t.Errorf("Stats().Specs=%v, want it empty for an unnamed pool", got)
+	}
+}
