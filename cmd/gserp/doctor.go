@@ -46,7 +46,7 @@ func runDoctor(ctx context.Context, out io.Writer, opts doctorOptions) error {
 	}
 	ports := threads * perThread
 
-	fmt.Fprintf(out, "Checking %s for a run of %d ports (%d threads × %d) against %s\n\n",
+	_, _ = fmt.Fprintf(out, "Checking %s for a run of %d ports (%d threads × %d) against %s\n\n",
 		opts.ControlURL, ports, threads, perThread, strings.Join(checkedDomains, ", "))
 
 	report := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
@@ -54,31 +54,31 @@ func runDoctor(ctx context.Context, out io.Writer, opts doctorOptions) error {
 		Ports:   ports,
 	})
 	for _, f := range report.Findings {
-		fmt.Fprintf(out, "[%s] %s\n", f.Severity, f.Title)
+		_, _ = fmt.Fprintf(out, "[%s] %s\n", f.Severity, f.Title)
 		if f.Detail != "" {
-			fmt.Fprintf(out, "      %s\n", f.Detail)
+			_, _ = fmt.Fprintf(out, "      %s\n", f.Detail)
 		}
 		if f.Action != "" {
-			fmt.Fprintf(out, "      → %s\n", f.Action)
+			_, _ = fmt.Fprintf(out, "      → %s\n", f.Action)
 		}
-		fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out)
 	}
 
 	if gws := report.Gateways.Gateways; len(gws) > 0 {
-		fmt.Fprintf(out, "VPN gateways available as egress channels: %d\n", len(gws))
+		_, _ = fmt.Fprintf(out, "VPN gateways available as egress channels: %d\n", len(gws))
 		for _, g := range gws {
 			state := "stopped"
 			if g.Running {
 				state = "running"
 			}
-			fmt.Fprintf(out, "  %-24s %-8s %s\n", g.Name, g.Kind, state)
+			_, _ = fmt.Fprintf(out, "  %-24s %-8s %s\n", g.Name, g.Kind, state)
 		}
-		fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out)
 	}
 
 	if !report.OK() {
 		return fmt.Errorf("preflight failed with %d blocking finding(s)", len(report.Blocking()))
 	}
-	fmt.Fprintln(out, "Preflight passed. The proxy is ready for this run.")
+	_, _ = fmt.Fprintln(out, "Preflight passed. The proxy is ready for this run.")
 	return nil
 }
