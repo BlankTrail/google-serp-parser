@@ -357,13 +357,29 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		return nil, err
 	}
 	assigned := p.mixer.Assign(size)
-	if len(assigned) == 0 {
+	if len(assigned) < size {
 		return nil, errors.New("blanktrail: no usable egress channel")
 	}
+	// The mixer decides how many ports each channel gets; spreadSpecs decides
+	// which ports those are, so no template ends up confined to one egress.
+	groups := groupChannels(assigned)
+	counts := make([]int, len(groups))
+	total := 0
+	for i, g := range groups {
+		counts[i] = len(g)
+		total += len(g)
+	}
+	if total != size {
+		return nil, errors.New("blanktrail: no usable egress channel")
+	}
+	layout := spreadSpecs(specNames, counts)
+	taken := make([]int, len(groups))
 
 	used := map[int]bool{}
 	for i := 0; i < size; i++ {
-		ch := assigned[i]
+		g := layout[i]
+		ch := groups[g][taken[g]]
+		taken[g]++
 		eg, ok := ch.Next()
 		if !ok {
 			_ = p.Close()
@@ -405,6 +421,32 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		p.mu.Unlock()
 	}
 	return p, nil
+}
+
+// groupChannels collects one assignment slot list per channel, keeping both the
+// channels and the slots within each channel in the order Assign produced them.
+// Each group's length is that channel's share of the pool, so handing the slots
+// out in order preserves the mixer's proportions exactly.
+//
+// Channels are grouped by name rather than by comparing the interface values:
+// the mixer already keys a channel's weight by its name, and == on a caller's
+// own Channel implementation panics if its dynamic type is not comparable.
+func groupChannels(assigned []Channel) [][]Channel {
+	var groups [][]Channel
+	at := make(map[string]int, len(assigned))
+	for _, ch := range assigned {
+		if ch == nil {
+			continue
+		}
+		i, ok := at[ch.Name()]
+		if !ok {
+			i = len(groups)
+			at[ch.Name()] = i
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], ch)
+	}
+	return groups
 }
 
 func (p *Pool) pickPort(ctx context.Context, used map[int]bool) (int, error) {
