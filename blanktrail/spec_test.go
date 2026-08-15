@@ -161,6 +161,174 @@ func TestPlanSpecs_IsDeterministic(t *testing.T) {
 	}
 }
 
+// spreadMatrix counts, per channel, how many ports of each template it carries.
+func spreadMatrix(specNames []string, chanCounts []int) []map[string]int {
+	out := make([]map[string]int, len(chanCounts))
+	for i := range out {
+		out[i] = map[string]int{}
+	}
+	for port, ch := range spreadSpecs(specNames, chanCounts) {
+		out[ch][specNames[port]]++
+	}
+	return out
+}
+
+func TestSpreadSpecs_PutsEveryTemplateOnEveryChannel(t *testing.T) {
+	// Two channels, two templates, four ports: the case the whole product turns
+	// on. Both channels must see both device profiles, or the comparison
+	// between them is a comparison of IPs.
+	names, err := planSpecs([]NamedSpec{{Name: "desktop"}, {Name: "mobile"}}, 4)
+	if err != nil {
+		t.Fatalf("planSpecs: %v", err)
+	}
+	got := spreadMatrix(names, []int{2, 2})
+	for c, row := range got {
+		if row["desktop"] != 1 || row["mobile"] != 1 {
+			t.Errorf("channel %d carries %v, want one of each (matrix=%v)", c, row, got)
+		}
+	}
+}
+
+func TestSpreadSpecs_SpreadsARareTemplateWideningTheWeights(t *testing.T) {
+	// Six desktop and two mobile ports over two equal channels. The two mobile
+	// ports are the entire mobile measurement; both on one channel makes every
+	// mobile number a property of that one IP.
+	names, err := planSpecs([]NamedSpec{{Name: "desktop", Weight: 3}, {Name: "mobile", Weight: 1}}, 8)
+	if err != nil {
+		t.Fatalf("planSpecs: %v", err)
+	}
+	got := spreadMatrix(names, []int{4, 4})
+	for c, row := range got {
+		if row["mobile"] != 1 || row["desktop"] != 3 {
+			t.Errorf("channel %d carries %v, want 3 desktop and 1 mobile (matrix=%v)", c, row, got)
+		}
+	}
+}
+
+func TestSpreadSpecs_SpreadsARareTemplateAcrossUnequalChannels(t *testing.T) {
+	// A penalised channel holds fewer ports, but "fewer" is not "none of the
+	// rare template": four ports on one channel and two on the other still
+	// leaves room for a mobile port on each.
+	names, err := planSpecs([]NamedSpec{{Name: "desktop", Weight: 2}, {Name: "mobile", Weight: 1}}, 6)
+	if err != nil {
+		t.Fatalf("planSpecs: %v", err)
+	}
+	got := spreadMatrix(names, []int{4, 2})
+	if got[0]["mobile"] == 0 || got[1]["mobile"] == 0 {
+		t.Errorf("matrix=%v, want the mobile ports split over both channels", got)
+	}
+}
+
+func TestSpreadSpecs_SingleChannelTakesEverything(t *testing.T) {
+	names, err := planSpecs([]NamedSpec{{Name: "desktop"}, {Name: "mobile"}}, 8)
+	if err != nil {
+		t.Fatalf("planSpecs: %v", err)
+	}
+	for port, ch := range spreadSpecs(names, []int{8}) {
+		if ch != 0 {
+			t.Fatalf("port %d went to channel %d, want the only channel", port, ch)
+		}
+	}
+}
+
+func TestSpreadSpecs_KeepsBothMarginalsAndStaysCloseToTheGlobalMix(t *testing.T) {
+	// The contract in one test: the mixer's per-channel port counts survive
+	// untouched, every template keeps the number of ports planSpecs gave it, and
+	// no channel's share of a template is off the global mix by a whole port.
+	specSets := [][]NamedSpec{
+		{{Name: "desktop"}, {Name: "mobile"}},
+		{{Name: "desktop", Weight: 3}, {Name: "mobile", Weight: 1}},
+		{{Name: "a", Weight: 5}, {Name: "b", Weight: 3}, {Name: "c", Weight: 2}},
+		{{Name: "a", Weight: 9}, {Name: "b"}},
+	}
+	chanShapes := [][]int{{1, 1}, {2, 1}, {4, 1}, {1, 1, 1}, {3, 2, 1}}
+
+	for _, specs := range specSets {
+		for _, shape := range chanShapes {
+			for size := len(specs); size <= 24; size++ {
+				names, err := planSpecs(specs, size)
+				if err != nil {
+					t.Fatalf("planSpecs(%v, %d): %v", specs, size, err)
+				}
+				chanCounts := splitEvenly(size, shape)
+				if len(chanCounts) == 0 {
+					continue // more channels than ports; the mixer would not build this
+				}
+				got := spreadMatrix(names, chanCounts)
+
+				wantSpec := countByName(names)
+				gotSpec := map[string]int{}
+				for c, row := range got {
+					total := 0
+					for name, n := range row {
+						total += n
+						gotSpec[name] += n
+					}
+					if total != chanCounts[c] {
+						t.Fatalf("size %d shape %v: channel %d holds %d ports, want %d (matrix=%v)",
+							size, shape, c, total, chanCounts[c], got)
+					}
+					for name, want := range wantSpec {
+						// n/chanCounts[c] must be within one port of want/size.
+						lo := want * chanCounts[c]
+						if diff := row[name]*size - lo; diff >= size || diff <= -size {
+							t.Fatalf("size %d shape %v: channel %d carries %d of %q, want within a port of %.2f (matrix=%v)",
+								size, shape, c, row[name], name, float64(lo)/float64(size), got)
+						}
+					}
+				}
+				for name, want := range wantSpec {
+					if gotSpec[name] != want {
+						t.Fatalf("size %d shape %v: %q got %d ports, want %d (matrix=%v)",
+							size, shape, name, gotSpec[name], want, got)
+					}
+				}
+			}
+		}
+	}
+}
+
+// splitEvenly shares size out over channels weighted by shape, the way the
+// mixer's assignment does. It returns nil when a channel would get no port.
+func splitEvenly(size int, shape []int) []int {
+	total := 0
+	for _, w := range shape {
+		total += w
+	}
+	out := make([]int, len(shape))
+	handed := 0
+	for i, w := range shape {
+		out[i] = size * w / total
+		handed += out[i]
+	}
+	for i := 0; handed < size; i = (i + 1) % len(out) {
+		out[i]++
+		handed++
+	}
+	for _, n := range out {
+		if n == 0 {
+			return nil
+		}
+	}
+	return out
+}
+
+func TestSpreadSpecs_IsDeterministic(t *testing.T) {
+	names, err := planSpecs([]NamedSpec{{Name: "a", Weight: 5}, {Name: "b", Weight: 3}, {Name: "c"}}, 17)
+	if err != nil {
+		t.Fatalf("planSpecs: %v", err)
+	}
+	first := spreadSpecs(names, []int{7, 6, 4})
+	for i := 0; i < 20; i++ {
+		again := spreadSpecs(names, []int{7, 6, 4})
+		for port := range first {
+			if again[port] != first[port] {
+				t.Fatalf("run %d differs at port %d: %v vs %v", i, port, again, first)
+			}
+		}
+	}
+}
+
 func TestSpecByName_FallsBackToTheZeroSpec(t *testing.T) {
 	mobile := PortSpec{Browser: "chrome", OS: "android"}
 	specs := []NamedSpec{{Name: "mobile", Spec: mobile}}

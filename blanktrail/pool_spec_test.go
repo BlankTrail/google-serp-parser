@@ -300,6 +300,113 @@ func TestPool_StatsBreakDownByTemplate(t *testing.T) {
 	}
 }
 
+// layoutMatrix reports how many ports of each template each channel carries.
+// Reading the ports directly is the point: the claim under test is about what
+// the pool actually built, not about what an arithmetic helper returned.
+func layoutMatrix(t *testing.T, p *Pool) map[string]map[string]int {
+	t.Helper()
+	out := map[string]map[string]int{}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pt := range p.ports {
+		ch := pt.ch.Name()
+		if out[ch] == nil {
+			out[ch] = map[string]int{}
+		}
+		out[ch][pt.specName]++
+	}
+	return out
+}
+
+func TestNewPool_EveryChannelCarriesEveryTemplate(t *testing.T) {
+	// Two proxies, two device profiles, four ports. Pairing the channel plan
+	// with the template plan by index used to put every desktop port on one
+	// proxy and every mobile port on the other, so "desktop rank 4, mobile
+	// rank 7" reported a device difference that was really — or also — a
+	// difference of IP geography, ASN and reputation.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 2, 2) // 4 ports
+	cfg.Specs = desktopMobile()
+	cfg.Channels = []Channel{NewGatewayChannel("a", "a"), NewGatewayChannel("b", "b")}
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	got := layoutMatrix(t, pool)
+	if len(got) != 2 {
+		t.Fatalf("layout=%v, want ports on both channels", got)
+	}
+	for _, ch := range []string{"a", "b"} {
+		if got[ch]["desktop"] < 1 || got[ch]["mobile"] < 1 {
+			t.Errorf("channel %q carries %v, want at least one port of each template (layout=%v)", ch, got[ch], got)
+		}
+	}
+}
+
+func TestNewPool_RareTemplateIsNotConfinedToOneChannel(t *testing.T) {
+	// Weights 3:1 over eight ports: six desktop, two mobile. The two mobile
+	// ports are the whole mobile measurement, and both landing on one proxy
+	// makes every mobile number a property of that one IP. This is the case a
+	// fix that merely regroups the port indices still gets wrong.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 2, 4) // 8 ports
+	specs := desktopMobile()
+	specs[0].Weight = 3
+	specs[1].Weight = 1
+	cfg.Specs = specs
+	cfg.Channels = []Channel{NewGatewayChannel("a", "a"), NewGatewayChannel("b", "b")}
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	got := layoutMatrix(t, pool)
+	if n := got["a"]["mobile"] + got["b"]["mobile"]; n != 2 {
+		t.Fatalf("mobile ports=%d, want 2 (layout=%v)", n, got)
+	}
+	if got["a"]["mobile"] != 1 || got["b"]["mobile"] != 1 {
+		t.Errorf("mobile ports by channel: a=%d b=%d, want one each (layout=%v)",
+			got["a"]["mobile"], got["b"]["mobile"], got)
+	}
+	// The mixer's own proportions must survive: both channels weigh the same,
+	// so both must still hold four ports.
+	for _, ch := range []string{"a", "b"} {
+		if n := got[ch]["desktop"] + got[ch]["mobile"]; n != 4 {
+			t.Errorf("channel %q holds %d ports, want 4 (layout=%v)", ch, n, got)
+		}
+	}
+}
+
+func TestNewPool_SingleChannelLayoutIsUnchanged(t *testing.T) {
+	// Every other pool test runs on one implicit channel. Spreading templates
+	// across channels must leave that case exactly as it was.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 2, 4) // 8 ports, one channel
+	cfg.Specs = desktopMobile()
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	got := layoutMatrix(t, pool)
+	if len(got) != 1 {
+		t.Fatalf("layout=%v, want a single channel", got)
+	}
+	if got["direct"]["desktop"] != 4 || got["direct"]["mobile"] != 4 {
+		t.Errorf("layout=%v, want 4 desktop and 4 mobile on the one channel", got)
+	}
+}
+
 func TestPool_ExhaustionOfOneTemplateNamesThatTemplate(t *testing.T) {
 	// "every port in the pool is quarantined" is a lie while Stats() reports
 	// four desktop ports available, and it hides the one fact the operator
