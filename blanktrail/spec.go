@@ -179,7 +179,7 @@ func spreadSpecs(specNames []string, chanCounts []int) []int {
 	// order. The map is only ever looked up in, never ranged over.
 	var names []string
 	var counts []int
-	index := make(map[string]int, len(chanCounts))
+	index := map[string]int{}
 	for _, n := range specNames {
 		i, ok := index[n]
 		if !ok {
