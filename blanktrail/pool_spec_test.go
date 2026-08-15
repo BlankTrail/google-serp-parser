@@ -136,3 +136,114 @@ func TestPool_RenewalReopensAPortUnderItsOwnTemplate(t *testing.T) {
 		}
 	}
 }
+
+func TestPool_AcquireSpecOnlyHandsOutPortsOfThatTemplate(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 2, 3) // 6 ports, 3 of each
+	cfg.Specs = desktopMobile()
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	for i := 0; i < 6; i++ {
+		lease, err := pool.AcquireSpec(context.Background(), "mobile")
+		if err != nil {
+			t.Fatalf("AcquireSpec %d: %v", i, err)
+		}
+		if got := fake.ProfileOf(lease.Port()).OS; got != "android" {
+			t.Errorf("AcquireSpec(mobile) handed out port %d with OS %q", lease.Port(), got)
+		}
+		if got := lease.SpecName(); got != "mobile" {
+			t.Errorf("lease.SpecName()=%q, want mobile", got)
+		}
+		lease.Release()
+		clock.Advance(pool.Cooldown())
+	}
+}
+
+func TestPool_AcquireSpecRejectsANameNoPortCarries(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.Specs = desktopMobile()
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	// A typo must fail immediately and say so. Waiting for a port that can never
+	// arrive would look exactly like a slow run.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err = pool.AcquireSpec(ctx, "tablet")
+	if !errors.Is(err, ErrUnknownSpec) {
+		t.Fatalf("AcquireSpec(tablet) err=%v, want ErrUnknownSpec", err)
+	}
+}
+
+func TestPool_AcquireStillHandsOutAnyPort(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 4)
+	cfg.Specs = desktopMobile()
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	seen := map[string]bool{}
+	for i := 0; i < 4; i++ {
+		lease, err := pool.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("Acquire %d: %v", i, err)
+		}
+		seen[lease.SpecName()] = true
+		lease.Release()
+		clock.Advance(pool.Cooldown())
+	}
+	if !seen["desktop"] || !seen["mobile"] {
+		t.Errorf("Acquire only ever produced %v, want it to draw from both templates", seen)
+	}
+}
+
+func TestPool_AcquireSpecReportsExhaustionPerTemplate(t *testing.T) {
+	// Desktop ports being alive is no comfort to a caller that needs a mobile
+	// one; exhaustion is answered per template, not pool-wide.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 4)
+	cfg.Specs = desktopMobile()
+
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	pool.mu.Lock()
+	for _, pt := range pool.ports {
+		if pt.specName == "mobile" {
+			pt.mu.Lock()
+			pt.quarantined = true
+			pt.mu.Unlock()
+		}
+	}
+	pool.mu.Unlock()
+
+	if _, err := pool.AcquireSpec(context.Background(), "mobile"); !errors.Is(err, ErrPoolExhausted) {
+		t.Fatalf("AcquireSpec(mobile) err=%v, want ErrPoolExhausted", err)
+	}
+	lease, err := pool.AcquireSpec(context.Background(), "desktop")
+	if err != nil {
+		t.Fatalf("AcquireSpec(desktop) failed while desktop ports are healthy: %v", err)
+	}
+	lease.Release()
+}
