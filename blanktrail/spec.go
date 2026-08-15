@@ -22,13 +22,27 @@ var ErrTooFewPorts = errors.New("blanktrail: fewer ports than named specs")
 // not when a request is sent: a pool of one template can only ever speak with
 // one device identity, and comparing two identities in a single run is the
 // ordinary case, not an exotic one.
+//
+// PoolConfig.Specs documents how many ports each template receives.
 type NamedSpec struct {
 	// Name identifies the template. It must be non-empty and unique in the pool.
 	Name string
+
 	// Spec is the template ports under this name are opened with.
+	//
+	// Either leave it entirely zero — NewPool then opens these ports with
+	// DefaultPortSpec() — or fill it in completely, starting from
+	// DefaultPortSpec() and changing only what differs. A half-filled spec is
+	// refused at startup rather than completed: PortSpec's booleans cannot tell
+	// "unset" from "deliberately false", so there is no honest field-wise merge,
+	// and quietly substituting DefaultPortSpec() would open a Windows desktop
+	// port under a template named "mobile" and report it as mobile everywhere.
 	Spec PortSpec
-	// Weight is this template's share of the pool beyond its guaranteed first
-	// port. Zero means an equal share.
+
+	// Weight is this template's share of the ports that remain once every
+	// template has been guaranteed one. Zero and one mean the same thing, one
+	// share: a template left at zero beside one weighted 5 gets one sixth of the
+	// remainder, not half of it.
 	Weight int
 }
 

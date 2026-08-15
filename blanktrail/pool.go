@@ -14,9 +14,13 @@ import (
 	"time"
 )
 
-// ErrPoolExhausted is returned by Acquire when every port has been quarantined
-// and there is nothing left to hand out.
-var ErrPoolExhausted = errors.New("blanktrail: every port in the pool is quarantined")
+// ErrPoolExhausted is returned when every port the acquire could have used has
+// been quarantined. For Acquire that is the whole pool; for AcquireSpec it is
+// every port of the named template, and the error wraps this sentinel with that
+// name — the rest of the pool may be perfectly healthy at that moment, and an
+// unqualified "the pool is quarantined" would contradict what Stats() reports.
+// Both forms answer errors.Is(err, ErrPoolExhausted).
+var ErrPoolExhausted = errors.New("blanktrail: every candidate port is quarantined")
 
 // ErrUnknownSpec is returned by AcquireSpec when no port in the pool was opened
 // under the requested template name.
@@ -56,6 +60,27 @@ type PoolConfig struct {
 	Spec PortSpec
 	// Specs, when non-empty, opens ports under several named templates and lets
 	// AcquireSpec ask for one by name. Spec is ignored when this is set.
+	//
+	// How the ports are shared out, in full:
+	//
+	//   - Every named template is guaranteed one port before weight is looked
+	//     at, so no template is ever rounded away.
+	//   - What is left is split by NamedSpec.Weight using largest-remainder
+	//     allocation; equal remainders are broken in declaration order.
+	//   - Templates are interleaved along the opening order, so a pool that
+	//     fails half way through opening still holds a mix rather than all of
+	//     one kind.
+	//   - Every template is spread over Channels as evenly as the counts allow,
+	//     so a template is never confined to one egress: a comparison between
+	//     two templates has to be a comparison of the templates, not of the IPs
+	//     they happened to share.
+	//   - The whole layout is a pure function of this configuration. Two runs of
+	//     the same config produce the same one, which is what makes their
+	//     numbers comparable.
+	//
+	// NewPool returns ErrTooFewPorts when Size() is smaller than len(Specs):
+	// dropping a template would leave the run measuring one device profile and
+	// labelling it with two.
 	Specs []NamedSpec
 	// Channels are the egress sources ports are spread over. Empty means direct.
 	Channels []Channel
@@ -265,8 +290,20 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	if len(cfg.Specs) > 0 {
 		specs := append([]NamedSpec(nil), cfg.Specs...)
 		for i := range specs {
-			if specs[i].Spec.Browser == "" {
+			// A template that says nothing at all wants the defaults. A template
+			// that says something but forgets Browser cannot be completed: the
+			// booleans have no "unset" state, so a field-wise merge would invent
+			// answers, and swapping the whole struct for DefaultPortSpec() would
+			// throw the caller's OS away and open a Windows desktop port that
+			// every label in the run then calls "mobile". Refuse loudly instead.
+			if specs[i].Spec == (PortSpec{}) {
 				specs[i].Spec = DefaultPortSpec()
+				continue
+			}
+			if specs[i].Spec.Browser == "" {
+				return nil, fmt.Errorf("blanktrail: spec %q sets some PortSpec fields but leaves Browser empty; "+
+					"start from DefaultPortSpec() and change what differs, or leave Spec entirely zero to get it whole",
+					specs[i].Name)
 			}
 		}
 		cfg.Specs = specs
@@ -422,8 +459,9 @@ func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
 // AcquireSpec leases the coldest ready port opened under the named template.
 // It returns ErrUnknownSpec when no port carries that name — a typo has to fail
 // at once, because waiting for a port that can never arrive is indistinguishable
-// from a slow run — and ErrPoolExhausted when every port of that template is
-// quarantined, even if other templates are healthy.
+// from a slow run — and ErrPoolExhausted, naming the template, when every port
+// of that template is quarantined, even if other templates are healthy. A closed
+// pool answers ErrPoolExhausted as well: shutting down is not a misspelling.
 func (p *Pool) AcquireSpec(ctx context.Context, name string) (*Lease, error) {
 	if name == "" {
 		return p.acquire(ctx, "")
@@ -464,9 +502,17 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 }
 
 // hasSpec reports whether any port in the pool carries this template name.
+//
+// A closed pool holds no ports at all, so every name would look like a typo. A
+// worker shutting down has to hear "there is nothing left to lease", not "you
+// misspelled a name that was valid a millisecond ago" — so a closed pool answers
+// yes and lets take() give the caller ErrPoolExhausted, exactly as Acquire does.
 func (p *Pool) hasSpec(name string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return true
+	}
 	for _, pt := range p.ports {
 		if pt.specName == name {
 			return true
@@ -514,6 +560,11 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 	}
 
 	if alive == 0 {
+		if specName != "" {
+			// alive counted only ports of this template, so the bare sentinel
+			// would describe a pool state that may not exist.
+			return nil, 0, fmt.Errorf("%w: spec %q", ErrPoolExhausted, specName)
+		}
 		return nil, 0, ErrPoolExhausted
 	}
 	if best != nil {
