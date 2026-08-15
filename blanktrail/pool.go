@@ -357,13 +357,9 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	assigned := p.mixer.Assign(size)
-	if len(assigned) < size {
-		return nil, errors.New("blanktrail: no usable egress channel")
-	}
 	// The mixer decides how many ports each channel gets; spreadSpecs decides
-	// which ports those are, so no template ends up confined to one egress.
-	groups := groupChannels(assigned)
+	// which ports those are, so that no template ends up confined to one egress.
+	groups := groupChannels(p.mixer.Assign(size))
 	counts := make([]int, len(groups))
 	total := 0
 	for i, g := range groups {
@@ -371,6 +367,8 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		total += len(g)
 	}
 	if total != size {
+		// Assign hands back nothing once every channel has been penalised to a
+		// weight of zero.
 		return nil, errors.New("blanktrail: no usable egress channel")
 	}
 	layout := spreadSpecs(specNames, counts)
