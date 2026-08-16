@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -387,7 +388,7 @@ func settle(ctx context.Context, out io.Writer, st *store.Store, p plan, opts ru
 		// A job is stamped done only when nothing is pending, so a run that was
 		// cut short stays available to be taken up rather than closing over the
 		// queries nobody reached.
-		say(out, "still to do: %d; gserp run -resume -name %q takes them up",
+		say(out, opts, "still to do: %d; gserp run -resume -name %q takes them up",
 			len(left), p.spec.Name)
 	}
 
@@ -398,15 +399,15 @@ func settle(ctx context.Context, out io.Writer, st *store.Store, p plan, opts ru
 	if err != nil {
 		// The reason names the file it could not open, which is the same path
 		// by another route, and it goes on to whatever prints the error.
-		return scrubbed(err)
+		return errors.New(scrub(err.Error(), opts))
 	}
-	say(out, "%d rows written to %s", rows, opts.Out)
+	say(out, opts, "%d rows written to %s", rows, opts.Out)
 	return nil
 }
 
 // say prints a line with everything that must not be printed taken out of it.
-func say(out io.Writer, format string, args ...any) {
-	_, _ = fmt.Fprintln(out, hideSecrets(fmt.Sprintf(format, args...), secrets()...))
+func say(out io.Writer, opts runOptions, format string, args ...any) {
+	_, _ = fmt.Fprintln(out, scrub(fmt.Sprintf(format, args...), opts))
 }
 
 // resumedPlan takes up the job a name was last left in the middle of.
@@ -699,29 +700,59 @@ func hideSecrets(text string, of ...string) string {
 
 	fields := strings.Fields(text)
 	for i, f := range fields {
-		fields[i] = filtered(f)
+		scheme, rest, ok := strings.Cut(f, "://")
+		if !ok {
+			continue
+		}
+		userinfo, host, ok := strings.Cut(rest, "@")
+		if !ok || userinfo == "" {
+			continue
+		}
+		fields[i] = scheme + "://" + withheld + "@" + host
 	}
 	return strings.Join(fields, " ")
 }
 
-// filtered takes out of one word of a line what must not be printed.
-func filtered(f string) string {
-	if scheme, rest, ok := strings.Cut(f, "://"); ok {
-		if userinfo, host, ok := strings.Cut(rest, "@"); ok && userinfo != "" {
-			return scheme + "://" + withheld + "@" + host
+// handed are the local paths this run was given on its command line.
+//
+// They are the only strings the command knows to be paths on this machine.
+// Nothing in a line tells a path apart from anything else shaped like one — a
+// control-API route reads exactly as an absolute path does — so a redactor that
+// went by shape would cut "/ports/suggest" down to "suggest" and hand the
+// reader a message naming something that is not a thing. What was handed in is
+// known, finite, and known to be local; everything else is left whole.
+func handed(opts runOptions) []string {
+	return []string{opts.Out, opts.DB, opts.Queries}
+}
+
+// shortenPaths cuts each of the given paths down to the name of the file it
+// points at, wherever it appears in the line.
+//
+// Which file was written is the answer the user asked for and says nothing
+// about the machine. The directories above it say where they keep their things,
+// and a line printed once is read for years.
+func shortenPaths(text string, paths ...string) string {
+	// Longest first. One handed path can sit inside another — a history kept
+	// under the directory the export goes to — and taking the shorter one out
+	// first leaves the longer one half rewritten.
+	longestFirst := slices.Clone(paths)
+	slices.SortFunc(longestFirst, func(a, b string) int { return len(b) - len(a) })
+
+	for _, p := range longestFirst {
+		base := filepath.Base(p)
+		if p == "" || base == p {
+			continue
 		}
-		return f
+		text = strings.ReplaceAll(text, p, base)
 	}
-	if filepath.IsAbs(f) {
-		// The file's name is kept and the directories above it are dropped.
-		// Which file was written is the answer the user asked for and says
-		// nothing about the machine; where they keep it is a description of the
-		// machine, and it outlives the terminal it was printed on. A name given
-		// as a quoted string is not a path here and is left whole, which is what
-		// keeps the resume command something that can be typed back.
-		return filepath.Base(f)
-	}
-	return f
+	return text
+}
+
+// scrub takes out of a line everything this run must not print: the values it
+// was given in the environment, and where on this machine the files it was
+// pointed at are kept.
+func scrub(text string, opts runOptions) string {
+	return hideSecrets(shortenPaths(text, handed(opts)...), secrets()...)
 }
 
 // after returns what follows sep, and whether sep was there at all.

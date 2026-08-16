@@ -57,6 +57,14 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("%s never happened", what)
 }
 
+// invented builds an absolute path in the shape this platform writes them,
+// naming nothing that exists on this machine — so a failure printing one says
+// nothing about where anybody keeps their things. The volume comes from a real
+// path because on Windows a rooted path without one is not absolute.
+func invented(elems ...string) string {
+	return filepath.VolumeName(os.TempDir()) + string(filepath.Separator) + filepath.Join(elems...)
+}
+
 // listOf writes a query list and returns its path.
 func listOf(t *testing.T, dir, content string) string {
 	t.Helper()
@@ -504,16 +512,16 @@ func TestHideSecrets_KeepsAFailedAddressOutOfWhatIsPrinted(t *testing.T) {
 	}
 }
 
-func TestHideSecrets_KeepsWhereOnThisMachineAFileIsKeptOutOfWhatIsPrinted(t *testing.T) {
+func TestScrub_KeepsWhereOnThisMachineAHandedFileIsKeptOutOfWhatIsPrinted(t *testing.T) {
 	// On the user's own terminal an absolute path is merely their own. In a log,
 	// a bug report or a transcript it is a description of their machine, and it
 	// outlives the terminal it was printed on. The file's name is what they
 	// asked about; the directories above it are not.
 	dir := t.TempDir()
-	line := fmt.Sprintf("wrote %s beside %s, and results.csv is relative",
-		filepath.Join(dir, "results.csv"), filepath.Join(dir, "history.db"))
+	opts := runOptions{Out: filepath.Join(dir, "results.csv"), DB: filepath.Join(dir, "history.db")}
+	line := fmt.Sprintf("wrote %s beside %s, and results.csv is relative", opts.Out, opts.DB)
 
-	got := hideSecrets(line)
+	got := scrub(line, opts)
 
 	if strings.Contains(got, dir) {
 		t.Errorf("the directory survived into %q", got)
@@ -522,6 +530,41 @@ func TestHideSecrets_KeepsWhereOnThisMachineAFileIsKeptOutOfWhatIsPrinted(t *tes
 		if !strings.Contains(got, kept) {
 			t.Errorf("%q was taken out along with the directory: %q", kept, got)
 		}
+	}
+}
+
+func TestScrub_LeavesAlonePathShapedTextTheCommandWasNeverHanded(t *testing.T) {
+	// Guessing at what a path is cannot work: nothing in a line tells a route
+	// apart from a file. The first of these is a real message from the control
+	// API, and a redactor going by shape cut it down to "blanktrail: suggest
+	// returned no port" — naming something that is not a thing. The second is a
+	// path in every sense, written the way this platform writes one, and still
+	// none of the command's business; it is here because the first is only
+	// path-shaped on the platforms where the separator is a slash, and a guard
+	// that sleeps on the machine the tests run on is not a guard.
+	opts := runOptions{Out: invented("mine", "results.csv")}
+
+	for _, line := range []string{
+		"blanktrail: /ports/suggest returned no port",
+		"failed on " + invented("somebody-elses", "results.csv"),
+	} {
+		if got := scrub(line, opts); got != line {
+			t.Errorf("a line the command was never handed came back as %q, want %q", got, line)
+		}
+	}
+}
+
+func TestScrub_CutsEachHandedPathToItsOwnNameWhateverOrderTheyCameIn(t *testing.T) {
+	// One handed path can sit inside another — a history kept under the
+	// directory the export goes to. Taking the shorter one out first leaves the
+	// longer one half rewritten, and half a path is still a path.
+	dir := t.TempDir()
+	opts := runOptions{Out: dir, DB: filepath.Join(dir, "history.db")}
+
+	got := scrub("wrote "+opts.DB, opts)
+
+	if want := "wrote history.db"; got != want {
+		t.Errorf("scrub returned %q, want %q", got, want)
 	}
 }
 
