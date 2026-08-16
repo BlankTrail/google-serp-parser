@@ -3,6 +3,7 @@
 package google
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -151,5 +152,80 @@ func TestSession_SurfacesAShellAsAnError(t *testing.T) {
 	s := NewSession(rewriteHost{target: p.srv.URL})
 	if _, err := s.Search(context.Background(), Query{Text: "iphone"}); err == nil {
 		t.Fatal("Search accepted the JavaScript shell as results")
+	}
+}
+
+func TestSession_TreatsAnOversizedBodyAsAnError(t *testing.T) {
+	// LimitReader alone returns io.EOF at its boundary exactly as it would at
+	// a genuine end of body, so a response beyond maxBody would otherwise be
+	// cut off with no error — a truncated page that still parses into
+	// plausible, incomplete results, which is the failure mode this whole
+	// milestone exists to avoid.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		if r.URL.Path != "/search" {
+			_, _ = w.Write([]byte("<html><body>home</body></html>"))
+			return
+		}
+		// One byte over maxBody, written in chunks rather than one huge
+		// allocation.
+		chunk := bytes.Repeat([]byte("a"), 1<<20) // 1 MiB
+		written := 0
+		for written < maxBody+1 {
+			n, _ := w.Write(chunk)
+			written += n
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	s := NewSession(rewriteHost{target: srv.URL})
+	if _, err := s.Search(context.Background(), Query{Text: "iphone"}); err == nil {
+		t.Fatal("Search accepted a body beyond maxBody without error")
+	} else if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error=%q, want it to mention the size limit", err)
+	}
+}
+
+func TestSession_SecondSearchAdvancesTheChainInsteadOfResetting(t *testing.T) {
+	// warmed exists precisely so a session's second and later searches skip
+	// the home-page visit and the referrer chain keeps advancing — the
+	// difference between a session that looks like one browsing tab and one
+	// that looks like a script reopening a tab for every query.
+	p := newRecordingProxy(t, "serp_direct_us.html")
+	s := NewSession(rewriteHost{target: p.srv.URL})
+
+	firstQuery := Query{Text: "iphone"}
+	if _, err := s.Search(context.Background(), firstQuery); err != nil {
+		t.Fatalf("first Search: %v", err)
+	}
+	if _, err := s.Search(context.Background(), Query{Text: "ipad"}); err != nil {
+		t.Fatalf("second Search: %v", err)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.paths) != 3 {
+		t.Fatalf("paths=%v, want home + two searches", p.paths)
+	}
+	homeVisits := 0
+	for _, path := range p.paths {
+		if path == "/" {
+			homeVisits++
+		}
+	}
+	if homeVisits != 1 {
+		t.Errorf("home page visited %d times across two searches, want exactly 1", homeVisits)
+	}
+
+	firstSearchURL, err := firstQuery.URL()
+	if err != nil {
+		t.Fatalf("firstQuery.URL: %v", err)
+	}
+	if got := p.hdrs[2].Get("Referer"); got != firstSearchURL {
+		t.Errorf("second search Referer=%q, want the first search's URL %q, not the home page", got, firstSearchURL)
+	}
+	if got := p.hdrs[2].Get("Sec-Fetch-Site"); got != "same-origin" {
+		t.Errorf("second search Sec-Fetch-Site=%q, want same-origin", got)
 	}
 }
