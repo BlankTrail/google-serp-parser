@@ -21,8 +21,24 @@ body {
 }
 
 header {
+	align-items: baseline;
 	border-bottom: 1px solid var(--rule);
+	display: flex;
+	gap: 1rem;
+	justify-content: space-between;
 	padding: 0.75rem 1.5rem;
+}
+
+.langs {
+	display: flex;
+	font-size: 0.9rem;
+	gap: 0.75rem;
+}
+
+/* The language being read is shown and not offered: a switch that leads back
+   to where the reader already is reads as a switch that does nothing. */
+.langs span {
+	color: var(--quiet);
 }
 
 .brand {

@@ -1,16 +1,16 @@
 {{define "main"}}
-<h1>Jobs</h1>
+<h1>{{.T "jobs.title"}}</h1>
 {{if .Jobs}}
 <table>
 <thead>
 <tr>
-<th>Name</th>
-<th>Started</th>
-<th>Queries</th>
-<th>Done</th>
-<th>Failed</th>
-<th>Left</th>
-<th>State</th>
+<th>{{.T "jobs.name"}}</th>
+<th>{{.T "jobs.started"}}</th>
+<th>{{.T "jobs.queries"}}</th>
+<th>{{.T "jobs.done"}}</th>
+<th>{{.T "jobs.failed"}}</th>
+<th>{{.T "jobs.left"}}</th>
+<th>{{.T "jobs.state"}}</th>
 </tr>
 </thead>
 <tbody>
@@ -24,12 +24,12 @@
 <td class="count">{{.Done}}</td>
 <td class="count">{{.Failed}}</td>
 <td class="count">{{.Pending}}</td>
-<td>{{if .Finished}}finished{{else}}unfinished{{end}}</td>
+<td>{{if .Finished}}{{$.T "job.state.finished"}}{{else}}{{$.T "job.state.unfinished"}}{{end}}</td>
 </tr>
 {{end}}
 </tbody>
 </table>
 {{else}}
-<p class="empty">No jobs yet.</p>
+<p class="empty">{{.T "jobs.none"}}</p>
 {{end}}
 {{end}}

@@ -69,6 +69,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("web: a server needs a store")
 	}
+	if err := checkCatalogue(catalogue); err != nil {
+		return nil, err
+	}
 	pages, err := parsePages()
 	if err != nil {
 		return nil, err
@@ -162,13 +165,41 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	return err
 }
 
+// page is what every template is handed, whatever else the page carries. The
+// layout can then count on the language and the switcher being there.
+type page struct {
+	// Lang is the language the page is written in.
+	Lang Lang
+	// Title is the key of the page's name, not the name itself: the layout
+	// translates it like every other phrase.
+	Title string
+	// Langs is the switcher, offering this same address in each language.
+	Langs []langLink
+}
+
+// T is how a template asks for a phrase. Templates name a key and never a
+// language, so the same markup serves every reader.
+func (p page) T(key string) string { return p.Lang.T(key) }
+
+// frame builds the part of a page that does not depend on what is on it.
+func frame(r *http.Request, lang Lang, title string) page {
+	return page{Lang: lang, Title: title, Langs: switcher(r, lang)}
+}
+
+// indexPage is the job list.
+type indexPage struct {
+	page
+	Jobs []store.JobSummary
+}
+
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
+	lang := rememberLang(w, r)
 	jobs, err := s.store.Jobs(r.Context(), 0)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, "index.html", map[string]any{"Title": "Jobs", "Jobs": jobs})
+	s.render(w, r, "index.html", indexPage{page: frame(r, lang, "jobs.title"), Jobs: jobs})
 }
 
 // render writes a page, and says so plainly when it cannot.
