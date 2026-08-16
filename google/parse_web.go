@@ -112,7 +112,8 @@ func parseOrganic(doc *goquery.Document) []Result {
 }
 
 // snippetOf reads a result's description: everything in its box except the
-// title and the displayed address.
+// title, the displayed address, and what the page draws for the eye rather
+// than writes for the reader.
 //
 // It cannot use ownText: Google wraps the query's own terms in em and b
 // inside the snippet, and taking only direct text children would drop them,
@@ -126,10 +127,8 @@ func snippetOf(box *goquery.Selection) string {
 			case "h3", "cite", "style", "script":
 				return
 			}
-			for _, a := range n.Attr {
-				if a.Key == "role" && a.Val == "heading" {
-					return
-				}
+			if outsideTheDescription(n) {
+				return
 			}
 		}
 		if n.Type == html.TextNode {
@@ -146,6 +145,52 @@ func snippetOf(box *goquery.Selection) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
+// outsideTheDescription reports whether an element's own attributes say its
+// text is not part of a result's description. Every test here is an attribute
+// on the element itself — no CSS class, no pattern matching.
+//
+//   - data-snhf marks a result's header field: its title, its byline and its
+//     cite. Google renders that block TWICE inside one result box — once
+//     inside the result's own anchor, once beside it for a hover animation —
+//     which is why the site name arrived doubled in every snippet: measured on
+//     a real page as "Хабр Хабр 7 дек. 2022 г. — …". Skipping the header
+//     field drops both copies and leaves the description behind.
+//   - role="heading" is the card layout's title, which has no h3 to skip.
+//   - aria-hidden="true" is the page saying this text is not read to anyone:
+//     favicons, thumbnails, and the duration drawn over a video card.
+//   - an inline visibility:hidden or display:none is the same statement made
+//     in CSS. Looking for it with strings.Contains over one attribute's value
+//     is neither a class selector nor a regular expression.
+//
+// A layout that carries no data-snhf is left alone: the card layout has no
+// duplicated header at all. A few video and rich results do carry the
+// duplicate without the attribute, and their byline is still doubled — there
+// the second copy is hidden by a stylesheet class, which this parser
+// deliberately cannot see. Measured over the corpus: 134 of 138 results come
+// out clean, the remaining 4 are those.
+func outsideTheDescription(n *html.Node) bool {
+	for _, a := range n.Attr {
+		switch a.Key {
+		case "data-snhf":
+			return true
+		case "role":
+			if a.Val == "heading" {
+				return true
+			}
+		case "aria-hidden":
+			if a.Val == "true" {
+				return true
+			}
+		case "style":
+			v := strings.ReplaceAll(strings.ToLower(a.Val), " ", "")
+			if strings.Contains(v, "visibility:hidden") || strings.Contains(v, "display:none") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // parseAds reads the three paid placements. They are separate products with
 // separate markup, so each is read on its own terms rather than through one
 // selector that would fit none of them well.
@@ -159,7 +204,15 @@ func parseAds(doc *goquery.Document) []Ad {
 		{"#bottomads [data-text-ad]", PlacementBottom},
 	} {
 		doc.Find(block.selector).Each(func(_ int, unit *goquery.Selection) {
-			link := unit.Find("a[href]").First()
+			// The address is taken from whichever anchor in the unit carries
+			// data-pcu, not from the first anchor: measured, one bottom
+			// placement in the corpus leads with a sitelink that has no
+			// data-pcu while another anchor in the same unit does, and reading
+			// only the first left that ad with no destination at all.
+			link := unit.Find("a[data-pcu]").First()
+			if link.Length() == 0 {
+				link = unit.Find("a[href]").First()
+			}
 			title, _ := firstHeading(unit)
 			ad := Ad{
 				Position:  len(out) + 1,
@@ -181,8 +234,16 @@ func parseAds(doc *goquery.Document) []Ad {
 		})
 	}
 
-	// The right-hand block is product listings: no data-text-ad, and its
-	// units are click links rather than headed text ads.
+	// The right-hand block is product listings: no data-text-ad, and its units
+	// are click links rather than headed text ads. Only the title is read, and
+	// Ad.URL stays empty here — see Ad. The click address does carry an adurl
+	// parameter, but it was present and empty on all 27 such links in the
+	// corpus, so there is no advertiser address in the page to take.
+	//
+	// On those same pages this branch produces nothing: every #rhs click link
+	// there is an empty placeholder carrying no text. A product listing block
+	// with readable titles reaches this parser in the shape the fixture models
+	// and has not been seen in a capture since.
 	doc.Find("#rhs a[href*='aclk']").Each(func(_ int, link *goquery.Selection) {
 		title, _ := firstHeading(link)
 		if title == "" {
