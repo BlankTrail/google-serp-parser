@@ -196,6 +196,39 @@ func TestParseSERP_SnippetLeavesOutTheDuplicatedByline(t *testing.T) {
 	}
 }
 
+func TestParseSERP_AdSnippetLeavesOutTheDuplicatedByline(t *testing.T) {
+	// An ad renders its byline — the advertiser's name beside its displayed
+	// address — twice, once inside its own anchor and once beside it. Both
+	// copies are in the DOM at all times, and a walker that does not know the
+	// block opens every ad snippet with them: measured on real pages as
+	// "Apple https://www.apple.com Apple https://www.apple.com Introducing…".
+	//
+	// The address carries data-dtld; the name beside it carries nothing, so
+	// skipping only the marked element leaves "Apple Apple" behind. Asserting
+	// on both halves is what keeps that half-fix from passing.
+	s := parseFixture(t, "serp_ads_us.html")
+	if len(s.Ads) == 0 {
+		t.Fatal("the ads fixture parsed no ads")
+	}
+	for i, a := range s.Ads {
+		if a.Host == "" {
+			continue
+		}
+		if strings.Contains(a.Snippet, a.Host) {
+			t.Errorf("ad %d snippet carries its address %q: %q", i+1, a.Host, a.Snippet)
+		}
+		// The display name is the host without its scheme and www prefix —
+		// the label the page draws next to the address.
+		name := strings.TrimPrefix(a.Host, "www.")
+		if name != "" && strings.Contains(a.Snippet, name) {
+			t.Errorf("ad %d snippet carries its advertiser name %q: %q", i+1, name, a.Snippet)
+		}
+		if a.Snippet == "" {
+			t.Errorf("ad %d lost its description entirely", i+1)
+		}
+	}
+}
+
 func TestParseSERP_SnippetLeavesOutWhatThePageHidesFromReaders(t *testing.T) {
 	// A video card draws its running time on the thumbnail inside an
 	// aria-hidden="true" wrapper. It is beside the description, not part of

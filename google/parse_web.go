@@ -188,6 +188,43 @@ func outsideTheDescription(n *html.Node) bool {
 			}
 		}
 	}
+	return wrapsTheDisplayedAddress(n, bylineDepth)
+}
+
+// bylineDepth is how far below an element a data-dtld marker may sit for that
+// element to count as the byline's wrapper.
+//
+// Two is what reaches the wrapper holding both halves of the byline without
+// reaching the whole result or ad unit, which would swallow the description
+// too. Measured over the corpus: at one, every ad snippet still opened with
+// its advertiser's name repeated; at two, none did and every description
+// survived intact.
+const bylineDepth = 2
+
+// wrapsTheDisplayedAddress reports whether an element encloses the block
+// Google draws as "Advertiser https://advertiser.example" beside a title.
+//
+// data-dtld is Google's own marker on the element holding that address — an
+// attribute, not a class, so it survives the class-name churn this parser
+// deliberately cannot follow. The test looks for it in an element's
+// descendants rather than on the element itself because the marker sits on the
+// address alone, while the site name beside it carries no marker at all:
+// skipping only the marked element leaves the name behind, which is how the
+// duplication read as "Apple Apple" once the address was gone.
+func wrapsTheDisplayedAddress(n *html.Node, depth int) bool {
+	if depth < 0 {
+		return false
+	}
+	for _, a := range n.Attr {
+		if a.Key == "data-dtld" {
+			return true
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.ElementNode && wrapsTheDisplayedAddress(c, depth-1) {
+			return true
+		}
+	}
 	return false
 }
 

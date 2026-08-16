@@ -341,14 +341,41 @@ func renderAd(i int, a advert) string {
 		// An anchor with no data-pcu ahead of the one that has it — measured.
 		lead = fmt.Sprintf(`<a href="/goto?url=SL%02d" data-ved="x">%s</a>`, i, esc(a.sitelink))
 	}
+
+	// The byline — the advertiser's name beside its displayed address — is
+	// rendered TWICE, once inside the ad's own anchor and once beside it, with
+	// both copies in the DOM at all times. Measured on real pages, where a
+	// walker that did not know the block opened every ad snippet with them:
+	// "Apple https://www.apple.com Apple https://www.apple.com Introducing…".
+	//
+	// data-dtld is Google's own marker, and it sits on the address only — the
+	// name beside it carries nothing. That is why the parser skips the wrapper
+	// rather than the marked element, and why this fixture nests them as the
+	// real page does.
+	byline := fmt.Sprintf(
+		`<div><span><div><span>%s</span></div>`+
+			`<span data-dtld="%s" role="text">%s</span></span></div>`,
+		esc(displayName(a.host)), esc(displayName(a.host)), esc(a.host))
 	return fmt.Sprintf(
 		`<div data-text-ad="1" data-ta-slot="0" data-ta-slot-pos="%d">%s`+
 			`<a href="/goto?url=AD%02d" data-ved="x" data-pcu="%s,https://ad.doubleclick.net/">`+
-			`<div role="heading" aria-level="3">%s</div></a><div>%s</div></div>`+"\n",
-		i+1, lead, i, esc(a.host), esc(a.title), esc(a.body))
+			`<div role="heading" aria-level="3">%s</div>%s</a>%s<div>%s</div></div>`+"\n",
+		i+1, lead, i, esc(a.host), esc(a.title), byline, byline, esc(a.body))
 }
 
 func esc(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 	return r.Replace(s)
+}
+
+// displayName renders the label Google draws beside an ad's address — the
+// advertiser's own name, taken here from its host so a fixture needs no extra
+// field to carry it.
+func displayName(rawURL string) string {
+	h := strings.TrimPrefix(strings.TrimPrefix(rawURL, "https://"), "http://")
+	h = strings.TrimPrefix(h, "www.")
+	if i := strings.IndexAny(h, "/?"); i >= 0 {
+		h = h[:i]
+	}
+	return h
 }
