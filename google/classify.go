@@ -55,11 +55,16 @@ type ResponseError struct {
 	// caller threading it through alongside the error.
 	Query string
 
+	// op is what was under way when the response turned out to be unusable.
+	// The same class is reached by fetching a page and by parsing a body that
+	// was already in hand, and a message that named only one of them would
+	// misreport the other.
+	op  string
 	err error
 }
 
 func (e *ResponseError) Error() string {
-	return fmt.Sprintf("google: search %q: %v (class %s)", e.Query, e.err, e.Class)
+	return fmt.Sprintf("google: %s %q: %v (class %s)", e.op, e.Query, e.err, e.Class)
 }
 
 // Unwrap keeps errors.Is(err, ErrNotSERP) working for callers written before

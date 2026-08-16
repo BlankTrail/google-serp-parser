@@ -67,7 +67,7 @@ func (s *Session) Search(ctx context.Context, q Query) (SERP, error) {
 	s.last = target
 
 	if class, err := Classify(status, finalURL, body); err != nil {
-		return SERP{}, &ResponseError{Class: class, Query: q.Text, err: err}
+		return SERP{}, &ResponseError{Class: class, Query: q.Text, op: "search", err: err}
 	}
 	serp, err := ParseSERP(q.Text, body)
 	if err != nil {

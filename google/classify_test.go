@@ -156,7 +156,7 @@ func TestClassOf_ReadsTheClassOutOfAWrappedError(t *testing.T) {
 	// and over which transport. An error travels up through wrapping, so the
 	// class has to survive it; recovering it from the message instead would tie
 	// that decision to the wording of the message.
-	inner := &ResponseError{Class: ClassShell, Query: "iphone 13"}
+	inner := &ResponseError{Class: ClassShell, Query: "iphone 13", op: "search"}
 	wrapped := fmt.Errorf("google: page %d of %q: %w", 2, "iphone 13", inner)
 
 	got, ok := ClassOf(wrapped)
@@ -180,7 +180,7 @@ func TestClassOf_SaysNothingForAnErrorThatCarriesNoClass(t *testing.T) {
 func TestResponseError_StaysMatchableAsNotASERP(t *testing.T) {
 	// Callers written before the class existed branch on ErrNotSERP. Adding a
 	// type must not take that away from them.
-	err := &ResponseError{Class: ClassWall, Query: "x", err: fmt.Errorf("%w: challenge page", ErrNotSERP)}
+	err := &ResponseError{Class: ClassWall, Query: "x", op: "search", err: fmt.Errorf("%w: challenge page", ErrNotSERP)}
 	if !errors.Is(err, ErrNotSERP) {
 		t.Error("a response error no longer matches ErrNotSERP")
 	}
