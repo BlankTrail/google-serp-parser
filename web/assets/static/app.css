@@ -88,3 +88,47 @@ th {
 .empty {
 	color: var(--quiet);
 }
+
+.pages {
+	display: flex;
+	gap: 1rem;
+	margin-right: auto;
+}
+
+/* The counts of a running job read across in one line, so a glance takes in
+   the whole of where it has got to. */
+.progress {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 1.5rem;
+	margin: 0 0 1.5rem;
+}
+
+.progress dt {
+	color: var(--quiet);
+	font-size: 0.8rem;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+.progress dd {
+	font-size: 1.2rem;
+	margin: 0;
+	text-align: left;
+}
+
+.settings dl {
+	display: grid;
+	gap: 0 1rem;
+	grid-template-columns: max-content max-content;
+	margin: 0;
+}
+
+.settings dt {
+	color: var(--quiet);
+}
+
+.settings dd {
+	margin: 0;
+}

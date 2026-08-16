@@ -16,7 +16,7 @@
 <tbody>
 {{range .Jobs}}
 <tr>
-<td>{{.Name}}</td>
+<td><a href="/job/{{.ID}}">{{.Name}}</a></td>
 {{/* Shown on the clock the reader started the run by. The history keeps the
      instant, and an instant printed as itself is hours from the wall. */}}
 <td>{{.CreatedAt.Local.Format "2006-01-02 15:04"}}</td>

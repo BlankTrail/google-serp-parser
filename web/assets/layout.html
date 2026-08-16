@@ -9,6 +9,12 @@
 <body>
 <header>
 <a class="brand" href="/">gserp</a>
+{{/* Starting a job is what this program is for, so the page that starts one is
+     offered from every page rather than reached by typing its address. */}}
+<nav class="pages">
+<a href="/new">{{.T "new.title"}}</a>
+<a href="/history">{{.T "history.title"}}</a>
+</nav>
 <nav class="langs" aria-label="{{.T "nav.language"}}">
 {{range .Langs}}{{if .Current}}<span aria-current="true">{{.Name}}</span>{{else}}<a href="{{.URL}}">{{.Name}}</a>{{end}}
 {{end}}</nav>

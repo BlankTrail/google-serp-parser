@@ -52,12 +52,20 @@
 <label for="spec">{{.T "form.spec"}}</label>
 <input id="spec" name="spec" size="10" value="{{.Form.SpecName}}">
 </p>
+{{/* These two are inputs to the estimate and to nothing else: a job runs on the
+     one warm pool this server was started with, and the history has nowhere to
+     keep a thread count of its own. They stand apart and say so, because a box
+     that looks like a setting and is not is worse than no box. */}}
+<fieldset>
+<legend>{{.T "estimate.title"}}</legend>
 <p>
 <label for="threads">{{.T "form.threads"}}</label>
 <input id="threads" name="threads" type="number" min="1" value="{{.Form.Threads}}">
 <label for="ports">{{.T "form.ports"}}</label>
 <input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}">
 </p>
+<p class="empty">{{.T "form.estimateonly"}}</p>
+</fieldset>
 <p>
 <button type="submit" name="{{.Do.Field}}" value="{{.Do.Estimate}}">{{.T "form.estimate"}}</button>
 <button type="submit" name="{{.Do.Field}}" value="{{.Do.Start}}">{{.T "form.start"}}</button>
