@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -139,16 +140,237 @@ func TestRotor_RoundRobinAndSkipsBurnedProxies(t *testing.T) {
 	}
 }
 
-func TestRotor_ForgivesEveryoneWhenAllAreBurned(t *testing.T) {
+func TestRotor_ABenchedAddressRestsBeforeItIsOfferedAgain(t *testing.T) {
+	// A refusal a minute ago rarely means the address is dead: it was busy, or
+	// it was turned away for a while, and both pass. Handing it straight back
+	// means beating on it, and dropping it forever throws away most of a list.
+	clock := time.Unix(1700000000, 0)
 	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
-	r := NewStaticRotor(ups)
+	r := NewStaticRotor(ups, WithRest(6*time.Hour), WithClock(func() time.Time { return clock }))
+
 	for i := 0; i < 3; i++ {
 		r.MarkBad(ups[0])
-		r.MarkBad(ups[1])
+	}
+	if got := r.Benched(); got != 1 {
+		t.Fatalf("Benched()=%d, want 1", got)
+	}
+	for i := 0; i < 4; i++ {
+		u, ok := r.Next()
+		if !ok {
+			t.Fatal("Next reported an empty list")
+		}
+		if u.Key() == ups[0].Key() {
+			t.Fatalf("the benched address was offered again after %d handouts", i+1)
+		}
 	}
 
-	if _, ok := r.Next(); !ok {
-		t.Error("Next returned false with every proxy burned; it must forgive and keep going rather than stall")
+	clock = clock.Add(6 * time.Hour)
+	var seen bool
+	for i := 0; i < 4 && !seen; i++ {
+		u, _ := r.Next()
+		seen = u.Key() == ups[0].Key()
+	}
+	if !seen {
+		t.Error("the address never came back after its rest")
+	}
+	if got := r.Benched(); got != 0 {
+		t.Errorf("Benched()=%d after the rest elapsed, want 0", got)
+	}
+}
+
+func TestRotor_AReturningAddressGoesToTheBackOfTheList(t *testing.T) {
+	// A returning address must not compete for a handout with addresses that
+	// have never let anyone down. The back of the list is that statement, and
+	// on a list of thousands it means the second chance comes much later.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	clock = clock.Add(time.Hour)
+
+	// The first two handouts are the addresses that never failed; the returning
+	// one comes after them, not in its original place at the front.
+	var order []string
+	for i := 0; i < 3; i++ {
+		u, _ := r.Next()
+		order = append(order, u.Host)
+	}
+	if order[len(order)-1] != "1.1.1.1" {
+		t.Errorf("handout order %v, want the returning address last", order)
+	}
+}
+
+func TestRotor_AReturningAddressDoesNotOvertakeTheCursor(t *testing.T) {
+	// The cursor counts positions, so moving an address out of the stretch it
+	// has already walked shifts everything behind it forward. Left uncorrected
+	// the cursor lands on the returning address, which would hand it out first
+	// of all — the opposite of the back of the list.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3\n4.4.4.4:4", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		if u, _ := r.Next(); u.Host != ups[i].Host {
+			t.Fatalf("handout %d was %s, want %s", i+1, u.Host, ups[i].Host)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	clock = clock.Add(time.Hour)
+
+	if u, _ := r.Next(); u.Host != "4.4.4.4" {
+		t.Errorf("handout after the release was %s, want the address the cursor had reached", u.Host)
+	}
+	if u, _ := r.Next(); u.Host != "1.1.1.1" {
+		t.Errorf("handout after that was %s, want the returning address", u.Host)
+	}
+}
+
+func TestRotor_AFailureShortOfTheLimitDoesNotBenchAnAddress(t *testing.T) {
+	// One refusal is noise. Benching on it would empty a healthy list.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	r := NewStaticRotor(ups, WithClock(func() time.Time { return clock }))
+
+	r.MarkBad(ups[0])
+	r.MarkBad(ups[0])
+	if got := r.Benched(); got != 0 {
+		t.Errorf("Benched()=%d after two failures of three, want 0", got)
+	}
+}
+
+func TestRotor_HandsOutTheLongestRestedWhenEveryAddressIsBenched(t *testing.T) {
+	// A list where everything has failed recently is a systemic fault, not a
+	// list problem, and the caller still has to be told something. The address
+	// that has rested longest is the one closest to eligible, so it is the
+	// honest choice — and it keeps the rest meaningful for all the others,
+	// which forgiving the whole list would not.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	r := NewStaticRotor(ups, WithRest(6*time.Hour), WithClock(func() time.Time { return clock }))
+
+	// The one benched first sits in the middle of the list, so neither end of it
+	// can be mistaken for the answer.
+	for _, u := range []Upstream{ups[1], ups[0], ups[2]} {
+		for i := 0; i < 3; i++ {
+			r.MarkBad(u)
+		}
+		clock = clock.Add(time.Minute)
+	}
+
+	u, ok := r.Next()
+	if !ok {
+		t.Fatal("Next gave up on a fully benched list instead of offering the longest rested")
+	}
+	if u.Key() != ups[1].Key() {
+		t.Errorf("offered %s, want the one benched first", u.Host)
+	}
+	if got := r.Benched(); got != 2 {
+		t.Errorf("Benched()=%d, want only the offered address released and the others still resting", got)
+	}
+}
+
+func TestRotor_RestDefaultsToSixHours(t *testing.T) {
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	r := NewStaticRotor(ups, WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	clock = clock.Add(5*time.Hour + 59*time.Minute)
+	for i := 0; i < 4; i++ {
+		if u, _ := r.Next(); u.Key() == ups[0].Key() {
+			t.Fatal("the address came back before six hours had passed")
+		}
+	}
+	clock = clock.Add(2 * time.Minute)
+	var seen bool
+	for i := 0; i < 4 && !seen; i++ {
+		u, _ := r.Next()
+		seen = u.Key() == ups[0].Key()
+	}
+	if !seen {
+		t.Error("the address did not come back once six hours had passed")
+	}
+}
+
+func TestRotor_AnOptionCarryingNothingLeavesTheDefaultInPlace(t *testing.T) {
+	// Options come from configuration, where a field left unset is the common
+	// case and must mean "as it comes", not "no rest at all" or "no clock".
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	r := NewStaticRotor(ups, WithRest(0), WithClock(nil))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	for i := 0; i < 4; i++ {
+		u, ok := r.Next()
+		if !ok {
+			t.Fatal("Next reported an empty list")
+		}
+		if u.Key() == ups[0].Key() {
+			t.Fatal("the benched address came back at once, so the rest was set to zero")
+		}
+	}
+}
+
+func TestRotor_AReloadedListDoesNotRestartOrCancelARest(t *testing.T) {
+	// The rest belongs to the address, not to the copy of the list it was read
+	// from. A source that reloads every few minutes would otherwise wipe every
+	// rest it holds, and one that reloads often enough would never let a rest
+	// run out at all.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	clock = clock.Add(30 * time.Minute)
+	reloaded, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	r.reconcile(reloaded)
+
+	if got := r.Benched(); got != 1 {
+		t.Fatalf("Benched()=%d after a reload that still lists the address, want 1", got)
+	}
+	for i := 0; i < 3; i++ {
+		if u, _ := r.Next(); u.Key() == ups[0].Key() {
+			t.Fatal("the reload cancelled the rest")
+		}
+	}
+
+	clock = clock.Add(30 * time.Minute)
+	var seen bool
+	for i := 0; i < 3 && !seen; i++ {
+		u, _ := r.Next()
+		seen = u.Key() == ups[0].Key()
+	}
+	if !seen {
+		t.Error("the address did not come back an hour after it was benched, so the reload restarted its rest")
+	}
+}
+
+func TestRotor_AReloadForgetsAnAddressItNoLongerLists(t *testing.T) {
+	// An address the source has dropped cannot be handed out again, so its rest
+	// is a record of nothing. Kept, it would inflate the count of resting
+	// addresses for as long as the rotor lives.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	reloaded, _ := Parse("2.2.2.2:2\n3.3.3.3:3", "socks5")
+	r.reconcile(reloaded)
+
+	if got := r.Benched(); got != 0 {
+		t.Errorf("Benched()=%d after a reload that dropped the address, want 0", got)
 	}
 }
 
@@ -182,4 +404,60 @@ func TestRotor_CloseIsIdempotentAndConcurrencySafe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// listOfSize builds a list the size a bought one actually is. The addresses are
+// from the documentation range, one per port.
+func listOfSize(n int) []Upstream {
+	ups := make([]Upstream, n)
+	for i := range ups {
+		ups[i] = Upstream{Scheme: "socks5", Host: "192.0.2.1", Port: strconv.Itoa(i + 1)}
+	}
+	return ups
+}
+
+func BenchmarkRotorNextOnAFullSizeList(b *testing.B) {
+	r := NewStaticRotor(listOfSize(15000))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, ok := r.Next(); !ok {
+			b.Fatal("Next reported an empty list")
+		}
+	}
+}
+
+func BenchmarkRotorNextWhenNearlyEveryAddressIsResting(b *testing.B) {
+	ups := listOfSize(15000)
+	clock := time.Unix(1700000000, 0)
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+	for _, u := range ups[:len(ups)-1] {
+		for i := 0; i < 3; i++ {
+			r.MarkBad(u)
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, ok := r.Next(); !ok {
+			b.Fatal("Next reported an empty list")
+		}
+	}
+}
+
+func BenchmarkRotorNextReleasingATenthOfAFullSizeList(b *testing.B) {
+	ups := listOfSize(15000)
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		clock := time.Unix(1700000000, 0)
+		r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+		for j := 0; j < len(ups); j += 10 {
+			for k := 0; k < 3; k++ {
+				r.MarkBad(ups[j])
+			}
+		}
+		clock = clock.Add(time.Hour)
+		b.StartTimer()
+		if _, ok := r.Next(); !ok {
+			b.Fatal("Next reported an empty list")
+		}
+	}
 }
