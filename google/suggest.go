@@ -45,12 +45,13 @@ func (s *Suggester) Suggest(ctx context.Context, q Query) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.suggestFrom(ctx, target)
+	return s.suggestFrom(ctx, target, q)
 }
 
 // suggestFrom fetches and reads one completion response. It takes a full URL so
-// the reading half can be tested without building one.
-func (s *Suggester) suggestFrom(ctx context.Context, target string) ([]string, error) {
+// the reading half can be tested without building one, and the query alongside
+// it because the request carries the language in a header as well.
+func (s *Suggester) suggestFrom(ctx context.Context, target string, q Query) ([]string, error) {
 	client := s.Client
 	if client == nil {
 		client = &http.Client{}
@@ -59,6 +60,12 @@ func (s *Suggester) suggestFrom(ctx context.Context, target string) ([]string, e
 	if err != nil {
 		return nil, fmt.Errorf("google: build suggest request: %w", err)
 	}
+	// The language axis is asked for twice, hl in the address and this header
+	// on the request, and both come from the one query so they cannot
+	// disagree. Completions in a language the client claims not to prefer are
+	// a contradiction this program would be creating.
+	req.Header.Set("Accept-Language", q.AcceptLanguage())
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("google: suggest: %w", err)
