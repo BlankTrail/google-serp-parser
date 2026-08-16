@@ -55,7 +55,7 @@ func TestSuggester_ReadsTheSuggestionArray(t *testing.T) {
 	defer srv.Close()
 
 	s := &Suggester{Client: srv.Client()}
-	got, err := s.suggestFrom(context.Background(), srv.URL)
+	got, err := s.suggestFrom(context.Background(), srv.URL, Query{Text: "iphone 13"})
 	if err != nil {
 		t.Fatalf("suggestFrom: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestSuggester_AnEmptyListIsNotAnError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := (&Suggester{Client: srv.Client()}).suggestFrom(context.Background(), srv.URL)
+	got, err := (&Suggester{Client: srv.Client()}).suggestFrom(context.Background(), srv.URL, Query{Text: "zzqqxx"})
 	if err != nil {
 		t.Fatalf("suggestFrom: %v", err)
 	}
@@ -95,8 +95,30 @@ func TestSuggester_RejectsABodyThatIsNotTheExpectedShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := (&Suggester{Client: srv.Client()}).suggestFrom(context.Background(), srv.URL); err == nil {
+	if _, err := (&Suggester{Client: srv.Client()}).suggestFrom(context.Background(), srv.URL, Query{Text: "iphone 13"}); err == nil {
 		t.Error("suggestFrom accepted an HTML body as a suggestion list")
+	}
+}
+
+func TestSuggester_SendsTheAcceptLanguageTheQueryAsksFor(t *testing.T) {
+	// The language axis reaches the completion endpoint the same two ways it
+	// reaches a search: hl in the address and this header on the request. A
+	// request carrying only hl asks for the language halfway.
+	got := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Get("Accept-Language")
+		_, _ = w.Write([]byte(`["тест",[]]`))
+	}))
+	defer srv.Close()
+
+	q := Query{Text: "тест", Country: "ru", Language: "ru"}
+	if _, err := (&Suggester{Client: srv.Client()}).suggestFrom(context.Background(), srv.URL, q); err != nil {
+		t.Fatalf("suggestFrom: %v", err)
+	}
+	// Asserted whole, not by prefix: a header built from the wrong half of the
+	// query still starts with the right two letters.
+	if sent := <-got; sent != "ru-RU,ru;q=0.9" {
+		t.Errorf("Accept-Language=%q, want ru-RU,ru;q=0.9", sent)
 	}
 }
 
@@ -106,7 +128,7 @@ func TestSuggester_ReportsANonOKStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := (&Suggester{Client: srv.Client()}).suggestFrom(context.Background(), srv.URL)
+	_, err := (&Suggester{Client: srv.Client()}).suggestFrom(context.Background(), srv.URL, Query{Text: "iphone 13"})
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Errorf("err=%v, want it to name the status", err)
 	}
