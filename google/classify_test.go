@@ -55,10 +55,12 @@ func TestClassify_TheJavaScriptShellIsNotAnEmptyResult(t *testing.T) {
 }
 
 func TestClassify_ResultsWinOverWallMarkers(t *testing.T) {
-	// Order is load-bearing and was established by measurement: a genuine
-	// result page mentions reCAPTCHA, and checking wall markers first
-	// declared a page with eleven extracted links to be a wall.
-	body := append([]byte(`<html><body><script src="recaptcha/api.js"></script>`),
+	// Order is load-bearing and was established by measurement: checking
+	// wall markers before results declared a page carrying real results to
+	// be a wall. The body below carries an actual wallMarkers phrase — not a
+	// string the classifier ignores — so this test fails if the order is
+	// ever reversed.
+	body := append([]byte(`<html><body><p>our systems have detected unusual traffic</p>`),
 		append(fixture(t, "serp_goto_ru.html"), []byte(`</body></html>`)...)...)
 	got, err := Classify(200, "https://www.google.com/search?q=x", body)
 	if err != nil {
@@ -66,6 +68,23 @@ func TestClassify_ResultsWinOverWallMarkers(t *testing.T) {
 	}
 	if got != ClassSERP {
 		t.Errorf("class=%q, want %q — a page with results is never a wall", got, ClassSERP)
+	}
+}
+
+func TestClassify_SorryScriptDoesNotShadowAGenuineEmptyAnswer(t *testing.T) {
+	// "/sorry/index" turns up in Google's own inline JavaScript on ordinary
+	// pages, not only on walls — measured on 17 of 17 real captures. A true
+	// zero on a site: query must still come out as ClassEmpty, never ClassWall,
+	// even with that string sitting right there in a script tag.
+	body := []byte(`<html><body><script>var u="/sorry/index?continue=x";</script>` +
+		`<div id="search"><div id="rso"></div>` +
+		`<p>По запросу <em>site:blanktrail.com</em> ничего не найдено.</p></div></body></html>`)
+	got, err := Classify(200, "https://www.google.com/search?q=site:blanktrail.com", body)
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if got != ClassEmpty {
+		t.Errorf("class=%q, want %q", got, ClassEmpty)
 	}
 }
 

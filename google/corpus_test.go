@@ -30,8 +30,10 @@ import (
 // are logged, not asserted: a site can rank organically and advertise on the
 // same query, so an ad and a result sharing a host is not on its own proof
 // that one leaked into the other, and the two exported slices carry nothing
-// stronger to compare. A page that produces zero results is reported loudly —
-// that is exactly the drift this test exists to catch.
+// stronger to compare. A page classified ClassSERP that produces zero results
+// is reported loudly — that is exactly the drift this test exists to catch.
+// ClassEmpty is not held to that: Google genuinely finding nothing is a valid
+// zero, not drift.
 func TestCorpus_ParsesRealCapturedPages(t *testing.T) {
 	dir := os.Getenv("GSERP_CORPUS")
 	if dir == "" {
@@ -59,7 +61,7 @@ func TestCorpus_ParsesRealCapturedPages(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseSERP: %v", err)
 			}
-			if len(serp.Results) == 0 {
+			if class == ClassSERP && len(serp.Results) == 0 {
 				t.Errorf("a page classified %s yielded no results — the parser has drifted", class)
 			}
 			forms := map[LinkForm]int{}
