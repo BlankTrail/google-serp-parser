@@ -3,6 +3,7 @@
 package google
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -130,20 +131,85 @@ func TestParseSERP_TheCardLayoutHasNoCiteAndSaysSo(t *testing.T) {
 }
 
 func TestParseSERP_AdsCarryTheirAddressInPlainText(t *testing.T) {
-	// Unlike organic results, an ad's destination is in the page even when
+	// Unlike organic results, a text ad's destination is in the page even when
 	// the click URL is encrypted — data-pcu holds it. No resolution needed.
+	//
+	// The assertion is per placement, not over the whole slice: "some ad has a
+	// URL" passes happily while an entire placement comes back with none,
+	// which is exactly what the product listings were doing.
 	s := parseFixture(t, "serp_ads_us.html")
 	if len(s.Ads) == 0 {
 		t.Fatal("no ads parsed from the ads fixture")
 	}
-	var withURL int
+	byPlacement := map[Placement][]Ad{}
 	for _, a := range s.Ads {
-		if a.URL != "" {
-			withURL++
+		byPlacement[a.Placement] = append(byPlacement[a.Placement], a)
+	}
+
+	for _, p := range []Placement{PlacementTop, PlacementBottom} {
+		ads := byPlacement[p]
+		if len(ads) == 0 {
+			t.Errorf("placement %q produced no ads at all", p)
+			continue
+		}
+		for i, a := range ads {
+			if a.URL == "" {
+				t.Errorf("%s ad %d carries no destination; data-pcu was not read", p, i+1)
+			}
+			if a.Host == "" {
+				t.Errorf("%s ad %d carries no host", p, i+1)
+			}
 		}
 	}
-	if withURL == 0 {
-		t.Error("no ad carried a destination; data-pcu was not read")
+
+	// The product listings are documented as carrying a title and nothing
+	// else. If that ever stops being true, Ad's doc comment has to change with
+	// it — which is what this half of the test is for.
+	product := byPlacement[PlacementProduct]
+	if len(product) == 0 {
+		t.Error("the product ad block was not parsed")
+	}
+	for i, a := range product {
+		if a.URL != "" || a.Host != "" {
+			t.Errorf("product ad %d carries URL %q host %q — Ad says this placement has neither",
+				i+1, a.URL, a.Host)
+		}
+	}
+}
+
+func TestParseSERP_SnippetLeavesOutTheDuplicatedByline(t *testing.T) {
+	// A result's header field holds the byline twice — one copy inside the
+	// result's own anchor, one beside it for a hover animation, both in the
+	// DOM at all times. A walker with no notion of the header field returned
+	// the site name doubled in every snippet on every real page: measured as
+	// "Хабр Хабр 7 дек. 2022 г. — …" and "blanktrail.com blanktrail.com · …".
+	for _, name := range []string{"serp_goto_ru.html", "serp_site_ru.html", "serp_direct_us.html"} {
+		for i, r := range parseFixture(t, name).Results {
+			if r.Host == "" {
+				continue
+			}
+			if strings.Contains(r.Snippet, r.Host) {
+				t.Errorf("%s result %d snippet carries its byline %q: %q",
+					name, i+1, r.Host, r.Snippet)
+			}
+		}
+	}
+}
+
+func TestParseSERP_SnippetLeavesOutWhatThePageHidesFromReaders(t *testing.T) {
+	// A video card draws its running time on the thumbnail inside an
+	// aria-hidden="true" wrapper. It is beside the description, not part of
+	// it, and a duration inside a sentence is a wrong answer that reads like a
+	// right one.
+	s := parseFixture(t, "serp_direct_us.html")
+	for i, r := range s.Results {
+		if strings.Contains(r.Snippet, "13:00") {
+			t.Errorf("result %d snippet swallowed the hidden video overlay: %q", i+1, r.Snippet)
+		}
+	}
+	if s.Results[len(s.Results)-1].Snippet != "Trade-in values by model." {
+		t.Errorf("the video result's snippet=%q, want the description alone",
+			s.Results[len(s.Results)-1].Snippet)
 	}
 }
 

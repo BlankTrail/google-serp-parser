@@ -13,9 +13,10 @@
 //
 // The attribute names are the real ones because they are what the parser
 // anchors on: data-ved marks a telemetry-bearing link, data-text-ad marks a
-// text ad, data-pcu carries an advertiser's address in plain text. Their
-// values are placeholders — the real ones are session tokens and have no
-// business in a public repository.
+// text ad, data-pcu carries an advertiser's address in plain text, data-snhf
+// marks a result's header field and data-sncf its content field. Their values
+// are placeholders — the real ones are session tokens and have no business in
+// a public repository.
 //
 //	go run google/testdata/generate.go
 package main
@@ -33,6 +34,11 @@ type result struct {
 	host    string
 	path    string
 	snippet string
+	// duration, when set, renders the video-card overlay: a running time drawn
+	// on a thumbnail inside an aria-hidden="true" wrapper. Measured on real
+	// video results, and the reason the walker skips that attribute — the
+	// overlay is drawn for the eye and is not part of the description.
+	duration string
 }
 
 // page describes one fixture.
@@ -54,6 +60,11 @@ type advert struct {
 	title string
 	host  string
 	body  string
+	// sitelink, when set, renders an extra anchor BEFORE the one carrying
+	// data-pcu. Measured: one bottom placement in a real capture leads with an
+	// anchor that has no data-pcu, so a parser reading only the first anchor
+	// records that ad with no destination.
+	sitelink string
 }
 
 func main() {
@@ -72,31 +83,31 @@ func main() {
 
 func pages() []page {
 	ru := []result{
-		{"Как тестировать методы REST API", "habr.com", "ru › articles", "Разбор подходов к тестированию REST API и типичных ошибок."},
-		{"Один запрос, шестнадцать проверок", "software-testing.ru", "testing › for-beginners", "Как из одного запроса вытащить максимум проверок."},
-		{"Работа с GET", "testgrow.ru", "lectures › lecture59", "Лекция о параметрах GET-запроса и их проверке."},
-		{"Тестирование запроса", "www.politerm.com", "zuludoc › zb_query_test", "Документация по проверке запросов в ZuluGIS."},
-		{"Как тестировать API в Postman", "gb.ru", "blog › postman", "Пошаговое руководство для начинающих."},
-		{"Имеет ли смысл проверять всё", "qna.habr.com", "q › 1234567", "Обсуждение границ разумного покрытия."},
-		{"Инструменты тестирования API", "testengineer.ru", "tools", "Обзор инструментов и их сильных сторон."},
-		{"Проверка ответов сервера", "apitest.dev", "guides › responses", "Что именно стоит утверждать в ответе."},
+		{title: "Как тестировать методы REST API", host: "habr.com", path: "ru › articles", snippet: "Разбор подходов к тестированию REST API и типичных ошибок."},
+		{title: "Один запрос, шестнадцать проверок", host: "software-testing.ru", path: "testing › for-beginners", snippet: "Как из одного запроса вытащить максимум проверок."},
+		{title: "Работа с GET", host: "testgrow.ru", path: "lectures › lecture59", snippet: "Лекция о параметрах GET-запроса и их проверке."},
+		{title: "Тестирование запроса", host: "www.politerm.com", path: "zuludoc › zb_query_test", snippet: "Документация по проверке запросов в ZuluGIS."},
+		{title: "Как тестировать API в Postman", host: "gb.ru", path: "blog › postman", snippet: "Пошаговое руководство для начинающих."},
+		{title: "Имеет ли смысл проверять всё", host: "qna.habr.com", path: "q › 1234567", snippet: "Обсуждение границ разумного покрытия."},
+		{title: "Инструменты тестирования API", host: "testengineer.ru", path: "tools", snippet: "Обзор инструментов и их сильных сторон."},
+		{title: "Проверка ответов сервера", host: "apitest.dev", path: "guides › responses", snippet: "Что именно стоит утверждать в ответе."},
 		// A Google property under the encrypted form: the destination is not in
 		// the page, so the cite is the only place a Google host can show up,
 		// and it must be filtered the same way classifyLink filters direct and
 		// redirect links — measured to differ by link form otherwise.
-		{"Google Search Help", "support.google.com", "websearch › answer", "Справка по операторам поиска Google."},
+		{title: "Google Search Help", host: "support.google.com", path: "websearch › answer", snippet: "Справка по операторам поиска Google."},
 	}
 	cards := []result{
-		{"ChatGPT начинает блокировать прямые запросы", "", "", "Новость о смене политики доступа."},
-		{"Как проводить нагрузочное тестирование", "", "", "Практическое руководство по нагрузке."},
-		{"Burp Suite для тестирования безопасности", "", "", "Разбор возможностей инструмента."},
-		{"Как пользоваться SYNTX AI", "", "", "Первые шаги в интерфейсе."},
-		{"Автотесты без боли", "", "", "О поддерживаемых автотестах."},
-		{"Что должен уметь QA-инженер", "", "", "Список навыков и почему они нужны."},
-		{"Пирамида тестирования", "", "", "Классическая модель и её критика."},
-		{"Контрактное тестирование", "", "", "Зачем нужны контракты между сервисами."},
-		{"Мутационное тестирование", "", "", "Как доказать, что тест краснеет."},
-		{"Тест-дизайн на практике", "", "", "Техники и когда они уместны."},
+		{title: "ChatGPT начинает блокировать прямые запросы", host: "", path: "", snippet: "Новость о смене политики доступа."},
+		{title: "Как проводить нагрузочное тестирование", host: "", path: "", snippet: "Практическое руководство по нагрузке."},
+		{title: "Burp Suite для тестирования безопасности", host: "", path: "", snippet: "Разбор возможностей инструмента."},
+		{title: "Как пользоваться SYNTX AI", host: "", path: "", snippet: "Первые шаги в интерфейсе."},
+		{title: "Автотесты без боли", host: "", path: "", snippet: "О поддерживаемых автотестах."},
+		{title: "Что должен уметь QA-инженер", host: "", path: "", snippet: "Список навыков и почему они нужны."},
+		{title: "Пирамида тестирования", host: "", path: "", snippet: "Классическая модель и её критика."},
+		{title: "Контрактное тестирование", host: "", path: "", snippet: "Зачем нужны контракты между сервисами."},
+		{title: "Мутационное тестирование", host: "", path: "", snippet: "Как доказать, что тест краснеет."},
+		{title: "Тест-дизайн на практике", host: "", path: "", snippet: "Техники и когда они уместны."},
 	}
 	site := make([]result, 0, 10)
 	for i, title := range []string{
@@ -111,30 +122,33 @@ func pages() []page {
 		"Downloads — BlankTrail Proxy",
 		"FAQ — BlankTrail Proxy",
 	} {
-		site = append(site, result{title, "blanktrail.com", fmt.Sprintf("page%d", i+1),
-			"Страница сайта BlankTrail Proxy."})
+		site = append(site, result{title: title, host: "blanktrail.com",
+			path: fmt.Sprintf("page%d", i+1), snippet: "Страница сайта BlankTrail Proxy."})
 	}
 	us := []result{
-		{"Used iPhones | Shop Certified Refurbished iPhones", "buy.gazelle.com", "iphone", "Certified refurbished iPhones with a warranty."},
-		{"Shop the Newest Apple iPhones - AT&T", "www.att.com", "buy › phones", "Deals on the latest Apple iPhone models."},
-		{"Shop Apple iPhone: Find Prices, Specs & Deals", "www.boostmobile.com", "phones › apple", "Compare iPhone prices and plans."},
-		{"Apple Cell Phones & Smartphones", "www.ebay.com", "b › apple", "Listings for new and used Apple phones."},
-		{"iPhone - Apple", "www.apple.com", "iphone", "The official Apple iPhone page."},
-		{"iPhone - Wikipedia", "en.wikipedia.org", "wiki › IPhone", "Encyclopaedia article on the iPhone line."},
-		{"New Apple iPhones & Accessories", "www.bestbuy.com", "site › apple-iphone", "Retail listings and accessories."},
-		{"Apple iPhone: Shop Apple Smartphones", "www.verizon.com", "smartphones › apple", "Carrier offers on Apple smartphones."},
-		{"Refurbished iPhone deals", "swappa.com", "iphone", "Marketplace listings for used iPhones."},
-		{"Compare iPhone models", "www.gsmarena.com", "apple-phones", "Specification comparison table."},
+		{title: "Used iPhones | Shop Certified Refurbished iPhones", host: "buy.gazelle.com", path: "iphone", snippet: "Certified refurbished iPhones with a warranty."},
+		{title: "Shop the Newest Apple iPhones - AT&T", host: "www.att.com", path: "buy › phones", snippet: "Deals on the latest Apple iPhone models."},
+		{title: "Shop Apple iPhone: Find Prices, Specs & Deals", host: "www.boostmobile.com", path: "phones › apple", snippet: "Compare iPhone prices and plans."},
+		{title: "Apple Cell Phones & Smartphones", host: "www.ebay.com", path: "b › apple", snippet: "Listings for new and used Apple phones."},
+		{title: "iPhone - Apple", host: "www.apple.com", path: "iphone", snippet: "The official Apple iPhone page."},
+		{title: "iPhone - Wikipedia", host: "en.wikipedia.org", path: "wiki › IPhone", snippet: "Encyclopaedia article on the iPhone line."},
+		{title: "New Apple iPhones & Accessories", host: "www.bestbuy.com", path: "site › apple-iphone", snippet: "Retail listings and accessories."},
+		{title: "Apple iPhone: Shop Apple Smartphones", host: "www.verizon.com", path: "smartphones › apple", snippet: "Carrier offers on Apple smartphones."},
+		{title: "Refurbished iPhone deals", host: "swappa.com", path: "iphone", snippet: "Marketplace listings for used iPhones."},
+		{title: "Compare iPhone models", host: "www.gsmarena.com", path: "apple-phones", snippet: "Specification comparison table."},
 	}
 	direct := []result{
-		{"iPhone", "www.apple.com", "iphone", "The official Apple iPhone page."},
-		{"iPhone", "en.wikipedia.org", "wiki › IPhone", "Encyclopaedia article on the iPhone line."},
-		{"New Apple iPhones & Accessories", "www.bestbuy.com", "site › apple-iphone", "Retail listings and accessories."},
-		{"Apple iPhone: Shop Apple Smartphones", "www.verizon.com", "smartphones › apple", "Carrier offers on Apple smartphones."},
-		{"Apple iPhone deals", "www.t-mobile.com", "cell-phone › apple", "Carrier promotions on iPhone."},
-		{"Buy iPhone unlocked", "www.walmart.com", "browse › iphone", "Retail listings for unlocked phones."},
-		{"iPhone accessories", "www.target.com", "c › iphone", "Cases, cables and chargers."},
-		{"Trade in your iPhone", "www.gazelle.com", "trade-in", "Trade-in values by model."},
+		{title: "iPhone", host: "www.apple.com", path: "iphone", snippet: "The official Apple iPhone page."},
+		{title: "iPhone", host: "en.wikipedia.org", path: "wiki › IPhone", snippet: "Encyclopaedia article on the iPhone line."},
+		{title: "New Apple iPhones & Accessories", host: "www.bestbuy.com", path: "site › apple-iphone", snippet: "Retail listings and accessories."},
+		{title: "Apple iPhone: Shop Apple Smartphones", host: "www.verizon.com", path: "smartphones › apple", snippet: "Carrier offers on Apple smartphones."},
+		{title: "Apple iPhone deals", host: "www.t-mobile.com", path: "cell-phone › apple", snippet: "Carrier promotions on iPhone."},
+		{title: "Buy iPhone unlocked", host: "www.walmart.com", path: "browse › iphone", snippet: "Retail listings for unlocked phones."},
+		{title: "iPhone accessories", host: "www.target.com", path: "c › iphone", snippet: "Cases, cables and chargers."},
+		// A video result: the running time is drawn on the thumbnail behind
+		// aria-hidden="true" and must not end up inside the description.
+		{title: "Trade in your iPhone", host: "www.gazelle.com", path: "trade-in",
+			snippet: "Trade-in values by model.", duration: "13:00"},
 	}
 
 	return []page{
@@ -158,15 +172,19 @@ func pages() []page {
 			comment: "all three ad placements at once: top, bottom and product",
 			query:   "buy iphone", results: us, encoded: true,
 			topAds: []advert{
-				{"Cricket Wireless® iPhone promo", "https://www.cricketwireless.com/", "Switch and save on iPhone."},
-				{"Certified pre-owned iPhone 14", "https://patriotmobile.com/", "In stock and ready to ship."},
-				{"iPhones, iPads, MacBooks", "https://www.adorama.com/", "Shop Apple at Adorama."},
-				{"Apple iPhone Models", "https://savings.consumercellular.com/", "Compare models and plans."},
+				{title: "Cricket Wireless® iPhone promo", host: "https://www.cricketwireless.com/", body: "Switch and save on iPhone."},
+				{title: "Certified pre-owned iPhone 14", host: "https://patriotmobile.com/", body: "In stock and ready to ship."},
+				{title: "iPhones, iPads, MacBooks", host: "https://www.adorama.com/", body: "Shop Apple at Adorama."},
+				{title: "Apple iPhone Models", host: "https://savings.consumercellular.com/", body: "Compare models and plans."},
 			},
 			botAds: []advert{
-				{"Refurbished iPhones For Sale", "https://www.plug.tech/", "Unlocked and tested."},
-				{"certified pre-owned iphone se 3", "https://patriotmobile.com/", "Devices with warranty."},
-				{"Used & Refurbished iPhones", "https://reebelo.com/", "Free delivery, 30-day returns."},
+				// This one leads with a sitelink that carries no data-pcu, the
+				// shape that left a real bottom ad with no destination when
+				// only the first anchor was read.
+				{title: "Refurbished iPhones For Sale", host: "https://www.plug.tech/",
+					body: "Unlocked and tested.", sitelink: "Deals under $300"},
+				{title: "certified pre-owned iphone se 3", host: "https://patriotmobile.com/", body: "Devices with warranty."},
+				{title: "Used & Refurbished iPhones", host: "https://reebelo.com/", body: "Free delivery, 30-day returns."},
 			},
 			prodAds: []string{"Apple iPhone 15 — 676,99 $ — Reebelo USA", "Apple iPhone 14 — 218,99 $ — Gen Mobile", "Apple iPhone 13 — 1 099,00 $ — Best Buy"},
 		},
@@ -258,22 +276,48 @@ func renderResult(p page, i int, r result) string {
 		// page. The placeholder stands in for the ciphertext.
 		href = fmt.Sprintf("/goto?url=ENCRYPTED%02d", i)
 	}
-	title := fmt.Sprintf("<h3>%s</h3>", esc(r.title))
-	if p.cards {
-		title = fmt.Sprintf(`<div role="heading" aria-level="3">%s</div>`, esc(r.title))
-	}
-	cite := ""
-	if !p.cards && r.host != "" {
-		cite = fmt.Sprintf(`<cite>https://%s › %s</cite>`, esc(r.host), esc(r.path))
-	}
+
 	// The snippet lives in a div that is a SIBLING of the title+cite wrapper,
 	// both under the outer data-snc box — not nested inside that wrapper.
 	// Measured on real pages: a climb that stops at the nearest ancestor
 	// (the inner wrapper) finds the title and the cite but never reaches the
 	// description at all.
+	overlay := ""
+	if r.duration != "" {
+		// A video card's thumbnail and the running time drawn on it, behind
+		// aria-hidden="true" as measured. It is beside the description, not
+		// part of it.
+		overlay = fmt.Sprintf(`<div aria-hidden="true"><div><span>%s</span></div></div>`, esc(r.duration))
+	}
+
+	if p.cards {
+		// The card layout: titles in [role=heading], no h3, no cite, and — as
+		// measured — no header field and no duplicated byline either.
+		title := fmt.Sprintf(`<div role="heading" aria-level="3">%s</div>`, esc(r.title))
+		return fmt.Sprintf(
+			`<div data-snc="r%d"><div><a href="%s" data-ved="x">%s</a></div><div>%s%s</div></div>`+"\n",
+			i, esc(href), title, overlay, snippetHTML(r.snippet))
+	}
+
+	// The header field, data-snhf, holds the title, the byline and the cite —
+	// and holds the byline TWICE. Measured in real markup: one copy sits
+	// inside the result's own anchor, a second identical copy sits beside it
+	// and is revealed by a hover animation. Both are in the DOM at all times,
+	// which is why a text walker with no notion of the header field returned
+	// every site name doubled.
+	byline := ""
+	if r.host != "" {
+		byline = fmt.Sprintf(
+			`<div><span aria-hidden="true"><span><img alt=""/></span></span>`+
+				`<div><div><span>%s</span></div>`+
+				`<div><cite>https://%s › %s</cite></div></div></div>`,
+			esc(r.host), esc(r.host), esc(r.path))
+	}
 	return fmt.Sprintf(
-		`<div data-snc="r%d"><div><a href="%s" data-ved="x">%s</a>%s</div><div>%s</div></div>`+"\n",
-		i, esc(href), title, cite, snippetHTML(r.snippet))
+		`<div data-snc="r%d"><div data-snhf="0"><div><a href="%s" data-ved="x">%s%s</a></div>%s</div>`+
+			`<div data-sncf="1">%s%s</div></div>`+"\n",
+		i, esc(href), fmt.Sprintf("<h3>%s</h3>", esc(r.title)), byline, byline,
+		overlay, snippetHTML(r.snippet))
 }
 
 // snippetHTML renders a snippet with its first word wrapped in em, the way
@@ -292,11 +336,16 @@ func renderAd(i int, a advert) string {
 	// data-pcu carries the advertiser's address in plain text even when the
 	// click URL is encrypted — measured, and the reason ads need no
 	// resolution while organic results do. A tracker may follow after a comma.
+	lead := ""
+	if a.sitelink != "" {
+		// An anchor with no data-pcu ahead of the one that has it — measured.
+		lead = fmt.Sprintf(`<a href="/goto?url=SL%02d" data-ved="x">%s</a>`, i, esc(a.sitelink))
+	}
 	return fmt.Sprintf(
-		`<div data-text-ad="1" data-ta-slot="0" data-ta-slot-pos="%d">`+
+		`<div data-text-ad="1" data-ta-slot="0" data-ta-slot-pos="%d">%s`+
 			`<a href="/goto?url=AD%02d" data-ved="x" data-pcu="%s,https://ad.doubleclick.net/">`+
 			`<div role="heading" aria-level="3">%s</div></a><div>%s</div></div>`+"\n",
-		i+1, i, esc(a.host), esc(a.title), esc(a.body))
+		i+1, lead, i, esc(a.host), esc(a.title), esc(a.body))
 }
 
 func esc(s string) string {
