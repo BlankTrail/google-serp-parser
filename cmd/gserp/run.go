@@ -305,8 +305,10 @@ func printEstimate(out io.Writer, name string, est run.Estimate) {
 	_, _ = fmt.Fprintf(out, "%s: %d queries × %d pages = %d searches, %d warm-ups, "+
 		"%d requests leaving the machine, %d at worst\n",
 		name, est.Queries, est.Pages, est.Searches, est.Warmups, est.Requests, est.MaxRequests)
-	// The floor counts pauses and nothing else — no network time, no retries —
-	// so it is stated as the shortest this could be and never as a duration.
+	// The floor counts pauses and nothing else — no network time, no retries,
+	// no walk that ends early — so it is printed as a floor and said to be one.
+	// A measured run took many times it, and a number that gets believed as a
+	// forecast is worse than no number at all.
 	_, _ = fmt.Fprintf(out, "floor %v over %d ports, %v apart; the run takes longer than that\n",
 		est.Floor.Round(time.Second), est.Ports, est.Cooldown.Round(time.Second))
 }

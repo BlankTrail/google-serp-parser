@@ -10,6 +10,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -479,5 +480,31 @@ func TestSettle_StampsAJobThatHasNothingLeftAsDone(t *testing.T) {
 
 	if _, err := s.LastUnfinished(context.Background(), "j"); !errors.Is(err, store.ErrNoUnfinishedJob) {
 		t.Errorf("LastUnfinished returned %v, want the job to be stamped done", err)
+	}
+}
+
+func TestResumedPlan_KeepsTheNumberEachQueryHadInTheOriginalList(t *testing.T) {
+	// A job taken up part way holds only what is left of it. Numbering those
+	// from zero would file every result against the wrong query: the first one
+	// still to do would be recorded as the one that is already done.
+	dir := t.TempDir()
+	db := filepath.Join(dir, "h.db")
+	startedJob(t, db, "nightly")
+
+	s, err := store.Open(db)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	p, err := resumedPlan(context.Background(), s, "nightly")
+	if err != nil {
+		t.Fatalf("resumedPlan: %v", err)
+	}
+	if !slices.Equal(p.queries, []string{"b", "c"}) {
+		t.Errorf("the plan holds %q, want the two queries that were never run", p.queries)
+	}
+	if !slices.Equal(p.ordinals, []int{1, 2}) {
+		t.Errorf("the plan numbers them %v, want the 1 and 2 they had in the list", p.ordinals)
 	}
 }
