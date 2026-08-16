@@ -104,6 +104,45 @@ func TestNewJob_BothButtonsAreSubmitsOfTheOneForm(t *testing.T) {
 	}
 }
 
+func TestNewJob_SaysThatTheThreadAndPortBoxesOnlyChangeTheEstimate(t *testing.T) {
+	// The two feed the estimate and nothing else. What runs a job is the one
+	// warm pool the server was started with, and the thread count it was built
+	// with: neither is a property of a job, and the history has nowhere to keep
+	// them. A box that looks like a setting and is not is worse than no box,
+	// because somebody will set it to sixteen, watch the job run at four and
+	// conclude the program ignores what it is told.
+	//
+	// The two are read out of the group they stand in rather than looked for
+	// anywhere on the page, because a sentence at the bottom of a form explains
+	// nothing about the box at the top of it.
+	body := get(t, testServer(t), "/new").Body.String()
+
+	_, opened, ok := strings.Cut(body, "<fieldset")
+	if !ok {
+		t.Fatalf("the estimate's own boxes stand in no group of their own:\n%s", body)
+	}
+	group, _, ok := strings.Cut(opened, "</fieldset>")
+	if !ok {
+		t.Fatalf("the group the estimate's boxes stand in is never closed:\n%s", body)
+	}
+	if !strings.Contains(group, LangEN.T("form.estimateonly")) {
+		t.Errorf("the group does not say what its boxes are for:\n%s", group)
+	}
+	for _, field := range []string{`name="threads"`, `name="ports"`} {
+		if !strings.Contains(group, field) {
+			t.Errorf("%s is not in the group that says these change only the estimate", field)
+		}
+	}
+	// The depth is a setting of the job itself: it is written down with the job
+	// and it decides what is searched for. Standing it beside the two that are
+	// not would say the opposite of what this group is for.
+	for _, field := range []string{`name="pages"`, `name="queries"`, `name="name"`} {
+		if strings.Contains(group, field) {
+			t.Errorf("%s was grouped with the boxes that change nothing but the estimate", field)
+		}
+	}
+}
+
 func TestEstimate_AnswersWithoutStartingAnything(t *testing.T) {
 	// The first thing anyone does with ten thousand queries is ask what it will
 	// cost. Answering must not need a pool, a network, or a job in the history.

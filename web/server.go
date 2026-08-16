@@ -129,8 +129,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /{$}", s.index)
 	s.mux.HandleFunc("GET /new", s.newJob)
 	s.mux.HandleFunc("POST /new", s.createJob)
+	s.mux.HandleFunc("GET /job/{id}", s.job)
 	s.mux.HandleFunc("GET /history", s.history)
 	s.mux.HandleFunc("GET /export", s.download)
+	// What the job page polls, and what its two buttons send. Both buttons are
+	// registered for post alone, so a browser prefetching a link, or anything
+	// else that walks one, is answered with a refusal rather than with somebody
+	// else's job ending.
+	s.mux.HandleFunc("GET /api/progress", s.apiProgress)
+	s.mux.HandleFunc("POST /api/stop", s.apiStop)
+	s.mux.HandleFunc("POST /api/resume", s.apiResume)
 	// One path element, so a name can never walk out of the directory it is
 	// looked up in.
 	s.mux.HandleFunc("GET /assets/{file}", s.asset)

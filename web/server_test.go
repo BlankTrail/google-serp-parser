@@ -198,6 +198,18 @@ func TestServer_OffersTheOtherLanguageWithoutLosingThePage(t *testing.T) {
 	}
 }
 
+func TestServer_OffersTheFormThatStartsAJobFromEveryPage(t *testing.T) {
+	// Starting a job is what this program is for, and until now its page was
+	// reachable only by typing the address. A page nothing links to is a page
+	// nobody finds.
+	s := testServer(t)
+	for _, at := range []string{"/", "/history", "/new"} {
+		if body := get(t, s, at).Body.String(); !strings.Contains(body, `href="/new"`) {
+			t.Errorf("%s does not offer the page that starts a job:\n%s", at, body)
+		}
+	}
+}
+
 func TestServer_ServesItsOwnStylesheet(t *testing.T) {
 	// Everything ships inside the binary; a missing asset means the embed
 	// pattern stopped matching and nobody would notice from the Go side.
