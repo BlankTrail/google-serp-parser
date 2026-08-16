@@ -38,6 +38,10 @@ type Config struct {
 	// refuses to start anything, which is what a reader of a history on another
 	// machine gets.
 	Supervisor Supervisor
+	// Search is what a search answered inside the request is taken to, how many
+	// of them may be under way at once and how long one may take. A server built
+	// without a searcher serves the history and searches nothing.
+	Search SearchConfig
 }
 
 // Server is the programmable interface.
@@ -51,6 +55,8 @@ type Server struct {
 	log   *slog.Logger
 	sup   Supervisor
 	mux   *http.ServeMux
+
+	direct directSearch
 }
 
 // New builds the server.
@@ -63,6 +69,8 @@ func New(cfg Config) (*Server, error) {
 		log:   cfg.Logger,
 		sup:   cfg.Supervisor,
 		mux:   http.NewServeMux(),
+
+		direct: newDirectSearch(cfg.Search),
 	}
 	if s.log == nil {
 		s.log = slog.Default()
@@ -80,6 +88,7 @@ func New(cfg Config) (*Server, error) {
 func (s *Server) routes() {
 	s.jobRoutes()
 	s.resultRoutes()
+	s.searchRoutes()
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint")
 	})
