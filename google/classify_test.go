@@ -4,6 +4,7 @@ package google
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -147,6 +148,41 @@ func TestClassify_TheOtherEnglishWordingIsAlsoAnEmptyAnswer(t *testing.T) {
 	}
 	if got != ClassEmpty {
 		t.Errorf("class=%q, want %q", got, ClassEmpty)
+	}
+}
+
+func TestClassOf_ReadsTheClassOutOfAWrappedError(t *testing.T) {
+	// A caller decides from the class whether the query is worth asking again
+	// and over which transport. An error travels up through wrapping, so the
+	// class has to survive it; recovering it from the message instead would tie
+	// that decision to the wording of the message.
+	inner := &ResponseError{Class: ClassShell, Query: "iphone 13"}
+	wrapped := fmt.Errorf("google: page %d of %q: %w", 2, "iphone 13", inner)
+
+	got, ok := ClassOf(wrapped)
+	if !ok {
+		t.Fatal("the class was not recoverable from a wrapped error")
+	}
+	if got != ClassShell {
+		t.Errorf("class=%q, want %q", got, ClassShell)
+	}
+}
+
+func TestClassOf_SaysNothingForAnErrorThatCarriesNoClass(t *testing.T) {
+	// A request that never arrived was never classified, and a caller that took
+	// the zero Class for an answer would be branching on a class nothing
+	// measured.
+	if got, ok := ClassOf(errors.New("dial tcp: connection refused")); ok {
+		t.Errorf("ClassOf reported %q for an error that carries no class", got)
+	}
+}
+
+func TestResponseError_StaysMatchableAsNotASERP(t *testing.T) {
+	// Callers written before the class existed branch on ErrNotSERP. Adding a
+	// type must not take that away from them.
+	err := &ResponseError{Class: ClassWall, Query: "x", err: fmt.Errorf("%w: challenge page", ErrNotSERP)}
+	if !errors.Is(err, ErrNotSERP) {
+		t.Error("a response error no longer matches ErrNotSERP")
 	}
 }
 
