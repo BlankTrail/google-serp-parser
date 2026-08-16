@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -21,8 +22,18 @@ const interruptExit = 130
 func main() {
 	if err := dispatch(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "gserp:", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
+}
+
+// exitCode is what the shell is told. Whatever started the run reads this and
+// nothing else, so a job the user stopped is told apart from one that failed:
+// the first is to be taken up, the second is to be looked into.
+func exitCode(err error) int {
+	if errors.Is(err, errStopped) {
+		return interruptExit
+	}
+	return 1
 }
 
 func dispatch(ctx context.Context, args []string) error {
