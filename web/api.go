@@ -142,6 +142,12 @@ func (s *Server) pressed(w http.ResponseWriter, r *http.Request, do func(*Superv
 		http.Error(w, pickLang(r).T("form.norunner"), http.StatusServiceUnavailable)
 		return
 	}
+	if !s.sup.canRun() {
+		// Nothing can be started here until the connection is set up, and a job
+		// taken up would wait in the queue with nothing to say why.
+		http.Error(w, pickLang(r).T("form.notsetup"), http.StatusServiceUnavailable)
+		return
+	}
 	err := do(s.sup, sum.ID)
 	switch {
 	case err == nil,

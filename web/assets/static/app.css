@@ -103,6 +103,13 @@ header {
 	color: var(--quiet);
 }
 
+/* Setting the machine up is not one of the screens, so it is set at the size of
+   the switcher beside it rather than at the size of the tabs. */
+.tools {
+	display: flex;
+	font-size: var(--small);
+}
+
 /* Links are neutral. The one place on a screen filled with colour is the bar,
    and a page of coloured links spends that budget before the bar is drawn. */
 a {
@@ -285,6 +292,7 @@ button:hover {
 }
 
 input,
+select,
 textarea {
 	background: var(--surface);
 	border: var(--hairline-width) solid var(--hairline);
@@ -413,4 +421,16 @@ tbody tr:last-child td {
 	flex-wrap: wrap;
 	gap: 0.75rem;
 	margin: 0;
+}
+
+/* What a check found, one finding under the next, separated by air rather than
+   by a rule. Nothing here is coloured by how serious it is: the word says that,
+   and a page that paints its own verdict is a page arguing with the reader. */
+.findings {
+	display: flex;
+	flex-direction: column;
+	gap: 0.9rem;
+	list-style: none;
+	margin: 0;
+	padding: 0;
 }

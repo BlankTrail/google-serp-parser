@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/settings"
 	"github.com/blanktrail/google-serp-parser/store"
 	"github.com/blanktrail/google-serp-parser/web"
@@ -102,11 +103,15 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	// Closed before the history, because a job it ends is written down as it
 	// lets go of it. Close waits for that.
 	sup := opts.jobs(ctx, out, st)
-	if sup != nil {
-		defer func() { _ = sup.Close() }()
-	}
+	defer func() { _ = sup.Close() }()
 
-	srv, err := web.New(web.Config{Store: st, Logger: opts.logger(os.Stderr), Supervisor: sup})
+	srv, err := web.New(web.Config{
+		Store:        st,
+		Logger:       opts.logger(os.Stderr),
+		Supervisor:   sup,
+		SettingsPath: opts.settingsPath(),
+		Connect:      opts.connect,
+	})
 	if err != nil {
 		_ = ln.Close()
 		return err
@@ -115,33 +120,116 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	return srv.Serve(ctx, ln)
 }
 
-// jobs opens the ports the interface will run jobs on, or says why it will only
-// be able to show what is already there.
+// jobs opens the ports the interface will run jobs on, or says why it has none
+// yet.
 //
-// Neither a missing key nor ports that would not open is a reason to refuse to
-// start. Half of what this interface does is read a history, that half needs
-// nothing opened, and a machine with no key is a machine somebody is reading a
-// history on. Refusing there would take away the part that still works.
+// There is always a supervisor. Neither a missing key nor ports that would not
+// open is a reason to refuse to start: half of what this interface does is read
+// a history and that half needs nothing opened. What such a server has is a
+// supervisor with nothing to run on, which is what lets a connection set up in
+// the browser be taken into use without the process being started again.
 //
 // The key is read from the environment and is not a flag, for the reason it is
 // not one anywhere else in this command: a key on a command line is a key in the
-// shell history and in the process list of everyone on the machine.
+// shell history and in the process list of everyone on the machine. It is also
+// read from the settings, because a connection set up in a browser that had to
+// be set up again after every restart is one nobody would trust.
 func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) *web.Supervisor {
-	if os.Getenv(envAPIKey) == "" {
-		_, _ = fmt.Fprintf(out, "%s is not set: this interface will show the history and cannot run a job\n",
+	saved, configured := o.saved(out)
+	threads, ports := o.runOn(saved, configured)
+
+	var pool *blanktrail.Pool
+	var err error
+	switch {
+	case os.Getenv(envAPIKey) != "":
+		// What this process was started with wins. Somebody who put a key in the
+		// environment for this run meant it for this run.
+		pool, err = openPool(ctx, out, poolConfig(threads, ports))
+	case saved.APIKey != "":
+		pool, err = o.dial(ctx, saved, threads, ports)
+	default:
+		_, _ = fmt.Fprintf(out,
+			"%s is not set and no connection has been saved: this interface shows the history and runs nothing until the connection is set up in it\n",
 			envAPIKey)
-		return nil
+		return web.NewSupervisorWithoutAPool(st)
 	}
-	threads, ports := o.runOn(o.saved(out))
-	pool, err := openPool(ctx, out, poolConfig(threads, ports))
 	if err != nil {
 		_, _ = fmt.Fprintf(out,
-			"no ports could be opened, so this interface will show the history and cannot run a job: %s\n",
+			"no ports could be opened, so this interface shows the history and runs nothing until the connection is set up in it: %s\n",
 			o.clean(err.Error()))
 		_, _ = fmt.Fprintln(out, "gserp doctor prints the whole report")
-		return nil
+		return web.NewSupervisorWithoutAPool(st)
 	}
 	return web.NewSupervisor(st, pool, threads)
+}
+
+// connect opens the ports a connection just saved in the browser describes.
+//
+// It is what the interface is handed to build a pool with, and it is written
+// here rather than there because how many ports a run opens, how long they rest
+// and what they are opened as is this command's to decide — the same decision
+// the estimate on the form is worked out from.
+//
+// The numbers are the ones just saved rather than the ones this process was
+// started with: somebody who has this moment typed a port count into the
+// settings has said which they want, and a flag from last week that quietly won
+// would make the box on the screen a box that does nothing.
+func (o serveOptions) connect(ctx context.Context, saved settings.Settings) (*blanktrail.Pool, error) {
+	return o.dial(ctx, saved, saved.Threads, saved.Ports)
+}
+
+// dial opens a pool against the connection described, after the check that says
+// whether it would get through at all.
+//
+// The check is the one gserp doctor runs, for the reason it is run before a run
+// from the command line: the most common way a job is dead on arrival is one a
+// single request would have shown.
+func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads, ports int) (*blanktrail.Pool, error) {
+	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
+	if err != nil {
+		return nil, o.scrubbed(err)
+	}
+	if threads < 1 {
+		threads = o.Threads
+	}
+	if ports < 1 {
+		ports = o.Ports
+	}
+	cfg := poolConfig(threads, ports)
+	if saved.Cooldown > 0 {
+		cfg.Cooldown = saved.Cooldown
+	}
+
+	report := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
+		Domains: checkedDomains,
+		Ports:   cfg.Size(),
+	})
+	if !report.OK() {
+		return nil, errors.New("this connection would not get through; the settings page says what the check found")
+	}
+	cfg.Client = client
+	cfg.CA = report.CA
+
+	if saved.Proxy.Kind != "" {
+		// The list is loaded here and reloaded on its own interval afterwards, so a
+		// list that changes during a run is a list this pool follows.
+		rotor, err := blanktrail.NewRotor(ctx, blanktrail.Source{
+			Kind:          saved.Proxy.Kind,
+			Location:      saved.Proxy.Location,
+			Refresh:       saved.Proxy.Refresh,
+			DefaultScheme: "socks5",
+		})
+		if err != nil {
+			return nil, o.scrubbed(err)
+		}
+		cfg.Channels = []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)}
+	}
+
+	pool, err := blanktrail.NewPool(ctx, cfg)
+	if err != nil {
+		return nil, o.scrubbed(err)
+	}
+	return pool, nil
 }
 
 // saved is what was set in the browser, and whether anything was.
@@ -155,7 +243,7 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 // over. It is the file somebody's connection is kept in, and a program that
 // quietly ran without it would look like one that had lost their settings.
 func (o serveOptions) saved(out io.Writer) (settings.Settings, bool) {
-	path := filepath.Join(filepath.Dir(o.DB), settingsName)
+	path := o.settingsPath()
 	if _, err := os.Stat(path); err != nil {
 		return settings.Settings{}, false
 	}
@@ -167,6 +255,13 @@ func (o serveOptions) saved(out io.Writer) (settings.Settings, bool) {
 		return settings.Settings{}, false
 	}
 	return s, true
+}
+
+// settingsPath is the file the connection is kept in: beside the history rather
+// than inside it, so a history that is copied, handed over or backed up does not
+// carry the connection with it.
+func (o serveOptions) settingsPath() string {
+	return filepath.Join(filepath.Dir(o.DB), settingsName)
 }
 
 // runOn is how many queries this interface takes at once and how many ports

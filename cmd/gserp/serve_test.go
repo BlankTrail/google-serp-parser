@@ -18,6 +18,7 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 	"github.com/blanktrail/google-serp-parser/settings"
+	"github.com/blanktrail/google-serp-parser/store"
 	"github.com/blanktrail/google-serp-parser/web"
 )
 
@@ -148,9 +149,14 @@ func TestServe_TakesAJobFromTheFormWhenItHasSomethingToRunItOn(t *testing.T) {
 }
 
 func TestServe_ShowsTheHistoryAndSaysSoWhenItCannotRunAnything(t *testing.T) {
-	// A machine with no key is a machine somebody is reading a history on.
-	// Refusing to start there takes away the half that needs nothing opened,
-	// and a browser pointed at a dead port explains none of it.
+	// A machine with no key is a machine somebody is reading a history on, or
+	// one nobody has set up yet. Refusing to start there takes away the half
+	// that needs nothing opened, and a browser pointed at a dead port explains
+	// none of it.
+	//
+	// What the page says is the sentence about a connection that has not been
+	// set up rather than the one about a server built to read a history, because
+	// this server can be set up from the page it is refusing on.
 	//
 	// The control address is pointed at the stand-in as well as the key being
 	// emptied. Whichever of the two the command notices first, what it notices
@@ -168,8 +174,39 @@ func TestServe_ShowsTheHistoryAndSaysSoWhenItCannotRunAnything(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("the form came back %d, want the page again with its complaint", res.StatusCode)
 	}
-	if !strings.Contains(string(body), web.LangEN.T("form.norunner")) {
+	if !strings.Contains(string(body), web.LangEN.T("form.notsetup")) {
 		t.Errorf("the page does not say why it cannot run the job:\n%s", body)
+	}
+}
+
+func TestServe_OpensThePortsAConnectionSavedInTheBrowserDescribes(t *testing.T) {
+	// A connection is set up in a browser and read by a process started later.
+	// One that had to be set up again after every restart is one nobody would
+	// trust, and the interface would come up dead with nothing saying why.
+	//
+	// The environment is emptied so that what is opened here can have come from
+	// the settings file alone.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	t.Setenv(envControlURL, "")
+	t.Setenv(envAPIKey, "")
+	t.Setenv(envProxyList, "")
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), Threads: 1, Ports: 1,
+	})
+
+	st, err := store.Open(opts.DB)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var out bytes.Buffer
+	sup := opts.jobs(t.Context(), &out, st)
+	t.Cleanup(func() { _ = sup.Close() })
+
+	if len(fake.OpenPorts()) == 0 {
+		t.Errorf("nothing was opened for a connection that was saved in the browser:\n%s", out.String())
 	}
 }
 

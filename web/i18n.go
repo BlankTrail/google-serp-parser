@@ -129,6 +129,7 @@ var catalogue = map[Lang]map[string]string{
 		"form.queries.required": "There is not one query in the list.",
 		"form.pages.positive":   "A query is taken to at least one page.",
 		"form.norunner":         "This server was started to read the history, so it cannot run a job.",
+		"form.notsetup":         "There is nothing to run a job on yet. Open the settings and set the connection up.",
 		"estimate.title":        "What this will cost",
 		"estimate.searches":     "Queries × pages",
 		"estimate.requests":     "Requests leaving this machine",
@@ -166,6 +167,47 @@ var catalogue = map[Lang]map[string]string{
 		"state.class.empty":      "nothing found",
 		"state.class.serp":       "a page of results",
 		"state.class.silent":     "no answer at all",
+
+		// Setting the machine up. The key is spoken of by its last few characters
+		// and never shown, which is why two phrases are needed where one box
+		// stands.
+		"settings.title":            "Settings",
+		"settings.connection":       "Connection",
+		"settings.address":          "Address",
+		"settings.key":              "Key",
+		"settings.key.saved":        "The key that is saved ends in",
+		"settings.key.keep":         "Leave this empty to keep the key that is saved.",
+		"settings.check":            "Check the connection",
+		"settings.check.title":      "What the check found",
+		"settings.check.nothing":    "The check found nothing to report.",
+		"settings.finding.ok":       "In order",
+		"settings.finding.warn":     "Note",
+		"settings.finding.fail":     "Fail",
+		"settings.source":           "Addresses to go out through",
+		"settings.source.where":     "Read from",
+		"settings.source.none":      "Not used",
+		"settings.source.file":      "A file on this machine",
+		"settings.source.url":       "An address",
+		"settings.source.at":        "Where",
+		"settings.source.refresh":   "Read again every, minutes",
+		"settings.pool":             "Ports",
+		"settings.pause":            "Pause on one port between requests, seconds",
+		"settings.language":         "Language of this interface",
+		"settings.language.reader":  "Whichever the reader asks for",
+		"settings.save":             "Save",
+		"settings.running.asks":     "A job is running. These settings change where the work runs, so say what to do about that job.",
+		"settings.running.cost":     "Stopping it costs a second warm-up and leaves it to be carried on. Waiting costs however long it has left.",
+		"settings.running.now":      "Stop it and save",
+		"settings.running.after":    "Save and wait for it to finish",
+		"settings.unreadable":       "The settings file is there and could not be read. What is below is what this program starts from; saving writes it over the file.",
+		"settings.opened.nothing":   "The settings are saved, and nothing could be opened with them, so the work goes on where it was. The reason is in the log this server writes.",
+		"settings.address.unusable": "That is not an address this program can reach.",
+		"settings.ports.count":      "The ports on a thread are a count of at least one.",
+		"settings.threads.count":    "The threads are a count of at least one.",
+		"settings.pause.length":     "A pause is a length of time, and no shorter than none.",
+		"settings.refresh.length":   "How often a list is read again is a length of time, and no shorter than none.",
+		"settings.source.unknown":   "That is not one of the places a list can be read from.",
+		"settings.language.unknown": "This interface is not written in that language.",
 	},
 	LangRU: {
 		"nav.language":         "Язык",
@@ -220,6 +262,7 @@ var catalogue = map[Lang]map[string]string{
 		"form.queries.required": "В списке нет ни одного запроса.",
 		"form.pages.positive":   "Запрос берётся хотя бы на одну страницу.",
 		"form.norunner":         "Этот сервер поднят читать историю и выполнять задания не может.",
+		"form.notsetup":         "Выполнять задание пока не на чем. Откройте настройки и настройте связь.",
 		"estimate.title":        "Во что это обойдётся",
 		"estimate.searches":     "Запросов × страниц",
 		"estimate.requests":     "Запросов уйдёт с этой машины",
@@ -254,6 +297,44 @@ var catalogue = map[Lang]map[string]string{
 		"state.class.empty":      "ничего не найдено",
 		"state.class.serp":       "страница выдачи",
 		"state.class.silent":     "ответа не было",
+
+		"settings.title":            "Настройки",
+		"settings.connection":       "Связь",
+		"settings.address":          "Адрес",
+		"settings.key":              "Ключ",
+		"settings.key.saved":        "Сохранённый ключ оканчивается на",
+		"settings.key.keep":         "Оставьте пустым, чтобы сохранённый ключ остался прежним.",
+		"settings.check":            "Проверить связь",
+		"settings.check.title":      "Что показала проверка",
+		"settings.check.nothing":    "Проверке нечего сообщить.",
+		"settings.finding.ok":       "В порядке",
+		"settings.finding.warn":     "Замечание",
+		"settings.finding.fail":     "Отказ",
+		"settings.source":           "Адреса, через которые выходить",
+		"settings.source.where":     "Читать",
+		"settings.source.none":      "Не используются",
+		"settings.source.file":      "Из файла на этой машине",
+		"settings.source.url":       "По адресу",
+		"settings.source.at":        "Откуда",
+		"settings.source.refresh":   "Перечитывать раз в, мин",
+		"settings.pool":             "Порты",
+		"settings.pause":            "Пауза на одном порту между запросами, с",
+		"settings.language":         "Язык этого интерфейса",
+		"settings.language.reader":  "Какой попросит читающий",
+		"settings.save":             "Сохранить",
+		"settings.running.asks":     "Идёт задание. Эти настройки меняют то, где выполняется работа, — скажите, что делать с ним.",
+		"settings.running.cost":     "Остановка стоит повторного разогрева и оставляет задание к продолжению. Ожидание стоит того времени, что заданию осталось.",
+		"settings.running.now":      "Остановить и сохранить",
+		"settings.running.after":    "Сохранить и дождаться конца",
+		"settings.unreadable":       "Файл настроек есть, и прочитать его не удалось. Ниже — то, с чего эта программа начинает; сохранение перезапишет файл.",
+		"settings.opened.nothing":   "Настройки сохранены, и открыть по ним ничего не удалось, поэтому работа выполняется там же, где и раньше. Причина — в журнале сервера.",
+		"settings.address.unusable": "По этому адресу программа обратиться не может.",
+		"settings.ports.count":      "Портов на поток — хотя бы один.",
+		"settings.threads.count":    "Потоков — хотя бы один.",
+		"settings.pause.length":     "Пауза — это время, и не короче нуля.",
+		"settings.refresh.length":   "Как часто перечитывать список — это время, и не короче нуля.",
+		"settings.source.unknown":   "Список не читают из такого места.",
+		"settings.language.unknown": "На этом языке интерфейс не написан.",
 	},
 }
 
@@ -311,13 +392,22 @@ func fromAcceptLanguage(header string) (Lang, bool) {
 	return "", false
 }
 
-// pickLang decides which language a request is answered in.
+// pickLang decides which language a request is answered in on a server that
+// has been told nothing about which one to prefer.
+func pickLang(r *http.Request) Lang { return chooseLang(r, "") }
+
+// chooseLang decides which language a request is answered in.
 //
 // The order is the reader's own words first, then what they said last time,
-// then what their browser prefers. A language this program does not have is not
-// an answer at any step, and falls through to the next: a mistyped address must
-// not undo a choice the reader made.
-func pickLang(r *http.Request) Lang {
+// then what this machine was set up to answer in, then what their browser
+// prefers. A language this program does not have is not an answer at any step,
+// and falls through to the next: a mistyped address must not undo a choice the
+// reader made.
+//
+// The saved language stands below both of the reader's own answers and above
+// the browser's, because it is a decision somebody made on this machine and the
+// header is a guess about a reader this machine has never met.
+func chooseLang(r *http.Request, saved Lang) Lang {
 	if l, ok := langOf(r.URL.Query().Get(langQuery)); ok {
 		return l
 	}
@@ -325,6 +415,9 @@ func pickLang(r *http.Request) Lang {
 		if l, ok := langOf(c.Value); ok {
 			return l
 		}
+	}
+	if l, ok := langOf(string(saved)); ok {
+		return l
 	}
 	if l, ok := fromAcceptLanguage(r.Header.Get("Accept-Language")); ok {
 		return l
@@ -338,22 +431,28 @@ func pickLang(r *http.Request) Lang {
 // Only an outright request is stored. Writing down what the browser preferred
 // would freeze a guess into a decision the reader never made, and a browser
 // reconfigured afterwards would go on being ignored.
-//
-// The cookie is closed to scripts because nothing in the browser reads it: the
-// language is decided here, before a page exists.
-func rememberLang(w http.ResponseWriter, r *http.Request) Lang {
-	lang := pickLang(r)
+func (s *Server) rememberLang(w http.ResponseWriter, r *http.Request) Lang {
+	lang := chooseLang(r, s.tongue())
 	if _, asked := langOf(r.URL.Query().Get(langQuery)); asked {
-		http.SetCookie(w, &http.Cookie{
-			Name:     langCookie,
-			Value:    string(lang),
-			Path:     "/",
-			MaxAge:   int(langMemory / time.Second),
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
+		writeLang(w, lang)
 	}
 	return lang
+}
+
+// writeLang writes a language down for as long as a language is worth
+// remembering.
+//
+// The cookie is closed to scripts because nothing in the browser reads it: the
+// language is decided on the server, before a page exists.
+func writeLang(w http.ResponseWriter, lang Lang) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     langCookie,
+		Value:    string(lang),
+		Path:     "/",
+		MaxAge:   int(langMemory / time.Second),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // langLink is one language as the switcher offers it.

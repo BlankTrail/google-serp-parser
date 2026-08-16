@@ -151,13 +151,13 @@ type queuedView struct {
 
 // state draws what is happening right now.
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
-	lang := rememberLang(w, r)
+	lang := s.rememberLang(w, r)
 	view, err := s.stateOf(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	view.page = frame(r, lang, "state.title", stateAt)
+	view.page = s.frame(r, lang, "state.title", stateAt)
 	view.Back = stateAt
 	// The screen asks for itself again only while the supervisor is holding
 	// something. With nothing running and nothing waiting, every figure on it —

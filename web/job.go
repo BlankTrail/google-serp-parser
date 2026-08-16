@@ -34,13 +34,13 @@ var errEnough = errors.New("web: the page holds every row it draws")
 // button sends the reader back to it, so the address is written once.
 func jobPath(id int64) string { return "/job/" + strconv.FormatInt(id, 10) }
 
-// settings is a job as it was set up: everything about it that will not change
+// jobSetup is a job as it was set up: everything about it that will not change
 // while it runs.
 //
 // The counts are deliberately absent. They live in progressJSON, which is both
 // what the page renders and what its script polls, so a number about this job
 // has one place to come from.
-type settings struct {
+type jobSetup struct {
 	Name     string
 	Started  time.Time
 	Pages    int
@@ -53,7 +53,7 @@ type settings struct {
 // captured, and what may be pressed.
 type jobPage struct {
 	page
-	Job      settings
+	Job      jobSetup
 	Progress progressJSON
 	// State is the key of what to call the job's state, not the word itself.
 	State     string
@@ -75,7 +75,7 @@ type jobPage struct {
 // there, so a reader with no script sees the job as it stood when the page was
 // drawn rather than a page of empty boxes.
 func (s *Server) job(w http.ResponseWriter, r *http.Request) {
-	lang := rememberLang(w, r)
+	lang := s.rememberLang(w, r)
 	sum, ok := s.jobAsked(w, r, r.PathValue("id"))
 	if !ok {
 		return
@@ -88,8 +88,8 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	at := s.progress(sum)
 
 	s.render(w, r, "job.html", jobPage{
-		page: frame(r, lang, "job.title", jobsAt),
-		Job: settings{
+		page: s.frame(r, lang, "job.title", jobsAt),
+		Job: jobSetup{
 			Name:     sum.Name,
 			Started:  sum.CreatedAt,
 			Pages:    sum.Pages,

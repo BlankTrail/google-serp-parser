@@ -160,7 +160,7 @@ type historyPage struct {
 // The positions are gathered rather than streamed, unlike an export: a page is
 // read by a person, and what a person reads is bounded by that.
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	lang := rememberLang(w, r)
+	lang := s.rememberLang(w, r)
 	host := strings.TrimSpace(r.URL.Query().Get("host"))
 
 	var positions []store.Position
@@ -175,7 +175,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, "history.html", historyPage{
-		page:      frame(r, lang, "history.title", historyAt),
+		page:      s.frame(r, lang, "history.title", historyAt),
 		Host:      host,
 		Positions: positions,
 	})
