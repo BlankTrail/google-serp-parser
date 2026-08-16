@@ -1080,3 +1080,244 @@ func TestLease_AnAnswerHandedBackAfterTheLeaseIsReturnedChangesNothing(t *testin
 		t.Errorf("Quarantined=%d; a returned lease took a port out of the pool", st.Quarantined)
 	}
 }
+
+func TestPool_AQuarantinedPortComesBackOnAnotherEgress(t *testing.T) {
+	// A bought list is dead in large part by definition, so a port that drew
+	// three bad addresses in a row is unlucky rather than broken, and holding it
+	// out for the life of the pool stops a job in which nothing is wrong. Handing
+	// it back with the address it was quarantined for repeats that draw at once,
+	// so coming back has to start with another one.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+	cfg.MaxPortStrikes = 1
+	cfg.ReviveAfter = time.Minute
+	cfg.MaxRevivals = 2
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	port := fake.OpenPorts()[0]
+	dead := fake.UpstreamOf(port)
+	p.exhausted(port)
+
+	if q := p.Stats().Quarantined; q != 1 {
+		t.Fatalf("Quarantined=%d before the wait, want 1", q)
+	}
+	if _, err := p.Acquire(context.Background()); !errors.Is(err, ErrPoolExhausted) {
+		t.Fatalf("Acquire before ReviveAfter=%v, want ErrPoolExhausted", err)
+	}
+
+	clock.Advance(time.Minute)
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire after ReviveAfter: %v", err)
+	}
+	defer l.Release()
+
+	if got := l.Egress().Upstream; got == dead {
+		t.Errorf("the port came back on %q, the address it was quarantined for", got)
+	}
+	if got := fake.UpstreamOf(port); got == dead {
+		t.Errorf("port %d still egresses through %q; the lease and the proxy disagree", port, got)
+	}
+	st := p.Stats()
+	if st.Revivals != 1 {
+		t.Errorf("Stats().Revivals=%d, want 1", st.Revivals)
+	}
+	if st.Quarantined != 0 {
+		t.Errorf("Quarantined=%d once the port is back in rotation, want 0", st.Quarantined)
+	}
+}
+
+func TestPool_APortQuarantinedOnceTooOftenStopsComingBack(t *testing.T) {
+	// Bringing a port back without end turns one that is genuinely finished into
+	// a slow leak: every acquisition pays for a rotation and the port is
+	// quarantined again a moment later.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+	cfg.MaxPortStrikes = 1
+	cfg.ReviveAfter = time.Minute
+	cfg.MaxRevivals = 1
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	port := fake.OpenPorts()[0]
+	p.exhausted(port)
+	clock.Advance(time.Minute)
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire inside MaxRevivals: %v", err)
+	}
+	l.Release()
+
+	p.exhausted(port)
+	clock.Advance(time.Minute)
+
+	if _, err := p.Acquire(context.Background()); !errors.Is(err, ErrPoolExhausted) {
+		t.Errorf("Acquire past MaxRevivals=%v, want ErrPoolExhausted", err)
+	}
+	if n := p.Stats().Revivals; n != 1 {
+		t.Errorf("Stats().Revivals=%d, want 1", n)
+	}
+}
+
+func TestPool_ANegativeReviveAfterKeepsAQuarantinedPortOut(t *testing.T) {
+	// Coming back is a policy, and a caller that wants a quarantined port to stay
+	// out has to be able to say so without reading the default. The channel here
+	// has addresses left, so the port would come back if the setting were ignored.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+	cfg.MaxPortStrikes = 1
+	cfg.ReviveAfter = -1
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	p.exhausted(fake.OpenPorts()[0])
+	clock.Advance(time.Hour)
+
+	if _, err := p.Acquire(context.Background()); !errors.Is(err, ErrPoolExhausted) {
+		t.Errorf("Acquire with a negative ReviveAfter=%v, want ErrPoolExhausted", err)
+	}
+	if n := p.Stats().Revivals; n != 0 {
+		t.Errorf("Stats().Revivals=%d with revival switched off, want 0", n)
+	}
+}
+
+func TestPool_AQuarantineWithNoBeginningIsNotRevived(t *testing.T) {
+	// The wait is measured from the moment the quarantine began, and every place
+	// that quarantines a port records it. A port flagged without that moment has
+	// no wait to measure and stays out, rather than being handed another egress
+	// on the first acquire that sees it.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+	cfg.ReviveAfter = time.Minute
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	pt := p.ports[0]
+	pt.mu.Lock()
+	pt.quarantined = true
+	pt.mu.Unlock()
+
+	clock.Advance(time.Hour)
+
+	if _, err := p.Acquire(context.Background()); !errors.Is(err, ErrPoolExhausted) {
+		t.Errorf("Acquire=%v, want ErrPoolExhausted", err)
+	}
+	if n := p.Stats().Revivals; n != 0 {
+		t.Errorf("Stats().Revivals=%d, want 0", n)
+	}
+}
+
+// renewWatch counts how many times a channel is asked for another address. The
+// pool's counters record what came back, so attempts that never produced one are
+// only visible from the channel's side.
+type renewWatch struct {
+	Channel
+	mu sync.Mutex
+	n  int
+}
+
+func (c *renewWatch) Renew(ctx context.Context, cur Egress) (Egress, error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return c.Channel.Renew(ctx, cur)
+}
+
+func (c *renewWatch) asked() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+func TestPool_APortWhoseEgressCannotBeReplacedStaysQuarantined(t *testing.T) {
+	// Coming back starts with another egress and cannot be anything less, so a
+	// channel holding one fixed address has nothing to bring the port back to.
+	// The pool has to answer that the port is gone rather than spend every
+	// acquisition on a rotation that can never finish. Each failed attempt costs
+	// the port one chance and a fresh wait, so the chances are spread over time
+	// rather than spent in one burst on the first acquire that asks.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ch := &renewWatch{Channel: NewDirectChannel("direct")} // one fixed address
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{ch}
+	cfg.MaxPortStrikes = 1
+	cfg.ReviveAfter = time.Minute
+	cfg.MaxRevivals = 3
+
+	// A pool that keeps retrying never returns, and a hung test says nothing. A
+	// Sleep that gives up turns that into a failed assertion.
+	errKeptTrying := errors.New("the pool kept waiting for a rotation that cannot happen")
+	sleeps := 0
+	cfg.Sleep = func(ctx context.Context, d time.Duration) error {
+		sleeps++
+		if sleeps > 4 {
+			return errKeptTrying
+		}
+		return clock.Sleep(ctx, d)
+	}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	p.exhausted(fake.OpenPorts()[0])
+	clock.Advance(time.Minute)
+
+	if _, err := p.Acquire(context.Background()); !errors.Is(err, ErrPoolExhausted) {
+		t.Fatalf("Acquire=%v, want ErrPoolExhausted", err)
+	}
+	if n := ch.asked(); n != 1 {
+		t.Errorf("the channel was asked for another address %d times on one acquire, want 1", n)
+	}
+
+	// The next wait buys the port its next chance, and no more than that.
+	clock.Advance(time.Minute)
+	if _, err := p.Acquire(context.Background()); !errors.Is(err, ErrPoolExhausted) {
+		t.Fatalf("second Acquire=%v, want ErrPoolExhausted", err)
+	}
+	if n := ch.asked(); n != 2 {
+		t.Errorf("the channel was asked %d times after two waits, want 2", n)
+	}
+
+	st := p.Stats()
+	if st.Quarantined != 1 {
+		t.Errorf("Quarantined=%d after a rotation that failed, want 1", st.Quarantined)
+	}
+	if st.Revivals != 0 {
+		t.Errorf("Stats().Revivals=%d, want 0: the port never came back", st.Revivals)
+	}
+}
