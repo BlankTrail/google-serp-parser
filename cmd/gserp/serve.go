@@ -11,8 +11,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 
+	"github.com/blanktrail/google-serp-parser/settings"
 	"github.com/blanktrail/google-serp-parser/store"
 	"github.com/blanktrail/google-serp-parser/web"
 )
@@ -21,6 +23,19 @@ import (
 // address. It is loopback: the history is one machine's own, and a default that
 // answered the network would put it on every one this machine is attached to.
 const defaultServeAddr = "127.0.0.1:8080"
+
+// The pool a job runs on when neither the caller nor this machine's own
+// settings say otherwise. They are the run command's defaults, so a job set up
+// in the browser costs what the same job costs from the command line.
+const (
+	defaultThreads = 2
+	defaultPorts   = 3
+)
+
+// settingsName is what the file the interface saves its settings in is called.
+// It sits beside the history rather than inside it, so a history that is
+// copied, handed over or backed up does not carry the connection with it.
+const settingsName = "gserp-settings.json"
 
 // serveOptions is everything the command was asked to do.
 type serveOptions struct {
@@ -40,8 +55,8 @@ func serveFlags(opts *serveOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.StringVar(&opts.Addr, "addr", defaultServeAddr, "address to listen on")
 	fs.StringVar(&opts.DB, "db", "gserp.db", "history database to open")
-	fs.IntVar(&opts.Threads, "threads", 2, "queries taken at once")
-	fs.IntVar(&opts.Ports, "ports", 3, "ports per thread")
+	fs.IntVar(&opts.Threads, "threads", defaultThreads, "queries taken at once")
+	fs.IntVar(&opts.Ports, "ports", defaultPorts, "ports per thread")
 	return fs
 }
 
@@ -117,7 +132,8 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 			envAPIKey)
 		return nil
 	}
-	pool, err := openPool(ctx, out, poolConfig(o.Threads, o.Ports))
+	threads, ports := o.runOn(o.saved(out))
+	pool, err := openPool(ctx, out, poolConfig(threads, ports))
 	if err != nil {
 		_, _ = fmt.Fprintf(out,
 			"no ports could be opened, so this interface will show the history and cannot run a job: %s\n",
@@ -125,7 +141,53 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 		_, _ = fmt.Fprintln(out, "gserp doctor prints the whole report")
 		return nil
 	}
-	return web.NewSupervisor(st, pool, o.Threads)
+	return web.NewSupervisor(st, pool, threads)
+}
+
+// saved is what was set in the browser, and whether anything was.
+//
+// The file does not exist until somebody opens the settings, and a machine
+// nobody has configured has to run on what it was started with: answering there
+// with the settings package's own defaults would open a pool of a size nobody
+// on this machine ever asked for.
+//
+// A file that is there and cannot be read is said out loud rather than passed
+// over. It is the file somebody's connection is kept in, and a program that
+// quietly ran without it would look like one that had lost their settings.
+func (o serveOptions) saved(out io.Writer) (settings.Settings, bool) {
+	path := filepath.Join(filepath.Dir(o.DB), settingsName)
+	if _, err := os.Stat(path); err != nil {
+		return settings.Settings{}, false
+	}
+	s, err := settings.Load(path)
+	if err != nil {
+		_, _ = fmt.Fprintf(out,
+			"the saved settings could not be read, so this interface runs on what it was started with: %s\n",
+			o.clean(err.Error()))
+		return settings.Settings{}, false
+	}
+	return s, true
+}
+
+// runOn is how many queries this interface takes at once and how many ports
+// each of them gets.
+//
+// A number the caller moved off its default is one they meant for this run, and
+// it stands. A number they left alone is one they left to whatever this machine
+// is set up with, and what it is set up with is the file the settings are saved
+// in — which is what makes a change made in a browser outlive the restart.
+func (o serveOptions) runOn(saved settings.Settings, configured bool) (threads, ports int) {
+	threads, ports = o.Threads, o.Ports
+	if !configured {
+		return threads, ports
+	}
+	if threads == defaultThreads && saved.Threads > 0 {
+		threads = saved.Threads
+	}
+	if ports == defaultPorts && saved.Ports > 0 {
+		ports = saved.Ports
+	}
+	return threads, ports
 }
 
 // logger is where the server says what went wrong.
