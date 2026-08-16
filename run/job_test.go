@@ -4,8 +4,10 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +26,181 @@ func usQueries(n int) []google.Query {
 		qs[i] = usQuery(fmt.Sprintf("q%02d", i))
 	}
 	return qs
+}
+
+// recordingSink stands in for whatever writes the history down. It is called
+// from every thread of a job, so it holds a lock like any real one must.
+//
+// It also notes how much of the job the origin had served by the time each
+// result reached it: a runner that kept everything and handed it over once the
+// job was over would otherwise look exactly the same from out here.
+type recordingSink struct {
+	// served is the origin's search count, read at the moment of each call.
+	served *atomic.Int64
+	// fail is what this sink answers instead of writing anything down.
+	fail error
+
+	mu     sync.Mutex
+	got    []QueryResult
+	during []int64
+}
+
+func (s *recordingSink) Record(_ context.Context, res QueryResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.served != nil {
+		s.during = append(s.during, s.served.Load())
+	}
+	if s.fail != nil {
+		return s.fail
+	}
+	s.got = append(s.got, res)
+	return nil
+}
+
+func (s *recordingSink) records() []QueryResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.got)
+}
+
+func (s *recordingSink) ordinals() []int {
+	out := make([]int, 0, len(s.got))
+	for _, r := range s.records() {
+		out = append(out, r.Ordinal)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// servedWhenRecording is how far along the job was at each call, in call order.
+func (s *recordingSink) servedWhenRecording() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.during)
+}
+
+func TestRunner_HandsEveryQueryToTheSinkBeforeTheJobIsOver(t *testing.T) {
+	// The point of a sink is that work is safe before the job ends. Collecting
+	// it and handing it over at the end would lose everything on a crash,
+	// which is the case the sink exists for.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 4)
+
+	sink := &recordingSink{served: &o.searches}
+	queries := usQueries(3)
+	r := &Runner{Pool: f.Pool, Threads: 2, Sink: sink}
+	rep := r.Run(context.Background(), Job{Queries: queries, Pages: 1})
+
+	if rep.Done != len(queries) {
+		t.Fatalf("Done=%d, want %d (failed %d, untried %d)", rep.Done, len(queries), rep.Failed, rep.Untried)
+	}
+	if got := sink.ordinals(); !slices.Equal(got, []int{0, 1, 2}) {
+		t.Errorf("the sink saw ordinals %v, want 0, 1 and 2", got)
+	}
+	// Two threads carry the first two queries, and the third is only handed out
+	// once one of them comes back for it. So a sink called as its query lands
+	// is called for the first time with a search still to come, and a sink
+	// handed the whole job at the end sees every search already served.
+	during := sink.servedWhenRecording()
+	if len(during) == 0 || slices.Min(during) >= int64(len(queries)) {
+		t.Errorf("the sink was called with %v of %d searches served, want the first one to arrive while the job was still running",
+			during, len(queries))
+	}
+}
+
+func TestRunner_CarriesTheOriginalNumberingThroughAJobPickedUpPartWay(t *testing.T) {
+	// A resumed job holds only what is left. Numbering those from zero would
+	// file every result against the wrong query.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 4)
+
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 2, Sink: sink}
+	rep := r.Run(context.Background(), Job{
+		Queries:  []google.Query{usQuery("g"), usQuery("h")},
+		Ordinals: []int{7, 9},
+		Pages:    1,
+	})
+
+	if rep.Done != 2 {
+		t.Fatalf("Done=%d, want 2 (failed %d, untried %d)", rep.Done, rep.Failed, rep.Untried)
+	}
+	if got := sink.ordinals(); !slices.Equal(got, []int{7, 9}) {
+		t.Errorf("the sink saw ordinals %v, want the job's own 7 and 9", got)
+	}
+}
+
+func TestRunner_RefusesNumberingThatDoesNotLineUpWithTheQueries(t *testing.T) {
+	// A shorter list would file results against whichever queries happened to
+	// line up, quietly and wrongly.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2)
+
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink}
+	rep := r.Run(context.Background(), Job{
+		Queries:  usQueries(2),
+		Ordinals: []int{3},
+		Pages:    1,
+	})
+
+	if !errors.Is(rep.Err, ErrOrdinalsMismatch) {
+		t.Errorf("Report.Err=%v, want ErrOrdinalsMismatch", rep.Err)
+	}
+	if rep.Done != 0 || rep.Failed != 0 || rep.Untried != 2 {
+		t.Errorf("Done=%d Failed=%d Untried=%d, want nothing run", rep.Done, rep.Failed, rep.Untried)
+	}
+	// The refusal is worth having only if it comes before the work does.
+	if got := o.searches.Load(); got != 0 {
+		t.Errorf("%d searches, want none - the job ran before its numbering was checked", got)
+	}
+	if got := sink.records(); len(got) != 0 {
+		t.Errorf("the sink was handed %d results by a job that was refused", len(got))
+	}
+}
+
+func TestRunner_HandsAQueryThatFailedToTheSinkWithItsReason(t *testing.T) {
+	// A failure nobody wrote down is a query that a job picked up again takes
+	// up again, and again, for as long as it keeps failing.
+	o := newOrigin(t, func(*http.Request, int) string { return shellBody })
+	f := poolFacing(t, o.addr(), 3)
+
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink}
+	rep := r.Run(context.Background(), Job{Queries: usQueries(1), Pages: 1, Tries: 2})
+
+	if rep.Failed != 1 {
+		t.Fatalf("Failed=%d, want 1 (done %d, untried %d)", rep.Failed, rep.Done, rep.Untried)
+	}
+	got := sink.records()
+	if len(got) != 1 {
+		t.Fatalf("the sink saw %d results, want the failed query among them", len(got))
+	}
+	if got[0].Err == nil {
+		t.Error("the sink was handed the failed query as though it had produced results")
+	}
+}
+
+func TestRunner_TreatsAResultTheSinkRefusedAsAFailedQuery(t *testing.T) {
+	// A sink that cannot write is a job that is not being saved. Carrying on
+	// silently would produce a run whose results exist only on screen.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 3)
+
+	sink := &recordingSink{fail: errors.New("disk is full")}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink}
+	rep := r.Run(context.Background(), Job{Queries: usQueries(1), Pages: 1})
+
+	if rep.Failed != 1 {
+		t.Fatalf("Failed=%d, want 1 (done %d, untried %d)", rep.Failed, rep.Done, rep.Untried)
+	}
+	if rep.Results[0].Err == nil {
+		t.Fatal("a query whose result was never written down is reported as done")
+	}
+	if !strings.Contains(rep.Results[0].Err.Error(), "disk is full") {
+		t.Errorf("the recorded reason is %v, want it to name what the sink said", rep.Results[0].Err)
+	}
 }
 
 func TestRunner_ReportsTheAnswersInTheOrderTheQueriesWereGiven(t *testing.T) {

@@ -4,16 +4,41 @@ package run
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/google"
 )
 
+// Sink is where a finished query is written down while the job is still
+// running.
+//
+// It is declared here because this is where it is consumed, and narrowing it to
+// one method is what keeps this package clear of storage: whatever writes the
+// history knows about databases and files, and this does not.
+//
+// Record is called from every thread of a job, and by more than one of them at
+// once. An implementation has to be safe for concurrent use.
+type Sink interface {
+	Record(ctx context.Context, res QueryResult) error
+}
+
+// ErrOrdinalsMismatch is returned when a job carries a numbering that does not
+// line up with its queries.
+var ErrOrdinalsMismatch = errors.New("run: Ordinals must be empty or as long as Queries")
+
 // Job is a list of queries and how deep to take each one.
 type Job struct {
 	// Queries are taken in this order and reported in it.
 	Queries []google.Query
+	// Ordinals gives each query its place in the list the job originally had,
+	// which matters only for a job picked up part way: it holds what is left,
+	// and numbering that from zero would file every result against the wrong
+	// query. Empty means these queries are the whole list and the ordinal is
+	// the index.
+	Ordinals []int
 	// Pages is how many result pages each query is taken to. Non-positive means
 	// one. A walk stops earlier when the page says the results have run out.
 	Pages int
@@ -33,6 +58,9 @@ type QueryResult struct {
 	Pages []google.SERP
 	// Err is why this query produced nothing. Nil on success.
 	Err error
+	// Ordinal is the query's place in the original list, so a sink can file the
+	// result without knowing how the job was assembled.
+	Ordinal int
 	// Attempted says whether this query was ever sent. A cancelled job leaves
 	// queries nobody reached, and reporting those as failures would tell a
 	// reader they were tried and lost, sending them to look for a fault in work
@@ -60,6 +88,9 @@ type Report struct {
 	// underneath them. A caller running two jobs on one pool at once sees both
 	// in it.
 	Requests int64
+	// Err is a refusal that belongs to the job rather than to any one query: a
+	// plan that does not add up, and nothing was run.
+	Err error
 }
 
 // Runner spreads a job over threads.
@@ -68,6 +99,10 @@ type Runner struct {
 	Pool *blanktrail.Pool
 	// Threads is how many queries are taken at once. Non-positive means one.
 	Threads int
+	// Sink is handed every query as it finishes, so a job that ends badly still
+	// leaves behind everything it had established. Nil keeps the results in the
+	// report and nowhere else.
+	Sink Sink
 }
 
 // Run works through a job and reports what came of every query.
@@ -81,6 +116,17 @@ type Runner struct {
 // is one query's, and breaking it up would leave the caller holding half a
 // ranking for the length of a pause.
 func (r *Runner) Run(ctx context.Context, j Job) Report {
+	if len(j.Ordinals) != 0 && len(j.Ordinals) != len(j.Queries) {
+		// Refused before anything is sent. A numbering that runs short files
+		// results against whichever queries happen to line up, and the job
+		// would have to be taken apart afterwards to find out which.
+		rep := Report{Results: make([]QueryResult, len(j.Queries)), Untried: len(j.Queries), Err: ErrOrdinalsMismatch}
+		for i, q := range j.Queries {
+			rep.Results[i].Query = q
+		}
+		return rep
+	}
+
 	threads := r.Threads
 	if threads < 1 {
 		threads = 1
@@ -101,6 +147,10 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	results := make([]QueryResult, len(j.Queries))
 	for i, q := range j.Queries {
 		results[i].Query = q
+		results[i].Ordinal = i
+		if len(j.Ordinals) != 0 {
+			results[i].Ordinal = j.Ordinals[i]
+		}
 	}
 
 	// One Attempt for the whole job. It keeps a session per port, and a port is
@@ -129,6 +179,17 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 
 				results[i].Attempted = true
 				results[i].Pages, results[i].Err = attempt.Walk(ctx, j.Queries[i], pages)
+				if r.Sink != nil {
+					// The failures go to the sink as well as the successes.
+					// A query whose failure was never written down is one a
+					// job picked up again takes up again, for as long as it
+					// keeps failing.
+					if sinkErr := r.Sink.Record(ctx, results[i]); sinkErr != nil && results[i].Err == nil {
+						// A job whose results are not being written is not a
+						// job that succeeded, whatever the walk returned.
+						results[i].Err = fmt.Errorf("run: recording %q: %w", j.Queries[i].Text, sinkErr)
+					}
+				}
 			}
 		}()
 	}
