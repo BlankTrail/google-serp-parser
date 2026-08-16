@@ -179,3 +179,47 @@ func TestParseSERP_NoResultPointsAtGoogleItself(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSERP_CiteDerivedGoogleHostIsExcluded(t *testing.T) {
+	// Under the encrypted form the host comes only from the cite, never from
+	// an address classifyLink could reject. It must be filtered through
+	// isGoogleHost the same way classifyLink filters direct and redirect
+	// links, or the result set depends on which link form Google happened to
+	// answer with.
+	s := parseFixture(t, "serp_goto_ru.html")
+	for _, r := range s.Results {
+		if r.Title == "Google Search Help" {
+			t.Error("a result whose cite read a Google host was not filtered out")
+		}
+	}
+}
+
+func TestParseSERP_SnippetRecoversEmphasisedTerms(t *testing.T) {
+	// Google wraps the query's own terms in em inside a real snippet.
+	// ownText alone cannot see through that wrapping — the direct-children
+	// rule drops the emphasised word entirely — so this snippet must come
+	// back whole, not with a hole where "Разбор" belongs.
+	s := parseFixture(t, "serp_goto_ru.html")
+	want := "Разбор подходов к тестированию REST API и типичных ошибок."
+	if s.Results[0].Snippet != want {
+		t.Errorf("snippet=%q, want %q", s.Results[0].Snippet, want)
+	}
+}
+
+func TestParseSERP_RelatedExcludesPaginationAndReadsThePhraseFromQ(t *testing.T) {
+	// The pagination bar sits in the same container as the related-search
+	// chips and answers to the same href prefix, so it must be told apart by
+	// structure (role="navigation", a start parameter) rather than assumed
+	// absent. And one chip's anchor text arrives out of visual order, so the
+	// phrase must be read from the query parameter, not the anchor text.
+	s := parseFixture(t, "serp_goto_ru.html")
+	want := []string{"related one", "related two", "related three"}
+	if len(s.Related) != len(want) {
+		t.Fatalf("related=%d %v, want %d %v", len(s.Related), s.Related, len(want), want)
+	}
+	for i, w := range want {
+		if s.Related[i] != w {
+			t.Errorf("related %d=%q, want %q", i+1, s.Related[i], w)
+		}
+	}
+}

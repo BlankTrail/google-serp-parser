@@ -9,13 +9,25 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/net/html"
 )
 
-// resultContainer is how far up from a link the parser climbs to find that
-// result's own box. Class names are useless here — Google randomises them —
-// so the climb stops at the nearest ancestor carrying one of Google's own
-// structural attributes.
-const resultContainer = "div[data-snc], div[data-snf], div[jscontroller], li, div"
+// resultBox returns the element that holds one whole result — title, cite and
+// description together.
+//
+// The climb is staged rather than one comma-separated group: Closest returns
+// the NEAREST ancestor matching any branch, so a group ending in a bare div
+// always stops at the innermost wrapper, which carries the title and the cite
+// but not the description — measured on 9 of 9 results checked across three
+// real pages.
+func resultBox(link *goquery.Selection) *goquery.Selection {
+	for _, sel := range []string{"div[data-snc]", "div[data-snf]", "div[jscontroller]"} {
+		if box := link.Closest(sel); box.Length() > 0 {
+			return box
+		}
+	}
+	return link.Closest("li, div")
+}
 
 // ParseSERP turns a result page into typed data. It classifies the body
 // first: a page that is not results has nothing to parse, and saying so is
@@ -55,7 +67,7 @@ func parseOrganic(doc *goquery.Document) []Result {
 			return
 		}
 
-		box := link.Closest(resultContainer)
+		box := resultBox(link)
 		host, path, hasCite := citeHost(box)
 		if !hasCite && dest != "" {
 			// The direct and redirect forms carry the address, so the host is
@@ -63,6 +75,15 @@ func parseOrganic(doc *goquery.Document) []Result {
 			if u, err := url.Parse(dest); err == nil {
 				host = u.Hostname()
 			}
+		}
+		if host != "" && isGoogleHost(host) {
+			// classifyLink already excludes Google's own properties for the
+			// direct and redirect forms, checked against the address itself.
+			// Under the encrypted form there is no address yet — the cite is
+			// the only place a Google host can show up — so it needs the same
+			// filter, or the same page yields a different result set purely
+			// because of which link form Google happened to answer with.
+			return
 		}
 
 		// One result is linked more than once — title, breadcrumb, sitelinks.
@@ -90,16 +111,39 @@ func parseOrganic(doc *goquery.Document) []Result {
 	return out
 }
 
-// snippetOf reads a result's description: the longest own-text run inside its
-// box, which is the shape a snippet has regardless of how the box is built.
+// snippetOf reads a result's description: everything in its box except the
+// title and the displayed address.
+//
+// It cannot use ownText: Google wraps the query's own terms in em and b
+// inside the snippet, and taking only direct text children would drop them,
+// leaving a sentence with a hole where the match was.
 func snippetOf(box *goquery.Selection) string {
-	best := ""
-	box.Find("div, span").Each(func(_ int, s *goquery.Selection) {
-		if t := ownText(s); len(t) > len(best) {
-			best = t
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch n.Data {
+			case "h3", "cite", "style", "script":
+				return
+			}
+			for _, a := range n.Attr {
+				if a.Key == "role" && a.Val == "heading" {
+					return
+				}
+			}
 		}
-	})
-	return best
+		if n.Type == html.TextNode {
+			b.WriteString(n.Data)
+			b.WriteString(" ")
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	for _, n := range box.Nodes {
+		walk(n)
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 // parseAds reads the three paid placements. They are separate products with
@@ -157,12 +201,30 @@ func parseAds(doc *goquery.Document) []Ad {
 }
 
 // parseRelated reads the "related searches" phrases. They are links back into
-// search rather than out of it, which is exactly what identifies them.
+// search rather than out of it, which is exactly what identifies them — but
+// the pagination bar lives in the same containers and answers to the same
+// selector, so it must be told apart rather than assumed absent.
 func parseRelated(doc *goquery.Document) []string {
 	var out []string
 	seen := map[string]bool{}
 	doc.Find("#botstuff a[href^='/search'], #bres a[href^='/search']").Each(func(_ int, s *goquery.Selection) {
-		phrase := strings.Join(strings.Fields(s.Text()), " ")
+		if s.Closest("[role=navigation]").Length() > 0 {
+			return // the pagination bar, not a suggestion
+		}
+		href, _ := s.Attr("href")
+		u, err := url.Parse(href)
+		if err != nil {
+			return
+		}
+		q := u.Query()
+		// An offset or a vertical switch is navigation within this search,
+		// not a different search being suggested.
+		if q.Get("q") == "" || q.Has("start") || q.Has("tbm") || q.Has("udm") || q.Has("tbs") {
+			return
+		}
+		// The phrase comes from the query parameter, not the anchor text:
+		// measured with the anchor's text nodes out of reading order.
+		phrase := strings.Join(strings.Fields(q.Get("q")), " ")
 		if phrase == "" || seen[phrase] {
 			return
 		}
