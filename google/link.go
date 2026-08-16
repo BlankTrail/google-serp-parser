@@ -68,14 +68,28 @@ func classifyLink(href string) (dest string, form LinkForm, ok bool) {
 	return "", "", false
 }
 
-// isGoogleHost reports whether a host belongs to Google itself. Its own
-// properties appear among the results and are not organic entries.
+// isGoogleHost reports whether a host is one of Google's own properties. They
+// appear among the results and are not organic entries.
+//
+// The test is structural: "google" must be the label immediately left of the
+// public suffix. A substring test would be wrong in a way that costs results —
+// a legitimate site such as google.example.com would be dropped, and every
+// position below it would shift up to fill the gap.
 func isGoogleHost(host string) bool {
-	host = strings.ToLower(host)
-	return host == "google.com" ||
-		strings.HasSuffix(host, ".google.com") ||
-		strings.Contains(host, ".google.") ||
-		strings.HasPrefix(host, "google.")
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	labels := strings.Split(host, ".")
+	// A one-label suffix covers google.com and google.de; a two-label suffix
+	// covers google.co.uk and google.com.br, but only for the second-level
+	// labels that are actually used as suffixes — otherwise google.myshop.com
+	// would match the same shape.
+	secondLevel := map[string]bool{"co": true, "com": true, "net": true, "org": true, "ac": true}
+	if i := len(labels) - 2; i >= 0 && labels[i] == "google" {
+		return true
+	}
+	if i := len(labels) - 3; i >= 0 && labels[i] == "google" && secondLevel[labels[len(labels)-2]] {
+		return true
+	}
+	return false
 }
 
 // Resolver turns an encrypted result link into the address it points at.
