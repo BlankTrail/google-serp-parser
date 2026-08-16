@@ -104,7 +104,7 @@ type PoolConfig struct {
 	Cooldown time.Duration
 
 	// RequestTimeout bounds one request through a leased port, retries included
-	// (default 60s). Keep it comfortably above MaxRetriesPerReq × maxRetryAfter,
+	// (default 300s). Keep it comfortably above MaxRetriesPerReq × maxRetryAfter,
 	// or a throttled target will exhaust the deadline in pauses before a retry
 	// can run.
 	RequestTimeout time.Duration
@@ -278,7 +278,7 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		return nil, errors.New("blanktrail: PoolConfig.Client is required")
 	}
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 60 * time.Second
+		cfg.RequestTimeout = 300 * time.Second
 	}
 	if cfg.MaxRetriesPerReq <= 0 {
 		cfg.MaxRetriesPerReq = 4
