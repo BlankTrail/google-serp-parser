@@ -35,7 +35,7 @@ func resultBox(link *goquery.Selection) *goquery.Selection {
 // more useful than returning an empty SERP that reads like a real zero.
 func ParseSERP(query string, body []byte) (SERP, error) {
 	if class, err := Classify(200, "", body); err != nil {
-		return SERP{}, fmt.Errorf("google: parse %q: %w (class %s)", query, err, class)
+		return SERP{}, &ResponseError{Class: class, Query: query, op: "parse", err: err}
 	}
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {

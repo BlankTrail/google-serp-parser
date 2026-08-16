@@ -267,6 +267,41 @@ func TestParseSERP_TheShellYieldsNothingAndAnError(t *testing.T) {
 	}
 }
 
+func TestParseSERP_HandsBackTheClassOfAnUnusableBody(t *testing.T) {
+	// ParseSERP is reached directly by anything holding a body it did not
+	// search for. Those callers branch on the class exactly as the ones coming
+	// through Search do, and a class left in the message would put them back to
+	// matching prose for it.
+	_, err := ParseSERP("test", fixture(t, "jsshell.html"))
+	if err == nil {
+		t.Fatal("ParseSERP accepted the JavaScript shell")
+	}
+	class, ok := ClassOf(err)
+	if !ok {
+		t.Fatalf("ParseSERP returned %v, which carries no class", err)
+	}
+	if class != ClassShell {
+		t.Errorf("class=%q, want %q", class, ClassShell)
+	}
+}
+
+func TestParseSERP_NamesParsingRatherThanSearchingWhenItFails(t *testing.T) {
+	// ParseSERP and Search reach the same class by different routes and answer
+	// with the same error type. Nothing was fetched here — the body was handed
+	// in — so a message naming a search would send whoever reads the log
+	// looking for a request that was never made.
+	_, err := ParseSERP("test", fixture(t, "jsshell.html"))
+	if err == nil {
+		t.Fatal("ParseSERP accepted the JavaScript shell")
+	}
+	if !strings.Contains(err.Error(), "parse") {
+		t.Errorf("the error does not say what was under way: %q", err)
+	}
+	if strings.Contains(err.Error(), "search") {
+		t.Errorf("a parse failure reports itself as a search: %q", err)
+	}
+}
+
 func TestParseSERP_NoResultPointsAtGoogleItself(t *testing.T) {
 	// Google's own properties appear in the markup and are not organic
 	// entries; one slipping in shifts every position below it.
