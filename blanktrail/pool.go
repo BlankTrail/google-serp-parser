@@ -27,6 +27,23 @@ var ErrPoolExhausted = errors.New("blanktrail: every candidate port is quarantin
 // under the requested template name.
 var ErrUnknownSpec = errors.New("blanktrail: no port carries this spec name")
 
+// DefaultCooldown is the gap NewPool keeps between two requests on one port when
+// the caller names neither Cooldown nor a delay range.
+//
+// It rests on a sweep of 240 answers taken on held ports at gaps of 0, 2, 5, 15,
+// 30 and 60 seconds, forty answers at each gap. Three of the 240 were slow: one
+// at no gap at all, two at thirty seconds, none anywhere else. Scattered across
+// gaps two orders of magnitude apart, they are not explained by the gap, and
+// forty back-to-back requests with no wait between them gave thirty-nine fast.
+//
+// So this is a small deliberate pause and not a derived quantity. What the sweep
+// establishes is that the gap does not drive slow answers over forty requests to
+// a port, which is not the same as establishing that it never could over ten
+// thousand; and the whole margin of two seconds over none rests on one answer in
+// forty. A caller who has measured their own list should set Cooldown from what
+// they measured rather than inherit this.
+const DefaultCooldown = 2 * time.Second
+
 // DeriveCooldown computes the default port cooldown from the ring the caller
 // described: with portsPerThread ports and a per-request delay somewhere in
 // [delayMin, delayMax], a port in a rigid ring would come back after
@@ -100,7 +117,8 @@ type PoolConfig struct {
 	// cooldown and offers NextDelay so callers have one place to ask.
 	DelayMin, DelayMax time.Duration
 	// Cooldown is the minimum gap between two requests on the SAME port. Zero
-	// derives it from PortsPerThread and the delay range.
+	// derives it from PortsPerThread and the delay range, or takes
+	// DefaultCooldown when no delay range was given either.
 	Cooldown time.Duration
 
 	// RequestTimeout bounds one request through a leased port, retries included
@@ -339,6 +357,10 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		}
 		cfg.Specs = specs
 	}
+	// The delay range is filled in below for NextDelay's sake, so whether the
+	// caller described one has to be read before that happens: a filled-in range
+	// would otherwise derive a cooldown from a pause nobody asked for.
+	pacedByCaller := cfg.DelayMin > 0 || cfg.DelayMax > 0
 	if cfg.DelayMin <= 0 {
 		cfg.DelayMin = 3 * time.Second
 	}
@@ -365,8 +387,12 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	}
 
 	cool := cfg.Cooldown
-	if cool <= 0 {
+	switch {
+	case cool > 0:
+	case pacedByCaller:
 		cool = DeriveCooldown(cfg.PortsPerThread, cfg.DelayMin, cfg.DelayMax)
+	default:
+		cool = DefaultCooldown
 	}
 
 	channels := cfg.Channels

@@ -119,6 +119,71 @@ func TestNewPool_ExplicitCooldownWins(t *testing.T) {
 	}
 }
 
+func TestNewPool_APoolToldNothingAboutPacingLeavesTwoSecondsBetweenTwoRequestsOnOnePort(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 2, 4)
+	// Neither the gap nor the delay range is named, which is the case the
+	// documented default answers.
+	cfg.DelayMin, cfg.DelayMax = 0, 0
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if p.Cooldown() != 2*time.Second {
+		t.Errorf("Cooldown=%v, want the documented 2s", p.Cooldown())
+	}
+	if p.Cooldown() != DefaultCooldown {
+		t.Errorf("Cooldown=%v, want DefaultCooldown %v", p.Cooldown(), DefaultCooldown)
+	}
+}
+
+func TestNewPool_ADescribedDelayRangeStillDecidesTheGapRatherThanTheDefault(t *testing.T) {
+	// The default answers a caller who said nothing. A caller who did describe a
+	// delay range is asking a different question, and answering it with two
+	// seconds would throw their answer away.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 2, 4)
+	cfg.DelayMin, cfg.DelayMax = 5*time.Second, 5*time.Second
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if want := 20 * time.Second; p.Cooldown() != want {
+		t.Errorf("Cooldown=%v, want the derived %v", p.Cooldown(), want)
+	}
+}
+
+func TestNewPool_ADelayFloorAloneIsEnoughToDeriveTheGap(t *testing.T) {
+	// DelayMax alone bounds the pause as much as DelayMin does, and a caller who
+	// named only one of the two has still described the ring the derivation is
+	// about.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 2, 4)
+	cfg.DelayMin, cfg.DelayMax = 0, 6*time.Second
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if p.Cooldown() == DefaultCooldown {
+		t.Fatalf("Cooldown=%v, want the delay range to have been taken into account", p.Cooldown())
+	}
+	if want := DeriveCooldown(4, 3*time.Second, 6*time.Second); p.Cooldown() != want {
+		t.Errorf("Cooldown=%v, want %v", p.Cooldown(), want)
+	}
+}
+
 // TestNewPool_DefaultsRequestTimeoutTo300s pins the default so a later edit
 // cannot quietly lower the ceiling.
 func TestNewPool_DefaultsRequestTimeoutTo300s(t *testing.T) {
