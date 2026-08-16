@@ -63,32 +63,57 @@ func blankForm() jobForm {
 	return jobForm{Pages: 1, Threads: 2, Ports: 6}
 }
 
+// queryOf reads one line of a list and says whether there is a query on it.
+//
+// This is the one rule this program reads a list by, wherever the list came
+// from: the box on the form and a file of a million lines both come through
+// here. Two rules would be two answers to "how many queries have I got", and
+// the reader would have no way of telling which of them their job ran.
+//
+// The line is trimmed rather than split on: a box in a browser ends its lines
+// the way the web ends them, and a query carrying a stray return is a query
+// searched for with one. A blank line is nothing, and a line opening with a
+// hash is a note somebody left themselves.
+func queryOf(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	return line, true
+}
+
+// faults is everything wrong with a job apart from its list.
+//
+// It stands apart because a list arriving as a file is not there to be looked
+// at when these are decided: the boxes reach the server first and the file
+// follows them, and a name that is missing has to be found out before a million
+// lines are written into a job nobody asked for.
+func (f jobForm) faults() []string {
+	var complaints []string
+	if strings.TrimSpace(f.Name) == "" {
+		complaints = append(complaints, "form.name.required")
+	}
+	if f.Pages < 1 {
+		complaints = append(complaints, "form.pages.positive")
+	}
+	return complaints
+}
+
 // parse pulls the queries out of the box and lists everything wrong at once.
 //
 // Every fault is reported together rather than the first one alone: a reader
 // with three mistakes should learn all three now, not submit three times.
 func (f jobForm) parse() ([]string, []string) {
-	var complaints []string
-	if strings.TrimSpace(f.Name) == "" {
-		complaints = append(complaints, "form.name.required")
-	}
+	complaints := f.faults()
 
 	var queries []string
 	for _, line := range strings.Split(f.Queries, "\n") {
-		// Trimmed rather than split on: a box in a browser ends its lines the
-		// way the web ends them, and a query carrying a stray return is a query
-		// searched for with one.
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+		if text, ok := queryOf(line); ok {
+			queries = append(queries, text)
 		}
-		queries = append(queries, line)
 	}
 	if len(queries) == 0 {
 		complaints = append(complaints, "form.queries.required")
-	}
-	if f.Pages < 1 {
-		complaints = append(complaints, "form.pages.positive")
 	}
 	return queries, complaints
 }
@@ -185,14 +210,24 @@ type newPage struct {
 	Do         actions
 }
 
+// showNew draws the new-job page, filling in the parts of it that are the same
+// however the reader got here. Every way onto this page goes through it, so the
+// page a refused upload lands on is the page a refused form lands on.
+func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
+	form jobForm, complaints []string, est *estimateView) {
+	s.render(w, r, "new.html", newPage{
+		page:       s.frame(r, lang, "new.title", newAt),
+		Form:       form,
+		Complaints: complaints,
+		Estimate:   est,
+		Do:         buttons(),
+	})
+}
+
 // newJob shows an empty form.
 func (s *Server) newJob(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
-	s.render(w, r, "new.html", newPage{
-		page: s.frame(r, lang, "new.title", newAt),
-		Form: blankForm(),
-		Do:   buttons(),
-	})
+	s.showNew(w, r, lang, blankForm(), nil, nil)
 }
 
 // createJob answers the form: it costs the job, or starts it.
@@ -222,13 +257,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.render(w, r, "new.html", newPage{
-		page:       s.frame(r, lang, "new.title", newAt),
-		Form:       form,
-		Complaints: complaints,
-		Estimate:   estimateOf(form, queries),
-		Do:         buttons(),
-	})
+	s.showNew(w, r, lang, form, complaints, estimateOf(form, queries))
 }
 
 // start writes the job down, queues it and sends the browser to its page.

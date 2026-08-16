@@ -31,6 +31,11 @@ type JobSummary struct {
 	Language string
 	SpecName string
 
+	// PlanReady says the job's list of queries finished arriving. A job without
+	// it is one whose upload broke off part way: it is here, it holds whatever
+	// reached the database, and nothing will run it.
+	PlanReady bool
+
 	Total   int
 	Done    int
 	Failed  int
@@ -45,7 +50,7 @@ type JobSummary struct {
 // nothing rather than a count of one.
 const jobSummaryQuery = `
 	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''),
-	       j.pages, j.country, j.language, j.spec_name,
+	       j.pages, j.country, j.language, j.spec_name, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
 	       sum(CASE WHEN q.state = 'failed'  THEN 1 ELSE 0 END),
@@ -115,7 +120,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 	var sum JobSummary
 	var created, finished string
 	err := row.Scan(&sum.ID, &sum.Name, &created, &finished,
-		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName,
+		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobSummary{}, err

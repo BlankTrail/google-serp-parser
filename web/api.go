@@ -151,10 +151,13 @@ func (s *Server) pressed(w http.ResponseWriter, r *http.Request, do func(*Superv
 	err := do(s.sup, sum.ID)
 	switch {
 	case err == nil,
-		errors.Is(err, ErrNotRunning), errors.Is(err, ErrBusy), errors.Is(err, ErrNothingLeft):
+		errors.Is(err, ErrNotRunning), errors.Is(err, ErrBusy), errors.Is(err, ErrNothingLeft),
+		errors.Is(err, store.ErrPlanUnfinished):
 		// A button pressed twice, or pressed in the second a job ended in, is a
 		// race and not a fault. The page the reader lands on says what is true
-		// now, which is the answer they were after.
+		// now, which is the answer they were after. A job whose list never
+		// finished arriving is the same shape of thing: its page never offered
+		// this button, and the page says why.
 		http.Redirect(w, r, backTo(r, sum.ID), http.StatusSeeOther)
 	default:
 		s.fail(w, r, err)

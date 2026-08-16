@@ -82,8 +82,7 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 		return 0, fmt.Errorf("store: reading the job id: %w", err)
 	}
 
-	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO queries(job_id, ordinal, text) VALUES(?, ?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, queryInsert)
 	if err != nil {
 		return 0, fmt.Errorf("store: preparing the query insert: %w", err)
 	}

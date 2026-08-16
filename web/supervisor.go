@@ -236,17 +236,38 @@ func (v *Supervisor) Enqueue(spec store.JobSpec, queries []string) (int64, error
 	return id, v.queueUp(id)
 }
 
+// Start puts a job that has already been written down at the back of the queue.
+//
+// It is the half of Enqueue that does not write the job. A list too large to
+// hold is streamed into the history by whoever read the file, so by the time it
+// reaches here the job is there with its whole plan and the mark that says so,
+// and there is nothing left to write.
+func (v *Supervisor) Start(jobID int64) error {
+	if v.isClosed() {
+		return ErrClosed
+	}
+	return v.queueUp(jobID)
+}
+
 // Resume puts a job that was left part way back in the queue.
 //
 // What it will run is not decided here. The queries a job has left are read
 // when its turn comes, so a job that was stopped and resumed twice does not
 // carry a plan drawn up before the last of its results landed.
+//
+// A job whose list never finished arriving is refused. Its queries look exactly
+// like work waiting to be done, and they are a fraction of a list nobody knows
+// the length of: running them would end with the job stamped complete on a
+// plan that was never whole.
 func (v *Supervisor) Resume(jobID int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), jobSettleGrace)
 	defer cancel()
 	sum, err := v.st.Progress(ctx, jobID)
 	if err != nil {
 		return err
+	}
+	if !sum.PlanReady {
+		return fmt.Errorf("%w: %d", store.ErrPlanUnfinished, jobID)
 	}
 	if sum.Pending == 0 {
 		return fmt.Errorf("%w: %d", ErrNothingLeft, jobID)

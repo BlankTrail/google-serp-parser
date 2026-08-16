@@ -176,6 +176,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET "+jobsAt, s.jobs)
 	s.mux.HandleFunc("GET "+newAt, s.newJob)
 	s.mux.HandleFunc("POST "+newAt, s.createJob)
+	// A list too large for the box has an address of its own, because it is read
+	// as it arrives and a form the server reads whole cannot be.
+	s.mux.HandleFunc("POST "+uploadAt, s.uploadList)
 	s.mux.HandleFunc("GET /job/{id}", s.job)
 	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)

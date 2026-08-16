@@ -98,15 +98,18 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Spec:     sum.SpecName,
 		},
 		Progress: at,
-		State:    stateOf(at),
+		State:    stateOf(at, sum.PlanReady),
 		Rows:     rows,
 		Capped:   capped,
 		Formats:  export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
 		// somebody presses until they conclude the job cannot be stopped at all.
-		CanStop:   s.sup != nil && at.Running,
-		CanResume: s.sup != nil && !at.Running && !at.Queued && !at.Finished && at.Pending > 0,
+		CanStop: s.sup != nil && at.Running,
+		// A job whose list never finished arriving is not offered either. The
+		// queries it holds are a fraction of a list, and nothing will run them.
+		CanResume: s.sup != nil && sum.PlanReady &&
+			!at.Running && !at.Queued && !at.Finished && at.Pending > 0,
 		RefreshMS: refreshEvery.Milliseconds(),
 	})
 }
@@ -164,8 +167,15 @@ func (s *Server) someRows(ctx context.Context, jobID int64) ([]store.Row, bool, 
 // It answers with a key and never a sentence, because every phrase on every
 // page goes through the catalogue, and a state named in English here would be
 // the one English word on a Russian page.
-func stateOf(p progressJSON) string {
+//
+// A list that never finished arriving is said first and over everything else.
+// Such a job has queries waiting and no stamp on it, which is exactly what an
+// unfinished run looks like, and calling the two by one name would tell the
+// reader to carry on with a job that cannot be carried on.
+func stateOf(p progressJSON, listReady bool) string {
 	switch {
+	case !listReady:
+		return "job.state.listunfinished"
 	case p.Finished:
 		return "job.state.finished"
 	case p.Running:

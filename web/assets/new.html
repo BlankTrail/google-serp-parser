@@ -85,4 +85,46 @@
 <button type="submit" name="{{.Do.Field}}" value="{{.Do.Start}}">{{.T "form.start"}}</button>
 </div>
 </form>
+
+<h2>{{.T "form.list.title"}}</h2>
+{{/* A second form and not a second button, because this one is read as it
+     arrives. The server reads a form whole before a handler sees a field of it,
+     which is the only way two buttons could be told apart, and a form read
+     whole is a file of a million lines held before a line of it is looked at.
+     Nothing here needs a script either. */}}
+<form class="card fields" method="post" action="/new/upload" enctype="multipart/form-data">
+<div class="field">
+<label for="list-name">{{.T "form.name"}}</label>
+<input id="list-name" name="name" value="{{.Form.Name}}">
+</div>
+<div class="row">
+<div class="field">
+<label for="list-pages">{{.T "form.pages"}}</label>
+<input id="list-pages" name="pages" type="number" min="1" value="{{.Form.Pages}}">
+</div>
+<div class="field">
+<label for="list-country">{{.T "form.country"}}</label>
+<input id="list-country" name="country" size="4" value="{{.Form.Country}}">
+</div>
+<div class="field">
+<label for="list-language">{{.T "form.language"}}</label>
+<input id="list-language" name="language" size="4" value="{{.Form.Language}}">
+</div>
+<div class="field">
+<label for="list-spec">{{.T "form.spec"}}</label>
+<input id="list-spec" name="spec" size="10" value="{{.Form.SpecName}}">
+</div>
+</div>
+{{/* The file stands last on purpose. A browser sends the parts of a form in the
+     order they stand here, and the server has to know the name and the depth
+     before the first line of the file reaches it. */}}
+<div class="field">
+<label for="list">{{.T "form.list"}}</label>
+<input id="list" name="list" type="file">
+</div>
+<p class="empty">{{.T "form.list.why"}}</p>
+<div class="actions">
+<button type="submit">{{.T "form.upload"}}</button>
+</div>
+</form>
 {{end}}
