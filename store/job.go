@@ -17,6 +17,10 @@ var ErrNoQueries = errors.New("store: a job needs at least one query")
 // taken up.
 var ErrNoUnfinishedJob = errors.New("store: no unfinished job of this name")
 
+// ErrPlanUnfinished is returned for a job whose list of queries was never
+// finished being written.
+var ErrPlanUnfinished = errors.New("store: the job's plan was never finished")
+
 // JobSpec is what a job was asked to do, kept so a later reader can tell one
 // night's numbers from another's without guessing at the settings behind them.
 type JobSpec struct {
@@ -60,9 +64,14 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The plan is marked ready in the same transaction that writes it, because
+	// this call has the whole list in hand: either all of it is committed or
+	// none of it is, and there is no moment in between for a reader to see. A
+	// list too large to hold is written by a different path, which sets the flag
+	// after its last batch.
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, pages, spec_name, country, language)
-		 VALUES(?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO jobs(name, created_at, pages, spec_name, country, language, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), pages,
 		spec.SpecName, spec.Country, spec.Language)
 	if err != nil {
@@ -96,7 +105,23 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 // Pending returns the queries of a job that have not finished, in the order
 // they were given. A job that does not exist has nothing pending, which is the
 // same answer as a job that is done — both mean there is no work here.
+// A job whose plan was never finished is refused rather than answered, and
+// this is the one place every run and every resume passes through to learn what
+// to do. Handing back the queries that did land would run a fraction of the
+// list and stamp the job done; handing back none would read as a job with
+// nothing left, which is the same loss said more quietly.
 func (s *Store) Pending(ctx context.Context, jobID int64) ([]PendingQuery, error) {
+	var ready bool
+	err := s.db.QueryRowContext(ctx, `SELECT plan_ready FROM jobs WHERE id = ?`, jobID).Scan(&ready)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("store: reading the plan of job %d: %w", jobID, err)
+	case !ready:
+		return nil, fmt.Errorf("%w: job %d", ErrPlanUnfinished, jobID)
+	}
+
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT ordinal, text FROM queries
 		 WHERE job_id = ? AND state = 'pending'
@@ -138,6 +163,10 @@ type UnfinishedJob struct {
 // of two shapes into one run, and nothing in the history would say which rows
 // were which.
 //
+// A job whose plan was never finished is passed over rather than chosen. It is
+// the newest job of its name and it is not work, and choosing it would refuse
+// the name outright while an older run of the same name waits to be taken up.
+//
 // Jobs stamped in the same second are ordered by the one written last, so a
 // name used twice in a minute resumes the later of the two rather than either.
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
@@ -145,7 +174,7 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, name, pages, spec_name, country, language
 		   FROM jobs
-		  WHERE name = ? AND finished_at IS NULL
+		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Pages, &j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language)
