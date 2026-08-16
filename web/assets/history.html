@@ -1,0 +1,36 @@
+{{define "main"}}
+<h1>{{.T "history.title"}}</h1>
+<form method="get" action="/history">
+<label for="host">{{.T "history.host"}}</label>
+<input id="host" name="host" value="{{.Host}}">
+<button type="submit">{{.T "history.look"}}</button>
+</form>
+{{if .Positions}}
+<table>
+<thead>
+<tr>
+<th>{{.T "history.taken"}}</th>
+<th>{{.T "history.job"}}</th>
+<th>{{.T "history.query"}}</th>
+<th>{{.T "history.rank"}}</th>
+<th>{{.T "history.address"}}</th>
+</tr>
+</thead>
+<tbody>
+{{range .Positions}}
+<tr>
+{{/* Shown on the clock the reader started the run by. The history keeps the
+     instant, and an instant printed as itself is hours from the wall. */}}
+<td>{{.TakenAt.Local.Format "2006-01-02 15:04"}}</td>
+<td>{{.JobName}}</td>
+<td>{{.Query}}</td>
+<td class="count">{{.Rank}}</td>
+<td>{{.URL}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else if .Host}}
+<p class="empty">{{.T "history.none"}}</p>
+{{end}}
+{{end}}
