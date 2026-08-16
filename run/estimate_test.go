@@ -232,7 +232,104 @@ func TestEstimate_AsksThePoolItWillRunOn(t *testing.T) {
 
 	r := &Runner{Pool: f.Pool, Threads: 2}
 	j := Job{Queries: make([]google.Query, 100), Pages: 3}
-	if got, want := r.Estimate(j), EstimateFor(j, f.Pool.Size(), f.Pool.Cooldown()); got != want {
-		t.Errorf("Estimate=%+v, want the same as EstimateFor on the pool's own numbers %+v", got, want)
+	want := EstimateWith(j, f.Pool.Size(), r.Threads, f.Pool.Cooldown(), MeasuredPace)
+	if got := r.Estimate(j); got != want {
+		t.Errorf("Estimate=%+v, want the same as EstimateWith on the pool's own numbers %+v", got, want)
+	}
+}
+
+func TestEstimateFor_AssumesEnoughThreadsToKeepEveryPortBusy(t *testing.T) {
+	// EstimateFor is never told a thread count. Assuming one thread would quote
+	// eight times the time for a pool of eight, and a user sizing a pool would
+	// read it as the ports having bought them nothing.
+	j := Job{Queries: make([]google.Query, 20), Pages: 2}
+	want := EstimateWith(j, 8, 8, 7*time.Second, MeasuredPace)
+	if got := EstimateFor(j, 8, 7*time.Second); got != want {
+		t.Errorf("EstimateFor=%+v, want %+v", got, want)
+	}
+}
+
+func TestEstimateWith_CountsGettingToEachPortOnceAndEveryAnswerAfterThat(t *testing.T) {
+	// Twenty queries two pages deep over eight ports: eight ports to reach,
+	// twenty first answers, twenty later ones, over four threads.
+	p := Pace{ReachPort: 60 * time.Second, FirstRequest: 10 * time.Second, LaterRequest: 2 * time.Second}
+	est := EstimateWith(Job{Queries: make([]google.Query, 20), Pages: 2}, 8, 4, 0, p)
+
+	if want := 180 * time.Second; est.Expected != want {
+		t.Errorf("Expected=%v, want %v — (8×60 + 20×10 + 20×2) over four threads", est.Expected, want)
+	}
+}
+
+func TestEstimateWith_PaysToReachOnlyThePortsTheWorkActuallyUses(t *testing.T) {
+	// Three queries never reach the other five ports. Charging for those quotes
+	// a cost against work nobody does — the same reason the warm-ups are counted
+	// per port reached rather than per port held.
+	p := Pace{ReachPort: 60 * time.Second, FirstRequest: 10 * time.Second, LaterRequest: 2 * time.Second}
+	est := EstimateWith(Job{Queries: make([]google.Query, 3), Pages: 1}, 8, 4, 0, p)
+
+	if want := 70 * time.Second; est.Expected != want {
+		t.Errorf("Expected=%v, want %v — (3×60 + 3×10) over the three threads that have work", est.Expected, want)
+	}
+}
+
+func TestEstimateWith_AddingThreadsPastThePortCountBuysNothingAndTooFewCostsTime(t *testing.T) {
+	// A port answers one thread at a time, so threads beyond the ports wait. But
+	// a job given fewer threads than ports leaves ports idle, and an estimate
+	// blind to that quotes a run the caller has not asked for.
+	p := Pace{ReachPort: 20 * time.Second, FirstRequest: 10 * time.Second, LaterRequest: 5 * time.Second}
+	j := Job{Queries: make([]google.Query, 8), Pages: 1}
+
+	crowded := EstimateWith(j, 4, 100, 0, p)
+	if want := 40 * time.Second; crowded.Expected != want {
+		t.Errorf("Expected=%v with a hundred threads over four ports, want %v", crowded.Expected, want)
+	}
+	starved := EstimateWith(j, 4, 1, 0, p)
+	if want := 160 * time.Second; starved.Expected != want {
+		t.Errorf("Expected=%v with one thread over four ports, want %v", starved.Expected, want)
+	}
+}
+
+func TestEstimateWith_NeverQuotesLessThanThePacingItIsHeldTo(t *testing.T) {
+	// The two bounds are on the same run. A job whose requests are cheap is still
+	// held to the gap between two requests on one port, and quoting under the
+	// floor would contradict the line printed beside it.
+	est := EstimateWith(Job{Queries: make([]google.Query, 100), Pages: 3}, 4, 4, 10*time.Second, Pace{})
+
+	if est.Floor != 240*time.Second {
+		t.Fatalf("Floor=%v, want 240s", est.Floor)
+	}
+	if est.Expected != est.Floor {
+		t.Errorf("Expected=%v, want the floor %v when a request is quoted as free", est.Expected, est.Floor)
+	}
+}
+
+func TestEstimateWith_AJobWithNoPortsToRunOnIsNotQuotedATime(t *testing.T) {
+	// Dividing the work over no threads at all is the one arithmetic in here that
+	// can crash, and a user asking about a closed pool gets counts, not a panic.
+	est := EstimateWith(Job{Queries: make([]google.Query, 10), Pages: 2}, 0, 0, 10*time.Second, MeasuredPace)
+
+	if est.Expected != 0 || est.Floor != 0 {
+		t.Errorf("Expected=%v Floor=%v, want neither quoted without a port to run on", est.Expected, est.Floor)
+	}
+}
+
+func TestMeasuredPace_StaysWithinAFactorOfTwoOfTheRunsItWasCheckedAgainst(t *testing.T) {
+	// The three runs the pace was checked against: twenty queries two pages deep,
+	// eight ports, four threads, a seven-second gap. A model fitted to three
+	// points is a lookup table, so this pins the agreement it happens to have
+	// rather than claiming any more than that.
+	est := EstimateWith(Job{Queries: make([]google.Query, 20), Pages: 2}, 8, 4, 7*time.Second, MeasuredPace)
+
+	if want := 14 * time.Second; est.Floor != want {
+		t.Errorf("Floor=%v, want the %v those runs were quoted", est.Floor, want)
+	}
+	for _, took := range []time.Duration{
+		6*time.Minute + 44*time.Second,
+		8*time.Minute + 23*time.Second,
+		11*time.Minute + 22*time.Second,
+	} {
+		if est.Expected < took/2 || est.Expected > 2*took {
+			t.Errorf("Expected=%v against a run of %v, which is more than a factor of two out", est.Expected, took)
+		}
 	}
 }
