@@ -102,6 +102,19 @@ type SERP struct {
 	// depends on them.
 	PeopleAlsoAsk []string
 
+	// MaxOffset is the furthest start offset the pagination bar linked to, and
+	// HasPagination says whether a bar was found at all. The pair is the page's
+	// own account of how much further the results go, which is the only such
+	// account it gives — see TotalResults.
+	//
+	// So HasPagination false means "this parser found no bar", never "Google
+	// offered nothing further". The two must not be conflated: the mobile
+	// layout and any redesign may draw the control differently, and a walk that
+	// read a bar it could not find as the end of the results would report a
+	// site as absent on the strength of markup it never looked at.
+	MaxOffset     int
+	HasPagination bool
+
 	// TotalResults is Google's own estimate and HasTotal says whether it was
 	// read. Neither is populated yet: nothing here reads #result-stats. So
 	// HasTotal false currently means "this library did not look", not "Google

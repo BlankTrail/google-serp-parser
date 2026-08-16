@@ -27,6 +27,23 @@ var ErrPoolExhausted = errors.New("blanktrail: every candidate port is quarantin
 // under the requested template name.
 var ErrUnknownSpec = errors.New("blanktrail: no port carries this spec name")
 
+// DefaultCooldown is the gap NewPool keeps between two requests on one port when
+// the caller names neither Cooldown nor a delay range.
+//
+// It rests on a sweep of 240 answers taken on held ports at gaps of 0, 2, 5, 15,
+// 30 and 60 seconds, forty answers at each gap. Three of the 240 were slow: one
+// at no gap at all, two at thirty seconds, none anywhere else. Scattered across
+// gaps two orders of magnitude apart, they are not explained by the gap, and
+// forty back-to-back requests with no wait between them gave thirty-nine fast.
+//
+// So this is a small deliberate pause and not a derived quantity. What the sweep
+// establishes is that the gap does not drive slow answers over forty requests to
+// a port, which is not the same as establishing that it never could over ten
+// thousand; and the whole margin of two seconds over none rests on one answer in
+// forty. A caller who has measured their own list should set Cooldown from what
+// they measured rather than inherit this.
+const DefaultCooldown = 2 * time.Second
+
 // DeriveCooldown computes the default port cooldown from the ring the caller
 // described: with portsPerThread ports and a per-request delay somewhere in
 // [delayMin, delayMax], a port in a rigid ring would come back after
@@ -100,7 +117,8 @@ type PoolConfig struct {
 	// cooldown and offers NextDelay so callers have one place to ask.
 	DelayMin, DelayMax time.Duration
 	// Cooldown is the minimum gap between two requests on the SAME port. Zero
-	// derives it from PortsPerThread and the delay range.
+	// derives it from PortsPerThread and the delay range, or takes
+	// DefaultCooldown when no delay range was given either.
 	Cooldown time.Duration
 
 	// RequestTimeout bounds one request through a leased port, retries included
@@ -133,6 +151,22 @@ type PoolConfig struct {
 	// MaxPortStrikes is how many times a port may spend its whole retry budget
 	// without getting a usable response before it is quarantined (default 3).
 	MaxPortStrikes int
+	// ReviveAfter is how long a quarantined port waits before it is offered
+	// another egress and put back into rotation. Zero derives two minutes; a
+	// negative value leaves a quarantined port quarantined for the life of the
+	// pool.
+	//
+	// A port is quarantined for the answers it gave, and those answers came
+	// through an egress. On a list where a large share of the addresses are dead
+	// before the run starts, a port that drew three bad ones in a row is unlucky
+	// rather than broken, and a pool that cannot take it back stops a job in
+	// which nothing is wrong.
+	ReviveAfter time.Duration
+	// MaxRevivals is how many times one port may be offered another egress
+	// (default 3). Past it the port stays quarantined: taking a port that is
+	// genuinely finished back for ever costs a rotation on every acquisition and
+	// buys nothing.
+	MaxRevivals int
 
 	// Now and Sleep are clock seams for tests. Both default to the real clock.
 	Now   func() time.Time
@@ -173,8 +207,13 @@ type poolPort struct {
 	failures    int  // consecutive failed attempts; any success clears it
 	requests    int
 	strikes     int
-	renewedAt   time.Time
-	session     uint64 // bumped whenever the port's identity changes
+	// quarantinedAt is when the quarantine began, and is zero while the port is
+	// not quarantined. revivals counts how many times the port has been offered
+	// another egress to come back on.
+	quarantinedAt time.Time
+	revivals      int
+	renewedAt     time.Time
+	session       uint64 // bumped whenever the port's identity changes
 }
 
 func (pt *poolPort) egress() Egress {
@@ -233,6 +272,15 @@ type Stats struct {
 	EgressRotations  int64
 	Renewals         int64
 	Quarantines      int64
+
+	// Rejections counts answers a caller handed back as unusable even though the
+	// request carrying them succeeded. A run whose rejections climb while its
+	// requests do not is being refused, not failing.
+	Rejections int64
+
+	// Revivals counts quarantined ports given another egress and put back into
+	// rotation.
+	Revivals int64
 }
 
 // Stats returns a snapshot of pool activity.
@@ -309,6 +357,10 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		}
 		cfg.Specs = specs
 	}
+	// The delay range is filled in below for NextDelay's sake, so whether the
+	// caller described one has to be read before that happens: a filled-in range
+	// would otherwise derive a cooldown from a pause nobody asked for.
+	pacedByCaller := cfg.DelayMin > 0 || cfg.DelayMax > 0
 	if cfg.DelayMin <= 0 {
 		cfg.DelayMin = 3 * time.Second
 	}
@@ -327,10 +379,20 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	if cfg.MaxPortStrikes <= 0 {
 		cfg.MaxPortStrikes = 3
 	}
+	if cfg.ReviveAfter == 0 {
+		cfg.ReviveAfter = 2 * time.Minute
+	}
+	if cfg.MaxRevivals <= 0 {
+		cfg.MaxRevivals = 3
+	}
 
 	cool := cfg.Cooldown
-	if cool <= 0 {
+	switch {
+	case cool > 0:
+	case pacedByCaller:
 		cool = DeriveCooldown(cfg.PortsPerThread, cfg.DelayMin, cfg.DelayMax)
+	default:
+		cool = DefaultCooldown
 	}
 
 	channels := cfg.Channels
@@ -491,6 +553,20 @@ func (p *Pool) NextDelay() time.Duration {
 	return p.cfg.DelayMin + time.Duration(rand.Int63n(int64(spread)+1))
 }
 
+// Sleep pauses for d and returns early if ctx ends first.
+//
+// The pause between a caller's own requests is the caller's to take: the pool
+// derives the delay but cannot know when the caller is about to ask again. A
+// caller left to its own timer would keep a clock the rest of the pool does not
+// run on, and a test that wound the pool forward would then sit through every
+// pause for real. A non-positive d reports only whether ctx has ended.
+func (p *Pool) Sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	return p.cfg.Sleep(ctx, d)
+}
+
 // Acquire leases the coldest ready port of any template, waiting until one is
 // available or ctx is done. Always Release the lease.
 func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
@@ -523,6 +599,12 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 			return nil, err
 		}
 		if pt != nil {
+			if err := p.reviveIfDue(ctx, pt); err != nil {
+				// The port could not be given another egress, so it stays
+				// quarantined. Give it back and take another.
+				p.giveBack(pt)
+				continue
+			}
 			if err := p.renewIfDue(ctx, pt); err != nil {
 				// The renewal left the port closed. renewFailed has marked it
 				// broken — and quarantined it if it keeps failing — so give it
@@ -580,8 +662,12 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		}
 		pt.mu.Lock()
 		quarantined, leased, last := pt.quarantined, pt.leased, pt.lastUsed
+		revivals, since := pt.revivals, pt.quarantinedAt
 		pt.mu.Unlock()
-		if quarantined {
+		// A port that has waited out its quarantine is a candidate again. take
+		// holds p.mu and must not call the control API, so it only decides that
+		// the port is due; acquire does the rotation that brings it back.
+		if quarantined && !p.revivableAt(revivals, since, now) {
 			continue
 		}
 		alive++
@@ -618,6 +704,19 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		soonest = 0
 	}
 	return nil, soonest, nil
+}
+
+// revivableAt reports whether a port quarantined at since, and offered another
+// egress revivals times already, has waited long enough to be offered one more.
+// It takes values rather than the port, and no lock of its own, so a caller can
+// read the port's state once and decide from it.
+func (p *Pool) revivableAt(revivals int, since, now time.Time) bool {
+	if p.cfg.ReviveAfter < 0 || revivals >= p.cfg.MaxRevivals {
+		return false
+	}
+	// A quarantine with no beginning has no wait to measure, and reading the zero
+	// time as "long ago" would bring such a port back on the very next acquire.
+	return !since.IsZero() && now.Sub(since) >= p.cfg.ReviveAfter
 }
 
 // giveBack returns a port taken by take without counting a request against it,
@@ -716,6 +815,50 @@ func (l *Lease) Release() {
 	l.pool.mu.Unlock()
 }
 
+// Reject tells the pool that this port produced an answer the caller cannot
+// use, even though the request carrying it succeeded.
+//
+// The pool cannot see that on its own and must not try to: it does not know the
+// target and has no business reasoning about what a good answer looks like. But
+// a refusal arriving with a 2xx status is still a refusal, and left unsaid it
+// would clear the port's consecutive-failure count and hand the same identity
+// out again. So a rejection counts exactly as a failed attempt does: enough of
+// them in a row and the egress is replaced, enough of those and the port is
+// quarantined. The address is blamed on every rejection, because the request
+// went through — whatever was refused, it was not the request.
+//
+// A returned lease is not rejected: by then the port may belong to another
+// thread, whose work must not spend a strike.
+//
+// The lease stays held. A caller that wants a different port releases this one
+// and acquires another.
+func (l *Lease) Reject(ctx context.Context) error {
+	if l.released {
+		return nil
+	}
+	num := l.pt.num
+	p := l.pool
+
+	p.mu.Lock()
+	p.stats.Rejections++
+	p.mu.Unlock()
+
+	p.markBadEgress(num)
+	if !p.attemptFailed(num) {
+		return nil
+	}
+	if err := p.rotateEgress(ctx, num); err != nil {
+		// There is nowhere to move to, or moving failed. Either way the port has
+		// spent its whole budget on this answer, which is what a strike records.
+		p.exhausted(num)
+		if errors.Is(err, ErrRenewUnsupported) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // --- remedy implementation (used by the ladder) ---
 
 func (p *Pool) port(num int) *poolPort {
@@ -766,7 +909,8 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	return nil
 }
 
-// markBadEgress reports that an egress failed at the connection level, so the
+// markBadEgress reports that an egress did not carry its work — it failed at
+// the connection level, or the answer it brought back was refused — so the
 // channel can stop handing that address out.
 //
 // It deliberately does not penalise the channel: this runs on every attempt, and
@@ -819,6 +963,51 @@ func (p *Pool) attemptSucceeded(num int) {
 	pt.mu.Lock()
 	pt.failures = 0
 	pt.mu.Unlock()
+}
+
+// reviveIfDue takes a quarantined port back once it has waited long enough, and
+// leaves every other port alone.
+//
+// Coming back starts with another egress and cannot be anything less. The port
+// was quarantined for the answers it gave, and those answers came through the
+// egress it still holds, so clearing the flag alone would put it straight back
+// into the state it was quarantined for. A rotation that fails leaves the port
+// quarantined — there is nothing to bring it back to — and restarts its wait, so
+// a port whose egress cannot be replaced is not tried again on every acquire.
+func (p *Pool) reviveIfDue(ctx context.Context, pt *poolPort) error {
+	now := p.cfg.Now()
+
+	pt.mu.Lock()
+	due := pt.quarantined && p.revivableAt(pt.revivals, pt.quarantinedAt, now)
+	if due {
+		// The attempt is what costs, not the outcome: a rotation that fails is
+		// as expensive as one that works, so both count against MaxRevivals.
+		pt.revivals++
+	}
+	pt.mu.Unlock()
+	if !due {
+		return nil
+	}
+
+	p.markBadEgress(pt.num)
+	if err := p.rotateEgress(ctx, pt.num); err != nil {
+		pt.mu.Lock()
+		pt.quarantinedAt = now
+		pt.mu.Unlock()
+		return err
+	}
+
+	pt.mu.Lock()
+	pt.quarantined = false
+	pt.quarantinedAt = time.Time{}
+	pt.strikes = 0
+	pt.failures = 0
+	pt.mu.Unlock()
+
+	p.mu.Lock()
+	p.stats.Revivals++
+	p.mu.Unlock()
+	return nil
 }
 
 // renewIfDue replaces a port's whole identity when a proactive trigger has
@@ -931,6 +1120,7 @@ func (p *Pool) renewFailed(pt *poolPort, err error) error {
 	quarantine := pt.strikes >= p.cfg.MaxPortStrikes && !pt.quarantined
 	if quarantine {
 		pt.quarantined = true
+		pt.quarantinedAt = p.cfg.Now()
 	}
 	pt.mu.Unlock()
 
@@ -956,6 +1146,7 @@ func (p *Pool) exhausted(num int) {
 	quarantine := pt.strikes >= p.cfg.MaxPortStrikes && !pt.quarantined
 	if quarantine {
 		pt.quarantined = true
+		pt.quarantinedAt = p.cfg.Now()
 	}
 	pt.mu.Unlock()
 
