@@ -121,10 +121,14 @@ type PortSpec struct {
 	Decompress     bool // hand the client an identity-encoded body
 	EnableHTTP3    bool // re-originate over HTTP/3 where the target offers it
 
-	MaxConcurrent int    // in-flight requests allowed on the port
-	RetryDelayMs  int    // proxy-side retry delay
-	IdleSeconds   int    // per-port idle timeout (0 = inherit the global one)
-	LeakGuard     string // "", off, warn, enforce
+	MaxConcurrent int // in-flight requests allowed on the port
+	RetryDelayMs  int // proxy-side retry delay
+	IdleSeconds   int // per-port idle timeout (0 = inherit the global one)
+	// TimeoutSeconds bounds how long the port waits on one request; zero leaves
+	// it to the proxy. Keep PoolConfig.RequestTimeout well above this value, or
+	// the client gives up on the request before the port-side timeout can.
+	TimeoutSeconds int
+	LeakGuard      string // "", off, warn, enforce
 }
 
 // DefaultPortSpec is the configuration a session-oriented scraper wants: a real
@@ -142,7 +146,8 @@ func DefaultPortSpec() PortSpec {
 		KeepSessions:   true,
 		Decompress:     true,
 		// MaxConcurrent is left unset (0) so the proxy applies its own default.
-		LeakGuard: "warn",
+		TimeoutSeconds: 30,
+		LeakGuard:      "warn",
 	}
 }
 
@@ -184,6 +189,7 @@ type openPortRequest struct {
 	MaxConcurrent   *int    `json:"max_concurrent,omitempty"`
 	RetryDelayMs    *int    `json:"retry_delay_ms,omitempty"`
 	IdleSeconds     *int    `json:"idle_seconds,omitempty"`
+	TimeoutSeconds  *int    `json:"timeout_seconds,omitempty"`
 	LeakGuard       string  `json:"leak_guard,omitempty"`
 }
 
@@ -216,6 +222,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	if s.IdleSeconds > 0 {
 		n := s.IdleSeconds
 		req.IdleSeconds = &n
+	}
+	if s.TimeoutSeconds > 0 {
+		n := s.TimeoutSeconds
+		req.TimeoutSeconds = &n
 	}
 	switch {
 	case eg.Gateway != "":
