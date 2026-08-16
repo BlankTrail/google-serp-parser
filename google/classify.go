@@ -41,11 +41,19 @@ func (c Class) Usable() bool { return c == ClassSERP || c == ClassEmpty }
 var ErrNotSERP = errors.New("google: response is not a result page")
 
 // wallMarkers are phrases that only appear on a challenge page. They are
-// checked AFTER results, never before — see Classify.
+// checked AFTER results and AFTER the empty markers, never before — see
+// Classify.
+//
+// "/sorry/index" is deliberately not here: it appears in Google's own inline
+// JavaScript on ordinary result pages — measured on 17 of 17 real captures —
+// so as a body marker it would misfire on genuine pages. The sound version of
+// that signal is the finalURL check in Classify, which sees where the
+// response actually landed rather than a string anywhere in the markup.
 var wallMarkers = []string{
-	"/sorry/index",
 	"our systems have detected unusual traffic",
 	"unusual traffic from your computer network",
+	"наши системы обнаружили необычный трафик",
+	"необычный трафик, поступающий из вашей компьютерной сети",
 }
 
 // emptyMarkers are how Google words "nothing found". Absence of results is
@@ -63,9 +71,15 @@ var emptyMarkers = []string{
 // result page mentions reCAPTCHA in its own markup. A run that checked wall
 // markers first declared a page carrying eleven extracted links to be a wall.
 //
-// Nothing here tries to name a vendor or a challenge type. That belongs to
-// the proxy, which solves them; a second signature database in the parser
-// would be worse than the first and would drift away from it.
+// Google's own "nothing found" wording is tested before the wall phrases in
+// the body for the same reason: "/sorry/index" — a genuine wall signal in a
+// redirect target — also turns up inside ordinary pages' own inline
+// JavaScript, and a body-marker scan run first turned an honest zero on a
+// site: query into a reported wall.
+//
+// Nothing here names a vendor or a challenge type. This program only needs
+// to know the response is unusable; a signature list here would have to be
+// maintained against pages this program never sees.
 func Classify(status int, finalURL string, body []byte) (Class, error) {
 	// 1. Results present — a page with results is never anything else.
 	if hasResults(body) {
@@ -77,27 +91,30 @@ func Classify(status int, finalURL string, body []byte) (Class, error) {
 		return ClassWall, fmt.Errorf("%w: challenge or rate limit", ErrNotSERP)
 	}
 
-	// 3. Wall phrases in the body.
 	lower := bytes.ToLower(body)
+
+	// 3. Google saying it found nothing — a successful capture. Checked
+	// before the wall phrases in the body: those phrases can appear
+	// incidentally (see wallMarkers), and an honest zero must not lose to one.
+	for _, m := range emptyMarkers {
+		if bytes.Contains(lower, []byte(m)) {
+			return ClassEmpty, nil
+		}
+	}
+
+	// 4. Wall phrases in the body.
 	for _, m := range wallMarkers {
 		if bytes.Contains(lower, []byte(m)) {
 			return ClassWall, fmt.Errorf("%w: challenge page", ErrNotSERP)
 		}
 	}
 
-	// 4 and 5. Refusals and server-side failures.
+	// 5 and 6. Refusals and server-side failures.
 	if status == http.StatusForbidden {
 		return ClassBanned, fmt.Errorf("%w: HTTP 403", ErrNotSERP)
 	}
 	if status != http.StatusOK {
 		return ClassHTTP, fmt.Errorf("%w: HTTP %d", ErrNotSERP, status)
-	}
-
-	// 6. Google saying it found nothing — a successful capture.
-	for _, m := range emptyMarkers {
-		if bytes.Contains(lower, []byte(m)) {
-			return ClassEmpty, nil
-		}
 	}
 
 	// 7. HTTP 200 with no sign of results and no explanation: the shell.
