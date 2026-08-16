@@ -279,27 +279,35 @@ would otherwise sit behind a job of ten thousand queries — but it does compete
 with a running job for the same capacity, and it has a deadline it must answer
 inside (five minutes unless configured otherwise).
 
-These are measurements from one live run against eight identities, not
-guarantees. Each row is one probe unless it says otherwise.
+These are measurements from live runs against eight identities, not guarantees.
+Each row is one probe. Both runs are shown because the difference between them
+is the point: the second was made after the deadline was raised from one minute
+to five, and the searches are the same searches.
 
-| when the search was sent | how it ended |
-|---|---|
-| on identities that had never searched | `504` at 1m0s, **five times in a row** |
-| the sixth search on those identities | `200` in 29.8s |
-| once the identities were warm | `200` in 6.4s |
-| while a job of ten queries was running | `200` in 6.4s |
+| search, in the order sent | under a 1m deadline | under a 5m deadline |
+|---|---|---|
+| 1st — identities that had never searched | `504` at 1m0s | `504` at 5m0s |
+| 2nd | `504` at 1m0s | `502` at 3m19s |
+| 3rd | `504` at 1m0s | `200` in 2m31s |
+| 4th | `504` at 1m0s | `200` in 2m8s |
+| 5th | `504` at 1m0s | `200` in 4.3s |
+| 6th | `200` in 29.8s | — |
+| sent while a job of ten queries was running | `200` in 6.4s | `200` in 3.0s |
+| three at once against a limit of one | 2 × `429` in 2–3ms | 2 × `429` in 2–3ms |
 
-Two consequences worth planning for:
+Three things to plan for:
 
-* **A freshly started server is slow, and it is slow once.** Reaching an
-  identity that answers costs from half a minute to several — measured
-  separately at 27s to 9m10s — and a cold identity often meets a challenge on
-  top of that. This is why the deadline is five minutes rather than one: the
-  solver's own bound on a challenge is 300 seconds, and a shorter deadline
-  hangs up on work that was still going to succeed. The run above was made
-  under the old one-minute deadline, which is what turned the warm-up into five
-  `504`s.
+* **The first minutes after a start are the pool finding identities that
+  answer, not the search being slow.** That cost has been measured separately
+  at 27s to 9m10s. Once it is paid, the same endpoint answers in 3–6 seconds.
+* **The deadline is five minutes because the solver's own bound on one
+  challenge is 300 seconds.** A shorter deadline hangs up on work that was
+  still going to succeed and reports it as a search that did not finish —
+  which is exactly what the first column is. Raising it turned four straight
+  failures into three answers, and it did **not** make the first search
+  succeed: on a cold pool, expect to spend the warm-up whatever the deadline
+  is.
 * **A running job is not the problem.** A search sent while a job was running
-  came back in 6.4s, because by then the identities were warm. If your program
-  must not wait at all, send searches when the server has been up a while, or
-  set a job going instead.
+  came back in 3.0s, because by then the identities were warm. If your program
+  cannot spend the warm-up, send searches to a server that has been up a while,
+  or set a job going instead.
