@@ -339,8 +339,10 @@ func TestLiveRun_TakesUpAnInterruptedJobExactlyWhereItStopped(t *testing.T) {
 		t.Skip("the resume did not finish, so there is no export to read back")
 	}
 
-	// The export the command itself wrote, counted by the command itself.
-	written := fmt.Sprintf("%d rows written to %s", totalAfter, resume.Out)
+	// The export the command itself wrote, counted by the command itself. The
+	// command names the file and not the directory it is in, which is why this
+	// is the base name: where on the machine it sits is not printed.
+	written := fmt.Sprintf("%d rows written to %s", totalAfter, filepath.Base(resume.Out))
 	if !strings.Contains(second.String(), written) {
 		errorf(t, "the history holds %d rows and the export does not say it wrote that many", totalAfter)
 	}

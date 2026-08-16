@@ -357,7 +357,7 @@ func settle(ctx context.Context, out io.Writer, st *store.Store, p plan, opts ru
 		// A job is stamped done only when nothing is pending, so a run that was
 		// cut short stays available to be taken up rather than closing over the
 		// queries nobody reached.
-		_, _ = fmt.Fprintf(out, "still to do: %d; gserp run -resume -name %q takes them up\n",
+		say(out, "still to do: %d; gserp run -resume -name %q takes them up",
 			len(left), p.spec.Name)
 	}
 
@@ -366,10 +366,17 @@ func settle(ctx context.Context, out io.Writer, st *store.Store, p plan, opts ru
 	}
 	rows, err := exportJob(ctx, st, p.id, opts.Out, opts.Format)
 	if err != nil {
-		return err
+		// The reason names the file it could not open, which is the same path
+		// by another route, and it goes on to whatever prints the error.
+		return scrubbed(err)
 	}
-	_, _ = fmt.Fprintf(out, "%d rows written to %s\n", rows, opts.Out)
+	say(out, "%d rows written to %s", rows, opts.Out)
 	return nil
+}
+
+// say prints a line with everything that must not be printed taken out of it.
+func say(out io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintln(out, hideSecrets(fmt.Sprintf(format, args...), secrets()...))
 }
 
 // resumedPlan takes up the job a name was last left in the middle of.
@@ -635,8 +642,9 @@ func secrets() []string {
 // handed can carry a key inside it, so a message repeated as it arrived
 // publishes that key to whatever the output is kept in. The values given are
 // removed outright, along with the parts of them a message tends to quote on
-// its own; a user and password inside any other address are recognised by their
-// position, because those are not known ahead of time.
+// its own; a user and password inside any other address, and where on this
+// machine a file is kept, are recognised by their shape, because neither is
+// known ahead of time.
 func hideSecrets(text string, of ...string) string {
 	for _, v := range of {
 		if v == "" {
@@ -655,17 +663,29 @@ func hideSecrets(text string, of ...string) string {
 
 	fields := strings.Fields(text)
 	for i, f := range fields {
-		scheme, rest, ok := strings.Cut(f, "://")
-		if !ok {
-			continue
-		}
-		userinfo, host, ok := strings.Cut(rest, "@")
-		if !ok || userinfo == "" {
-			continue
-		}
-		fields[i] = scheme + "://" + withheld + "@" + host
+		fields[i] = filtered(f)
 	}
 	return strings.Join(fields, " ")
+}
+
+// filtered takes out of one word of a line what must not be printed.
+func filtered(f string) string {
+	if scheme, rest, ok := strings.Cut(f, "://"); ok {
+		if userinfo, host, ok := strings.Cut(rest, "@"); ok && userinfo != "" {
+			return scheme + "://" + withheld + "@" + host
+		}
+		return f
+	}
+	if filepath.IsAbs(f) {
+		// The file's name is kept and the directories above it are dropped.
+		// Which file was written is the answer the user asked for and says
+		// nothing about the machine; where they keep it is a description of the
+		// machine, and it outlives the terminal it was printed on. A name given
+		// as a quoted string is not a path here and is left whole, which is what
+		// keeps the resume command something that can be typed back.
+		return filepath.Base(f)
+	}
+	return f
 }
 
 // after returns what follows sep, and whether sep was there at all.
