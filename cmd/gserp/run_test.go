@@ -17,8 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/export"
 	"github.com/blanktrail/google-serp-parser/google"
+	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 	"github.com/blanktrail/google-serp-parser/run"
 	"github.com/blanktrail/google-serp-parser/store"
 )
@@ -84,6 +86,112 @@ func TestRunCommand_EstimatesWithoutSendingAnything(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the estimate does not mention %q:\n%s", want, got)
 		}
+	}
+}
+
+// estimated returns what a dry run says a job of twenty queries costs at the
+// given thread and port counts.
+func estimated(t *testing.T, threads, ports string) string {
+	t.Helper()
+	dir := t.TempDir()
+	list := listOf(t, dir, strings.Repeat("golang generics\n", 20))
+
+	var out bytes.Buffer
+	err := runCommand(context.Background(), []string{
+		"-queries", list, "-db", filepath.Join(dir, "h.db"),
+		"-pages", "2", "-threads", threads, "-ports", ports, "-dry-run",
+	}, &out)
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+	return out.String()
+}
+
+// expectedIn reads back the time a printed estimate expects the job to take.
+func expectedIn(t *testing.T, printed string) time.Duration {
+	t.Helper()
+	for _, line := range strings.Split(printed, "\n") {
+		rest, ok := strings.CutPrefix(line, "expected ≈ ")
+		if !ok {
+			continue
+		}
+		d, err := time.ParseDuration(strings.Fields(rest)[0])
+		if err != nil {
+			t.Fatalf("the time in %q does not read back as one: %v", line, err)
+		}
+		return d
+	}
+	t.Fatalf("the estimate never says how long the job is expected to take:\n%s", printed)
+	return 0
+}
+
+func TestRunCommand_QuotesTheTimeOverTheThreadsItWasGivenAndNotOverThePorts(t *testing.T) {
+	// Threads are the lanes; ports are only what a lane can run on. Eight ports
+	// worked by one thread take eight times as long as eight ports worked by
+	// eight, so quoting the port count as the thread count halves the number on
+	// a run of four threads over eight ports — which is the shape the live runs
+	// were measured at.
+	slow := expectedIn(t, estimated(t, "1", "8"))
+	fast := expectedIn(t, estimated(t, "8", "1"))
+
+	if slow <= fast {
+		t.Errorf("one thread over eight ports is quoted at %v and eight threads at %v; "+
+			"the threads are not reaching the estimate", slow, fast)
+	}
+	if slow < 4*fast {
+		t.Errorf("one thread is quoted at %v against eight threads at %v, "+
+			"which is not the eightfold the lanes make it", slow, fast)
+	}
+}
+
+func TestRunCommand_SaysWhichOfTheTimesItQuotesIsABoundAndWhereTheOtherCameFrom(t *testing.T) {
+	// A floor counts the pauses and nothing else: a live run printed a floor of
+	// nought seconds and then took six minutes. The expected time is the one to
+	// plan around and it rests on costs measured on one list on one day, so a
+	// number printed bare gets believed and should not be.
+	got := estimated(t, "4", "2")
+
+	if !strings.Contains(got, "floor") {
+		t.Errorf("the estimate no longer states the bound the pacing gives:\n%s", got)
+	}
+	var expected string
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "expected ≈ ") {
+			expected = line
+		}
+	}
+	if expected == "" {
+		t.Fatalf("the estimate does not quote a time to plan around:\n%s", got)
+	}
+	if !strings.Contains(expected, "measured") {
+		t.Errorf("the expected time is quoted bare, with nothing about where it came from:\n%s", expected)
+	}
+}
+
+func TestRunCommand_PacesTheEstimateAsThePoolItWillOpenWouldPaceItself(t *testing.T) {
+	// The estimate is printed before the ports are opened — and on a dry run
+	// they never are — so the gap between two requests on one port has to be
+	// arrived at here. Arrived at differently from the pool, it quotes a job
+	// nobody is going to run.
+	fake := fakebt.New(t)
+	client, err := blanktrail.NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	cfg := poolConfig(runOptions{Threads: 2, Ports: 3})
+	cfg.Client = client
+	cfg.Insecure = true // the fake serves plain HTTP
+	cfg.Channels = []blanktrail.Channel{blanktrail.NewDirectChannel("direct")}
+
+	pool, err := blanktrail.NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	if got := settledCooldown(cfg); got != pool.Cooldown() {
+		t.Errorf("the estimate paces the job at %v and the pool paces it at %v", got, pool.Cooldown())
 	}
 }
 
