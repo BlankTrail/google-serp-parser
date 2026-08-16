@@ -27,7 +27,12 @@
 *.swp
 
 # internal working material — never published
-/docs/
+# The contents are excluded rather than the directory itself, because git
+# cannot take a file back out of a directory it has excluded whole — and one
+# file in there is written for whoever calls this program rather than for
+# whoever builds it.
+/docs/*
+!/docs/api.md
 /.superpowers/
 /testdata-corpus/
 *.har

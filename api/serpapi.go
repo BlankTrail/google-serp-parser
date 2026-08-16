@@ -19,6 +19,18 @@ import (
 // have left it unset.
 const serpAPIEngine = "google"
 
+// serpAPIEngines is every engine this address answers for, and a refusal says
+// so rather than only saying no.
+//
+// Images, news, shopping, video, maps, trends and translation are not here and
+// are not coming in the next few days. Nothing in this program reads any of
+// those pages, so a caller who asked for images and was handed the ordinary web
+// results would file web results as images, keep them, and find out a week
+// later. Naming what is supported is what turns that from a discovery into a
+// refusal the caller can act on at once: the list is short, it is the truth,
+// and it costs one sentence.
+var serpAPIEngines = []string{serpAPIEngine}
+
 // serpAPIStatus is what a finished search is called. The word is theirs, spelled
 // their way: a program branching on it compares against this exact string.
 const serpAPIStatus = "Success"
@@ -181,8 +193,9 @@ func (s *Server) serpAPISearch(w http.ResponseWriter, r *http.Request) {
 func serpAPIQuery(asked url.Values) (google.Query, string) {
 	if engine := strings.TrimSpace(asked.Get("engine")); engine != "" &&
 		!strings.EqualFold(engine, serpAPIEngine) {
-		return google.Query{}, "this server searches " + serpAPIEngine +
-			" and nothing else: engine=" + engine + " would be answered with results from somewhere it did not come from"
+		return google.Query{}, "engine=" + engine +
+			" is not supported by this server. Supported engines: " + strings.Join(serpAPIEngines, ", ") +
+			". Answering an engine this server does not read would hand back one kind of page under another kind's name"
 	}
 
 	text := strings.TrimSpace(asked.Get("q"))

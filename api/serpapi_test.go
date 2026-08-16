@@ -313,6 +313,42 @@ func TestSerpAPI_RefusesAnEngineItDoesNotSearchBeforeSpendingAnIdentityOnIt(t *t
 	}
 }
 
+func TestSerpAPI_NamesTheEngineItWillNotSearchAndEveryEngineItWill(t *testing.T) {
+	// The one reason this address exists is that somebody else's program starts
+	// working when its base address is changed, and such a program sends
+	// engine=google_images. A refusal that only says no leaves them reading this
+	// server's documentation to learn what they may ask for; a refusal that
+	// names the engine they asked for and the ones that exist is the answer
+	// itself. Both halves are checked, and the supported half against the list
+	// the server actually goes by, so an engine added to that list and left out
+	// of the sentence fails here rather than in somebody's integration.
+	s, secret := searchServer(t, SearchConfig{Searcher: answering(serpAPIPage())})
+
+	const asked = "google_images"
+	code, body := serpAPIAsk(t, s, secret, "/search?q=iphone&engine="+asked)
+	if code != http.StatusBadRequest {
+		t.Fatalf("engine=%s answered %d, want 400 (body %v)", asked, code, body)
+	}
+	refusal := textAt(t, body, "error")
+	if !strings.Contains(refusal, asked) {
+		t.Errorf("the refusal does not name the engine that was asked for: %q", refusal)
+	}
+	if !strings.Contains(refusal, "not supported") {
+		t.Errorf("the refusal does not say the engine is unsupported: %q", refusal)
+	}
+	// The engine asked for is taken out of the sentence before the supported
+	// ones are looked for in it. The name a caller sends is google_images, the
+	// engine this server supports is google, and one is a prefix of the other:
+	// a refusal that names only what was refused would otherwise read as though
+	// it had listed what is allowed.
+	rest := strings.ReplaceAll(refusal, asked, "«what was asked for»")
+	for _, engine := range serpAPIEngines {
+		if !strings.Contains(rest, engine) {
+			t.Errorf("the refusal lists no %q among the engines this server does search: %q", engine, refusal)
+		}
+	}
+}
+
 func TestSerpAPI_RefusesALayoutItDoesNotCapture(t *testing.T) {
 	// The layout travels with a query and changes nothing this program sends, so
 	// a mobile capture asked for here would be the desktop page with the word

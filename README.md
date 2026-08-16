@@ -11,6 +11,34 @@ and a SerpApi-compatible API. Powered by [BlankTrail Proxy](https://blanktrail.c
 
 ## Status
 
+**There is a programmable interface, and it is documented in
+[`docs/api.md`](docs/api.md).** `gserp serve` puts it on the same address as the
+pages, over the same history and the same queue, so a job set up by a program is
+the job the browser lists. Under `/api/v1/` a program sets a job going, watches
+it, stops it and takes it up again; two addresses stream what was captured — a
+job's results and a site's history — as one JSON object per line, so a job of a
+million rows is read a line at a time and a transfer cut short is worth every
+line before the break. A single search is answered inside the connection that
+asked for it, in this program's own shape and, at `/search`, in the shape SerpApi
+answers in: a program written against that service works after changing the base
+address and nothing else. Access is by key — `gserp key new` issues one and only
+a hash of it is stored — carried either in an `Authorization` header or, because
+somebody else's client already sends it that way, in the query string, which the
+documentation warns puts it into the access log of every proxy between you and
+the server.
+
+Three things about that interface are worth knowing before writing against it.
+**`google` is the only engine**, and a request for another is refused with a 400
+that names the engine asked for and lists the ones there are, rather than quietly
+answering an image search with web results. **No advertising is handed over**,
+and the answer says how many paid placements were on the page and were not
+reported, so none of them go missing silently. And a single search does not wait
+behind the job queue — it would otherwise sit behind a job of ten thousand
+queries — but it does compete with a running job for ports and has a deadline of
+its own; a search that reaches that deadline is told so plainly rather than left
+hanging. There is no rate limiting, keys have no scopes, and a job is polled
+rather than announced.
+
 **There is a browser interface.** `gserp serve` opens it, and `start.bat` or
 `start.sh` opens it and your browser with it. A job is set up in a form, which
 says what it will cost before you start it; it then runs in front of you, stops
@@ -37,8 +65,6 @@ a site's position, whether a page is indexed, and search completions. A refused
 answer is carried to another identity rather than lost, and addresses that stop
 working are replaced as the run goes, so a list accumulates the ones that work
 by using them.
-
-The SerpApi-compatible API lands in a later milestone.
 
 ## Licence
 
