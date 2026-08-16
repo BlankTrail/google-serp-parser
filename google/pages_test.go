@@ -12,12 +12,14 @@ import (
 // fakeSearcher answers from a script, so pagination can be tested without a
 // network and without a page of HTML per case.
 type fakeSearcher struct {
-	pages []SERP
-	errs  []error
-	asked []int
+	pages     []SERP
+	errs      []error
+	asked     []int
+	askedText []string
 }
 
 func (f *fakeSearcher) Search(_ context.Context, q Query) (SERP, error) {
+	f.askedText = append(f.askedText, q.Text)
 	f.asked = append(f.asked, q.Page)
 	i := q.Page - 1
 	if i < len(f.errs) && f.errs[i] != nil {
