@@ -211,14 +211,13 @@ func TestResolveAll_CountsACancelledBatchByWhatItTriedNotByWhatIsLeft(t *testing
 	serp := unresolved(srv.URL, "a", "b", "c", "d", "e", "f")
 	rep := (&Resolver{Client: srv.Client()}).ResolveAll(ctx, &serp, 1)
 
-	if rep.Resolved != 1 {
-		t.Errorf("resolved %d, want the one link that finished before the cancellation", rep.Resolved)
+	// One link finished, one died in flight, and four were never handed to a
+	// worker. Only the second of those is a failure.
+	if rep.Attempted != 6 || rep.Resolved != 1 || rep.Failed != 1 {
+		t.Fatalf("report=%+v, want 6 attempted, 1 resolved and only the in-flight link failed", rep)
 	}
-	if rep.Failed != len(rep.Errs)-1 {
-		t.Errorf("failed=%d with %d errors, want one error per failure plus the cancellation", rep.Failed, len(rep.Errs))
-	}
-	if left := rep.Attempted - rep.Resolved - rep.Failed; left < 1 {
-		t.Fatalf("report=%+v, want links left untried after the cancellation", rep)
+	if left := rep.Attempted - rep.Resolved - rep.Failed; left != 4 {
+		t.Errorf("%d links left untried, want the 4 the batch never reached", left)
 	}
 	if last := rep.Errs[len(rep.Errs)-1].Error(); !strings.Contains(last, "untried") {
 		t.Errorf("last error=%q, want it to say the batch stopped with links untried", last)
