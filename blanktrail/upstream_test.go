@@ -471,6 +471,29 @@ func BenchmarkRotorNextWhenNearlyEveryAddressIsResting(b *testing.B) {
 	}
 }
 
+// BenchmarkRotorNextWithHalfTheListRestingAndNothingDue is the steady state of
+// a list that has been in use for a while: a large share of it is resting, no
+// rest is anywhere near over, and the cursor still finds a free address within a
+// step or two. The other benchmarks cannot show what that costs — one has an
+// empty bench, and the one with a full bench spends nearly all its time walking
+// past resting addresses, which hides everything else.
+func BenchmarkRotorNextWithHalfTheListRestingAndNothingDue(b *testing.B) {
+	ups := listOfSize(15000)
+	clock := time.Unix(1700000000, 0)
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+	for j := 0; j < len(ups); j += 2 {
+		for i := 0; i < 3; i++ {
+			r.MarkBad(ups[j])
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, ok := r.Next(); !ok {
+			b.Fatal("Next reported an empty list")
+		}
+	}
+}
+
 func BenchmarkRotorNextReleasingATenthOfAFullSizeList(b *testing.B) {
 	ups := listOfSize(15000)
 	for i := 0; i < b.N; i++ {
