@@ -8,6 +8,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -392,6 +393,85 @@ func TestHideSecrets_KeepsAFailedAddressOutOfWhatIsPrinted(t *testing.T) {
 	}
 	if !strings.Contains(got, "refused the connection") {
 		t.Errorf("the reason was hidden along with the address: %q", got)
+	}
+}
+
+func TestHideSecrets_KeepsWhereOnThisMachineAFileIsKeptOutOfWhatIsPrinted(t *testing.T) {
+	// On the user's own terminal an absolute path is merely their own. In a log,
+	// a bug report or a transcript it is a description of their machine, and it
+	// outlives the terminal it was printed on. The file's name is what they
+	// asked about; the directories above it are not.
+	dir := t.TempDir()
+	line := fmt.Sprintf("wrote %s beside %s, and results.csv is relative",
+		filepath.Join(dir, "results.csv"), filepath.Join(dir, "history.db"))
+
+	got := hideSecrets(line)
+
+	if strings.Contains(got, dir) {
+		t.Errorf("the directory survived into %q", got)
+	}
+	for _, kept := range []string{"results.csv", "history.db", "is relative"} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("%q was taken out along with the directory: %q", kept, got)
+		}
+	}
+}
+
+func TestSettle_NamesTheExportWithoutSayingWhereOnThisMachineItSits(t *testing.T) {
+	s, id, dir := halfDoneJob(t)
+	path := filepath.Join(dir, "out.csv")
+
+	var out bytes.Buffer
+	err := settle(context.Background(), &out, s, plan{id: id, spec: store.JobSpec{Name: "j"}},
+		runOptions{Out: path, Format: "csv"})
+	if err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+
+	got := out.String()
+	if strings.Contains(got, dir) {
+		t.Errorf("the run printed where on this machine it wrote:\n%s", got)
+	}
+	if !strings.Contains(got, "out.csv") {
+		t.Errorf("the run does not say which file it wrote:\n%s", got)
+	}
+}
+
+func TestSettle_KeepsThePathOutOfTheReasonAnExportCouldNotBeWritten(t *testing.T) {
+	// The failure quotes the file it could not open, which is the same path by
+	// another route, and this one is handed on to whatever prints the error.
+	s, id, dir := halfDoneJob(t)
+	missing := filepath.Join(dir, "no-such-directory", "out.csv")
+
+	var out bytes.Buffer
+	err := settle(context.Background(), &out, s, plan{id: id, spec: store.JobSpec{Name: "j"}},
+		runOptions{Out: missing, Format: "csv"})
+	if err == nil {
+		t.Fatal("an export into a directory that does not exist was reported as written")
+	}
+	if strings.Contains(err.Error(), dir) {
+		t.Errorf("the refusal says where on this machine the file would have gone: %v", err)
+	}
+	if !strings.Contains(err.Error(), "out.csv") {
+		t.Errorf("the refusal does not say which file could not be written: %v", err)
+	}
+}
+
+func TestSettle_LeavesTheResumeCommandExactlyAsItHasToBeTyped(t *testing.T) {
+	// The hint exists to be copied. A name cut short on its way out — because
+	// the user filed the job under something shaped like a path — leaves a line
+	// that reads as a command and takes up nothing.
+	s, id, dir := halfDoneJob(t)
+	name := filepath.Join(dir, "nightly")
+
+	var out bytes.Buffer
+	if err := settle(context.Background(), &out, s, plan{id: id, spec: store.JobSpec{Name: name}}, runOptions{}); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+
+	want := fmt.Sprintf("-name %q", name)
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("the resume command does not carry the name the job is filed under:\n%s", out.String())
 	}
 }
 
