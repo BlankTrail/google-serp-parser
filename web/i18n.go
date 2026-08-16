@@ -102,6 +102,7 @@ var catalogue = map[Lang]map[string]string{
 		"history.address":      "Address",
 
 		"job.title":          "Job",
+		"job.progress":       "Progress",
 		"job.settings":       "Set up as",
 		"job.stop":           "Stop",
 		"job.resume":         "Carry on",
@@ -161,6 +162,7 @@ var catalogue = map[Lang]map[string]string{
 		"history.address":      "Адрес",
 
 		"job.title":          "Задание",
+		"job.progress":       "Ход",
 		"job.settings":       "Как заведено",
 		"job.stop":           "Остановить",
 		"job.resume":         "Продолжить",

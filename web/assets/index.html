@@ -1,6 +1,7 @@
 {{define "main"}}
 <h1>{{.T "jobs.title"}}</h1>
 {{if .Jobs}}
+<section class="card">
 <table>
 <thead>
 <tr>
@@ -29,6 +30,7 @@
 {{end}}
 </tbody>
 </table>
+</section>
 {{else}}
 <p class="empty">{{.T "jobs.none"}}</p>
 {{end}}

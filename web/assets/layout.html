@@ -3,12 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.T .Title}} · gserp</title>
+{{/* The product is named in the tab as well as in the header: an operator with
+     a dozen tabs open is looking at titles and nothing else. */}}
+<title>{{.T .Title}} · BlankTrail Google Parser</title>
 <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
 <header>
-<a class="brand" href="/">gserp</a>
+{{/* The name is written here rather than looked up in the catalogue. A product
+     name is the same word in every language, and translating it would leave two
+     programs where there is one. */}}
+<a class="brand" href="/">BlankTrail Google Parser</a>
 {{/* Starting a job is what this program is for, so the page that starts one is
      offered from every page rather than reached by typing its address. */}}
 <nav class="pages">

@@ -26,6 +26,17 @@
 		}
 	}
 
+	// The bar is filled by the numbers the server just sent, not by counting
+	// anything here. It is absent on a job with no queries behind it, which is
+	// why it is looked up rather than assumed.
+	function fill(done, total) {
+		var bar = document.getElementById("bar");
+		if (bar) {
+			bar.max = total;
+			bar.value = done;
+		}
+	}
+
 	function ask() {
 		fetch("/api/progress?job=" + encodeURIComponent(job), {
 			headers: { "Accept": "application/json" }
@@ -39,6 +50,7 @@
 			show("count-done", at.done);
 			show("count-failed", at.failed);
 			show("count-pending", at.pending);
+			fill(at.done, at.total);
 			missesLeft = 3;
 			if (at.watch) {
 				setTimeout(ask, every);
