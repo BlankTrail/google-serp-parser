@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -758,6 +759,19 @@ func shortenPaths(text string, paths ...string) string {
 // pointed at are kept.
 func scrub(text string, opts runOptions) string {
 	return hideSecrets(shortenPaths(text, handed(opts)...), secrets()...)
+}
+
+// scrubDB takes out of a line everything a command holding one database must
+// not print: the values it was given in the environment, and where on this
+// machine that database is kept.
+//
+// The path is taken out in both the shapes an error writes it. A quoted path
+// doubles every separator, so on a machine that separates with backslashes the
+// quoted form shares no substring with the one handed in and would otherwise go
+// out whole.
+func scrubDB(text, db string) string {
+	quoted := strconv.Quote(db)
+	return hideSecrets(shortenPaths(text, db, quoted[1:len(quoted)-1]), secrets()...)
 }
 
 // after returns what follows sep, and whether sep was there at all.

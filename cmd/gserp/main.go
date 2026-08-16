@@ -47,6 +47,8 @@ func dispatch(ctx context.Context, args []string) error {
 		return runCommand(ctx, args[1:], os.Stdout)
 	case "serve":
 		return serveCommand(ctx, args[1:], os.Stdout)
+	case "key":
+		return keyCommand(ctx, args[1:], os.Stdout)
 	case "doctor":
 		return doctorCommand(args[1:])
 	case "version", "--version", "-v":
@@ -85,6 +87,10 @@ Usage:
   gserp run [flags]      work a list of queries, saving each one as it lands
   gserp serve [flags]    serve the browser interface: set a job up, watch it
                          run, stop it, take it up again, export it
+  gserp key new [flags]  issue a key a program can reach this one with, and
+                         print it the once it can be seen
+  gserp key list [flags] list the keys that exist, without their secrets
+  gserp key revoke       stop one key working, by the id the listing prints
   gserp doctor [flags]   check a BlankTrail instance against an intended run
   gserp version          print the version
 
@@ -111,6 +117,11 @@ Serve flags:
   --db string                 history database to open (default gserp.db)
   --threads int               queries taken at once (default 2)
   --ports int                 ports per thread (default 3)
+
+Key flags:
+  --db string                 database the keys are kept in (default gserp.db)
+  --name string               name to file a new key under
+  --id int                    key to stop, by the id gserp key list prints
 
 Doctor flags:
   --bt-url string             control API base URL (default http://127.0.0.1:8891)

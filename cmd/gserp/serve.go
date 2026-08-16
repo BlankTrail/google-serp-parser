@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"strconv"
 
 	"github.com/blanktrail/google-serp-parser/store"
 	"github.com/blanktrail/google-serp-parser/web"
@@ -140,14 +139,8 @@ func (o serveOptions) logger(w io.Writer) *slog.Logger {
 // clean takes out of a line everything this command must not print: the values
 // it was given in the environment, and where on this machine the history is
 // kept.
-//
-// The path is taken out in both the shapes an error writes it. A quoted path
-// doubles every separator, so on a machine that separates with backslashes the
-// quoted form shares no substring with the one handed in and would otherwise go
-// out whole.
 func (o serveOptions) clean(text string) string {
-	quoted := strconv.Quote(o.DB)
-	return hideSecrets(shortenPaths(text, o.DB, quoted[1:len(quoted)-1]), secrets()...)
+	return scrubDB(text, o.DB)
 }
 
 // scrubbed rewrites an error so it can be printed.
