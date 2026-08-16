@@ -4,6 +4,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -96,6 +97,107 @@ func TestServer_ListsEveryJobTheHistoryHolds(t *testing.T) {
 	}
 }
 
+func TestServer_RendersThePageInTheLanguageAsked(t *testing.T) {
+	// jobs.none is the phrase under test because its two translations share no
+	// letter: one is Latin and the other Cyrillic, so a page carrying both is
+	// unmistakable, and the test cannot pass on a server that renders one
+	// language and calls it the other.
+	rec := get(t, testServer(t), "/?lang=ru")
+
+	body := rec.Body.String()
+	if !strings.Contains(body, LangRU.T("jobs.none")) {
+		t.Errorf("the page did not come back in Russian:\n%s", body)
+	}
+	if strings.Contains(body, LangEN.T("jobs.none")) {
+		t.Errorf("the page carries both languages at once:\n%s", body)
+	}
+}
+
+func TestServer_ShowsNoBareKeyWhereAPhraseBelongs(t *testing.T) {
+	// A key on the page is a phrase that was never looked up: the template
+	// printed the name of the text instead of the text. That mistake survives
+	// every test written about a particular phrase, because it lands on the
+	// phrases nobody thought to check, so this one is over all of them at once.
+	//
+	// Both an empty history and one with a job in it are drawn, since the two
+	// between them are what puts every phrase this program has on a page.
+	st := testStore(t)
+	if _, err := st.CreateJob(context.Background(),
+		store.JobSpec{Name: "morning list", Pages: 1}, []string{"a"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	listing, err := New(Config{Store: st, Logger: quiet()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for _, s := range []*Server{testServer(t), listing} {
+		for _, l := range Languages() {
+			body := get(t, s, "/?lang="+string(l)).Body.String()
+			for key := range catalogue[l] {
+				if strings.Contains(body, key) {
+					t.Errorf("the %s page shows the key %q where its text belongs", l, key)
+				}
+			}
+		}
+	}
+}
+
+func TestServer_SaysWhichLanguageThePageIsWrittenIn(t *testing.T) {
+	// A reader who needs the page read aloud, or translated by the browser, is
+	// told which language it is in by the markup or not at all.
+	body := get(t, testServer(t), "/?lang=ru").Body.String()
+	if !strings.Contains(body, `<html lang="ru"`) {
+		t.Errorf("the page does not declare the language it is written in:\n%s", body)
+	}
+}
+
+func TestServer_RemembersTheLanguageAskedForSoTheNextPageNeedsNoAsking(t *testing.T) {
+	// Without this the switch lasts exactly one page: every link on it drops the
+	// query, and the reader lands back in the language the browser prefers.
+	rec := get(t, testServer(t), "/?lang=ru")
+
+	var stored string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == langCookie {
+			stored = c.Value
+		}
+	}
+	if stored != string(LangRU) {
+		t.Errorf("the answer remembered %q, want ru", stored)
+	}
+}
+
+func TestServer_RemembersNothingWhenNobodyHasChosen(t *testing.T) {
+	// What Accept-Language says is a guess about the reader. Writing it down
+	// turns that guess into a decision they never made, and a browser whose
+	// preferences change afterwards is then ignored forever.
+	rec := get(t, testServer(t), "/")
+
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == langCookie {
+			t.Errorf("the answer wrote down %q without being asked", c.Value)
+		}
+	}
+}
+
+func TestServer_OffersTheOtherLanguageWithoutLosingThePage(t *testing.T) {
+	// The switch is a link, so it names where it goes. Naming the site root
+	// instead would send whoever clicked it back to the beginning and lose
+	// whatever they were looking at.
+	body := get(t, testServer(t), "/?lang=ru&limit=5").Body.String()
+
+	// The two halves are looked for apart because the ampersand joining them in
+	// a link is written as an entity, and a test searching for the raw query
+	// string would fail on a page that is perfectly correct.
+	if !strings.Contains(body, "lang=en") {
+		t.Errorf("the page does not offer the other language:\n%s", body)
+	}
+	if !strings.Contains(body, "limit=5") {
+		t.Errorf("the switch throws away the rest of the address:\n%s", body)
+	}
+}
+
 func TestServer_ServesItsOwnStylesheet(t *testing.T) {
 	// Everything ships inside the binary; a missing asset means the embed
 	// pattern stopped matching and nobody would notice from the Go side.
@@ -161,6 +263,24 @@ func TestNew_RefusesToStartWithoutAStore(t *testing.T) {
 	// away from its cause.
 	if _, err := New(Config{Logger: quiet()}); err == nil {
 		t.Error("New accepted a configuration with no store")
+	}
+}
+
+func TestNew_RefusesToStartWhenALanguageIsShortOfText(t *testing.T) {
+	// A check that is written but never called is worth nothing: the phrase
+	// still goes missing, and the bare key still reaches the one reader of that
+	// language. Nothing here runs in parallel, so the catalogue can be swapped
+	// for a broken one and put back.
+	whole := catalogue
+	t.Cleanup(func() { catalogue = whole })
+	catalogue = map[Lang]map[string]string{
+		LangEN: {"jobs.title": "Jobs", "jobs.none": "No jobs yet."},
+		LangRU: {"jobs.title": "Задания"},
+	}
+
+	_, err := New(Config{Store: testStore(t), Logger: quiet()})
+	if !errors.Is(err, ErrMissingText) {
+		t.Errorf("New gave %v, want a refusal naming the missing text", err)
 	}
 }
 

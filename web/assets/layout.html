@@ -1,14 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{.Lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}} · gserp</title>
+<title>{{.T .Title}} · gserp</title>
 <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
 <header>
 <a class="brand" href="/">gserp</a>
+<nav class="langs" aria-label="{{.T "nav.language"}}">
+{{range .Langs}}{{if .Current}}<span aria-current="true">{{.Name}}</span>{{else}}<a href="{{.URL}}">{{.Name}}</a>{{end}}
+{{end}}</nav>
 </header>
 <main>
 {{block "main" .}}{{end}}
