@@ -121,6 +121,8 @@ func parsePages() (map[string]*template.Template, error) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /{$}", s.index)
+	s.mux.HandleFunc("GET /history", s.history)
+	s.mux.HandleFunc("GET /export", s.download)
 	// One path element, so a name can never walk out of the directory it is
 	// looked up in.
 	s.mux.HandleFunc("GET /assets/{file}", s.asset)
