@@ -93,6 +93,104 @@ func (a *Attempt) Search(ctx context.Context, q google.Query) (google.SERP, erro
 	return google.SERP{}, fmt.Errorf("%w after %d: %w", ErrNoIdentityLeft, tries, last)
 }
 
+// Walk takes one query to a depth, holding a single identity for the whole of
+// it and moving to another only when an answer is refused.
+//
+// A visitor paging through results does not change address between page one and
+// page two, and does not arrive at page three with nothing behind them. Search
+// takes an identity per call, so a walk built out of it presents a different
+// visitor for every page: it throws away the referrer chain the session has
+// built and pays a fresh visit to the front page for each page taken.
+//
+// A refused page moves the walk on and it resumes at that page rather than at
+// the first. The pages already captured are captured, and taking them again
+// spends requests to learn what is already known. What the new identity then
+// looks like — its first search landing on a later page — is measured by the
+// live run rather than settled here.
+//
+// A failure returns the pages already taken alongside the error, for the same
+// reason: a position found on page one is still a position.
+func (a *Attempt) Walk(ctx context.Context, q google.Query, pages int) ([]google.SERP, error) {
+	if pages < 1 {
+		pages = 1
+	}
+	tries := a.Tries
+	if tries < 1 {
+		tries = defaultTries
+	}
+
+	var out []google.SERP
+	var last error
+	next := 1
+
+	for i := 0; i < tries; i++ {
+		taken, err := a.walkOnce(ctx, q, next, pages)
+		out = append(out, taken...)
+		next += len(taken)
+		if err == nil {
+			// The walk ran to its end. That end is not always the depth asked
+			// for: the results can run out first, and a walk stopped by the page
+			// itself is finished, not interrupted.
+			return out, nil
+		}
+		if ctx.Err() != nil {
+			// The caller's own context ended the walk. A deadline that came from
+			// the pool's request bound did not: that one is this identity failing
+			// to answer, and the rest of the walk is still worth taking to
+			// another.
+			return out, err
+		}
+		if errors.Is(err, blanktrail.ErrPoolExhausted) {
+			// There is no other identity to move to. Saying so beats reporting
+			// the last refusal, which would send a reader to their query list
+			// when the answer is in their address list.
+			return out, err
+		}
+		last = err
+	}
+	return out, fmt.Errorf("%w after %d: %w", ErrNoIdentityLeft, tries, last)
+}
+
+// walkOnce takes as much of from..to as one identity manages and returns the
+// pages it captured, so a refusal deeper in leaves the earlier ones standing.
+func (a *Attempt) walkOnce(ctx context.Context, q google.Query, from, to int) ([]google.SERP, error) {
+	lease, err := a.lease(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+
+	var out []google.SERP
+	err = google.SearchFrom(ctx, boundSearcher{attempt: a, lease: lease}, q, from, to,
+		func(_ int, serp google.SERP) bool {
+			out = append(out, serp)
+			return false
+		})
+	if err == nil {
+		return out, nil
+	}
+	if _, classified := google.ClassOf(err); classified {
+		// Only a response that was read and judged counts as a refusal. A
+		// request that never completed was already accounted for below.
+		if rejErr := lease.Reject(ctx); rejErr != nil {
+			return out, fmt.Errorf("%w (reporting it also failed: %v)", err, rejErr)
+		}
+	}
+	return out, err
+}
+
+// boundSearcher asks one held identity and nothing else. It carries no retry of
+// its own: moving to another identity is Walk's decision, taken once per refusal
+// rather than once per page.
+type boundSearcher struct {
+	attempt *Attempt
+	lease   *blanktrail.Lease
+}
+
+func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP, error) {
+	return b.attempt.sessionFor(b.lease).Search(ctx, q)
+}
+
 // once leases one identity, asks it, and hands the answer back.
 //
 // An unusable answer is reported to the pool before the lease is released: it

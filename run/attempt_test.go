@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,13 @@ func serpBody(host string) string {
 	return `<!doctype html><html><body><div id="search"><div data-snc="x">` +
 		`<a href="https://` + host + `/page" data-ved="2"><h3>Title</h3></a>` +
 		`<cite>` + host + `</cite></div></div></body></html>`
+}
+
+// serpBodyWithBar is a result page whose pagination bar links further than the
+// page in hand. Without a bar reaching onwards a walk stops on the first page,
+// and a test of what a multi-page walk costs would measure a single page.
+func serpBodyWithBar(host string) string {
+	return serpBody(host) + `<div role="navigation"><a href="/search?q=x&amp;start=90">10</a></div>`
 }
 
 // shellBody is the page that carries no results at all.
@@ -394,6 +402,33 @@ func TestAttempt_SaysThePoolIsEmptyRatherThanBlamingTheQuery(t *testing.T) {
 	if errors.Is(err, ErrNoIdentityLeft) {
 		t.Errorf("Search returned %v, which blames the query for an empty pool", err)
 	}
+
+	// A page walk reads the same way. It is the entry point a job uses, so the
+	// wrong answer here is the one a user would actually be handed.
+	_, err = a.Walk(context.Background(), usQuery("x"), 3)
+	if !errors.Is(err, blanktrail.ErrPoolExhausted) {
+		t.Errorf("Walk returned %v, want ErrPoolExhausted", err)
+	}
+	if errors.Is(err, ErrNoIdentityLeft) {
+		t.Errorf("Walk returned %v, which blames the query for an empty pool", err)
+	}
+}
+
+func TestAttempt_TakesANonPositiveDepthAsOnePage(t *testing.T) {
+	// A depth of zero is a caller who did not say how deep, not a caller who
+	// wants nothing. Passing it down would come back as a bad range, and the
+	// walk would report the query refused by every identity it never asked.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBodyWithBar("example.com") })
+	f := poolFacing(t, o.addr(), 2)
+
+	a := &Attempt{Pool: f.Pool, Tries: 2}
+	serps, err := a.Walk(context.Background(), usQuery("x"), 0)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(serps) != 1 {
+		t.Errorf("collected %d pages, want the one page a walk that named no depth is worth", len(serps))
+	}
 }
 
 func TestAttempt_StopsWhenTheContextIsCancelled(t *testing.T) {
@@ -491,6 +526,103 @@ func TestAttempt_DropsASessionWhenThePortsIdentityChanges(t *testing.T) {
 	}
 	if got := o.homes.Load(); got != 2 {
 		t.Errorf("%d visits to the front page, want 2 - the stale session was reused", got)
+	}
+}
+
+func TestAttempt_APageWalkKeepsOneIdentityForItsWholeDepth(t *testing.T) {
+	// A visitor paging through results does not change address between page one
+	// and page two. A second page arriving from an identity with nothing behind
+	// it is the shape this layer exists to avoid drawing, and it also throws away
+	// the referrer chain and pays a fresh visit to the front page per page.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBodyWithBar("example.com") })
+	f := poolFacing(t, o.addr(), 4)
+
+	a := &Attempt{Pool: f.Pool, Tries: 2}
+	serps, err := a.Walk(context.Background(), usQuery("x"), 3)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(serps) != 3 {
+		t.Fatalf("collected %d pages, want the 3 that were asked for", len(serps))
+	}
+	if got := o.searches.Load(); got != 3 {
+		t.Errorf("%d searches, want 3", got)
+	}
+	if got := f.portsUsed(); got != 1 {
+		t.Errorf("%d identities carried one walk, want 1", got)
+	}
+	if got := o.homes.Load(); got != 1 {
+		t.Errorf("%d visits to the front page over one walk, want 1 - the walk changed identity", got)
+	}
+}
+
+func TestAttempt_APageWalkThePageItselfEndedIsFinishedNotInterrupted(t *testing.T) {
+	// The bar on these pages offers nothing past page two, so the walk ends
+	// there of its own accord. Reading a walk shorter than the depth asked for
+	// as one that was cut off would carry the rest to another identity, spend
+	// every try on pages Google has said are not there, and then report the
+	// query as failed.
+	o := newOrigin(t, func(*http.Request, int) string {
+		return serpBody("example.com") +
+			`<div role="navigation"><a href="/search?q=x&amp;start=10">2</a></div>`
+	})
+	f := poolFacing(t, o.addr(), 4)
+
+	a := &Attempt{Pool: f.Pool, Tries: 3}
+	serps, err := a.Walk(context.Background(), usQuery("x"), 5)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(serps) != 2 {
+		t.Errorf("collected %d pages, want the 2 the bar offers", len(serps))
+	}
+	if got := o.searches.Load(); got != 2 {
+		t.Errorf("%d searches, want 2 - the depth that was not there was asked for anyway", got)
+	}
+	if got := f.portsUsed(); got != 1 {
+		t.Errorf("%d identities carried the walk, want 1", got)
+	}
+}
+
+func TestAttempt_APageWalkThatIsRefusedResumesOnTheNextIdentity(t *testing.T) {
+	// Starting the walk over on the new identity would pay for the pages already
+	// captured a second time; giving up on it would lose them.
+	var mu sync.Mutex
+	var offsets []string
+	o := newOrigin(t, func(r *http.Request, n int) string {
+		mu.Lock()
+		offsets = append(offsets, r.URL.Query().Get("start"))
+		mu.Unlock()
+		if n == 2 {
+			return shellBody
+		}
+		return serpBodyWithBar("example.com")
+	})
+	f := poolFacing(t, o.addr(), 4)
+
+	a := &Attempt{Pool: f.Pool, Tries: 3}
+	serps, err := a.Walk(context.Background(), usQuery("x"), 3)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	mu.Lock()
+	// The second page was refused, so it is the one the walk comes back to. An
+	// empty offset is the first page: the request carries no start at all.
+	want := []string{"", "10", "10", "20"}
+	got := append([]string(nil), offsets...)
+	mu.Unlock()
+	if !slices.Equal(got, want) {
+		t.Errorf("pages asked for at offsets %v, want %v", got, want)
+	}
+
+	if len(serps) != 3 {
+		t.Errorf("collected %d pages, want 3", len(serps))
+	}
+	if got := f.portsUsed(); got != 2 {
+		t.Errorf("%d identities carried the walk, want 2 - one refusal is worth one move", got)
+	}
+	if r := f.Pool.Stats().Rejections; r != 1 {
+		t.Errorf("Stats().Rejections=%d, want 1 - the refusal was not reported", r)
 	}
 }
 
