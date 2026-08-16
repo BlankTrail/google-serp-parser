@@ -119,8 +119,8 @@ func TestNewPool_ExplicitCooldownWins(t *testing.T) {
 	}
 }
 
-// TestNewPool_DefaultsRequestTimeoutTo300s pins the new default: a request
-// through a leased port may legitimately take minutes to produce a response.
+// TestNewPool_DefaultsRequestTimeoutTo300s pins the default so a later edit
+// cannot quietly lower the ceiling.
 func TestNewPool_DefaultsRequestTimeoutTo300s(t *testing.T) {
 	fake := fakebt.New(t)
 	clock := newFakeClock()
