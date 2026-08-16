@@ -11,8 +11,14 @@ and a SerpApi-compatible API. Powered by [BlankTrail Proxy](https://blanktrail.c
 
 ## Status
 
-Milestone **M0**: repository skeleton and the `blanktrail` SDK. Parsing, storage,
-web UI and the API land in later milestones.
+The repository skeleton and the `blanktrail` SDK are in place, and the `google`
+package now parses result pages: organic results with their exact host and
+link form, the three ad placements, and related searches. Every response is
+classified before it is parsed, so a genuine empty answer from Google is told
+apart from a page that is not results at all — a challenge, a refusal, or the
+JavaScript shell that arrives with HTTP 200 and no results in it.
+
+Storage, the web UI and the API land in later milestones.
 
 ## Licence
 

@@ -121,15 +121,17 @@ type PortSpec struct {
 	Decompress     bool // hand the client an identity-encoded body
 	EnableHTTP3    bool // re-originate over HTTP/3 where the target offers it
 
-	MaxConcurrent int    // in-flight requests allowed on the port
-	RetryDelayMs  int    // proxy-side retry delay
-	IdleSeconds   int    // per-port idle timeout (0 = inherit the global one)
-	LeakGuard     string // "", off, warn, enforce
+	MaxConcurrent int // in-flight requests allowed on the port
+	RetryDelayMs  int // proxy-side retry delay
+	IdleSeconds   int // per-port idle timeout (0 = inherit the global one)
+	// Keep PoolConfig.RequestTimeout well above this value.
+	TimeoutSeconds int    // seconds the port waits on one request; 0 leaves it to the proxy
+	LeakGuard      string // "", off, warn, enforce
 }
 
 // DefaultPortSpec is the configuration a session-oriented scraper wants: a real
-// profile from the curated database, Challenge Breaker armed, a private cookie
-// jar, and exactly one request in flight so the pool's cooldown means something.
+// profile from the curated database, Challenge Breaker armed, and a private
+// cookie jar.
 func DefaultPortSpec() PortSpec {
 	return PortSpec{
 		Mode:           "db",
@@ -141,7 +143,8 @@ func DefaultPortSpec() PortSpec {
 		JSSolver:       true,
 		KeepSessions:   true,
 		Decompress:     true,
-		MaxConcurrent:  1,
+		// MaxConcurrent is left unset (0) so the proxy applies its own default.
+		TimeoutSeconds: 30,
 		LeakGuard:      "warn",
 	}
 }
@@ -184,6 +187,7 @@ type openPortRequest struct {
 	MaxConcurrent   *int    `json:"max_concurrent,omitempty"`
 	RetryDelayMs    *int    `json:"retry_delay_ms,omitempty"`
 	IdleSeconds     *int    `json:"idle_seconds,omitempty"`
+	TimeoutSeconds  *int    `json:"timeout_seconds,omitempty"`
 	LeakGuard       string  `json:"leak_guard,omitempty"`
 }
 
@@ -216,6 +220,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	if s.IdleSeconds > 0 {
 		n := s.IdleSeconds
 		req.IdleSeconds = &n
+	}
+	if s.TimeoutSeconds > 0 {
+		n := s.TimeoutSeconds
+		req.TimeoutSeconds = &n
 	}
 	switch {
 	case eg.Gateway != "":
