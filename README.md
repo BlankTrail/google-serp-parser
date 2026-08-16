@@ -11,6 +11,17 @@ and a SerpApi-compatible API. Powered by [BlankTrail Proxy](https://blanktrail.c
 
 ## Status
 
+**There is a browser interface.** `gserp serve` opens it, and `start.bat` or
+`start.sh` opens it and your browser with it. A job is set up in a form, which
+says what it will cost before you start it; it then runs in front of you, stops
+on a button, carries on from exactly where it stopped on another, and downloads
+as CSV or JSON Lines from a link. Every page is in English and Russian, nothing
+is loaded from anywhere, and the whole interface is inside the binary. Jobs
+queue: one runs at a time, on ports that stay open between them, because
+opening a fresh set per job costs minutes before the first answer. With no key
+in the environment the same interface still reads the history; it says so
+rather than offering a button that cannot work.
+
 `gserp run` works end to end: it takes a list of queries, spreads them over
 threads, writes each result to a database as it lands, and exports what it
 found as CSV or JSON Lines. A run stopped with Ctrl+C says what is still to do
@@ -27,7 +38,7 @@ answer is carried to another identity rather than lost, and addresses that stop
 working are replaced as the run goes, so a list accumulates the ones that work
 by using them.
 
-The web UI and the API land in later milestones.
+The SerpApi-compatible API lands in a later milestone.
 
 ## Licence
 

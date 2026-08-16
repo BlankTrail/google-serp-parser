@@ -177,12 +177,17 @@ func insist(again <-chan os.Signal, done <-chan struct{}, kill func()) {
 	}
 }
 
-// poolConfig is the pool a run will open. It is built here rather than inline
-// so the estimate, the run and a test are all reasoning about the same one.
-func poolConfig(opts runOptions) blanktrail.PoolConfig {
+// poolConfig is the pool a job will open. It is built here rather than inline
+// so the estimate, the run, the browser interface and a test are all reasoning
+// about the same one.
+//
+// It takes the two numbers it reads rather than a whole command's options,
+// because the two commands that open a pool describe themselves with different
+// options and neither is the other's.
+func poolConfig(threads, ports int) blanktrail.PoolConfig {
 	return blanktrail.PoolConfig{
-		Threads:        opts.Threads,
-		PortsPerThread: opts.Ports,
+		Threads:        threads,
+		PortsPerThread: ports,
 		Spec:           blanktrail.DefaultPortSpec(),
 		DelayMin:       shortestPause,
 		DelayMax:       longestPause,
@@ -268,7 +273,7 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 		}
 	}
 
-	cfg := poolConfig(opts)
+	cfg := poolConfig(opts.Threads, opts.Ports)
 	job := run.Job{
 		Queries:  searchQueries(p.queries, p.spec),
 		Ordinals: p.ordinals,

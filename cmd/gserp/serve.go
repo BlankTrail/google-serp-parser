@@ -24,17 +24,24 @@ const defaultServeAddr = "127.0.0.1:8080"
 
 // serveOptions is everything the command was asked to do.
 type serveOptions struct {
-	Addr string
-	DB   string
+	Addr    string
+	DB      string
+	Threads int
+	Ports   int
 }
 
 // serveFlags declares the flags. It is separate from the parsing so the help
 // text can be checked against the flags themselves rather than against a list
 // somebody has to remember to keep up.
+//
+// The two numbers are the run command's own defaults, so a job set up in the
+// browser costs what the same job costs from the command line.
 func serveFlags(opts *serveOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.StringVar(&opts.Addr, "addr", defaultServeAddr, "address to listen on")
 	fs.StringVar(&opts.DB, "db", "gserp.db", "history database to open")
+	fs.IntVar(&opts.Threads, "threads", 2, "queries taken at once")
+	fs.IntVar(&opts.Ports, "ports", 3, "ports per thread")
 	return fs
 }
 
@@ -68,19 +75,57 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 
 	// The address is taken here rather than inside the server so that the line
 	// printed below names the port the system actually gave. A caller who asked
-	// for port zero has no other way to learn it.
+	// for port zero has no other way to learn it. It is also taken before the
+	// ports below are opened, which take a while: a browser opened alongside
+	// this command waits on a socket that is already there rather than being
+	// refused and shown an error page.
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {
 		return opts.scrubbed(err)
 	}
 
-	srv, err := web.New(web.Config{Store: st, Logger: opts.logger(os.Stderr)})
+	// Closed before the history, because a job it ends is written down as it
+	// lets go of it. Close waits for that.
+	sup := opts.jobs(ctx, out, st)
+	if sup != nil {
+		defer func() { _ = sup.Close() }()
+	}
+
+	srv, err := web.New(web.Config{Store: st, Logger: opts.logger(os.Stderr), Supervisor: sup})
 	if err != nil {
 		_ = ln.Close()
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "gserp is listening on http://%s — open that in a browser\n", ln.Addr())
 	return srv.Serve(ctx, ln)
+}
+
+// jobs opens the ports the interface will run jobs on, or says why it will only
+// be able to show what is already there.
+//
+// Neither a missing key nor ports that would not open is a reason to refuse to
+// start. Half of what this interface does is read a history, that half needs
+// nothing opened, and a machine with no key is a machine somebody is reading a
+// history on. Refusing there would take away the part that still works.
+//
+// The key is read from the environment and is not a flag, for the reason it is
+// not one anywhere else in this command: a key on a command line is a key in the
+// shell history and in the process list of everyone on the machine.
+func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) *web.Supervisor {
+	if os.Getenv(envAPIKey) == "" {
+		_, _ = fmt.Fprintf(out, "%s is not set: this interface will show the history and cannot run a job\n",
+			envAPIKey)
+		return nil
+	}
+	pool, err := openPool(ctx, out, poolConfig(o.Threads, o.Ports))
+	if err != nil {
+		_, _ = fmt.Fprintf(out,
+			"no ports could be opened, so this interface will show the history and cannot run a job: %s\n",
+			o.clean(err.Error()))
+		_, _ = fmt.Fprintln(out, "gserp doctor prints the whole report")
+		return nil
+	}
+	return web.NewSupervisor(st, pool, o.Threads)
 }
 
 // logger is where the server says what went wrong.
