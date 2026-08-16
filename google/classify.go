@@ -58,9 +58,19 @@ var wallMarkers = []string{
 
 // emptyMarkers are how Google words "nothing found". Absence of results is
 // not enough on its own: the shell has no results either.
+//
+// The two lists are not judged by the same standard. ClassEmpty is Usable, so
+// a false Empty is recorded permanently as a real zero and never retried,
+// while a false Wall merely costs a retry. Anything added here must therefore
+// clear a much higher bar than anything added to wallMarkers: it has to be
+// wording that cannot occur on a page which did find something.
+//
+// A missed marker is not free either — it degrades to ClassShell and is
+// retried forever — which is why the English wording is carried in both the
+// forms Google has been seen to serve.
 var emptyMarkers = []string{
 	"did not match any documents",
-	"по запросу", // Russian: "по запросу … ничего не найдено"
+	"no results found for",
 	"ничего не найдено",
 }
 
