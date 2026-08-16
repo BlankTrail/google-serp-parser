@@ -10,8 +10,12 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 
+	"github.com/blanktrail/google-serp-parser/api"
+	"github.com/blanktrail/google-serp-parser/blanktrail"
+	"github.com/blanktrail/google-serp-parser/run"
 	"github.com/blanktrail/google-serp-parser/store"
 	"github.com/blanktrail/google-serp-parser/web"
 )
@@ -85,22 +89,91 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 
 	// Closed before the history, because a job it ends is written down as it
 	// lets go of it. Close waits for that.
-	sup := opts.jobs(ctx, out, st)
+	sup, pool := opts.jobs(ctx, out, st)
 	if sup != nil {
 		defer func() { _ = sup.Close() }()
 	}
 
-	srv, err := web.New(web.Config{Store: st, Logger: opts.logger(os.Stderr), Supervisor: sup})
+	log := opts.logger(os.Stderr)
+	pages, err := web.New(web.Config{Store: st, Logger: log, Supervisor: sup})
+	if err != nil {
+		_ = ln.Close()
+		return err
+	}
+	programs, err := opts.programmable(st, log, sup, pool)
 	if err != nil {
 		_ = ln.Close()
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "gserp is listening on http://%s — open that in a browser\n", ln.Addr())
-	return srv.Serve(ctx, ln)
+	return pages.ServeHandler(ctx, ln, mount(pages.Handler(), programs.Handler()))
+}
+
+// programmable builds the interface a program reads, on the history, the queue
+// and the log the pages already have.
+//
+// Sharing those is the whole of it. One history is why a job set up by a program
+// is the job the browser lists, and one queue is why the machine runs one job at
+// a time however that job was asked for. Two of either would be two products in
+// one process, agreeing on nothing but the port.
+func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
+	sup *web.Supervisor, pool *blanktrail.Pool) (*api.Server, error) {
+	cfg := api.Config{Store: st, Logger: log}
+	// A supervisor that was never built is left out rather than passed on. The
+	// interface asks whether it has a queue at all, and a pointer that is nil put
+	// into an interface answers that question yes: it would take a job and fail
+	// on it instead of saying plainly that it can run nothing.
+	if sup != nil {
+		cfg.Supervisor = sup
+	}
+	// A search answered inside the request goes to the identities directly rather
+	// than through the queue, so it is handed the pool the jobs run on and not the
+	// queue in front of it. It competes for ports with a running job, which is why
+	// it is capped at the number of ports there are.
+	if pool != nil {
+		cfg.Search = api.SearchConfig{
+			Searcher: &run.Attempt{Pool: pool},
+			Ports:    o.Threads * o.Ports,
+		}
+	}
+	return api.New(cfg)
+}
+
+// browserPolls are the addresses the job page's own script calls. They have sat
+// under /api/ since before anything else did, and they are named here so that
+// mounting the programmable interface under that prefix does not take the job
+// page's buttons away.
+var browserPolls = []string{"/api/progress", "/api/stop", "/api/resume"}
+
+// mount puts the two interfaces on one address: the pages at the root, and the
+// programmable interface under the two prefixes it is documented at.
+//
+// An address under /api/ that neither of them serves is still the programmable
+// interface's to refuse. A program that mistyped one is answered in the single
+// shape it parses every refusal in, rather than with a page written for somebody
+// reading a screen.
+//
+// A pattern naming a whole path beats a pattern naming a prefix, whichever was
+// registered first, so the three above stay with the pages.
+func mount(pages, programs http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/", pages)
+	mux.Handle("/api/", programs)
+	mux.Handle("/search", programs)
+	for _, at := range browserPolls {
+		mux.Handle(at, pages)
+	}
+	return mux
 }
 
 // jobs opens the ports the interface will run jobs on, or says why it will only
 // be able to show what is already there.
+//
+// The pool comes back beside the queue because a search answered inside a
+// request does not go through that queue: it takes a port of its own from the
+// same set, and it can only do that if it is handed them. The supervisor closes
+// the pool when it closes, so both ways in end together and neither is left
+// searching on identities that have been given up.
 //
 // Neither a missing key nor ports that would not open is a reason to refuse to
 // start. Half of what this interface does is read a history, that half needs
@@ -110,11 +183,11 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 // The key is read from the environment and is not a flag, for the reason it is
 // not one anywhere else in this command: a key on a command line is a key in the
 // shell history and in the process list of everyone on the machine.
-func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) *web.Supervisor {
+func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) (*web.Supervisor, *blanktrail.Pool) {
 	if os.Getenv(envAPIKey) == "" {
 		_, _ = fmt.Fprintf(out, "%s is not set: this interface will show the history and cannot run a job\n",
 			envAPIKey)
-		return nil
+		return nil, nil
 	}
 	pool, err := openPool(ctx, out, poolConfig(o.Threads, o.Ports))
 	if err != nil {
@@ -122,9 +195,9 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 			"no ports could be opened, so this interface will show the history and cannot run a job: %s\n",
 			o.clean(err.Error()))
 		_, _ = fmt.Fprintln(out, "gserp doctor prints the whole report")
-		return nil
+		return nil, nil
 	}
-	return web.NewSupervisor(st, pool, o.Threads)
+	return web.NewSupervisor(st, pool, o.Threads), pool
 }
 
 // logger is where the server says what went wrong.

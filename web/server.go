@@ -147,8 +147,14 @@ func (s *Server) routes() {
 // Handler is the server's routes, so a test can drive them without a socket.
 func (s *Server) Handler() http.Handler { return s.mux }
 
-// Serve runs until the context is cancelled, then stops taking new requests and
-// finishes the ones already being answered.
+// ServeHandler runs the given handler on this server's socket and wind-down,
+// until the context is cancelled.
+//
+// It exists because the process serves more than these pages: the programmable
+// interface answers on the same address, and whoever mounts the two writes the
+// router that tells them apart. What happens to a page half sent when somebody
+// presses stop is decided here and nowhere else — written a second time in the
+// command, it would be two answers to one question.
 //
 // It takes a listener rather than an address so a caller can hand it a port the
 // system chose. A test that had to name a port in advance would race whatever
@@ -156,12 +162,12 @@ func (s *Server) Handler() http.Handler { return s.mux }
 //
 // The goroutine below shares two things with this one: the http.Server, whose
 // Shutdown is documented to be called while Serve runs, and the idle channel,
-// which is closed on one side and received on the other. Serve returns only
-// after that receive, so the caller is never told the server has stopped while
-// a page is still going out.
-func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+// which is closed on one side and received on the other. It returns only after
+// that receive, so the caller is never told the server has stopped while a page
+// is still going out.
+func (s *Server) ServeHandler(ctx context.Context, ln net.Listener, h http.Handler) error {
 	srv := &http.Server{
-		Handler:           s.mux,
+		Handler:           h,
 		ReadHeaderTimeout: readHeaderGrace,
 	}
 	idle := make(chan struct{})
@@ -181,6 +187,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		return nil
 	}
 	return err
+}
+
+// Serve runs these pages and nothing else, which is what a test of them wants
+// and what a process serving only them would ask for.
+func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	return s.ServeHandler(ctx, ln, s.mux)
 }
 
 // page is what every template is handed, whatever else the page carries. The
