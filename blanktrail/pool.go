@@ -233,6 +233,11 @@ type Stats struct {
 	EgressRotations  int64
 	Renewals         int64
 	Quarantines      int64
+
+	// Rejections counts answers a caller handed back as unusable even though the
+	// request carrying them succeeded. A run whose rejections climb while its
+	// requests do not is being refused, not failing.
+	Rejections int64
 }
 
 // Stats returns a snapshot of pool activity.
@@ -716,6 +721,50 @@ func (l *Lease) Release() {
 	l.pool.mu.Unlock()
 }
 
+// Reject tells the pool that this port produced an answer the caller cannot
+// use, even though the request carrying it succeeded.
+//
+// The pool cannot see that on its own and must not try to: it does not know the
+// target and has no business reasoning about what a good answer looks like. But
+// a refusal arriving with a 2xx status is still a refusal, and left unsaid it
+// would clear the port's consecutive-failure count and hand the same identity
+// out again. So a rejection counts exactly as a failed attempt does: enough of
+// them in a row and the egress is replaced, enough of those and the port is
+// quarantined. The address is blamed on every rejection, because the request
+// went through — whatever was refused, it was not the request.
+//
+// A returned lease is not rejected: by then the port may belong to another
+// thread, whose work must not spend a strike.
+//
+// The lease stays held. A caller that wants a different port releases this one
+// and acquires another.
+func (l *Lease) Reject(ctx context.Context) error {
+	if l.released {
+		return nil
+	}
+	num := l.pt.num
+	p := l.pool
+
+	p.mu.Lock()
+	p.stats.Rejections++
+	p.mu.Unlock()
+
+	p.markBadEgress(num)
+	if !p.attemptFailed(num) {
+		return nil
+	}
+	if err := p.rotateEgress(ctx, num); err != nil {
+		// There is nowhere to move to, or moving failed. Either way the port has
+		// spent its whole budget on this answer, which is what a strike records.
+		p.exhausted(num)
+		if errors.Is(err, ErrRenewUnsupported) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // --- remedy implementation (used by the ladder) ---
 
 func (p *Pool) port(num int) *poolPort {
@@ -766,7 +815,8 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	return nil
 }
 
-// markBadEgress reports that an egress failed at the connection level, so the
+// markBadEgress reports that an egress did not carry its work — it failed at
+// the connection level, or the answer it brought back was refused — so the
 // channel can stop handing that address out.
 //
 // It deliberately does not penalise the channel: this runs on every attempt, and

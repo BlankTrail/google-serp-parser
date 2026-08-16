@@ -909,3 +909,174 @@ func TestPool_CountFailureDefaultsToCountingEveryNon2xx(t *testing.T) {
 		t.Errorf("upstream still %q after %d attempts with CountFailure unset; the default must count every non-2xx", after, cfg.RotateAfterFailures)
 	}
 }
+
+// markWatch records every address a channel is told to stop handing out. That
+// verdict is the channel's to act on and has no effect the pool can observe
+// until an address has collected several of them, so a test that wants to pin
+// it has to watch the channel.
+type markWatch struct {
+	Channel
+	mu     sync.Mutex
+	marked []string
+}
+
+func (c *markWatch) MarkBad(eg Egress) {
+	c.mu.Lock()
+	c.marked = append(c.marked, eg.Upstream)
+	c.mu.Unlock()
+	c.Channel.MarkBad(eg)
+}
+
+func (c *markWatch) blamed() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.marked...)
+}
+
+func TestLease_AnAnswerHandedBackCountsTowardsANewEgress(t *testing.T) {
+	// A refusal arrives with a 2xx status, and to the transport that is a
+	// success: the port's consecutive-failure count is cleared and its egress
+	// kept. Unless the caller's verdict counts, the port keeps that egress and
+	// every thread that leases it next gets the same answer.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+	cfg.RotateAfterFailures = 2
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	before := l.Egress()
+
+	if err := l.Reject(context.Background()); err != nil {
+		t.Fatalf("first Reject: %v", err)
+	}
+	if got := l.Egress(); got != before {
+		t.Fatalf("egress %v -> %v after one rejection; it must take RotateAfterFailures of them", before, got)
+	}
+
+	if err := l.Reject(context.Background()); err != nil {
+		t.Fatalf("second Reject: %v", err)
+	}
+	if got := l.Egress(); got == before {
+		t.Errorf("egress still %v after two rejections with RotateAfterFailures=2", got)
+	}
+	l.Release()
+
+	if n := p.Stats().Rejections; n != 2 {
+		t.Errorf("Stats().Rejections=%d, want 2", n)
+	}
+}
+
+func TestLease_AnAnswerHandedBackBlamesTheAddressItCameThrough(t *testing.T) {
+	// The request itself succeeded, so the fault does not travel with the
+	// request — it belongs to the address the answer came back to. Saying so is
+	// what stops the channel handing that same address to the rest of the pool.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	ch := &markWatch{Channel: NewListChannel("list", NewStaticRotor(ups))}
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{ch}
+	// Two rejections would replace the egress; one leaves the blame as the only
+	// thing this test can be reading.
+	cfg.RotateAfterFailures = 2
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	addr := l.Egress().Upstream
+	if err := l.Reject(context.Background()); err != nil {
+		t.Fatalf("Reject: %v", err)
+	}
+	l.Release()
+
+	blamed := ch.blamed()
+	if len(blamed) != 1 || blamed[0] != addr {
+		t.Errorf("channel was told %q was bad, want exactly [%q]", blamed, addr)
+	}
+}
+
+func TestLease_EnoughAnswersHandedBackQuarantineThePort(t *testing.T) {
+	// A port every one of whose addresses is refused is not worth handing out: a
+	// pool of one healthy port and nine refused ones spends nine tenths of the
+	// run collecting refusals.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	// The default channel has one fixed address, so each rejection spends the
+	// port's whole budget at once and counts as a strike.
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.RotateAfterFailures = 1
+	cfg.MaxPortStrikes = 2
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	for i := 0; i < cfg.MaxPortStrikes; i++ {
+		if err := l.Reject(context.Background()); err != nil {
+			t.Fatalf("Reject %d: %v", i+1, err)
+		}
+	}
+	l.Release()
+
+	if q := p.Stats().Quarantined; q != 1 {
+		t.Errorf("Quarantined=%d, want 1 once the port has spent its strikes", q)
+	}
+}
+
+func TestLease_AnAnswerHandedBackAfterTheLeaseIsReturnedChangesNothing(t *testing.T) {
+	// Release puts the port back and another thread may hold it already. A late
+	// verdict would land on that thread's work, and with one strike left it
+	// would take the port out of the pool for an answer nobody read.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.RotateAfterFailures = 1
+	cfg.MaxPortStrikes = 1
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	l.Release()
+
+	if err := l.Reject(context.Background()); err != nil {
+		t.Fatalf("Reject after Release: %v", err)
+	}
+	st := p.Stats()
+	if st.Rejections != 0 {
+		t.Errorf("Stats().Rejections=%d after a rejection on a returned lease, want 0", st.Rejections)
+	}
+	if st.Quarantined != 0 {
+		t.Errorf("Quarantined=%d; a returned lease took a port out of the pool", st.Quarantined)
+	}
+}
