@@ -199,14 +199,15 @@ func httpGet(ctx context.Context, rawURL string) ([]byte, error) {
 // (optionally) reloads the list on an interval while keeping its cursor
 // position stable.
 type Rotor struct {
-	mu       sync.Mutex
-	ups      []Upstream
-	pos      int
-	fails    map[string]int
-	benched  map[string]time.Time // key -> when its rest began
-	maxFails int
-	rest     time.Duration
-	now      func() time.Time
+	mu          sync.Mutex
+	ups         []Upstream
+	pos         int
+	fails       map[string]int
+	benched     map[string]time.Time // key -> when its rest began
+	nextRelease time.Time            // earliest instant a rest ends; zero when nothing rests
+	maxFails    int
+	rest        time.Duration
+	now         func() time.Time
 
 	src  Source
 	stop chan struct{}
@@ -327,18 +328,40 @@ func (r *Rotor) Next() (Upstream, bool) {
 	u := r.ups[oldest]
 	delete(r.benched, u.Key())
 	delete(r.fails, u.Key())
+	r.refreshNextRelease()
 	return u, true
+}
+
+// refreshNextRelease recomputes the earliest instant a rest ends. Called with
+// the lock held, from every path that takes an address off the bench.
+//
+// The field exists so that Next can tell, in one comparison, that no rest is
+// over yet and skip walking the bench. That only works while it is exact: a
+// value later than the true earliest would hold a rested address out past its
+// rest, so it is recomputed here rather than nudged, and MarkBad lowers it when
+// a new rest ends sooner than the one it holds.
+func (r *Rotor) refreshNextRelease() {
+	r.nextRelease = time.Time{}
+	for _, since := range r.benched {
+		if end := since.Add(r.rest); r.nextRelease.IsZero() || end.Before(r.nextRelease) {
+			r.nextRelease = end
+		}
+	}
 }
 
 // releaseRested moves every address whose rest has elapsed to the end of the
 // list and clears its record. Called with the lock held.
+//
+// Every handout asks it first, so it must be cheap when there is nothing to do,
+// which is nearly always. Before the earliest instant any rest ends, no walk of
+// the bench can find anything, and it returns on the comparison alone.
 //
 // Moving rather than merely un-benching is the point: an address that has let
 // the run down once does not go back to competing with addresses that never
 // have. On a list of thousands the back of the queue is a long way off, which
 // is the second chance being real without being eager.
 func (r *Rotor) releaseRested(now time.Time) {
-	if len(r.benched) == 0 {
+	if len(r.benched) == 0 || now.Before(r.nextRelease) {
 		return
 	}
 	due := map[string]bool{}
@@ -372,6 +395,7 @@ func (r *Rotor) releaseRested(now time.Time) {
 		delete(r.benched, key)
 		delete(r.fails, key)
 	}
+	r.refreshNextRelease()
 }
 
 // Benched reports how many addresses are resting.
@@ -391,7 +415,11 @@ func (r *Rotor) MarkBad(u Upstream) {
 	r.fails[key]++
 	if r.fails[key] >= r.maxFails {
 		if _, resting := r.benched[key]; !resting {
-			r.benched[key] = r.now()
+			since := r.now()
+			r.benched[key] = since
+			if end := since.Add(r.rest); r.nextRelease.IsZero() || end.Before(r.nextRelease) {
+				r.nextRelease = end
+			}
 		}
 	}
 }
@@ -454,6 +482,7 @@ func (r *Rotor) reconcile(ups []Upstream) {
 			delete(r.benched, k)
 		}
 	}
+	r.refreshNextRelease()
 	r.ups = ups
 	if len(ups) > 0 {
 		r.pos %= len(ups)
