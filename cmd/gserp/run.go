@@ -176,6 +176,39 @@ func insist(again <-chan os.Signal, done <-chan struct{}, kill func()) {
 	}
 }
 
+// poolConfig is the pool a run will open. It is built here rather than inline
+// so the estimate, the run and a test are all reasoning about the same one.
+func poolConfig(opts runOptions) blanktrail.PoolConfig {
+	return blanktrail.PoolConfig{
+		Threads:        opts.Threads,
+		PortsPerThread: opts.Ports,
+		Spec:           blanktrail.DefaultPortSpec(),
+		DelayMin:       shortestPause,
+		DelayMax:       longestPause,
+		ReviveAfter:    time.Minute,
+	}
+}
+
+// settledCooldown is the gap the pool will keep between two requests on one
+// port.
+//
+// The estimate is printed before the ports are opened, and on a dry run they
+// are never opened at all, so the number cannot be read off a pool and has to
+// be arrived at the same way the pool arrives at it: a named gap stands, a
+// described pause is what the gap is derived from, and a caller who said
+// neither gets the documented default. Arrived at any other way, the estimate
+// paces a job nobody is going to run.
+func settledCooldown(cfg blanktrail.PoolConfig) time.Duration {
+	switch {
+	case cfg.Cooldown > 0:
+		return cfg.Cooldown
+	case cfg.DelayMin > 0 || cfg.DelayMax > 0:
+		return blanktrail.DeriveCooldown(cfg.PortsPerThread, cfg.DelayMin, cfg.DelayMax)
+	default:
+		return blanktrail.DefaultCooldown
+	}
+}
+
 // plan is the work a run is about to do, whether it was just read from a list
 // or picked up from a job that stopped part way.
 type plan struct {
@@ -234,14 +267,7 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 		}
 	}
 
-	cfg := blanktrail.PoolConfig{
-		Threads:        opts.Threads,
-		PortsPerThread: opts.Ports,
-		Spec:           blanktrail.DefaultPortSpec(),
-		DelayMin:       shortestPause,
-		DelayMax:       longestPause,
-		ReviveAfter:    time.Minute,
-	}
+	cfg := poolConfig(opts)
 	job := run.Job{
 		Queries:  searchQueries(p.queries, p.spec),
 		Ordinals: p.ordinals,
@@ -250,8 +276,12 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 	}
 	// The estimate is printed on every run, not only on a dry one: the number a
 	// user is about to spend is worth a line whether or not they asked for it.
-	printEstimate(out, p.spec.Name, run.EstimateFor(job, cfg.Size(),
-		blanktrail.DeriveCooldown(cfg.PortsPerThread, cfg.DelayMin, cfg.DelayMax)))
+	//
+	// The threads are named. They are the lanes the work is shared between, and
+	// leaving them to be assumed equal to the ports quotes half the time for the
+	// four threads over eight ports the live runs were measured at.
+	printEstimate(out, p.spec.Name, run.EstimateWith(job, cfg.Size(), opts.Threads,
+		settledCooldown(cfg), run.MeasuredPace))
 	if opts.DryRun {
 		return nil
 	}
@@ -457,11 +487,17 @@ func printEstimate(out io.Writer, name string, est run.Estimate) {
 	_, _ = fmt.Fprintf(out, "%s: %d queries × %d pages = %d searches, %d warm-ups, "+
 		"%d requests leaving the machine, %d at worst\n",
 		name, est.Queries, est.Pages, est.Searches, est.Warmups, est.Requests, est.MaxRequests)
+	// The expected time is the one to plan around, and it is quoted with where
+	// it came from. The costs behind it were measured on one list, on one day,
+	// against one target, and the range the dominant one was taken from spans a
+	// factor of twenty — so a bare number here would be believed, and should not
+	// be. The caveat is a clause because a paragraph gets skipped.
+	_, _ = fmt.Fprintf(out, "expected ≈ %v — from per-request costs measured elsewhere, "+
+		"whose own spread is a factor of twenty\n", est.Expected.Round(time.Second))
 	// The floor counts pauses and nothing else — no network time, no retries,
 	// no walk that ends early — so it is printed as a floor and said to be one.
-	// A measured run took many times it, and a number that gets believed as a
-	// forecast is worse than no number at all.
-	_, _ = fmt.Fprintf(out, "floor %v over %d ports, %v apart; the run takes longer than that\n",
+	// A live run printed a floor of nought seconds and then took six minutes.
+	_, _ = fmt.Fprintf(out, "floor %v over %d ports, %v apart, counting the pauses alone\n",
 		est.Floor.Round(time.Second), est.Ports, est.Cooldown.Round(time.Second))
 }
 
