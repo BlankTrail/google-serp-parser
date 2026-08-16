@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 // Command gserp is the Google SERP parser: a preflight check, a run that saves
-// what it finds, and — on this milestone — a browser interface onto what it
-// has already found.
+// what it finds, and a browser interface that sets one up, follows it and hands
+// back what it found.
 package main
 
 import (
@@ -83,7 +83,8 @@ const usageText = `gserp — open-source Google SERP parser, powered by BlankTra
 
 Usage:
   gserp run [flags]      work a list of queries, saving each one as it lands
-  gserp serve [flags]    serve the browser interface onto the history
+  gserp serve [flags]    serve the browser interface: set a job up, watch it
+                         run, stop it, take it up again, export it
   gserp doctor [flags]   check a BlankTrail instance against an intended run
   gserp version          print the version
 
@@ -108,6 +109,8 @@ Run flags:
 Serve flags:
   --addr string               address to listen on (default 127.0.0.1:8080)
   --db string                 history database to open (default gserp.db)
+  --threads int               queries taken at once (default 2)
+  --ports int                 ports per thread (default 3)
 
 Doctor flags:
   --bt-url string             control API base URL (default http://127.0.0.1:8891)

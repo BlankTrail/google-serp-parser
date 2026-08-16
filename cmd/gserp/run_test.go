@@ -187,7 +187,7 @@ func TestRunCommand_PacesTheEstimateAsThePoolItWillOpenWouldPaceItself(t *testin
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	cfg := poolConfig(runOptions{Threads: 2, Ports: 3})
+	cfg := poolConfig(2, 3)
 	cfg.Client = client
 	cfg.Insecure = true // the fake serves plain HTTP
 	cfg.Channels = []blanktrail.Channel{blanktrail.NewDirectChannel("direct")}
