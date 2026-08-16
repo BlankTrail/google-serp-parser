@@ -23,7 +23,7 @@ func newTestClient(t *testing.T) (*Client, *fakebt.Server) {
 	return c, fake
 }
 
-func TestDefaultPortSpec_ArmsChallengeBreakerAndOneRequestPerSession(t *testing.T) {
+func TestDefaultPortSpec_ArmsChallengeBreakerAndKeepsSessions(t *testing.T) {
 	s := DefaultPortSpec()
 	if !s.JSSolver {
 		t.Error("JSSolver must default to true: the target is behind a JS challenge")
@@ -31,11 +31,17 @@ func TestDefaultPortSpec_ArmsChallengeBreakerAndOneRequestPerSession(t *testing.
 	if !s.KeepSessions {
 		t.Error("KeepSessions must default to true: a port is a session with its own cookie jar")
 	}
-	if s.MaxConcurrent != 1 {
-		t.Errorf("MaxConcurrent=%d, want 1: cooldown is meaningless if a port serves several requests at once", s.MaxConcurrent)
-	}
 	if s.Mode != "db" {
 		t.Errorf("Mode=%q, want \"db\": a real profile from the curated database, not a synthetic one", s.Mode)
+	}
+}
+
+// TestDefaultPortSpec_LeavesMaxConcurrentUnset pins the new default: ports open
+// with no per-port concurrency limit at all, so the proxy applies its own.
+func TestDefaultPortSpec_LeavesMaxConcurrentUnset(t *testing.T) {
+	s := DefaultPortSpec()
+	if s.MaxConcurrent != 0 {
+		t.Errorf("MaxConcurrent=%d, want 0 (unset)", s.MaxConcurrent)
 	}
 }
 
@@ -70,14 +76,37 @@ func TestClient_OpenPortSendsSpecAndParsesProfile(t *testing.T) {
 			t.Errorf("open body %s=%v, want true", key, sent[key])
 		}
 	}
-	if v, ok := sent["max_concurrent"].(float64); !ok || v != 1 {
-		t.Errorf("open body max_concurrent=%v, want 1", sent["max_concurrent"])
-	}
 	if got, _ := sent["upstream"].(string); got != "socks5://user:pass@1.2.3.4:1080" {
 		t.Errorf("open body upstream=%q, want the egress upstream", got)
 	}
 	if _, present := sent["auto_rotate"]; present {
 		t.Error("open body carries auto_rotate; that key was removed from the control API")
+	}
+}
+
+// TestClient_OpenPortOmitsMaxConcurrentWhenUnset proves the omission reaches the
+// wire: a struct-only assertion on DefaultPortSpec() would not catch a
+// regression in PortSpec.request that started sending the zero value.
+func TestClient_OpenPortOmitsMaxConcurrentWhenUnset(t *testing.T) {
+	c, fake := newTestClient(t)
+
+	if _, err := c.OpenPort(context.Background(), 20010, DefaultPortSpec(), Egress{}); err != nil {
+		t.Fatalf("OpenPort: %v", err)
+	}
+
+	var sent map[string]any
+	for _, r := range fake.Requests() {
+		if r.Path == "/api/v1/ports/open" {
+			if err := json.Unmarshal([]byte(r.Body), &sent); err != nil {
+				t.Fatalf("decode recorded open body: %v", err)
+			}
+		}
+	}
+	if sent == nil {
+		t.Fatal("no request recorded for /api/v1/ports/open")
+	}
+	if v, present := sent["max_concurrent"]; present {
+		t.Errorf("open body carries max_concurrent=%v, want the key absent so the proxy governs it", v)
 	}
 }
 

@@ -128,8 +128,8 @@ type PortSpec struct {
 }
 
 // DefaultPortSpec is the configuration a session-oriented scraper wants: a real
-// profile from the curated database, Challenge Breaker armed, a private cookie
-// jar, and exactly one request in flight so the pool's cooldown means something.
+// profile from the curated database, Challenge Breaker armed, and a private
+// cookie jar.
 func DefaultPortSpec() PortSpec {
 	return PortSpec{
 		Mode:           "db",
@@ -141,8 +141,8 @@ func DefaultPortSpec() PortSpec {
 		JSSolver:       true,
 		KeepSessions:   true,
 		Decompress:     true,
-		MaxConcurrent:  1,
-		LeakGuard:      "warn",
+		// MaxConcurrent is left unset (0) so the proxy applies its own default.
+		LeakGuard: "warn",
 	}
 }
 
