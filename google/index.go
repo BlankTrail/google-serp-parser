@@ -38,6 +38,11 @@ type IndexStatus struct {
 // The caller's Query supplies the axes — country, language, device — and its
 // text is replaced by the operator.
 //
+// A target is reduced to a host and a path, because that is as far as the
+// operator reaches. Asking about an address with a query string therefore asks
+// about its path, and a positive answer establishes the path rather than the
+// exact address the caller named — see siteQuery.
+//
 // A page carrying no results answers "not indexed" and returns no error:
 // Google saying it found nothing is a successful capture, and for a target
 // that is genuinely absent it is the correct and ordinary answer. A response
@@ -70,6 +75,11 @@ func CheckIndexed(ctx context.Context, s Searcher, q Query, target string) (Inde
 // guarantee, and Google mixes in results from elsewhere often enough that
 // reporting them as the site's indexed pages would be wrong.
 //
+// A page reported on more than one result page is returned once. The parser
+// already drops a result linked twice within a page, and a listing whose
+// length is read as a count of what is indexed would be inflated by counting
+// the repeat again.
+//
 // A failure returns the results already gathered alongside the error, for the
 // same reason the walk does: pages taken are pages paid for.
 //
@@ -85,11 +95,27 @@ func ListIndexed(ctx context.Context, s Searcher, q Query, site string, pages in
 
 	serps, err := SearchDepth(ctx, s, q, pages)
 	var out []Result
+	seen := map[string]bool{}
 	for _, serp := range serps {
 		for _, r := range serp.Results {
-			if hostBelongsTo(r.Host, want) {
-				out = append(out, r)
+			if !hostBelongsTo(r.Host, want) {
+				continue
 			}
+			// Repeats are told apart by the same key the page parser uses, so
+			// the two agree on what one result is. A result carrying neither a
+			// link nor a title is kept: nothing identifies it, and dropping it
+			// would shorten the listing on no evidence at all.
+			key := r.Link
+			if key == "" {
+				key = r.Title
+			}
+			if key != "" {
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+			}
+			out = append(out, r)
 		}
 	}
 	return out, err
@@ -97,6 +123,13 @@ func ListIndexed(ctx context.Context, s Searcher, q Query, site string, pages in
 
 // siteQuery renders the operator for an address or a site, dropping the scheme
 // and a leading www that Google does not want inside it.
+//
+// A query string and a fragment are dropped with them, and that is a decision
+// rather than an oversight: the operator matches a host and a path, so there
+// is nothing to be gained by carrying the rest and a malformed query to be had
+// by trying. The cost is stated where callers read it — a check on an address
+// with a query string is a check on its path, and answers the broader
+// question. There is no narrower one to ask.
 func siteQuery(target string) string {
 	raw := strings.TrimSpace(target)
 	if !strings.Contains(raw, "://") {

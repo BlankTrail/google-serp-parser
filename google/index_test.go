@@ -31,6 +31,24 @@ func TestSiteQuery_BuildsTheOperator(t *testing.T) {
 	}
 }
 
+func TestSiteQuery_ReducesATargetToHostAndPath(t *testing.T) {
+	// The operator reaches a path and no further, so a target carrying a query
+	// string is asked about by its path alone. That makes the answer broader
+	// than the question, and it is pinned here rather than left to happen: a
+	// hit on example.com/page does not establish that example.com/page?id=5 is
+	// held.
+	cases := []struct{ in, want string }{
+		{"example.com/page?id=5", "site:example.com/page"},
+		{"https://example.com/page?id=5#top", "site:example.com/page"},
+		{"example.com?id=5", "site:example.com"},
+	}
+	for _, tc := range cases {
+		if got := siteQuery(tc.in); got != tc.want {
+			t.Errorf("siteQuery(%q)=%q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestCheckIndexed_OneResultIsEnough(t *testing.T) {
 	// The question is presence, not rank, so a single hit answers it — and
 	// answering it needs no address, which is what makes this check cheap
@@ -147,6 +165,45 @@ func TestListIndexed_KeepsOnlyResultsOnTheSite(t *testing.T) {
 		if !hostBelongsTo(r.Host, "example.com") {
 			t.Errorf("kept a result from %q", r.Host)
 		}
+	}
+}
+
+func TestListIndexed_ReportsAPageOnceWhenItComesBackOnTwoPages(t *testing.T) {
+	// The page parser already drops a result linked more than once within one
+	// page, so a listing that counted the same page twice because Google
+	// repeated it across the boundary would disagree with the parser about
+	// what "a result" is — and the caller most hurt by that is the one reading
+	// the length as a count of what is indexed.
+	// The third result below shares a title with the first and is a different
+	// page: a site's pages carry repeated titles all the time, and telling
+	// repeats apart by title would report the site as holding fewer pages than
+	// it does.
+	dup := Result{Position: 1, Host: "example.com", Title: "A", Link: "/goto/aaa", Form: LinkEncrypted}
+	other := Result{Position: 2, Host: "example.com", Title: "B", Link: "/goto/bbb", Form: LinkEncrypted}
+	sameTitle := Result{Position: 3, Host: "example.com", Title: "A", Link: "/goto/ccc", Form: LinkEncrypted}
+	f := &fakeSearcher{pages: []SERP{{Results: []Result{dup, other, sameTitle}}, {Results: []Result{dup}}}}
+	got, err := ListIndexed(context.Background(), f, Query{}, "example.com", 2)
+	if err != nil {
+		t.Fatalf("ListIndexed: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d results, want the 3 distinct pages: %+v", len(got), got)
+	}
+}
+
+func TestListIndexed_IdentifiesALinklessResultByItsTitle(t *testing.T) {
+	// That is the page parser's rule for the same case, and keeping the two in
+	// step matters more than the rule itself: a listing and the page it came
+	// from disagreeing about what counts as one result would be a discrepancy
+	// no one could explain from either file alone.
+	linkless := Result{Position: 1, Host: "example.com", Title: "A"}
+	f := &fakeSearcher{pages: []SERP{{Results: []Result{linkless}}, {Results: []Result{linkless}}}}
+	got, err := ListIndexed(context.Background(), f, Query{}, "example.com", 2)
+	if err != nil {
+		t.Fatalf("ListIndexed: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d results, want 1: %+v", len(got), got)
 	}
 }
 
