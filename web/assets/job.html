@@ -1,0 +1,80 @@
+{{define "main"}}
+<h1>{{.T "job.title"}}: {{.Job.Name}}</h1>
+
+{{/* Every count is written here, by the server. The script replaces these same
+     numbers in place and puts nothing on the page that was not already on it,
+     so a reader with no script reads the job as it stood when the page was
+     drawn. data-poll is what tells the script to ask again, and it is absent
+     whenever nothing is going to answer differently. */}}
+<section id="progress" data-job="{{.Progress.ID}}"{{if .Progress.Watch}} data-poll="{{.RefreshMS}}"{{end}}>
+<dl class="progress">
+<div><dt>{{.T "jobs.queries"}}</dt><dd class="count" id="count-total">{{.Progress.Total}}</dd></div>
+<div><dt>{{.T "jobs.done"}}</dt><dd class="count" id="count-done">{{.Progress.Done}}</dd></div>
+<div><dt>{{.T "jobs.failed"}}</dt><dd class="count" id="count-failed">{{.Progress.Failed}}</dd></div>
+<div><dt>{{.T "jobs.left"}}</dt><dd class="count" id="count-pending">{{.Progress.Pending}}</dd></div>
+<div><dt>{{.T "jobs.state"}}</dt><dd id="state">{{.T .State}}</dd></div>
+</dl>
+</section>
+
+{{/* Each button is a form that sends itself, by post. Nothing here needs a
+     script, and a stop behind a link is a stop anything walking the pages can
+     carry out on somebody else's run. */}}
+{{if .CanStop}}
+<form method="post" action="/api/stop">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<button type="submit">{{.T "job.stop"}}</button>
+</form>
+{{end}}
+{{if .CanResume}}
+<form method="post" action="/api/resume">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<button type="submit">{{.T "job.resume"}}</button>
+</form>
+{{end}}
+
+<section class="settings">
+<h2>{{.T "job.settings"}}</h2>
+<dl>
+{{/* Shown on the clock the reader started the run by. The history keeps the
+     instant, and an instant printed as itself is hours from the wall. */}}
+<dt>{{.T "jobs.started"}}</dt><dd>{{.Job.Started.Local.Format "2006-01-02 15:04"}}</dd>
+<dt>{{.T "form.pages"}}</dt><dd class="count">{{.Job.Pages}}</dd>
+<dt>{{.T "form.country"}}</dt><dd>{{.Job.Country}}</dd>
+<dt>{{.T "form.language"}}</dt><dd>{{.Job.Language}}</dd>
+<dt>{{.T "form.spec"}}</dt><dd>{{.Job.Spec}}</dd>
+</dl>
+</section>
+
+<p class="export">{{.T "job.export"}}:
+{{range .Formats}}<a href="/export?job={{$.Progress.ID}}&format={{.}}">{{.}}</a>
+{{end}}</p>
+
+<h2>{{.T "job.results"}}</h2>
+{{if .Rows}}
+{{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
+<table>
+<thead>
+<tr>
+<th>{{.T "history.query"}}</th>
+<th>{{.T "history.rank"}}</th>
+<th>{{.T "job.result.title"}}</th>
+<th>{{.T "history.address"}}</th>
+</tr>
+</thead>
+<tbody>
+{{range .Rows}}
+<tr>
+<td>{{.Query}}</td>
+<td class="count">{{.Rank}}</td>
+<td>{{.Title}}</td>
+<td><a href="{{.URL}}">{{.URL}}</a></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="empty">{{.T "job.results.none"}}</p>
+{{end}}
+
+<script src="/assets/app.js" defer></script>
+{{end}}
