@@ -56,18 +56,52 @@ func TestClassifyLink_UsesTheURLParserNotPatternMatching(t *testing.T) {
 	}
 }
 
+func TestIsGoogleHost_MatchesOnlyGooglesOwnProperties(t *testing.T) {
+	// The test is structural: "google" must be the label immediately left of
+	// the public suffix. A substring test would drop a legitimate site such
+	// as google.myshop.com as if Google owned it.
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"google.com", true},
+		{"www.google.com", true},
+		{"chromewebstore.google.com", true},
+		{"google.de", true},
+		{"google.co.uk", true},
+		{"google.com.br", true},
+		{"google.myshop.com", false},
+		{"notgoogle.com", false},
+		{"mygoogle.net", false},
+		{"habr.com", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.host, func(t *testing.T) {
+			if got := isGoogleHost(tc.host); got != tc.want {
+				t.Errorf("isGoogleHost(%q)=%v, want %v", tc.host, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolver_ReadsTheLocationHeaderWithoutFollowingIt(t *testing.T) {
-	// Following the redirect would load the destination site — one wasted
-	// round trip per result and a hit on a third party that never asked for
-	// it. The address is in the header of the first response.
+	// Following the redirect would cost a second round trip and would reach
+	// out to the destination, which never asked to be contacted. The address
+	// is already in the first response's header.
+	//
+	// The redirect deliberately points back at this test server: that is what
+	// makes a follow observable. Pointing it at an external address would
+	// leave the flag below unreachable and the assertion meaningless.
 	var followed bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/destination" {
 			followed = true
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		http.Redirect(w, r, "https://habr.com/ru/articles/704090/", http.StatusFound)
+		http.Redirect(w, r, srv.URL+"/destination", http.StatusFound)
 	}))
 	defer srv.Close()
 
@@ -76,7 +110,7 @@ func TestResolver_ReadsTheLocationHeaderWithoutFollowingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if want := "https://habr.com/ru/articles/704090/"; got != want {
+	if want := srv.URL + "/destination"; got != want {
 		t.Errorf("Resolve=%q, want %q", got, want)
 	}
 	if followed {
