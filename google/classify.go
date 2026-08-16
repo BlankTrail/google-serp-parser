@@ -63,8 +63,54 @@ type ResponseError struct {
 	err error
 }
 
+// classMark is how a response error writes its class into its own message, and
+// the only part of that message anything is allowed to read.
+//
+// It is a constant rather than two matching pieces of prose so that the writing
+// below and the reading in ClassInText cannot drift apart: reword one and the
+// other stops finding it, in this package, where a test says so.
+const classMark = " (class "
+
 func (e *ResponseError) Error() string {
-	return fmt.Sprintf("google: %s %q: %v (class %s)", e.op, e.Query, e.err, e.Class)
+	return fmt.Sprintf("google: %s %q: %v%s%s)", e.op, e.Query, e.err, classMark, e.Class)
+}
+
+// classes is every class this package produces. Text read back from anywhere is
+// checked against it, because a word that is not one of these was not produced
+// here, and reporting it as a kind of response would report something nobody
+// measured.
+var classes = map[Class]bool{
+	ClassSERP: true, ClassEmpty: true, ClassShell: true,
+	ClassWall: true, ClassBanned: true, ClassHTTP: true,
+}
+
+// ClassInText reads the class out of an error that has been through somewhere
+// keeping text and not values, such as a column of a history.
+//
+// ClassOf is the answer wherever the error itself is still in hand, and it is
+// the one to reach for. This one reads prose, which ResponseError says plainly
+// no caller should do — so the reading is done here, beside the writing, over a
+// marker both share, and pinned by a test that puts every class through both.
+//
+// The class is read from the end of the message, where it is written, and never
+// from the first place those words turn up: a query is the reader's own text and
+// may say anything, this marker included. What text cannot tell apart is a
+// message that ends in those same words for some other reason, and that is the
+// price of a column that keeps sentences instead of values.
+func ClassInText(message string) (Class, bool) {
+	at := strings.LastIndex(message, classMark)
+	if at < 0 {
+		return "", false
+	}
+	written := message[at+len(classMark):]
+	if !strings.HasSuffix(written, ")") {
+		return "", false
+	}
+	class := Class(strings.TrimSuffix(written, ")"))
+	if !classes[class] {
+		return "", false
+	}
+	return class, true
 }
 
 // Unwrap keeps errors.Is(err, ErrNotSERP) working for callers written before

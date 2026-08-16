@@ -385,7 +385,7 @@ func TestPages_LoadNothingFromAnywhereElse(t *testing.T) {
 	seedHistory(t, s, "example.com", 2)
 
 	var carried bool
-	for _, at := range []string{"/", "/new", "/history?host=example.com", jobPath(id)} {
+	for _, at := range []string{"/", "/state", "/new", "/history?host=example.com", jobPath(id)} {
 		body := get(t, s, at).Body.String()
 		carried = carried || strings.Contains(body, "https://")
 		loaded := resourcesOf(body)
@@ -414,7 +414,7 @@ func TestLayout_NamesTheProductInTheHeaderOfEveryPage(t *testing.T) {
 	s := testServer(t)
 	id := seedJob(t, s, "nightly", 3, 2, 1)
 
-	for _, at := range []string{"/", "/new", "/history", jobPath(id)} {
+	for _, at := range []string{"/", "/state", "/new", "/history", jobPath(id)} {
 		rec := get(t, s, at)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s gave %d, want 200", at, rec.Code)

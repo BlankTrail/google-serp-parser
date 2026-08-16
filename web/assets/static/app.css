@@ -25,6 +25,7 @@
 	--pad-card: 1rem 1.25rem;
 	--pad-metric: 1rem;
 	--column: 190px;
+	--group: 250px;
 	--figure: 24px;
 	--small: 13px;
 }
@@ -185,6 +186,42 @@ h2 {
 .state {
 	font-size: 1rem;
 	margin: 0;
+}
+
+/* What a card is about, where that is a name and not a number. Same reasoning
+   as the state above: set at reading size so the figures keep the attention. */
+.lead {
+	font-size: 1rem;
+	margin: 0 0 0.75rem;
+}
+
+/* The three things that make an operator step in, side by side, reflowing as
+   the window narrows rather than wrapping at a width somebody has to maintain.
+   They are wider than the metric cards because each carries its breakdown. */
+.groups {
+	display: grid;
+	gap: var(--gap);
+	grid-template-columns: repeat(auto-fit, minmax(var(--group), 1fr));
+}
+
+/* What one figure is made of, living under it and not competing with it: the
+   whole point of the card is the number at the top. */
+.detail {
+	display: grid;
+	gap: 0.3rem 1rem;
+	grid-template-columns: 1fr max-content;
+	margin: 0.75rem 0 0;
+}
+
+.detail dt {
+	color: var(--quiet);
+	font-size: var(--small);
+}
+
+.detail dd {
+	font-variant-numeric: tabular-nums;
+	margin: 0;
+	text-align: right;
 }
 
 /* The one thing on any screen that is filled with colour. Everything else —

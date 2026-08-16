@@ -369,3 +369,80 @@ func TestHistory_SaysNothingForASiteThatNeverRanked(t *testing.T) {
 		t.Errorf("%d positions for a site that never appeared", n)
 	}
 }
+
+func TestFailures_HandsBackWhatEachRefusedQueryCameBackWith(t *testing.T) {
+	// A screen that says a tenth of the queries failed and not what came back
+	// sends its reader to the database. The reason is written down when the
+	// query is settled, and this is the only way back to it.
+	//
+	// The job holds a query that succeeded and one that was never reached as
+	// well, because a walk that handed those over would report work that has not
+	// failed as failures and inflate every count built on it.
+	s := testStore(t)
+	id := jobWith(t, s, "one", "two", "three", "four")
+	mustRecord(t, s, id, 0, "example.com")
+	for ordinal, why := range map[int]string{1: "a wall", 2: "no answer"} {
+		if err := s.Record(context.Background(), id,
+			QueryOutcome{Ordinal: ordinal, Err: errors.New(why)}); err != nil {
+			t.Fatalf("recording the refusal of query %d: %v", ordinal, err)
+		}
+	}
+
+	var got []string
+	if err := s.Failures(context.Background(), id, func(why string) error {
+		got = append(got, why)
+		return nil
+	}); err != nil {
+		t.Fatalf("Failures: %v", err)
+	}
+	want := []string{"a wall", "no answer"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the refusals read back as %q, want %q", got, want)
+	}
+}
+
+func TestFailures_KeepsTheRefusalsOfOneJobOutOfAnother(t *testing.T) {
+	// Two jobs run on one history, and a screen following tonight's run must not
+	// be handed last night's refusals along with it.
+	s := testStore(t)
+	mine := jobWith(t, s, "one")
+	other := jobWith(t, s, "one")
+	if err := s.Record(context.Background(), other,
+		QueryOutcome{Ordinal: 0, Err: errors.New("somebody else's refusal")}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	var seen int
+	if err := s.Failures(context.Background(), mine, func(string) error { seen++; return nil }); err != nil {
+		t.Fatalf("Failures: %v", err)
+	}
+	if seen != 0 {
+		t.Errorf("a job with no refusals was handed %d of them", seen)
+	}
+}
+
+func TestFailures_StopsAtOnceWhenTheCallerHasSeenEnough(t *testing.T) {
+	// A job of ten thousand queries can refuse all of them, and a caller that
+	// has seen what it needs should not have to read the rest out of the disk.
+	s := testStore(t)
+	id := jobWith(t, s, "one", "two", "three")
+	for ordinal := range 3 {
+		if err := s.Record(context.Background(), id,
+			QueryOutcome{Ordinal: ordinal, Err: errors.New("refused")}); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	stop := errors.New("enough")
+	var seen int
+	err := s.Failures(context.Background(), id, func(string) error {
+		seen++
+		return stop
+	})
+	if !errors.Is(err, stop) {
+		t.Fatalf("Failures returned %v, want the caller's own error", err)
+	}
+	if seen != 1 {
+		t.Errorf("the callback saw %d refusals after asking to stop, want 1", seen)
+	}
+}

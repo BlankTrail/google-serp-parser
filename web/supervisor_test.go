@@ -68,6 +68,22 @@ func (e *heldEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Repo
 	return rep
 }
 
+// fakePool is what a held engine says about the identities behind it.
+//
+// Every number differs from every other, and none is zero: a fixture of zeroes
+// would let a screen showing the wrong count, or no count at all, agree with a
+// test that expected the right one.
+var fakePool = poolFacts{
+	Stats: blanktrail.Stats{
+		Ports: 6, Available: 5, Quarantined: 1,
+		EgressRotations: 4, Revivals: 2,
+	},
+	Threads:  2,
+	Cooldown: 3 * time.Second,
+}
+
+func (e *heldEngine) Pool() poolFacts { return fakePool }
+
 func (e *heldEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

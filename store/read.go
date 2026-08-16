@@ -58,6 +58,44 @@ func (s *Store) Rows(ctx context.Context, jobID int64, fn func(Row) error) error
 	return nil
 }
 
+// Failures hands what each refused query of a job came back with to fn, in the
+// order the job had.
+//
+// It streams for the same reason Rows does: every query of a job can refuse, and
+// a screen counting what kind of refusals they were has no reason to hold ten
+// thousand sentences at once. An error from fn ends the walk and comes back
+// unchanged.
+//
+// Only queries settled as refused are handed over. A query nobody has reached
+// yet carries no reason, and one that succeeded carries none either; passing
+// those on would report work that has not failed among the failures.
+func (s *Store) Failures(ctx context.Context, jobID int64, fn func(why string) error) error {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT err FROM queries
+		  WHERE job_id = ? AND state = 'failed'
+		  ORDER BY ordinal`, jobID)
+	if err != nil {
+		return fmt.Errorf("store: reading the refusals of job %d: %w", jobID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var why string
+		if err := rows.Scan(&why); err != nil {
+			return fmt.Errorf("store: reading a refusal: %w", err)
+		}
+		if err := fn(why); err != nil {
+			return err
+		}
+	}
+	// A walk cut short by a database that went away must not read as a job whose
+	// refusals stopped there, or a breakdown drawn from it names the wrong share.
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: reading the refusals of job %d: %w", jobID, err)
+	}
+	return nil
+}
+
 // Position is where a site stood for one query on one run.
 type Position struct {
 	JobID   int64

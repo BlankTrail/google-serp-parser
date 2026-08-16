@@ -63,6 +63,11 @@ type Server struct {
 	sup   *Supervisor
 	pages map[string]*template.Template
 	mux   *http.ServeMux
+	// now is where this server reads the clock. It is a field so that a test can
+	// hold the clock still: how long a job has been running is a number on the
+	// screen, and a test that could not name the instant could only check that
+	// something was printed.
+	now func() time.Time
 }
 
 // New builds the server and parses its pages once.
@@ -87,6 +92,7 @@ func New(cfg Config) (*Server, error) {
 		sup:   cfg.Supervisor,
 		pages: pages,
 		mux:   http.NewServeMux(),
+		now:   time.Now,
 	}
 	if s.log == nil {
 		s.log = slog.Default()
@@ -127,6 +133,10 @@ func parsePages() (map[string]*template.Template, error) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /{$}", s.index)
+	// What is happening right now, which is what an operator watching a run came
+	// to see. It has an address of its own so it can be opened, bookmarked and
+	// sent to whoever is on the next shift.
+	s.mux.HandleFunc("GET /state", s.state)
 	s.mux.HandleFunc("GET /new", s.newJob)
 	s.mux.HandleFunc("POST /new", s.createJob)
 	s.mux.HandleFunc("GET /job/{id}", s.job)

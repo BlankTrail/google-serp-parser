@@ -1,0 +1,95 @@
+{{define "main"}}
+<h1>{{.T "state.title"}}</h1>
+
+{{/* What is happening, and nothing about whether it is going well. The two
+     times stand beside each other so the reader can compare them; the comparison
+     itself is theirs, because they know what this program does not — how fresh
+     the address list is, how large the job is, what time it is where the target
+     sits. A program that judges wrongly once is not believed afterwards about
+     anything else it says. */}}
+{{if .Running}}
+<section class="card">
+<h2>{{.T "state.running"}}</h2>
+<p class="lead"><a href="/job/{{.Running.ID}}">{{.Running.Name}}</a></p>
+{{/* The one thing on this screen filled with colour, and it is drawn only for a
+     job with queries behind it: a bar with nothing behind it says the job is at
+     the beginning of nothing. */}}
+{{if .Running.Total}}
+<progress class="progress-bar" max="{{.Running.Total}}" value="{{.Running.Done}}" aria-label="{{.T "job.progress"}}"></progress>
+{{end}}
+<dl class="metrics">
+<div class="metric"><dt class="label">{{.T "jobs.done"}}</dt><dd class="figure" id="run-done">{{.Running.Done}}</dd></div>
+<div class="metric"><dt class="label">{{.T "jobs.failed"}}</dt><dd class="figure" id="run-failed">{{.Running.Failed}}</dd></div>
+<div class="metric"><dt class="label">{{.T "jobs.left"}}</dt><dd class="figure" id="run-pending">{{.Running.Pending}}</dd></div>
+{{/* These two are read together or not at all, so they are drawn together. */}}
+<div class="metric"><dt class="label">{{.T "state.elapsed"}}</dt><dd class="figure" id="run-elapsed">{{.Running.Elapsed}}</dd></div>
+<div class="metric"><dt class="label">{{.T "state.expected"}}</dt><dd class="figure" id="run-expected">{{.Running.Expected}}</dd></div>
+<div class="metric"><dt class="label">{{.T "state.rest"}}</dt><dd class="figure" id="run-rest">{{.Running.Rest}}</dd></div>
+</dl>
+</section>
+{{else}}
+<section class="card">
+<p class="empty">{{.T "state.idle"}}</p>
+<p class="lead"><a href="/new">{{.T "state.invite"}}</a></p>
+</section>
+{{end}}
+
+{{/* Three things make an operator step in: the queries start failing, the ports
+     start going, or the queue is not moving. Each is one figure large with what
+     it is made of underneath, so the screen is glanced at rather than read. */}}
+<div class="groups">
+{{if .Failures}}
+<section class="card">
+<h2>{{.T "state.failures"}}</h2>
+<p class="label">{{.T "state.failures.of"}}</p>
+<p class="figure" id="fail-share">{{.Failures.Share}}</p>
+<dl class="detail">
+{{range .Failures.Reasons}}
+<dt>{{$.T .Key}}</dt><dd id="{{.Cell}}">{{.Count}}</dd>
+{{end}}
+{{/* The share and what it was taken over. A share with no base under it is a
+     number nobody can check. */}}
+<dt>{{$.T "jobs.failed"}}</dt><dd id="fail-count">{{.Failures.Failed}}</dd>
+<dt>{{$.T "state.failures.settled"}}</dt><dd id="fail-settled">{{.Failures.Settled}}</dd>
+</dl>
+</section>
+{{end}}
+
+<section class="card">
+<h2>{{.T "state.pool"}}</h2>
+<p class="label">{{.T "state.pool.alive"}}</p>
+<p class="figure" id="pool-alive">{{.Pool.Alive}}</p>
+{{if .Pool.Ports}}
+<dl class="detail">
+<dt>{{.T "state.pool.ports"}}</dt><dd id="pool-ports">{{.Pool.Ports}}</dd>
+<dt>{{.T "state.pool.rotate"}}</dt><dd id="pool-rotations">{{.Pool.Rotations}}</dd>
+<dt>{{.T "state.pool.aside"}}</dt><dd id="pool-quarantined">{{.Pool.Quarantined}}</dd>
+<dt>{{.T "state.pool.back"}}</dt><dd id="pool-revived">{{.Pool.Revived}}</dd>
+</dl>
+{{else}}
+<p class="empty">{{.T "state.pool.none"}}</p>
+{{end}}
+
+</section>
+
+{{/* The queue is what the supervisor will take next. The history cannot answer
+     this: a job is written down when it is created, so every unfinished job in
+     there reads as waiting, including the ones nobody has asked for. */}}
+<section class="card">
+<h2>{{.T "state.queue"}}</h2>
+<p class="label">{{.T "jobs.title"}}</p>
+<p class="figure" id="queue-waiting">{{.Queue.Waiting}}</p>
+{{if .Queue.Jobs}}
+{{/* In the order they will be taken, numbered, because "after this one" and
+     "after the one after this one" is the whole of what a queue tells anybody. */}}
+<dl class="detail">
+{{range .Queue.Jobs}}
+<dt><a href="/job/{{.ID}}">{{.Name}}</a></dt><dd>{{.Place}}</dd>
+{{end}}
+</dl>
+{{else}}
+<p class="empty">{{.T "state.queue.none"}}</p>
+{{end}}
+</section>
+</div>
+{{end}}

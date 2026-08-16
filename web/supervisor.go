@@ -47,6 +47,21 @@ const jobSettleGrace = 30 * time.Second
 type engine interface {
 	Run(ctx context.Context, j run.Job, sink run.Sink) run.Report
 	Close() error
+	// Pool is what the identities behind this engine report about themselves.
+	Pool() poolFacts
+}
+
+// poolFacts is what a screen can say about the identities every job runs on:
+// the counts the pool keeps of itself, and the two settings an estimate for a
+// job on it turns on.
+//
+// It is one value rather than three accessors because all of it is read at the
+// same instant for the same screen, and three reads of a pool that is being used
+// while they happen would put three moments beside each other and call them one.
+type poolFacts struct {
+	Stats    blanktrail.Stats
+	Threads  int
+	Cooldown time.Duration
 }
 
 // poolEngine takes every job through the one pool the supervisor was handed.
@@ -71,6 +86,11 @@ func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Repo
 // Close gives up the identities. It runs when the supervisor shuts down and at
 // no point between two jobs.
 func (e *poolEngine) Close() error { return e.pool.Close() }
+
+// Pool is the one pool, as it stands right now.
+func (e *poolEngine) Pool() poolFacts {
+	return poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown()}
+}
 
 // jobSink files a finished query in the history under the job it belongs to.
 //
@@ -227,6 +247,13 @@ func (v *Supervisor) Running() (int64, bool) {
 	defer v.mu.Unlock()
 	return v.running, v.running != 0
 }
+
+// pool is what the identities behind every job report.
+//
+// It takes no lock: the engine is set before the worker starts and never
+// written again, and what it answers with is the pool's own snapshot, taken
+// under the pool's own lock.
+func (v *Supervisor) pool() poolFacts { return v.eng.Pool() }
 
 // Queued is the jobs waiting their turn, in the order they will be taken.
 //
