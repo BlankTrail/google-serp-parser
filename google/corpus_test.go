@@ -26,9 +26,12 @@ import (
 //
 // It asserts invariants rather than counts, because the corpus is whatever
 // the developer put there: every result carries a title, positions run 1..N
-// without gaps, no result is a Google property, and no ad leaked into the
-// organic set. A page that produces zero results is reported loudly — that is
-// exactly the drift this test exists to catch.
+// without gaps, and no result is a Google property. Ad counts and link forms
+// are logged, not asserted: a site can rank organically and advertise on the
+// same query, so an ad and a result sharing a host is not on its own proof
+// that one leaked into the other, and the two exported slices carry nothing
+// stronger to compare. A page that produces zero results is reported loudly —
+// that is exactly the drift this test exists to catch.
 func TestCorpus_ParsesRealCapturedPages(t *testing.T) {
 	dir := os.Getenv("GSERP_CORPUS")
 	if dir == "" {
