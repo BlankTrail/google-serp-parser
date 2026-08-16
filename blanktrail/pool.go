@@ -133,6 +133,22 @@ type PoolConfig struct {
 	// MaxPortStrikes is how many times a port may spend its whole retry budget
 	// without getting a usable response before it is quarantined (default 3).
 	MaxPortStrikes int
+	// ReviveAfter is how long a quarantined port waits before it is offered
+	// another egress and put back into rotation. Zero derives two minutes; a
+	// negative value leaves a quarantined port quarantined for the life of the
+	// pool.
+	//
+	// A port is quarantined for the answers it gave, and those answers came
+	// through an egress. On a list where a large share of the addresses are dead
+	// before the run starts, a port that drew three bad ones in a row is unlucky
+	// rather than broken, and a pool that cannot take it back stops a job in
+	// which nothing is wrong.
+	ReviveAfter time.Duration
+	// MaxRevivals is how many times one port may be offered another egress
+	// (default 3). Past it the port stays quarantined: taking a port that is
+	// genuinely finished back for ever costs a rotation on every acquisition and
+	// buys nothing.
+	MaxRevivals int
 
 	// Now and Sleep are clock seams for tests. Both default to the real clock.
 	Now   func() time.Time
@@ -173,8 +189,13 @@ type poolPort struct {
 	failures    int  // consecutive failed attempts; any success clears it
 	requests    int
 	strikes     int
-	renewedAt   time.Time
-	session     uint64 // bumped whenever the port's identity changes
+	// quarantinedAt is when the quarantine began, and is zero while the port is
+	// not quarantined. revivals counts how many times the port has been offered
+	// another egress to come back on.
+	quarantinedAt time.Time
+	revivals      int
+	renewedAt     time.Time
+	session       uint64 // bumped whenever the port's identity changes
 }
 
 func (pt *poolPort) egress() Egress {
@@ -238,6 +259,10 @@ type Stats struct {
 	// request carrying them succeeded. A run whose rejections climb while its
 	// requests do not is being refused, not failing.
 	Rejections int64
+
+	// Revivals counts quarantined ports given another egress and put back into
+	// rotation.
+	Revivals int64
 }
 
 // Stats returns a snapshot of pool activity.
@@ -331,6 +356,12 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	}
 	if cfg.MaxPortStrikes <= 0 {
 		cfg.MaxPortStrikes = 3
+	}
+	if cfg.ReviveAfter == 0 {
+		cfg.ReviveAfter = 2 * time.Minute
+	}
+	if cfg.MaxRevivals <= 0 {
+		cfg.MaxRevivals = 3
 	}
 
 	cool := cfg.Cooldown
@@ -528,6 +559,12 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 			return nil, err
 		}
 		if pt != nil {
+			if err := p.reviveIfDue(ctx, pt); err != nil {
+				// The port could not be given another egress, so it stays
+				// quarantined. Give it back and take another.
+				p.giveBack(pt)
+				continue
+			}
 			if err := p.renewIfDue(ctx, pt); err != nil {
 				// The renewal left the port closed. renewFailed has marked it
 				// broken — and quarantined it if it keeps failing — so give it
@@ -585,8 +622,12 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		}
 		pt.mu.Lock()
 		quarantined, leased, last := pt.quarantined, pt.leased, pt.lastUsed
+		revivals, since := pt.revivals, pt.quarantinedAt
 		pt.mu.Unlock()
-		if quarantined {
+		// A port that has waited out its quarantine is a candidate again. take
+		// holds p.mu and must not call the control API, so it only decides that
+		// the port is due; acquire does the rotation that brings it back.
+		if quarantined && !p.revivableAt(revivals, since, now) {
 			continue
 		}
 		alive++
@@ -623,6 +664,19 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		soonest = 0
 	}
 	return nil, soonest, nil
+}
+
+// revivableAt reports whether a port quarantined at since, and offered another
+// egress revivals times already, has waited long enough to be offered one more.
+// It takes values rather than the port, and no lock of its own, so a caller can
+// read the port's state once and decide from it.
+func (p *Pool) revivableAt(revivals int, since, now time.Time) bool {
+	if p.cfg.ReviveAfter < 0 || revivals >= p.cfg.MaxRevivals {
+		return false
+	}
+	// A quarantine with no beginning has no wait to measure, and reading the zero
+	// time as "long ago" would bring such a port back on the very next acquire.
+	return !since.IsZero() && now.Sub(since) >= p.cfg.ReviveAfter
 }
 
 // giveBack returns a port taken by take without counting a request against it,
@@ -871,6 +925,51 @@ func (p *Pool) attemptSucceeded(num int) {
 	pt.mu.Unlock()
 }
 
+// reviveIfDue takes a quarantined port back once it has waited long enough, and
+// leaves every other port alone.
+//
+// Coming back starts with another egress and cannot be anything less. The port
+// was quarantined for the answers it gave, and those answers came through the
+// egress it still holds, so clearing the flag alone would put it straight back
+// into the state it was quarantined for. A rotation that fails leaves the port
+// quarantined — there is nothing to bring it back to — and restarts its wait, so
+// a port whose egress cannot be replaced is not tried again on every acquire.
+func (p *Pool) reviveIfDue(ctx context.Context, pt *poolPort) error {
+	now := p.cfg.Now()
+
+	pt.mu.Lock()
+	due := pt.quarantined && p.revivableAt(pt.revivals, pt.quarantinedAt, now)
+	if due {
+		// The attempt is what costs, not the outcome: a rotation that fails is
+		// as expensive as one that works, so both count against MaxRevivals.
+		pt.revivals++
+	}
+	pt.mu.Unlock()
+	if !due {
+		return nil
+	}
+
+	p.markBadEgress(pt.num)
+	if err := p.rotateEgress(ctx, pt.num); err != nil {
+		pt.mu.Lock()
+		pt.quarantinedAt = now
+		pt.mu.Unlock()
+		return err
+	}
+
+	pt.mu.Lock()
+	pt.quarantined = false
+	pt.quarantinedAt = time.Time{}
+	pt.strikes = 0
+	pt.failures = 0
+	pt.mu.Unlock()
+
+	p.mu.Lock()
+	p.stats.Revivals++
+	p.mu.Unlock()
+	return nil
+}
+
 // renewIfDue replaces a port's whole identity when a proactive trigger has
 // fired, or repairs a port that a previous renewal left closed.
 //
@@ -981,6 +1080,7 @@ func (p *Pool) renewFailed(pt *poolPort, err error) error {
 	quarantine := pt.strikes >= p.cfg.MaxPortStrikes && !pt.quarantined
 	if quarantine {
 		pt.quarantined = true
+		pt.quarantinedAt = p.cfg.Now()
 	}
 	pt.mu.Unlock()
 
@@ -1006,6 +1106,7 @@ func (p *Pool) exhausted(num int) {
 	quarantine := pt.strikes >= p.cfg.MaxPortStrikes && !pt.quarantined
 	if quarantine {
 		pt.quarantined = true
+		pt.quarantinedAt = p.cfg.Now()
 	}
 	pt.mu.Unlock()
 
