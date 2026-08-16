@@ -5,6 +5,7 @@ package google
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -28,11 +29,21 @@ func (f *fakeSearcher) Search(_ context.Context, q Query) (SERP, error) {
 	return f.pages[i], nil
 }
 
+// page builds a result page of n results whose pagination bar was not found —
+// the case a walk must never read as the end of the results.
 func page(n int) SERP {
 	s := SERP{}
 	for i := 0; i < n; i++ {
 		s.Results = append(s.Results, Result{Position: i + 1, Host: "example.com"})
 	}
+	return s
+}
+
+// pageWithBar builds a result page whose pagination bar was found and offers
+// pages up to the given start offset.
+func pageWithBar(n, maxOffset int) SERP {
+	s := page(n)
+	s.MaxOffset, s.HasPagination = maxOffset, true
 	return s
 }
 
@@ -50,20 +61,53 @@ func TestSearchDepth_WalksPagesInOrder(t *testing.T) {
 	}
 }
 
-func TestSearchDepth_StopsWhenAPageRunsOut(t *testing.T) {
-	// Google thins out before the requested depth far more often than it fills
-	// it. Asking for page four after page three came back short spends a
-	// request on a page that is not there.
-	f := &fakeSearcher{pages: []SERP{page(10), page(3)}}
+func TestSearchDepth_StopsWhenTheBarOffersNothingPastThePageInHand(t *testing.T) {
+	// The last page of a result set links back to the pages before it and no
+	// further. That is Google stating where the results end, and it is worth
+	// stopping on: walking to the requested depth regardless would spend a
+	// request per query on a page that is not there.
+	f := &fakeSearcher{pages: []SERP{pageWithBar(10, 10), pageWithBar(10, 10)}}
 	got, err := SearchDepth(context.Background(), f, Query{Text: "x"}, 5)
 	if err != nil {
 		t.Fatalf("SearchDepth: %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("got %d pages, want 2 — the short page ends the walk", len(got))
+		t.Fatalf("got %d pages, want 2 — the bar offers nothing past page two", len(got))
 	}
 	if len(f.asked) != 2 {
 		t.Errorf("asked for %d pages, want 2", len(f.asked))
+	}
+}
+
+func TestSearchDepth_AShortPageIsNotTheEndOfTheResults(t *testing.T) {
+	// A page coming back one result lighter than the one before it is ordinary.
+	// Treating that as the end reported sites two pages further down as not
+	// ranking at all — a wrong answer that reads exactly like a right one, and
+	// the reason the walk asks the bar instead of counting results.
+	f := &fakeSearcher{pages: []SERP{pageWithBar(10, 40), pageWithBar(9, 40), pageWithBar(10, 40)}}
+	got, err := SearchDepth(context.Background(), f, Query{Text: "x"}, 3)
+	if err != nil {
+		t.Fatalf("SearchDepth: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d pages, want 3 — the bar offers pages past the short one", len(got))
+	}
+	if len(f.asked) != 3 {
+		t.Errorf("asked for %d pages, want 3", len(f.asked))
+	}
+}
+
+func TestSearchDepth_KeepsWalkingWhenNoBarWasFound(t *testing.T) {
+	// A layout whose pagination control this parser does not recognise says
+	// nothing about where the results end. Reading that silence as an ending
+	// would stop the walk on markup nobody read.
+	f := &fakeSearcher{pages: []SERP{page(10), page(4), page(10)}}
+	got, err := SearchDepth(context.Background(), f, Query{Text: "x"}, 3)
+	if err != nil {
+		t.Fatalf("SearchDepth: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d pages, want 3 — an unrecognised bar ends nothing", len(got))
 	}
 }
 
@@ -117,7 +161,16 @@ func TestSearchDepth_HonoursContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	f := &fakeSearcher{pages: []SERP{page(10), page(10)}}
-	if _, err := SearchDepth(ctx, f, Query{Text: "x"}, 2); err == nil {
-		t.Error("SearchDepth ignored a cancelled context")
+	_, err := SearchDepth(ctx, f, Query{Text: "x"}, 2)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want the cancellation", err)
+	}
+	// Every other way out of the walk names the package and the page it was on.
+	// A cancellation reported bare reads as if it came from somewhere else.
+	if !strings.Contains(err.Error(), "google: page 1") {
+		t.Errorf("err=%q, want it in the package's voice", err)
+	}
+	if len(f.asked) != 0 {
+		t.Errorf("made %d requests on a cancelled context", len(f.asked))
 	}
 }

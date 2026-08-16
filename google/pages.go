@@ -20,6 +20,12 @@ type Searcher interface {
 // ErrBadDepth is returned when a walk is asked for fewer than one page.
 var ErrBadDepth = errors.New("google: depth must be at least one page")
 
+// offsetPerPage is the stride between one page's start offset and the next. It
+// has to agree with the offset a Query renders, because the pagination bar's
+// links are expressed on that scale and the walk compares its own position
+// against them.
+const offsetPerPage = 10
+
 // SearchUntil walks pages 1..pages of one query, handing each to fn, and stops
 // as soon as fn says it has what it came for.
 //
@@ -29,18 +35,22 @@ var ErrBadDepth = errors.New("google: depth must be at least one page")
 // first and searching afterwards reads more simply and costs exactly that.
 //
 // Two conditions end the walk regardless of fn: a page with no results at all,
-// and a page shorter than the one before it, which is Google saying it has run
-// out. Google thins out before a requested depth far more often than it fills
-// it.
+// and a pagination bar that offers nothing past the page in hand. The second is
+// read from the page rather than inferred from how full it looked. A walk that
+// stopped on a page shorter than the one before it stopped on an ordinary blip
+// and reported sites further down as not ranking at all, which is a wrong
+// answer that reads like a right one.
+//
+// A page whose bar this parser did not find is walked past rather than stopped
+// at: absence of the signal is not the signal — see SERP.HasPagination.
 func SearchUntil(ctx context.Context, s Searcher, q Query, pages int, fn func(page int, serp SERP) bool) error {
 	if pages < 1 {
 		return fmt.Errorf("%w: got %d", ErrBadDepth, pages)
 	}
 
-	prev := -1
 	for n := 1; n <= pages; n++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return fmt.Errorf("google: page %d of %q: %w", n, q.Text, err)
 		}
 		q.Page = n
 		serp, err := s.Search(ctx, q)
@@ -53,10 +63,9 @@ func SearchUntil(ctx context.Context, s Searcher, q Query, pages int, fn func(pa
 		if fn != nil && fn(n, serp) {
 			return nil
 		}
-		if prev >= 0 && len(serp.Results) < prev {
+		if serp.HasPagination && serp.MaxOffset <= (n-1)*offsetPerPage {
 			return nil
 		}
-		prev = len(serp.Results)
 	}
 	return nil
 }

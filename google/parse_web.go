@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -45,7 +46,44 @@ func ParseSERP(query string, body []byte) (SERP, error) {
 	s.Results = parseOrganic(doc)
 	s.Ads = parseAds(doc)
 	s.Related = parseRelated(doc)
+	s.MaxOffset, s.HasPagination = parsePagination(doc)
 	return s, nil
+}
+
+// parsePagination reads how far the pagination bar offers to go, as the start
+// offset of the furthest page it links to.
+//
+// found is reported separately from the offset because absence has to mean
+// nothing at all: a bar this parser did not recognise is not a page stating its
+// results end here, and a caller that conflated the two would stop walking on
+// markup it never read. See SERP.HasPagination.
+//
+// A link only counts once it carries a start parameter. That is what tells the
+// bar apart from the vertical switches — Images, Videos, News — which sit under
+// the same role and point back into search just as the bar does. Taking those
+// for a bar would have every query's results appear to end on page one, so the
+// test is for the offset itself rather than for the container alone.
+func parsePagination(doc *goquery.Document) (maxOffset int, found bool) {
+	doc.Find("[role=navigation] a[href^='/search']").Each(func(_ int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		u, err := url.Parse(href)
+		if err != nil {
+			return
+		}
+		v := u.Query()
+		if !v.Has("start") {
+			return
+		}
+		offset, err := strconv.Atoi(v.Get("start"))
+		if err != nil || offset < 0 {
+			return
+		}
+		found = true
+		if offset > maxOffset {
+			maxOffset = offset
+		}
+	})
+	return maxOffset, found
 }
 
 // parseOrganic reads the organic results in page order.

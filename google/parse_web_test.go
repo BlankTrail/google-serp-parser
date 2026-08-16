@@ -305,6 +305,76 @@ func TestParseSERP_SnippetRecoversEmphasisedTerms(t *testing.T) {
 	}
 }
 
+// withNavigation wraps one organic result and one navigation block into a page
+// the parser will accept, so a pagination case reads as the bar it describes.
+func withNavigation(nav string) []byte {
+	return []byte(`<!doctype html><html><body>` +
+		`<div id="rso"><div data-snc="r0">` +
+		`<a href="https://example.com/a" data-ved="x"><h3>A result</h3></a>` +
+		`</div></div>` +
+		`<div role="navigation">` + nav + `</div>` +
+		`</body></html>`)
+}
+
+func TestParseSERP_ReadsHowFarThePaginationBarOffersToGo(t *testing.T) {
+	// The bar is the page's own statement about how much further the results
+	// go, and it is the only such statement on it: no page measured, captured
+	// or live, has ever carried a result total.
+	s := parseFixture(t, "serp_goto_ru.html")
+	if !s.HasPagination {
+		t.Fatal("the fixture's pagination bar was not found")
+	}
+	if s.MaxOffset != 40 {
+		t.Errorf("MaxOffset=%d, want 40 — the furthest page the bar links to", s.MaxOffset)
+	}
+}
+
+func TestParseSERP_ABarLinkingOnlyBackwardsIsStillFound(t *testing.T) {
+	// The last page of a result set links to the pages before it and to nothing
+	// after. That shape is the whole signal a walk stops on, so the bar has to
+	// come back found with its furthest offset behind the page in hand.
+	s, err := ParseSERP("x", withNavigation(
+		`<a href="/search?q=x&amp;start=0">1</a><a href="/search?q=x&amp;start=10">2</a>`))
+	if err != nil {
+		t.Fatalf("ParseSERP: %v", err)
+	}
+	if !s.HasPagination {
+		t.Fatal("a bar linking only to earlier pages was not found")
+	}
+	if s.MaxOffset != 10 {
+		t.Errorf("MaxOffset=%d, want 10", s.MaxOffset)
+	}
+}
+
+func TestParseSERP_NavigationCarryingNoOffsetIsNotAPaginationBar(t *testing.T) {
+	// The vertical switches — Images, Videos, News — sit under role="navigation"
+	// and link back into search exactly as the bar does. Counting them as a bar
+	// would have the parser state that the results end on page one of every
+	// query, which is the reverse of what this field is for.
+	s, err := ParseSERP("x", withNavigation(
+		`<a href="/search?q=x&amp;udm=2">Images</a><a href="/search?q=x&amp;tbm=vid">Videos</a>`))
+	if err != nil {
+		t.Fatalf("ParseSERP: %v", err)
+	}
+	if s.HasPagination {
+		t.Errorf("a vertical switch was read as a pagination bar, MaxOffset=%d", s.MaxOffset)
+	}
+}
+
+func TestParseSERP_APageWithNoNavigationAtAllReportsNoBar(t *testing.T) {
+	// Absence has to stay absence. A layout whose control this parser cannot
+	// find must not be reported as a page that offered nothing further.
+	s, err := ParseSERP("x", []byte(`<!doctype html><html><body><div id="rso">`+
+		`<div data-snc="r0"><a href="https://example.com/a" data-ved="x"><h3>A result</h3></a></div>`+
+		`</div></body></html>`))
+	if err != nil {
+		t.Fatalf("ParseSERP: %v", err)
+	}
+	if s.HasPagination || s.MaxOffset != 0 {
+		t.Errorf("HasPagination=%v MaxOffset=%d, want false and 0", s.HasPagination, s.MaxOffset)
+	}
+}
+
 func TestParseSERP_RelatedExcludesPaginationAndReadsThePhraseFromQ(t *testing.T) {
 	// The pagination bar sits in the same container as the related-search
 	// chips and answers to the same href prefix, so it must be told apart by
