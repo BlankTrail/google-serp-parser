@@ -124,10 +124,8 @@ type PortSpec struct {
 	MaxConcurrent int // in-flight requests allowed on the port
 	RetryDelayMs  int // proxy-side retry delay
 	IdleSeconds   int // per-port idle timeout (0 = inherit the global one)
-	// TimeoutSeconds bounds how long the port waits on one request; zero leaves
-	// it to the proxy. Keep PoolConfig.RequestTimeout well above this value, or
-	// the client gives up on the request before the port-side timeout can.
-	TimeoutSeconds int
+	// Keep PoolConfig.RequestTimeout well above this value.
+	TimeoutSeconds int    // seconds the port waits on one request; 0 leaves it to the proxy
 	LeakGuard      string // "", off, warn, enforce
 }
 
