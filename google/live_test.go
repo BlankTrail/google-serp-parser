@@ -24,15 +24,18 @@ import (
 //
 // Run it deliberately:
 //
-//	BLANKTRAIL_API_KEY=... go test -tags live ./google/ -run TestLive -v
+//	BLANKTRAIL_API_KEY=... BLANKTRAIL_URL=... go test -tags live ./google/ -run TestLive -v
 func TestLive_MeasuresWhatTheSpecLeftOpen(t *testing.T) {
 	key := os.Getenv("BLANKTRAIL_API_KEY")
 	if key == "" {
 		t.Skip("BLANKTRAIL_API_KEY is not set")
 	}
+	// The address is required rather than defaulted. A live test that falls
+	// back to a well-known address measures whatever happens to be listening
+	// there, and reports it as this one's result.
 	control := os.Getenv("BLANKTRAIL_URL")
 	if control == "" {
-		control = "http://127.0.0.1:8891"
+		t.Skip("BLANKTRAIL_URL is not set")
 	}
 
 	ctx := context.Background()

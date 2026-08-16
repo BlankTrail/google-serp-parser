@@ -35,6 +35,15 @@ var ccTLD = map[string]string{
 	"us": "www.google.com",
 }
 
+// offsetPerPage is the stride between one page's start offset and the next.
+// Google withdrew num=100, so depth is pages of ten.
+//
+// It lives here, beside the request that renders the offset, because a walk
+// reads the pagination bar's own offsets and compares them against where it
+// stands. Rendered from one place and compared from another, the two numbers
+// could drift apart and the comparison would quietly stop meaning anything.
+const offsetPerPage = 10
+
 // Query is one capture: what to search for, and the four axes that decide
 // which results come back. The axes are independent on purpose — "German
 // results in English" is an ordinary request.
@@ -83,7 +92,7 @@ func (q Query) URL() (string, error) {
 		v.Set("hl", lang)
 	}
 	if q.Page > 1 {
-		v.Set("start", strconv.Itoa((q.Page-1)*10))
+		v.Set("start", strconv.Itoa((q.Page-1)*offsetPerPage))
 	}
 
 	u := url.URL{Scheme: "https", Host: host, Path: "/search", RawQuery: v.Encode()}

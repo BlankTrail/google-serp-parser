@@ -194,15 +194,20 @@ func httpGet(ctx context.Context, rawURL string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 }
 
-// Rotor hands out upstreams round-robin from a live list, skips proxies that
-// keep failing to connect, and (optionally) reloads the list on an interval
-// while keeping its cursor position stable.
+// Rotor hands out upstreams round-robin from a live list, rests proxies that
+// keep failing to connect and returns them at the back of the list, and
+// (optionally) reloads the list on an interval while keeping its cursor
+// position stable.
 type Rotor struct {
-	mu       sync.Mutex
-	ups      []Upstream
-	pos      int
-	fails    map[string]int
-	maxFails int
+	mu          sync.Mutex
+	ups         []listed
+	pos         int
+	fails       map[string]int
+	benched     map[string]time.Time // key -> when its rest began
+	nextRelease time.Time            // earliest instant a rest ends; zero when nothing rests
+	maxFails    int
+	rest        time.Duration
+	now         func() time.Time
 
 	src  Source
 	stop chan struct{}
@@ -211,14 +216,68 @@ type Rotor struct {
 	closeOnce sync.Once
 }
 
+// listed is an address in the rotation, carried with the key the failure and
+// rest records are kept under.
+//
+// Finding a free address means stepping past every resting one, and the key is
+// built by joining strings, so computing it per step allocated once for every
+// address skipped. It is derived from the address alone and never changes, so
+// it is computed when the list is taken in and read from then on. The two are
+// copied together wherever the list is rebuilt, which is the only way the key
+// can stay the one belonging to the address it sits beside.
+type listed struct {
+	up  Upstream
+	key string
+}
+
+// withKeys pairs each address with its key, once.
+func withKeys(ups []Upstream) []listed {
+	l := make([]listed, len(ups))
+	for i, u := range ups {
+		l[i] = listed{up: u, key: u.Key()}
+	}
+	return l
+}
+
+// defaultRest is how long an address that failed its way out of the rotation
+// waits before it is offered again.
+//
+// Six hours is long enough that a temporary refusal has expired and short
+// enough that a bought list is not spent after one bad afternoon. A refusal a
+// minute ago rarely means the address is dead: it was busy, or it was turned
+// away for a while, and both pass.
+const defaultRest = 6 * time.Hour
+
+// RotorOption adjusts a rotor at construction.
+type RotorOption func(*Rotor)
+
+// WithRest sets how long a benched address rests. Zero or less keeps the
+// default.
+func WithRest(d time.Duration) RotorOption {
+	return func(r *Rotor) {
+		if d > 0 {
+			r.rest = d
+		}
+	}
+}
+
+// WithClock replaces the rotor's clock, so a test need not wait out a rest.
+func WithClock(now func() time.Time) RotorOption {
+	return func(r *Rotor) {
+		if now != nil {
+			r.now = now
+		}
+	}
+}
+
 // NewStaticRotor rotates over a fixed list with no background refresh.
-func NewStaticRotor(ups []Upstream) *Rotor {
-	return &Rotor{ups: ups, fails: map[string]int{}, maxFails: 3}
+func NewStaticRotor(ups []Upstream, opts ...RotorOption) *Rotor {
+	return newRotor(ups, Source{}, opts...)
 }
 
 // NewRotor loads the source once and, if Source.Refresh > 0, starts a
 // background reloader. Call Close to stop it.
-func NewRotor(ctx context.Context, src Source) (*Rotor, error) {
+func NewRotor(ctx context.Context, src Source, opts ...RotorOption) (*Rotor, error) {
 	ups, _, err := src.Load(ctx)
 	if err != nil {
 		return nil, err
@@ -226,13 +285,29 @@ func NewRotor(ctx context.Context, src Source) (*Rotor, error) {
 	if len(ups) == 0 {
 		return nil, fmt.Errorf("blanktrail: upstream source %q yielded no usable proxies", src.Location)
 	}
-	r := &Rotor{ups: ups, fails: map[string]int{}, maxFails: 3, src: src}
+	r := newRotor(ups, src, opts...)
 	if src.Refresh > 0 {
 		r.stop = make(chan struct{})
 		r.done = make(chan struct{})
 		go r.refreshLoop()
 	}
 	return r, nil
+}
+
+func newRotor(ups []Upstream, src Source, opts ...RotorOption) *Rotor {
+	r := &Rotor{
+		ups:      withKeys(ups),
+		fails:    map[string]int{},
+		benched:  map[string]time.Time{},
+		maxFails: 3,
+		rest:     defaultRest,
+		now:      time.Now,
+		src:      src,
+	}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 // Len reports the current number of upstreams.
@@ -242,36 +317,134 @@ func (r *Rotor) Len() int {
 	return len(r.ups)
 }
 
-// Next returns the next healthy upstream in round-robin order. The bool is
-// false only when the list is empty.
+// Next returns the next upstream in round-robin order, skipping the ones that
+// are resting. The bool is false only when the list is empty.
 func (r *Rotor) Next() (Upstream, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	r.releaseRested(r.now())
+
 	n := len(r.ups)
 	if n == 0 {
 		return Upstream{}, false
 	}
 	for i := 0; i < n; i++ {
-		u := r.ups[r.pos%n]
+		l := r.ups[r.pos%n]
 		r.pos = (r.pos + 1) % n
-		if r.fails[u.Key()] < r.maxFails {
-			return u, true
+		if _, resting := r.benched[l.key]; !resting {
+			return l.up, true
 		}
 	}
-	// Everything is marked bad — forgive all and hand out the next one so the
-	// caller keeps making progress rather than stalling on a fully-burned list.
-	r.fails = map[string]int{}
-	u := r.ups[r.pos%n]
-	r.pos = (r.pos + 1) % n
-	return u, true
+
+	// Every address is resting. That is a systemic fault rather than a list
+	// problem, and the caller still has to be given something. The one that has
+	// rested longest is closest to eligible, so it is the honest choice — and it
+	// leaves everyone else's rest intact, which forgiving the whole list would
+	// not.
+	oldest := 0
+	for i, l := range r.ups {
+		if r.benched[l.key].Before(r.benched[r.ups[oldest].key]) {
+			oldest = i
+		}
+	}
+	l := r.ups[oldest]
+	delete(r.benched, l.key)
+	delete(r.fails, l.key)
+	r.refreshNextRelease()
+	return l.up, true
 }
 
-// MarkBad records a connection-level failure for an upstream. After maxFails it
-// is skipped until the list is reloaded (or all upstreams burn out).
+// refreshNextRelease recomputes the earliest instant a rest ends. Called with
+// the lock held, from every path that takes an address off the bench.
+//
+// The field exists so that Next can tell, in one comparison, that no rest is
+// over yet and skip walking the bench. That only works while it is exact: a
+// value later than the true earliest would hold a rested address out past its
+// rest, so it is recomputed here rather than nudged, and MarkBad lowers it when
+// a new rest ends sooner than the one it holds.
+func (r *Rotor) refreshNextRelease() {
+	r.nextRelease = time.Time{}
+	for _, since := range r.benched {
+		if end := since.Add(r.rest); r.nextRelease.IsZero() || end.Before(r.nextRelease) {
+			r.nextRelease = end
+		}
+	}
+}
+
+// releaseRested moves every address whose rest has elapsed to the end of the
+// list and clears its record. Called with the lock held.
+//
+// Every handout asks it first, so it must be cheap when there is nothing to do,
+// which is nearly always. Before the earliest instant any rest ends, no walk of
+// the bench can find anything, and it returns on the comparison alone.
+//
+// Moving rather than merely un-benching is the point: an address that has let
+// the run down once does not go back to competing with addresses that never
+// have. On a list of thousands the back of the queue is a long way off, which
+// is the second chance being real without being eager.
+func (r *Rotor) releaseRested(now time.Time) {
+	if len(r.benched) == 0 || now.Before(r.nextRelease) {
+		return
+	}
+	due := map[string]bool{}
+	for key, since := range r.benched {
+		if now.Sub(since) >= r.rest {
+			due[key] = true
+		}
+	}
+	if len(due) == 0 {
+		return
+	}
+
+	kept := make([]listed, 0, len(r.ups))
+	tail := make([]listed, 0, len(due))
+	pos := r.pos
+	for i, l := range r.ups {
+		if due[l.key] {
+			tail = append(tail, l)
+			if i < r.pos {
+				// The cursor counted this address; it is leaving the stretch the
+				// cursor has already walked.
+				pos--
+			}
+			continue
+		}
+		kept = append(kept, l)
+	}
+	r.ups = append(kept, tail...)
+	r.pos = pos
+	for key := range due {
+		delete(r.benched, key)
+		delete(r.fails, key)
+	}
+	r.refreshNextRelease()
+}
+
+// Benched reports how many addresses are resting.
+func (r *Rotor) Benched() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.benched)
+}
+
+// MarkBad records a connection-level failure for an upstream. At maxFails the
+// address leaves the rotation and begins its rest; it comes back at the end of
+// the list once that rest has elapsed.
 func (r *Rotor) MarkBad(u Upstream) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.fails[u.Key()]++
+	key := u.Key()
+	r.fails[key]++
+	if r.fails[key] >= r.maxFails {
+		if _, resting := r.benched[key]; !resting {
+			since := r.now()
+			r.benched[key] = since
+			if end := since.Add(r.rest); r.nextRelease.IsZero() || end.Before(r.nextRelease) {
+				r.nextRelease = end
+			}
+		}
+	}
 }
 
 // Close stops the background reloader, if any. Safe to call more than once and
@@ -307,7 +480,14 @@ func (r *Rotor) refreshLoop() {
 }
 
 // reconcile swaps in a freshly loaded list while keeping the cursor position and
-// forgetting failure counts for proxies that are no longer present.
+// forgetting failure counts and rests for proxies that are no longer present.
+//
+// An address the source still lists keeps the rest it is serving. The rest
+// belongs to the address, not to the copy of the list it was read from, and a
+// source that reloads more often than the rest is long would otherwise never
+// let a rest run out. An address the source has dropped cannot be handed out
+// again, so its record is kept for nothing and would count as resting for as
+// long as the rotor lives.
 func (r *Rotor) reconcile(ups []Upstream) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -320,7 +500,13 @@ func (r *Rotor) reconcile(ups []Upstream) {
 			delete(r.fails, k)
 		}
 	}
-	r.ups = ups
+	for k := range r.benched {
+		if !present[k] {
+			delete(r.benched, k)
+		}
+	}
+	r.refreshNextRelease()
+	r.ups = withKeys(ups)
 	if len(ups) > 0 {
 		r.pos %= len(ups)
 	} else {
