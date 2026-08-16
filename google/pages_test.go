@@ -5,6 +5,7 @@ package google
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -149,6 +150,40 @@ func TestSearchUntil_StopsWhenTheCallbackIsSatisfied(t *testing.T) {
 	}
 	if len(f.asked) != 2 {
 		t.Errorf("took %d pages, want 2 - the callback was satisfied on the second", len(f.asked))
+	}
+}
+
+// refusal is the error a session returns for a page that carried no data.
+func refusal(class Class) error {
+	return &ResponseError{Class: class, Query: "x", op: "search", err: fmt.Errorf("%w: no results present", ErrNotSERP)}
+}
+
+func TestSearchUntil_KeepsTheResponseClassReadableThroughItsOwnWrapping(t *testing.T) {
+	// The run layer decides whether a query is worth taking to another identity
+	// from the class, and it reads that class off whatever the walk hands back.
+	// The wrapping here is the only thing carrying it that far.
+	f := &fakeSearcher{pages: []SERP{{}}, errs: []error{refusal(ClassShell)}}
+
+	err := SearchUntil(context.Background(), f, Query{Text: "x"}, 3, nil)
+	got, ok := ClassOf(err)
+	if !ok {
+		t.Fatalf("the class did not survive the walk's own wrapping: %v", err)
+	}
+	if got != ClassShell {
+		t.Errorf("class=%q, want %q", got, ClassShell)
+	}
+}
+
+func TestSearchDepth_KeepsTheResponseClassReadableThroughItsOwnWrapping(t *testing.T) {
+	f := &fakeSearcher{pages: []SERP{page(10), {}}, errs: []error{nil, refusal(ClassWall)}}
+
+	_, err := SearchDepth(context.Background(), f, Query{Text: "x"}, 3)
+	got, ok := ClassOf(err)
+	if !ok {
+		t.Fatalf("the class did not survive the walk's own wrapping: %v", err)
+	}
+	if got != ClassWall {
+		t.Errorf("class=%q, want %q", got, ClassWall)
 	}
 }
 
