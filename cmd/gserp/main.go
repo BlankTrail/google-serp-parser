@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 
-// Command gserp is the Google SERP parser: a web server, a CLI, and — on this
-// milestone — a preflight check and a run that saves what it finds.
+// Command gserp is the Google SERP parser: a preflight check, a run that saves
+// what it finds, and — on this milestone — a browser interface onto what it
+// has already found.
 package main
 
 import (
@@ -44,6 +45,8 @@ func dispatch(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "run":
 		return runCommand(ctx, args[1:], os.Stdout)
+	case "serve":
+		return serveCommand(ctx, args[1:], os.Stdout)
 	case "doctor":
 		return doctorCommand(args[1:])
 	case "version", "--version", "-v":
@@ -80,6 +83,7 @@ const usageText = `gserp — open-source Google SERP parser, powered by BlankTra
 
 Usage:
   gserp run [flags]      work a list of queries, saving each one as it lands
+  gserp serve [flags]    serve the browser interface onto the history
   gserp doctor [flags]   check a BlankTrail instance against an intended run
   gserp version          print the version
 
@@ -100,6 +104,10 @@ Run flags:
                               instead of starting one; it runs at the depth and
                               in the country it was created with
   --dry-run                   print the estimate and send nothing
+
+Serve flags:
+  --addr string               address to listen on (default 127.0.0.1:8080)
+  --db string                 history database to open (default gserp.db)
 
 Doctor flags:
   --bt-url string             control API base URL (default http://127.0.0.1:8891)
