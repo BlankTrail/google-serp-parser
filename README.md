@@ -11,14 +11,23 @@ and a SerpApi-compatible API. Powered by [BlankTrail Proxy](https://blanktrail.c
 
 ## Status
 
-The repository skeleton and the `blanktrail` SDK are in place, and the `google`
-package now parses result pages: organic results with their exact host and
-link form, the three ad placements, and related searches. Every response is
-classified before it is parsed, so a genuine empty answer from Google is told
-apart from a page that is not results at all — a challenge, a refusal, or the
-JavaScript shell that arrives with HTTP 200 and no results in it.
+`gserp run` works end to end: it takes a list of queries, spreads them over
+threads, writes each result to a database as it lands, and exports what it
+found as CSV or JSON Lines. A run stopped with Ctrl+C says what is still to do
+and the command that takes it up; `gserp run -resume` finishes exactly what was
+left. `gserp run -dry-run` says what a job will cost before any of it is sent.
 
-Storage, the web UI and the API land in later milestones.
+Underneath: the `google` package reads result pages — organic results with
+their exact host and link form, the three ad placements, related searches —
+and classifies every response before parsing it, so a genuine empty answer is
+told apart from a challenge, a refusal, or the JavaScript shell that arrives
+with HTTP 200 and no results in it. On top of that sit the engines: pagination,
+a site's position, whether a page is indexed, and search completions. A refused
+answer is carried to another identity rather than lost, and addresses that stop
+working are replaced as the run goes, so a list accumulates the ones that work
+by using them.
+
+The web UI and the API land in later milestones.
 
 ## Licence
 
