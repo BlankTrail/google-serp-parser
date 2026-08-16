@@ -273,16 +273,11 @@ func TestRunner_RecordsWhyAQueryFailedRatherThanOnlyThatItDid(t *testing.T) {
 	}
 }
 
-func TestRunner_AsksForEveryPageTheJobRequested(t *testing.T) {
-	o := newOrigin(t, func(*http.Request, int) string {
-		// A bar reaching further than the page in hand, so the walk continues.
-		return serpBody("example.com") +
-			`<div role="navigation"><a href="/search?q=x&amp;start=90">10</a></div>`
-	})
-	// One port, so the whole walk is taken by one identity and the front page is
-	// visited once. Each further identity a page went to would pay that visit
-	// again, and the search count is what this test is reading.
-	f := poolFacing(t, o.addr(), 1)
+func TestRunner_AsksForEveryPageTheJobRequestedOnOneIdentity(t *testing.T) {
+	o := newOrigin(t, func(*http.Request, int) string { return serpBodyWithBar("example.com") })
+	// Three ports, so a walk that changed identity between pages has somewhere to
+	// change to and this test can see it happen.
+	f := poolFacing(t, o.addr(), 3)
 
 	r := &Runner{Pool: f.Pool, Threads: 1}
 	rep := r.Run(context.Background(), Job{Queries: usQueries(1), Pages: 3})
@@ -296,10 +291,15 @@ func TestRunner_AsksForEveryPageTheJobRequested(t *testing.T) {
 	if got := o.searches.Load(); got != 3 {
 		t.Errorf("%d searches, want 3", got)
 	}
+	// One identity for the three pages: it visits the front page once, and the
+	// job takes one identity rather than one per page.
 	if got := o.homes.Load(); got != 1 {
-		t.Errorf("%d visits to the front page, want 1", got)
+		t.Errorf("%d visits to the front page, want 1 - the walk changed identity between pages", got)
 	}
-	if rep.Requests != 3 {
-		t.Errorf("Requests=%d, want the 3 the page walk cost", rep.Requests)
+	if got := f.portsUsed(); got != 1 {
+		t.Errorf("%d identities carried the walk, want 1", got)
+	}
+	if rep.Requests != 1 {
+		t.Errorf("Requests=%d, want the 1 identity an unrefused walk costs", rep.Requests)
 	}
 }

@@ -53,11 +53,12 @@ type Report struct {
 	Failed  int
 	Untried int
 	// Requests is how many times this job took an identity from the pool: one
-	// for every page it asked for, and one more for every further identity a
-	// refused page was taken to. It is the difference between two readings of
-	// the pool's own count rather than a tally kept here, because a tally would
-	// count the queries the runner handed out and miss the retries underneath
-	// them. A caller running two jobs on one pool at once sees both in it.
+	// for every query, however deep it was taken, and one more for every further
+	// identity a refused page was carried to. It is the difference between two
+	// readings of the pool's own count rather than a tally kept here, because a
+	// tally would count the queries the runner handed out and miss the retries
+	// underneath them. A caller running two jobs on one pool at once sees both
+	// in it.
 	Requests int64
 }
 
@@ -127,7 +128,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 				first = false
 
 				results[i].Attempted = true
-				results[i].Pages, results[i].Err = google.SearchDepth(ctx, attempt, j.Queries[i], pages)
+				results[i].Pages, results[i].Err = attempt.Walk(ctx, j.Queries[i], pages)
 			}
 		}()
 	}

@@ -17,11 +17,16 @@ type Searcher interface {
 	Search(ctx context.Context, q Query) (SERP, error)
 }
 
-// ErrBadDepth is returned when a walk is asked for fewer than one page.
+// ErrBadDepth is returned when a walk is asked for a range it cannot walk:
+// fewer than one page, or an end that comes before its start.
 var ErrBadDepth = errors.New("google: depth must be at least one page")
 
-// SearchUntil walks pages 1..pages of one query, handing each to fn, and stops
+// SearchFrom walks pages from..to of one query, handing each to fn, and stops
 // as soon as fn says it has what it came for.
+//
+// The range is what lets a walk that was interrupted part way carry on from the
+// page it stopped on. The pages before that one are already in hand, and taking
+// them again spends a request each to learn what is already known.
 //
 // The callback is what keeps a lookup from paying for pages it does not need.
 // A caller looking for one site usually finds it on the first page; taking the
@@ -37,12 +42,12 @@ var ErrBadDepth = errors.New("google: depth must be at least one page")
 //
 // A page whose bar this parser did not find is walked past rather than stopped
 // at: absence of the signal is not the signal — see SERP.HasPagination.
-func SearchUntil(ctx context.Context, s Searcher, q Query, pages int, fn func(page int, serp SERP) bool) error {
-	if pages < 1 {
-		return fmt.Errorf("%w: got %d", ErrBadDepth, pages)
+func SearchFrom(ctx context.Context, s Searcher, q Query, from, to int, fn func(page int, serp SERP) bool) error {
+	if from < 1 || to < from {
+		return fmt.Errorf("%w: got %d..%d", ErrBadDepth, from, to)
 	}
 
-	for n := 1; n <= pages; n++ {
+	for n := from; n <= to; n++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("google: page %d of %q: %w", n, q.Text, err)
 		}
@@ -62,6 +67,13 @@ func SearchUntil(ctx context.Context, s Searcher, q Query, pages int, fn func(pa
 		}
 	}
 	return nil
+}
+
+// SearchUntil walks pages 1..pages of one query from the first page. It is
+// SearchFrom for a caller that has nothing in hand yet, and the stopping rules
+// are described there.
+func SearchUntil(ctx context.Context, s Searcher, q Query, pages int, fn func(page int, serp SERP) bool) error {
+	return SearchFrom(ctx, s, q, 1, pages, fn)
 }
 
 // SearchDepth takes pages 1..pages of one query and returns them in order.

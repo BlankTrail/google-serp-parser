@@ -140,6 +140,37 @@ func TestSearchDepth_ReturnsWhatItHadWhenAPageFails(t *testing.T) {
 	}
 }
 
+func TestSearchFrom_StartsAtThePageItWasAskedFor(t *testing.T) {
+	// A walk that was refused half way resumes where it stopped. Starting over
+	// would pay for the pages already captured a second time.
+	f := &fakeSearcher{pages: []SERP{page(10), page(10), page(10), page(10)}}
+	var seen []int
+	err := SearchFrom(context.Background(), f, Query{Text: "x"}, 3, 4, func(n int, _ SERP) bool {
+		seen = append(seen, n)
+		return false
+	})
+	if err != nil {
+		t.Fatalf("SearchFrom: %v", err)
+	}
+	if len(seen) != 2 || seen[0] != 3 || seen[1] != 4 {
+		t.Errorf("walked pages %v, want 3 and 4", seen)
+	}
+	if len(f.asked) != 2 || f.asked[0] != 3 || f.asked[1] != 4 {
+		t.Errorf("asked for pages %v, want 3 and 4 - the pages before the start were taken again", f.asked)
+	}
+}
+
+func TestSearchFrom_RejectsARangeThatRunsBackwards(t *testing.T) {
+	f := &fakeSearcher{pages: []SERP{page(10)}}
+	err := SearchFrom(context.Background(), f, Query{Text: "x"}, 3, 2, nil)
+	if !errors.Is(err, ErrBadDepth) {
+		t.Errorf("SearchFrom returned %v, want ErrBadDepth", err)
+	}
+	if len(f.asked) != 0 {
+		t.Errorf("made %d requests for a range with nothing in it", len(f.asked))
+	}
+}
+
 func TestSearchUntil_StopsWhenTheCallbackIsSatisfied(t *testing.T) {
 	f := &fakeSearcher{pages: []SERP{page(10), page(10), page(10)}}
 	err := SearchUntil(context.Background(), f, Query{Text: "x"}, 3, func(n int, _ SERP) bool {
