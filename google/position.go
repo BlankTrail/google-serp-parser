@@ -46,9 +46,12 @@ type Position struct {
 // FindPosition walks up to pages of results and reports where site stands.
 //
 // Matching is by host by default, and that is a measurement rather than a
-// preference: about a third of results arrive under a link form that carries no
-// address at all, only an exact host. A lookup that insisted on the address
-// would silently fail to find a site that is plainly there.
+// preference. Some results arrive under a link form that carries no address at
+// all, only a host, and how many varies with the query and the day: 19 of 54 on
+// one run, 0 of roughly 60 on another. That spread is the argument. A lookup
+// that insisted on the address would find a site on the second run and silently
+// miss the same site on the first, which is worse than a lookup that never
+// depends on the address in the first place.
 //
 // When site names a page — anything with a path — the exact address is compared
 // instead, and only results whose address is known can match. That is the
