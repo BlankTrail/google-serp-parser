@@ -89,6 +89,7 @@ func (s *Server) routes() {
 	s.jobRoutes()
 	s.resultRoutes()
 	s.searchRoutes()
+	s.serpAPIRoutes()
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint")
 	})
