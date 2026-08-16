@@ -402,6 +402,75 @@ func TestRotor_AReloadForgetsAnAddressItNoLongerLists(t *testing.T) {
 	}
 }
 
+func TestRotor_AReloadThatReordersTheListKeepsEachRestWithItsOwnAddress(t *testing.T) {
+	// A reload replaces the list wholesale and the source is free to return the
+	// same addresses in a different order. The records are held per address, so
+	// nothing may be looked up by the position an address happens to occupy: read
+	// by position, a reordering reload would move one address's rest onto another
+	// and hand out the one that is resting.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	reloaded, _ := Parse("3.3.3.3:3\n2.2.2.2:2\n1.1.1.1:1", "socks5")
+	r.reconcile(reloaded)
+
+	seen := map[string]int{}
+	for i := 0; i < 6; i++ {
+		u, ok := r.Next()
+		if !ok {
+			t.Fatal("Next reported an empty list")
+		}
+		seen[u.Host]++
+	}
+	if seen["1.1.1.1"] != 0 {
+		t.Errorf("the resting address was handed out %d times after a reload reordered the list", seen["1.1.1.1"])
+	}
+	if seen["2.2.2.2"] != 3 || seen["3.3.3.3"] != 3 {
+		t.Errorf("handouts %v, want the two addresses that never failed shared evenly", seen)
+	}
+}
+
+func TestRotor_ARecordStillMatchesItsAddressAfterAReleaseReordersTheList(t *testing.T) {
+	// Releasing an address moves it to the back, which shifts every address it
+	// passed. A record read by position rather than by address would survive the
+	// first release and only go wrong at the next failure, benching a bystander
+	// and leaving the address that actually failed in the rotation.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	clock = clock.Add(time.Hour)
+	if _, ok := r.Next(); !ok { // the rest ends here and reorders the list
+		t.Fatal("Next reported an empty list")
+	}
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[2])
+	}
+	if got := r.Benched(); got != 1 {
+		t.Fatalf("Benched()=%d after failing one address, want 1", got)
+	}
+
+	seen := map[string]int{}
+	for i := 0; i < 6; i++ {
+		u, _ := r.Next()
+		seen[u.Host]++
+	}
+	if seen["3.3.3.3"] != 0 {
+		t.Errorf("the address that failed was handed out %d times", seen["3.3.3.3"])
+	}
+	if seen["1.1.1.1"] == 0 || seen["2.2.2.2"] == 0 {
+		t.Errorf("handouts %v, want both addresses that are not resting still in the rotation", seen)
+	}
+}
+
 func TestRotor_EmptyListReportsFalse(t *testing.T) {
 	if _, ok := NewStaticRotor(nil).Next(); ok {
 		t.Error("Next on an empty rotor returned true")

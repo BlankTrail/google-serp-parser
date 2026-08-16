@@ -200,7 +200,7 @@ func httpGet(ctx context.Context, rawURL string) ([]byte, error) {
 // position stable.
 type Rotor struct {
 	mu          sync.Mutex
-	ups         []Upstream
+	ups         []listed
 	pos         int
 	fails       map[string]int
 	benched     map[string]time.Time // key -> when its rest began
@@ -214,6 +214,29 @@ type Rotor struct {
 	done chan struct{}
 
 	closeOnce sync.Once
+}
+
+// listed is an address in the rotation, carried with the key the failure and
+// rest records are kept under.
+//
+// Finding a free address means stepping past every resting one, and the key is
+// built by joining strings, so computing it per step allocated once for every
+// address skipped. It is derived from the address alone and never changes, so
+// it is computed when the list is taken in and read from then on. The two are
+// copied together wherever the list is rebuilt, which is the only way the key
+// can stay the one belonging to the address it sits beside.
+type listed struct {
+	up  Upstream
+	key string
+}
+
+// withKeys pairs each address with its key, once.
+func withKeys(ups []Upstream) []listed {
+	l := make([]listed, len(ups))
+	for i, u := range ups {
+		l[i] = listed{up: u, key: u.Key()}
+	}
+	return l
 }
 
 // defaultRest is how long an address that failed its way out of the rotation
@@ -273,7 +296,7 @@ func NewRotor(ctx context.Context, src Source, opts ...RotorOption) (*Rotor, err
 
 func newRotor(ups []Upstream, src Source, opts ...RotorOption) *Rotor {
 	r := &Rotor{
-		ups:      ups,
+		ups:      withKeys(ups),
 		fails:    map[string]int{},
 		benched:  map[string]time.Time{},
 		maxFails: 3,
@@ -307,10 +330,10 @@ func (r *Rotor) Next() (Upstream, bool) {
 		return Upstream{}, false
 	}
 	for i := 0; i < n; i++ {
-		u := r.ups[r.pos%n]
+		l := r.ups[r.pos%n]
 		r.pos = (r.pos + 1) % n
-		if _, resting := r.benched[u.Key()]; !resting {
-			return u, true
+		if _, resting := r.benched[l.key]; !resting {
+			return l.up, true
 		}
 	}
 
@@ -320,16 +343,16 @@ func (r *Rotor) Next() (Upstream, bool) {
 	// leaves everyone else's rest intact, which forgiving the whole list would
 	// not.
 	oldest := 0
-	for i, u := range r.ups {
-		if r.benched[u.Key()].Before(r.benched[r.ups[oldest].Key()]) {
+	for i, l := range r.ups {
+		if r.benched[l.key].Before(r.benched[r.ups[oldest].key]) {
 			oldest = i
 		}
 	}
-	u := r.ups[oldest]
-	delete(r.benched, u.Key())
-	delete(r.fails, u.Key())
+	l := r.ups[oldest]
+	delete(r.benched, l.key)
+	delete(r.fails, l.key)
 	r.refreshNextRelease()
-	return u, true
+	return l.up, true
 }
 
 // refreshNextRelease recomputes the earliest instant a rest ends. Called with
@@ -374,12 +397,12 @@ func (r *Rotor) releaseRested(now time.Time) {
 		return
 	}
 
-	kept := make([]Upstream, 0, len(r.ups))
-	tail := make([]Upstream, 0, len(due))
+	kept := make([]listed, 0, len(r.ups))
+	tail := make([]listed, 0, len(due))
 	pos := r.pos
-	for i, u := range r.ups {
-		if due[u.Key()] {
-			tail = append(tail, u)
+	for i, l := range r.ups {
+		if due[l.key] {
+			tail = append(tail, l)
 			if i < r.pos {
 				// The cursor counted this address; it is leaving the stretch the
 				// cursor has already walked.
@@ -387,7 +410,7 @@ func (r *Rotor) releaseRested(now time.Time) {
 			}
 			continue
 		}
-		kept = append(kept, u)
+		kept = append(kept, l)
 	}
 	r.ups = append(kept, tail...)
 	r.pos = pos
@@ -483,7 +506,7 @@ func (r *Rotor) reconcile(ups []Upstream) {
 		}
 	}
 	r.refreshNextRelease()
-	r.ups = ups
+	r.ups = withKeys(ups)
 	if len(ups) > 0 {
 		r.pos %= len(ups)
 	} else {
