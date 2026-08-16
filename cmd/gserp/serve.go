@@ -213,12 +213,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	if saved.Proxy.Kind != "" {
 		// The list is loaded here and reloaded on its own interval afterwards, so a
 		// list that changes during a run is a list this pool follows.
-		rotor, err := blanktrail.NewRotor(ctx, blanktrail.Source{
-			Kind:          saved.Proxy.Kind,
-			Location:      saved.Proxy.Location,
-			Refresh:       saved.Proxy.Refresh,
-			DefaultScheme: "socks5",
-		})
+		rotor, err := blanktrail.NewRotor(ctx, listFrom(saved.Proxy))
 		if err != nil {
 			return nil, o.scrubbed(err)
 		}
@@ -230,6 +225,26 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 		return nil, o.scrubbed(err)
 	}
 	return pool, nil
+}
+
+// listScheme is how an address is reached when its line does not say. Lists are
+// mostly sold without one, and this is what the rest of this command has always
+// assumed of them.
+const listScheme = "socks5"
+
+// listFrom is where the addresses come from, as the settings describe it.
+//
+// It is one function rather than a few lines at the place a pool is opened
+// because every field of it is a box somebody filled in: a place that quietly
+// read its own interval, or its own idea of file or address, would leave a box
+// on the settings page that changes nothing and says nothing about it.
+func listFrom(p settings.ProxySource) blanktrail.Source {
+	return blanktrail.Source{
+		Kind:          p.Kind,
+		Location:      p.Location,
+		Refresh:       p.Refresh,
+		DefaultScheme: listScheme,
+	}
 }
 
 // saved is what was set in the browser, and whether anything was.

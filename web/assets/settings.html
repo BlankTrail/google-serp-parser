@@ -73,6 +73,11 @@
 <input id="source_refresh" name="source_refresh" type="number" min="0" value="{{.Form.Refresh}}">
 </div>
 </div>
+{{/* What a list may look like, said here rather than found out by writing one:
+     a file read and understood line by line reports nothing on this page, so a
+     list in a form this program does not read is a list that is simply
+     smaller than it looks. */}}
+<p class="empty">{{.T "settings.source.forms"}}</p>
 </fieldset>
 
 <fieldset>

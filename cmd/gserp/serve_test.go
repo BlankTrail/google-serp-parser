@@ -210,6 +210,69 @@ func TestServe_OpensThePortsAConnectionSavedInTheBrowserDescribes(t *testing.T) 
 	}
 }
 
+func TestServe_OpensItsPortsThroughTheAddressesTheSavedListNames(t *testing.T) {
+	// A list named in the settings and read nowhere is the worst of the two
+	// possible faults: the page says the work goes out through those addresses,
+	// the work goes out through this machine's own, and nothing anywhere says
+	// which. What proves the list was used is where the opened ports send their
+	// traffic.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	t.Setenv(envControlURL, "")
+	t.Setenv(envAPIKey, "")
+	t.Setenv(envProxyList, "")
+
+	list := filepath.Join(t.TempDir(), "list.txt")
+	if err := os.WriteFile(list, []byte("5.5.5.5:1080\n"), 0o600); err != nil {
+		t.Fatalf("writing the list: %v", err)
+	}
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), Threads: 1, Ports: 1,
+		Proxy: settings.ProxySource{Kind: "file", Location: list},
+	})
+
+	st, err := store.Open(opts.DB)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var out bytes.Buffer
+	sup := opts.jobs(t.Context(), &out, st)
+	t.Cleanup(func() { _ = sup.Close() })
+
+	ports := fake.OpenPorts()
+	if len(ports) == 0 {
+		t.Fatalf("nothing was opened:\n%s", out.String())
+	}
+	if got, want := fake.UpstreamOf(ports[0]), "socks5://5.5.5.5:1080"; got != want {
+		t.Errorf("the port sends through %q, want %q from the list the settings name", got, want)
+	}
+}
+
+func TestServe_CarriesTheSavedSourceWholeToTheListItReads(t *testing.T) {
+	// Every field here is a box somebody filled in on the settings page. One of
+	// them read as something else — a file opened as an address, an interval
+	// replaced by whatever this command would have chosen — is a box that looks
+	// as though it works and does nothing, and the only symptom is a list that
+	// never changes or never loads.
+	for _, saved := range []settings.ProxySource{
+		{Kind: "file", Location: "list.txt", Refresh: 15 * time.Minute},
+		{Kind: "url", Location: "https://example.test/list", Refresh: time.Hour},
+	} {
+		src := listFrom(saved)
+		if src.Kind != saved.Kind {
+			t.Errorf("the list is read as %q, want %q", src.Kind, saved.Kind)
+		}
+		if src.Location != saved.Location {
+			t.Errorf("the list is read from %q, want %q", src.Location, saved.Location)
+		}
+		if src.Refresh != saved.Refresh {
+			t.Errorf("the list is read again every %v, want the %v that was saved", src.Refresh, saved.Refresh)
+		}
+	}
+}
+
 // configured writes a settings file beside a history in a directory of this
 // test's own, and returns the options that would find it. The history itself is
 // never opened: what is asked here is which numbers a pool would be opened
