@@ -119,6 +119,25 @@ func TestNewPool_ExplicitCooldownWins(t *testing.T) {
 	}
 }
 
+// TestNewPool_DefaultsRequestTimeoutTo300s pins the new default: a request
+// through a leased port may legitimately take minutes to produce a response.
+func TestNewPool_DefaultsRequestTimeoutTo300s(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	// RequestTimeout deliberately left zero.
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if got := p.cfg.RequestTimeout; got != 300*time.Second {
+		t.Errorf("RequestTimeout=%v, want the default 300s", got)
+	}
+}
+
 func TestNewPool_RollsBackOnFailure(t *testing.T) {
 	fake := fakebt.New(t)
 	clock := newFakeClock()
