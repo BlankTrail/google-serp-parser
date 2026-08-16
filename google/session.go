@@ -17,9 +17,9 @@ const maxBody = 8 << 20
 // than like a script: it opens the home page before its first search and
 // carries an honest referrer chain from there.
 //
-// It holds no cookie jar. The proxy owns the jar for the port this session
-// runs on, and a second jar layered on top would present two identities on
-// one connection.
+// It holds no cookie jar of its own — the transport it is given owns that,
+// and a second jar layered on top would present two identities on one
+// connection.
 type Session struct {
 	Client *http.Client
 
@@ -77,9 +77,9 @@ func (s *Session) get(ctx context.Context, target string, q Query) (body []byte,
 		return nil, "", 0, fmt.Errorf("google: build request: %w", err)
 	}
 
-	// The proxy owns the User-Agent, Accept and sec-ch-ua — they come from the
-	// port's browser profile. Accept-Language is deliberately NOT spoofed by
-	// it, which makes it this package's to set, and it must agree with hl.
+	// Setting Accept-Language is this program's own responsibility: it is the
+	// one navigation header set here that depends on the query, and it must
+	// agree with hl.
 	req.Header.Set("Accept-Language", q.AcceptLanguage())
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	req.Header.Set("Sec-Fetch-Dest", "document")

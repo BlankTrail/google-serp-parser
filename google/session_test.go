@@ -114,9 +114,8 @@ func TestSession_CarriesAnHonestReferrerChain(t *testing.T) {
 }
 
 func TestSession_SendsTheAcceptLanguageTheQueryAsksFor(t *testing.T) {
-	// BlankTrail passes Accept-Language through untouched by design, so this
-	// header is the parser's own responsibility and is how the language axis
-	// actually reaches Google.
+	// Setting this header is this program's own responsibility, and it is
+	// how the language axis actually reaches Google.
 	p := newRecordingProxy(t, "serp_direct_us.html")
 	s := NewSession(rewriteHost{target: p.srv.URL})
 	if _, err := s.Search(context.Background(), Query{Text: "тест", Language: "ru"}); err != nil {
