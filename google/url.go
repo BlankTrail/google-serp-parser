@@ -9,11 +9,10 @@ import (
 	"strings"
 )
 
-// Device is which kind of results are wanted. It does not appear in the
-// request: Google decides desktop or mobile from the User-Agent, which the
-// proxy owns. It lives here because a caller needs one value describing the
-// whole capture, and because the pool must be asked for a port of the
-// matching fingerprint.
+// Device is which kind of results are wanted. It is not a request parameter:
+// Google infers the layout from the User-Agent, which this package does not
+// set. It lives here because a caller needs one value describing the whole
+// capture.
 type Device string
 
 const (
@@ -47,7 +46,9 @@ type Query struct {
 	// Language picks hl and the Accept-Language header. Empty means the
 	// domain's own default.
 	Language string
-	// Device selects the port fingerprint the request must go out on.
+	// Device records which layout the capture is meant to be of. Nothing here
+	// acts on it — see Device — so it travels with the query rather than
+	// changing the request this package builds.
 	Device Device
 	// Page is 1-based. Google withdrew num=100, so depth is pages of ten.
 	Page int

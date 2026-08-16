@@ -31,8 +31,16 @@ type Result struct {
 	Host        string
 	DisplayPath string
 	URL         string
-	Link        string
-	Form        LinkForm
+
+	// Link is the href exactly as the page carried it, and it is not always a
+	// URL. Under LinkDirect and LinkRedirect it is absolute. Under
+	// LinkEncrypted it is origin-relative — "/goto?url=…" — because that is
+	// all the markup holds, and handing it straight to Resolver.Resolve fails
+	// with an empty protocol scheme. Join it to the origin the page came from,
+	// SERP.Origin, before resolving it.
+	Link string
+
+	Form LinkForm
 }
 
 // Resolved reports whether this result carries the exact destination address.
@@ -51,9 +59,15 @@ const (
 	PlacementProduct Placement = "product"
 )
 
-// Ad is one paid placement. Unlike an organic result its destination is in
-// the page in plain text even when the click URL is encrypted, so URL is
-// populated without any extra request.
+// Ad is one paid placement.
+//
+// The two text placements carry the advertiser's address in the page in plain
+// text even when the click URL is encrypted, so URL is populated without any
+// extra request — unlike an organic result. PlacementProduct does not: the
+// product listing block carries a title, and this parser reads nothing else
+// from it, so URL and Host are empty there. Do not read an empty URL on a
+// product listing as "the page did not say"; it means this parser did not
+// look.
 type Ad struct {
 	Position  int
 	Placement Placement
@@ -70,15 +84,29 @@ type Ad struct {
 // was on the page at that moment, never as a complete account of who
 // advertises on the query.
 type SERP struct {
-	Query         string
-	Results       []Result
-	Ads           []Ad
-	Related       []string
+	Query string
+
+	// Origin is the scheme and host the page was served from, which is what an
+	// origin-relative Result.Link has to be joined to before it can be
+	// fetched. Session.Search fills it in from where the response actually
+	// landed. ParseSERP leaves it empty: it is handed a body and never learns
+	// where that body came from.
+	Origin string
+
+	Results []Result
+	Ads     []Ad
+	Related []string
+
+	// PeopleAlsoAsk is not populated yet — no code reads that block. It is
+	// declared so the field's name and type are settled before anything
+	// depends on them.
 	PeopleAlsoAsk []string
 
-	// TotalResults is Google's own estimate. HasTotal separates a real zero
-	// from a page that did not state one — every captured page so far has
-	// carried an empty #result-stats, so absence is the common case.
+	// TotalResults is Google's own estimate and HasTotal says whether it was
+	// read. Neither is populated yet: nothing here reads #result-stats. So
+	// HasTotal false currently means "this library did not look", not "Google
+	// stated nothing" — and on every page measured so far, 21 captured and one
+	// live, that element was empty in any case.
 	TotalResults int64
 	HasTotal     bool
 }
