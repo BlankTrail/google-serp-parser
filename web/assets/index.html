@@ -1,0 +1,35 @@
+{{define "main"}}
+<h1>Jobs</h1>
+{{if .Jobs}}
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Started</th>
+<th>Queries</th>
+<th>Done</th>
+<th>Failed</th>
+<th>Left</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+{{range .Jobs}}
+<tr>
+<td>{{.Name}}</td>
+{{/* Shown on the clock the reader started the run by. The history keeps the
+     instant, and an instant printed as itself is hours from the wall. */}}
+<td>{{.CreatedAt.Local.Format "2006-01-02 15:04"}}</td>
+<td class="count">{{.Total}}</td>
+<td class="count">{{.Done}}</td>
+<td class="count">{{.Failed}}</td>
+<td class="count">{{.Pending}}</td>
+<td>{{if .Finished}}finished{{else}}unfinished{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="empty">No jobs yet.</p>
+{{end}}
+{{end}}

@@ -1,0 +1,74 @@
+/* SPDX-License-Identifier: MIT */
+
+/* The stack is named by role rather than by family: this ships inside a binary
+   and must not fetch a font from anywhere. */
+:root {
+	--ink: #1b1b1b;
+	--paper: #fbfbf9;
+	--rule: #d8d6cf;
+	--quiet: #6a6a66;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	background: var(--paper);
+	color: var(--ink);
+	font: 16px/1.5 system-ui, sans-serif;
+}
+
+header {
+	border-bottom: 1px solid var(--rule);
+	padding: 0.75rem 1.5rem;
+}
+
+.brand {
+	color: var(--ink);
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-decoration: none;
+}
+
+main {
+	margin: 0 auto;
+	max-width: 60rem;
+	padding: 1.5rem;
+}
+
+h1 {
+	font-size: 1.4rem;
+	margin: 0 0 1rem;
+}
+
+table {
+	border-collapse: collapse;
+	width: 100%;
+}
+
+th,
+td {
+	border-bottom: 1px solid var(--rule);
+	padding: 0.4rem 0.6rem;
+	text-align: left;
+}
+
+th {
+	color: var(--quiet);
+	font-size: 0.8rem;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+}
+
+/* Counts read down the column, so they are aligned on their last digit. */
+.count {
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+.empty {
+	color: var(--quiet);
+}
