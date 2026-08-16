@@ -277,12 +277,29 @@ reaches its own timeout and retries anyway, having spent the wait and the place.
 A search answered inside the request does **not** wait behind the job queue — it
 would otherwise sit behind a job of ten thousand queries — but it does compete
 with a running job for the same capacity, and it has a deadline it must answer
-inside (one minute unless configured otherwise). Two consequences worth planning
-for:
+inside (five minutes unless configured otherwise).
 
-* A search on a freshly started server is **considerably slower** than one on a
-  server that has been searching for a while, because the first request through a
-  fresh connection costs what the later ones do not.
-* A search sent **while a large job is running** may wait, and may reach the
-  deadline and come back `504`. If your program cannot tolerate that, send
-  searches when no job is running, or set a job going instead.
+These are measurements from one live run against eight identities, not
+guarantees. Each row is one probe unless it says otherwise.
+
+| when the search was sent | how it ended |
+|---|---|
+| on identities that had never searched | `504` at 1m0s, **five times in a row** |
+| the sixth search on those identities | `200` in 29.8s |
+| once the identities were warm | `200` in 6.4s |
+| while a job of ten queries was running | `200` in 6.4s |
+
+Two consequences worth planning for:
+
+* **A freshly started server is slow, and it is slow once.** Reaching an
+  identity that answers costs from half a minute to several — measured
+  separately at 27s to 9m10s — and a cold identity often meets a challenge on
+  top of that. This is why the deadline is five minutes rather than one: the
+  solver's own bound on a challenge is 300 seconds, and a shorter deadline
+  hangs up on work that was still going to succeed. The run above was made
+  under the old one-minute deadline, which is what turned the warm-up into five
+  `504`s.
+* **A running job is not the problem.** A search sent while a job was running
+  came back in 6.4s, because by then the identities were warm. If your program
+  must not wait at all, send searches when the server has been up a while, or
+  set a job going instead.

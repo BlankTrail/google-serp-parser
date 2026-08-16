@@ -34,9 +34,20 @@ var errNoSearcher = errors.New("api: this server has nothing to search from")
 // minute to several, so a search with no bound at all can sit on a socket for
 // as long as somebody else's program is prepared to hold it — and to that
 // program a request that never comes back is indistinguishable from a program
-// that has hung. A minute is long enough to be worth waiting through and short
-// enough that a caller learns something either way.
-const defaultSearchDeadline = time.Minute
+// that has hung.
+//
+// The bound was a minute until a live run measured what that costs: on a pool
+// whose identities had never searched, five searches in a row ended at
+// 1m0.002s with nothing to show, and the first answer arrived only on the
+// sixth, at 29.8s. The same endpoint answered in 6.4s once the identities were
+// warm. The minute was not measuring the search — it was cutting off the
+// warm-up.
+//
+// Five minutes is not a round number picked to be generous. A cold identity
+// often meets a challenge, and the solver's own bound on solving one is 300
+// seconds: a deadline shorter than that hangs up on work that was still going
+// to succeed, and reports it as a search that failed.
+const defaultSearchDeadline = 5 * time.Minute
 
 // SearchConfig is what answering a search inside the request needs.
 type SearchConfig struct {

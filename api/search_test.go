@@ -20,6 +20,27 @@ import (
 // this interface is asking something other than the program does.
 var _ google.Searcher = (*run.Attempt)(nil)
 
+// solverChallengeBound is how long the solver is allowed to spend on one
+// challenge. It is not this package's number to choose; it is the number this
+// package's deadline has to clear.
+const solverChallengeBound = 300 * time.Second
+
+func TestDefaultSearchDeadline_OutlastsAChallengeRatherThanCuttingOneOff(t *testing.T) {
+	// A live run under a one-minute deadline ended five searches in a row at
+	// 1m0.002s with nothing to show, and the sixth answered in 29.8s. Nothing
+	// had failed: a cold identity was meeting a challenge, and the deadline was
+	// hanging up on a solve that was still going to succeed and reporting it to
+	// the caller as a search that did not finish.
+	//
+	// So the default is not free to be any round number. It has to outlast the
+	// solver, or this server turns the solver's slowest successes into 504s.
+	if defaultSearchDeadline < solverChallengeBound {
+		t.Errorf("the default deadline is %v, which is under the %v a challenge may take: "+
+			"searches that were about to succeed will come back 504",
+			defaultSearchDeadline, solverChallengeBound)
+	}
+}
+
 // searchStub stands where the identities go.
 //
 // It answers however a test tells it to and counts how many searches are inside

@@ -489,8 +489,16 @@ func TestLiveAPI_ASearchAnsweredInOneConnection(t *testing.T) {
 			}
 		}
 	}
-	liveLogf(t, "MEASUREMENT cold against warm: cold %s (%d results), warm median %v over %d answered searches of %d sent",
-		cold, len(coldShape.OrganicResults), liveMedian(warm).Round(time.Millisecond),
+	// A median over nothing is not a small number, it is no number. Printing
+	// "0s" next to "0 answered" reads as a measurement to anyone skimming, and
+	// the whole point of this file is that a figure stands for probes that were
+	// actually taken.
+	median := "not measured — no search was answered"
+	if len(warm) > 0 {
+		median = liveMedian(warm).Round(time.Millisecond).String()
+	}
+	liveLogf(t, "MEASUREMENT cold against warm: cold %s (%d results), warm median %s over %d answered searches of %d sent",
+		cold, len(coldShape.OrganicResults), median,
 		len(warm), len(liveSearchQueries)-1)
 
 	// 3. Too many at once. The limit under test is one rather than the eight the
