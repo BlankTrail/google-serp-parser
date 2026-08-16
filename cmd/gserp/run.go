@@ -268,20 +268,78 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 		}
 	}
 
+	// From here the job exists in the history, so however the run ends it is
+	// wound up rather than abandoned: what was reached, what is left and the
+	// command that takes that up are the whole reason the plan is written down
+	// before the first request.
+	runErr := work(ctx, out, cfg, job, opts.Threads, storeSink{st: st, jobID: p.id})
+	return finish(ctx, out, st, p, opts, runErr)
+}
+
+// work opens the ports and takes the queries.
+func work(ctx context.Context, out io.Writer, cfg blanktrail.PoolConfig, job run.Job,
+	threads int, sink run.Sink) error {
 	pool, err := openPool(ctx, out, cfg)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = pool.Close() }()
 
-	runner := &run.Runner{Pool: pool, Threads: opts.Threads, Sink: storeSink{st: st, jobID: p.id}}
-	report := runner.Run(ctx, job)
+	report := (&run.Runner{Pool: pool, Threads: threads, Sink: sink}).Run(ctx, job)
 	if report.Err != nil {
 		return report.Err
 	}
 	printReport(out, report)
+	return nil
+}
 
-	return settle(ctx, out, st, p, opts)
+// errStopped is a run's outcome when the user stopped it. It is not a failure
+// of the job and it is not a success either: what was reached is recorded, and
+// what is left is there to be taken up.
+var errStopped = errors.New("stopped before the job was finished")
+
+// settleGrace bounds the winding up of a run that was stopped. What it covers
+// is local — a database on this machine and a file beside it — so it is
+// generous for the work and short enough that a run the user stopped stops.
+const settleGrace = 30 * time.Second
+
+// settling returns the context a run is wound up on.
+//
+// A run the user interrupted still owes them a report, and every read behind
+// that report takes a context — which is precisely what the interruption ended.
+// Those reads get one of their own, carrying the job's values and a deadline of
+// its own so a stopped run cannot hang in its own shutdown instead. A run
+// nobody stopped keeps the context it ran on, and stays as interruptible while
+// it writes its export as it was while it worked.
+func settling(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), settleGrace)
+}
+
+// finish winds a run up, whatever ended it, and says what became of it.
+func finish(ctx context.Context, out io.Writer, st *store.Store, p plan, opts runOptions, runErr error) error {
+	if runErr != nil && ctx.Err() == nil {
+		// A run that never got going has nothing to settle: no results to write
+		// out, and a job the next resume finds by itself. An empty export and a
+		// hint about resuming would bury the reason it failed.
+		return runErr
+	}
+
+	settleCtx, done := settling(ctx)
+	defer done()
+	err := settle(settleCtx, out, st, p, opts)
+
+	if ctx.Err() != nil {
+		// The interruption is the run's own outcome and has to reach the exit
+		// status: a job stopped half way that exits nought reads, to whatever
+		// started it, as a job that finished. What the run was holding when it
+		// was stopped goes with it, because that reason is the cancellation and
+		// not anything a reader can act on.
+		return errors.Join(errStopped, err)
+	}
+	return err
 }
 
 // settle stamps a job that has nothing left, says what to do about one that

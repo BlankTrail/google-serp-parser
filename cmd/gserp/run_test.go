@@ -576,6 +576,121 @@ func TestSecondInterrupt_DoesNotEndAProcessThatHasAlreadyStoppedOnItsOwn(t *test
 	})
 }
 
+// halfDoneJob opens a history holding a job of two queries with the first one
+// recorded, which is the shape an interrupted run leaves behind.
+func halfDoneJob(t *testing.T) (*store.Store, int64, string) {
+	t.Helper()
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "h.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, recordedJob(t, s), dir
+}
+
+func TestSettling_GivesAStoppedRunALiveContextWithADeadlineOfItsOwn(t *testing.T) {
+	// The reads that produce the report cannot run on the context the
+	// interruption ended. They need one that is alive, and one that ends by
+	// itself, or a run the user stopped hangs in its own shutdown instead.
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+
+	ctx, done := settling(stopped)
+	defer done()
+
+	if err := ctx.Err(); err != nil {
+		t.Errorf("the winding up of a stopped run has nothing to read with: %v", err)
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		t.Error("nothing bounds the winding up, so a stopped run need never stop")
+	}
+}
+
+func TestSettling_LeavesARunThatWasNotStoppedOnTheContextItRanOn(t *testing.T) {
+	// A run nobody interrupted is still interruptible while it writes its
+	// export, and detaching it here would take that away.
+	live, stop := context.WithCancel(context.Background())
+	defer stop()
+
+	ctx, done := settling(live)
+	defer done()
+	stop()
+
+	if ctx.Err() == nil {
+		t.Error("the winding up carried on after the run it belongs to was ended")
+	}
+}
+
+func TestFinish_SaysHowToTakeUpAJobTheUserStoppedThoughItsContextIsDead(t *testing.T) {
+	// Measured on two live runs: the settling read ran on the context the
+	// interruption had just ended, so the run died on "reading pending queries:
+	// context canceled" and the line written for exactly this moment — how many
+	// are left and the command that takes them up — could not print on the one
+	// occasion it exists for.
+	s, id, dir := halfDoneJob(t)
+	path := filepath.Join(dir, "out.csv")
+
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+
+	var out bytes.Buffer
+	err := finish(stopped, &out, s, plan{id: id, spec: store.JobSpec{Name: "j"}},
+		runOptions{Out: path, Format: "csv"}, stopped.Err())
+
+	if !errors.Is(err, errStopped) {
+		t.Errorf("a run the user stopped returned %v, want an outcome that says it was stopped", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Errorf("the cancellation was reported to the user as a fault: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "still to do: 1") {
+		t.Errorf("the stopped run does not say how much is left:\n%s", got)
+	}
+	if !strings.Contains(got, "-resume") {
+		t.Errorf("the stopped run does not say what takes up the rest:\n%s", got)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the stopped run wrote no export of what it did reach: %v", err)
+	}
+	if _, err := s.LastUnfinished(context.Background(), "j"); err != nil {
+		t.Errorf("the stopped job is no longer there to take up: %v", err)
+	}
+}
+
+func TestFinish_KeepsTheReasonARunThatNeverGotGoingFailed(t *testing.T) {
+	// A run that could not open its ports has nothing to settle: no results to
+	// write out, and a job the next resume finds by itself. An empty export and
+	// a hint about resuming would bury the reason it failed.
+	s, id, dir := halfDoneJob(t)
+	path := filepath.Join(dir, "out.csv")
+	refused := errors.New("this run would not get through")
+
+	var out bytes.Buffer
+	err := finish(context.Background(), &out, s, plan{id: id, spec: store.JobSpec{Name: "j"}},
+		runOptions{Out: path, Format: "csv"}, refused)
+
+	if !errors.Is(err, refused) {
+		t.Errorf("finish returned %v, want the reason the run never got going", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Error("a run that never got going wrote an export anyway")
+	}
+}
+
+func TestExitStatus_TellsAJobTheUserStoppedApartFromOneThatFailed(t *testing.T) {
+	// Whatever started the run reads the status and nothing else. A stopped job
+	// that exits nought reads as one that finished, and one that exits like a
+	// fault sends somebody looking for a fault.
+	if got := exitCode(errors.Join(errStopped, nil)); got != interruptExit {
+		t.Errorf("a stopped job exits %d, want %d", got, interruptExit)
+	}
+	if got := exitCode(errors.New("the history could not be opened")); got != 1 {
+		t.Errorf("a failed job exits %d, want 1", got)
+	}
+}
+
 func TestResumedPlan_KeepsTheNumberEachQueryHadInTheOriginalList(t *testing.T) {
 	// A job taken up part way holds only what is left of it. Numbering those
 	// from zero would file every result against the wrong query: the first one
