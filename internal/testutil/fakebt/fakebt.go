@@ -7,6 +7,7 @@ package fakebt
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -92,7 +93,7 @@ func New(t *testing.T) *Server {
 		profiles: map[int]Profile{},
 		rotates:  map[int]int{},
 		fails:    map[string][]failure{},
-		nextPort: 20000,
+		nextPort: freePort(),
 	}
 	s.ts = httptest.NewServer(http.HandlerFunc(s.route))
 	t.Cleanup(s.ts.Close)
@@ -309,12 +310,39 @@ func (s *Server) serveCA(w http.ResponseWriter) {
 func (s *Server) serveSuggest(w http.ResponseWriter) {
 	s.mu.Lock()
 	for s.ports[s.nextPort] != "" || s.nextPort == 0 {
-		s.nextPort++
+		s.nextPort = freePort()
 	}
 	p := s.nextPort
-	s.nextPort++
+	s.nextPort = freePort()
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]int{"port": p})
+}
+
+// freePort is a port number this machine has just proved nothing is listening
+// on.
+//
+// It used to be a counter from 20000, and that was a real fault rather than an
+// untidy one: the product's own proxies are opened in that range, so a test
+// that dialled a port it believed closed reached a live proxy instead and sat
+// there until its patience ran out. The failure looked like the code under
+// test being slow, and it only appeared while something else was running.
+//
+// Asking the operating system for a port and letting it go leaves a small
+// window in which something else could take it. That is a far smaller risk
+// than naming a range and hoping, and the port is released here rather than
+// held because these ports stand for proxies that are *not* answering: a test
+// dials them expecting to be refused.
+func freePort() int {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		// Nothing here can recover from a machine that cannot open a socket, and
+		// a fake control API that hands out a port it did not check would put the
+		// old fault back quietly.
+		panic("fakebt: cannot find a free port: " + err.Error())
+	}
+	p := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return p
 }
 
 func (s *Server) serveList(w http.ResponseWriter) {
