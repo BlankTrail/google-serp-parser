@@ -1,0 +1,66 @@
+{{define "main"}}
+<h1>{{.T "new.title"}}</h1>
+
+{{if .Complaints}}
+<ul class="faults">
+{{range .Complaints}}<li>{{$.T .}}</li>
+{{end}}</ul>
+{{end}}
+
+{{with .Estimate}}
+<section class="estimate">
+<h2>{{$.T "estimate.title"}}</h2>
+<dl>
+<dt>{{$.T "estimate.searches"}}</dt>
+<dd>{{.Queries}} × {{.Pages}} = {{.Searches}}</dd>
+<dt>{{$.T "estimate.requests"}}</dt>
+<dd>{{.Requests}}</dd>
+<dt>{{$.T "estimate.worst"}}</dt>
+<dd>{{.MaxRequests}}</dd>
+<dt>{{$.T "estimate.expected"}}</dt>
+{{/* The time never travels alone: the costs behind it were measured on one
+     list on one day, and a bare number gets believed. */}}
+<dd>{{.Expected}} — {{$.T "estimate.caveat"}}</dd>
+<dt>{{$.T "estimate.floor"}}</dt>
+<dd>{{.Floor}}</dd>
+<dt>{{$.T "form.ports"}}</dt>
+<dd>{{.Ports}}</dd>
+</dl>
+</section>
+{{end}}
+
+{{/* Both buttons submit this form. Nothing on this page needs a script, so
+     nothing on it stops working when there is none. */}}
+<form method="post" action="/new">
+<p>
+<label for="name">{{.T "form.name"}}</label><br>
+<input id="name" name="name" value="{{.Form.Name}}">
+</p>
+<p>
+<label for="queries">{{.T "form.queries"}}</label><br>
+<textarea id="queries" name="queries" rows="12" cols="60">{{.Form.Queries}}</textarea>
+</p>
+<p>
+<label for="pages">{{.T "form.pages"}}</label>
+<input id="pages" name="pages" type="number" min="1" value="{{.Form.Pages}}">
+</p>
+<p>
+<label for="country">{{.T "form.country"}}</label>
+<input id="country" name="country" size="4" value="{{.Form.Country}}">
+<label for="language">{{.T "form.language"}}</label>
+<input id="language" name="language" size="4" value="{{.Form.Language}}">
+<label for="spec">{{.T "form.spec"}}</label>
+<input id="spec" name="spec" size="10" value="{{.Form.SpecName}}">
+</p>
+<p>
+<label for="threads">{{.T "form.threads"}}</label>
+<input id="threads" name="threads" type="number" min="1" value="{{.Form.Threads}}">
+<label for="ports">{{.T "form.ports"}}</label>
+<input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}">
+</p>
+<p>
+<button type="submit" name="{{.Do.Field}}" value="{{.Do.Estimate}}">{{.T "form.estimate"}}</button>
+<button type="submit" name="{{.Do.Field}}" value="{{.Do.Start}}">{{.T "form.start"}}</button>
+</p>
+</form>
+{{end}}
