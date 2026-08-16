@@ -50,12 +50,17 @@ type Config struct {
 	// a server whose only account of itself is unstamped text on standard
 	// output is a server nobody can operate.
 	Logger *slog.Logger
+	// Supervisor runs the jobs. A server built without one shows the history
+	// and refuses to start anything, which is what a reader of a history on
+	// another machine gets.
+	Supervisor *Supervisor
 }
 
 // Server is the browser interface.
 type Server struct {
 	store *store.Store
 	log   *slog.Logger
+	sup   *Supervisor
 	pages map[string]*template.Template
 	mux   *http.ServeMux
 }
@@ -79,6 +84,7 @@ func New(cfg Config) (*Server, error) {
 	s := &Server{
 		store: cfg.Store,
 		log:   cfg.Logger,
+		sup:   cfg.Supervisor,
 		pages: pages,
 		mux:   http.NewServeMux(),
 	}
@@ -121,6 +127,8 @@ func parsePages() (map[string]*template.Template, error) {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /{$}", s.index)
+	s.mux.HandleFunc("GET /new", s.newJob)
+	s.mux.HandleFunc("POST /new", s.createJob)
 	s.mux.HandleFunc("GET /history", s.history)
 	s.mux.HandleFunc("GET /export", s.download)
 	// One path element, so a name can never walk out of the directory it is
