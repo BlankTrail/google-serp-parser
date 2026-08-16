@@ -441,6 +441,30 @@ func TestPool_NextDelayStaysInsideTheRange(t *testing.T) {
 	}
 }
 
+func TestPool_SleepPausesOnTheClockTheRestOfThePoolRunsOn(t *testing.T) {
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	p, err := NewPool(context.Background(), testPoolConfig(t, fake, clock, 1, 1))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	was := clock.Now()
+	if err := p.Sleep(context.Background(), time.Minute); err != nil {
+		t.Fatalf("Sleep: %v", err)
+	}
+	if got := clock.Now().Sub(was); got != time.Minute {
+		t.Errorf("the clock moved %v, want a minute - the pause ran on a clock of its own", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := p.Sleep(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Errorf("Sleep returned %v, want the cancellation - a caller told to stop must not sit out the pause", err)
+	}
+}
+
 func TestPool_RenewsIdentityAfterNRequests(t *testing.T) {
 	fake := fakebt.New(t)
 	clock := newFakeClock()

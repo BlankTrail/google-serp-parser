@@ -48,7 +48,10 @@ type origin struct {
 
 // newOrigin serves TLS, because that is the scheme a search request is built
 // with and the request has to arrive as it would in a run.
-func newOrigin(t *testing.T, search func(n int) string) *origin {
+//
+// The search callback is handed the request as well as the count, so a test
+// that has to tell one query's answer from another can answer them differently.
+func newOrigin(t *testing.T, search func(r *http.Request, n int) string) *origin {
 	t.Helper()
 	o := &origin{}
 	o.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +61,7 @@ func newOrigin(t *testing.T, search func(n int) string) *origin {
 			_, _ = io.WriteString(w, shellBody)
 			return
 		}
-		_, _ = io.WriteString(w, search(int(o.searches.Add(1))))
+		_, _ = io.WriteString(w, search(r, int(o.searches.Add(1))))
 	}))
 	t.Cleanup(o.Close)
 	return o
@@ -274,7 +277,7 @@ func usQuery(text string) google.Query {
 func TestAttempt_TakesARefusedQueryToAnotherIdentity(t *testing.T) {
 	// A refusal answers the identity that sent the request, not the query.
 	// Asking again from the same one spends a try to be told the same thing.
-	o := newOrigin(t, func(n int) string {
+	o := newOrigin(t, func(_ *http.Request, n int) string {
 		if n == 1 {
 			return shellBody
 		}
@@ -304,7 +307,7 @@ func TestAttempt_TakesARefusedQueryToAnotherIdentity(t *testing.T) {
 func TestAttempt_GivesUpAfterTheTriesItWasAllowed(t *testing.T) {
 	// Without a ceiling a permanently refused query walks the whole pool, and
 	// on a job of thousands that is the entire budget spent on one query.
-	o := newOrigin(t, func(int) string { return shellBody })
+	o := newOrigin(t, func(*http.Request, int) string { return shellBody })
 	f := poolFacing(t, o.addr(), 4)
 
 	// A ceiling that is not enforced shows up as a search that never comes
@@ -333,7 +336,7 @@ func TestAttempt_DoesNotRetryAnHonestEmptyAnswer(t *testing.T) {
 	// An empty answer is a result. Retrying it turns "this page is not indexed"
 	// into a walk of the whole pool, and the index check is the feature that
 	// asks that question.
-	o := newOrigin(t, func(int) string { return emptyBody })
+	o := newOrigin(t, func(*http.Request, int) string { return emptyBody })
 	f := poolFacing(t, o.addr(), 3)
 
 	a := &Attempt{Pool: f.Pool, Tries: 3}
@@ -394,7 +397,7 @@ func TestAttempt_SaysThePoolIsEmptyRatherThanBlamingTheQuery(t *testing.T) {
 }
 
 func TestAttempt_StopsWhenTheContextIsCancelled(t *testing.T) {
-	o := newOrigin(t, func(int) string { return shellBody })
+	o := newOrigin(t, func(*http.Request, int) string { return shellBody })
 	f := poolFacing(t, o.addr(), 2)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -414,7 +417,7 @@ func TestAttempt_KeepsTheRequestBoundThePoolWasGiven(t *testing.T) {
 	// the caller changing its mind: the query is still worth taking to another
 	// identity, and a search with no deadline of its own must not wait forever
 	// to find that out.
-	o := newOrigin(t, func(int) string {
+	o := newOrigin(t, func(*http.Request, int) string {
 		time.Sleep(300 * time.Millisecond)
 		return serpBody("example.com")
 	})
@@ -437,7 +440,7 @@ func TestAttempt_ReusesOnePortsSessionAcrossQueries(t *testing.T) {
 	// a navigation from somewhere. A session built fresh for every query pays
 	// that visit every time: two requests where one was needed, on every query
 	// of the job.
-	o := newOrigin(t, func(int) string { return serpBody("example.com") })
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
 	f := poolFacing(t, o.addr(), 1)
 
 	a := &Attempt{Pool: f.Pool, Tries: 2}
@@ -459,7 +462,7 @@ func TestAttempt_DropsASessionWhenThePortsIdentityChanges(t *testing.T) {
 	// A session belongs to the identity it was opened under. Handing it to a
 	// port whose identity has since changed presents one visitor who changed
 	// underneath themselves.
-	o := newOrigin(t, func(int) string { return serpBody("example.com") })
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
 	f := poolFacing(t, o.addr(), 1, func(c *blanktrail.PoolConfig) {
 		c.RotateAfterFailures = 1
 	})
@@ -496,7 +499,7 @@ func TestAttempt_LetsAPageWalkSurviveARefusalUnchanged(t *testing.T) {
 	// the retry without being touched, and never learn that one happened.
 	var _ google.Searcher = (*Attempt)(nil)
 
-	o := newOrigin(t, func(n int) string {
+	o := newOrigin(t, func(_ *http.Request, n int) string {
 		if n == 1 {
 			return shellBody
 		}

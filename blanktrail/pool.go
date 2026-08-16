@@ -527,6 +527,20 @@ func (p *Pool) NextDelay() time.Duration {
 	return p.cfg.DelayMin + time.Duration(rand.Int63n(int64(spread)+1))
 }
 
+// Sleep pauses for d and returns early if ctx ends first.
+//
+// The pause between a caller's own requests is the caller's to take: the pool
+// derives the delay but cannot know when the caller is about to ask again. A
+// caller left to its own timer would keep a clock the rest of the pool does not
+// run on, and a test that wound the pool forward would then sit through every
+// pause for real. A non-positive d reports only whether ctx has ended.
+func (p *Pool) Sleep(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	return p.cfg.Sleep(ctx, d)
+}
+
 // Acquire leases the coldest ready port of any template, waiting until one is
 // available or ctx is done. Always Release the lease.
 func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
