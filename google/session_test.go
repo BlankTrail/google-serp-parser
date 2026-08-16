@@ -156,6 +156,32 @@ func TestSession_SurfacesAShellAsAnError(t *testing.T) {
 	}
 }
 
+func TestSession_HandsBackTheClassOfAnUnusableResponse(t *testing.T) {
+	// The shell arrives with HTTP 200, so nothing below this layer can tell it
+	// from a good page. If the class does not survive the return, the caller
+	// cannot tell "ask for this query again" from "this query has no answer",
+	// and the only way left to tell them apart is matching the wording of the
+	// message.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><body><div id="main"></div></body></html>`))
+	}))
+	t.Cleanup(srv.Close)
+
+	s := NewSession(rewriteHost{target: srv.URL})
+	_, err := s.Search(context.Background(), Query{Text: "x", Country: "us", Language: "en"})
+	if err == nil {
+		t.Fatal("a page with no results was accepted as a result page")
+	}
+	class, ok := ClassOf(err)
+	if !ok {
+		t.Fatalf("Search returned %v, which carries no class", err)
+	}
+	if class != ClassShell {
+		t.Errorf("class=%q, want %q", class, ClassShell)
+	}
+}
+
 func TestSession_TreatsAnOversizedBodyAsAnError(t *testing.T) {
 	// LimitReader alone returns io.EOF at its boundary exactly as it would at
 	// a genuine end of body, so a response beyond maxBody would otherwise be

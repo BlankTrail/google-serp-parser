@@ -40,6 +40,43 @@ func (c Class) Usable() bool { return c == ClassSERP || c == ClassEmpty }
 // on one error and still read the class for its logs.
 var ErrNotSERP = errors.New("google: response is not a result page")
 
+// ResponseError is a response that carried no data, with the class that says
+// which kind of nothing it was.
+//
+// The class travels as a value rather than as words in the message because the
+// caller branches on it: a shell will never carry results however often it is
+// asked for, while a wall is the same request refused for now and worth asking
+// again over another transport. A caller that had to read the class out of the
+// message would be reading prose, and its decision would break the first time
+// the prose was reworded.
+type ResponseError struct {
+	Class Class
+	// Query is the search text, so a log line names the query without the
+	// caller threading it through alongside the error.
+	Query string
+
+	err error
+}
+
+func (e *ResponseError) Error() string {
+	return fmt.Sprintf("google: search %q: %v (class %s)", e.Query, e.err, e.Class)
+}
+
+// Unwrap keeps errors.Is(err, ErrNotSERP) working for callers written before
+// the class was available.
+func (e *ResponseError) Unwrap() error { return e.err }
+
+// ClassOf returns the class an error carries, however deeply it has been
+// wrapped, and reports whether it carried one at all. A transport failure
+// carries none: nothing was classified because nothing arrived.
+func ClassOf(err error) (Class, bool) {
+	var re *ResponseError
+	if errors.As(err, &re) {
+		return re.Class, true
+	}
+	return "", false
+}
+
 // wallMarkers are phrases that only appear on a challenge page. They are
 // checked AFTER results and AFTER the empty markers, never before — see
 // Classify.
