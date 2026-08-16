@@ -466,11 +466,13 @@ func (v *Supervisor) work() {
 			}
 		}
 		v.runJob(ctx, eng, id)
-		// Before the job is settled and before it stops being the one running, so
-		// that a caller who finds no job in flight finds the swap it was waiting
-		// for already made.
+		// Before the job is settled, because an engine the job has left holds
+		// ports for nothing and settling takes a write to a database.
 		v.release()
 		v.settle(id)
+		// The job stops being the one running and the swap that was waiting for
+		// it is taken, both here and both under one lock, so that a caller who
+		// finds no job in flight finds the swap already made.
 		v.finished()
 	}
 }
@@ -501,35 +503,56 @@ func (v *Supervisor) next() (int64, context.Context, engine, bool) {
 	return id, ctx, v.eng, true
 }
 
-// release gives back the engine the job was taken through and takes into use
-// whatever was waiting for that job to end.
+// release gives back the engine the job was taken through.
 //
-// Both happen in one critical section so that nobody can find the swap made and
-// the engine it replaced still in use, or the other way about.
+// It closes that engine when a swap replaced it while the job was inside it:
+// the swap could not close it then, because the job was still sending through
+// its ports. This is the moment that stops being true, and this is the only
+// place that gives such an engine up.
+//
+// What it does not do is take the engine waiting for this job. That happens
+// where the job stops counting as running, because anything between the two
+// would be a stretch in which a swap is told the job is still running, records
+// itself as waiting for its end, and is never come back for.
 func (v *Supervisor) release() {
 	v.mu.Lock()
 	var spent []engine
 	if v.inUse != nil && v.inUse != v.eng {
-		// It was replaced while the job was inside it. This is the moment it is
-		// safe to give up, and this is the only place that does.
 		spent = append(spent, v.inUse)
 	}
 	v.inUse = nil
-	if v.pending != nil {
-		waiting := v.pending
-		v.pending = nil
-		spent = append(spent, v.install(waiting)...)
-	}
 	v.mu.Unlock()
 	v.giveUp(spent)
 }
 
-// finished puts the supervisor back to having no job in flight.
+// finished puts the supervisor back to having no job in flight and takes into
+// use whatever was waiting for that job to end.
+//
+// The two are one critical section, and that is what leaves no window rather
+// than merely a narrow one. A swap told to wait either arrives before this and
+// leaves an engine that this takes at once, or arrives after it and finds no
+// job running and installs its own. There is no third state a caller can be in:
+// none in which a swap is recorded against a job that has already had its end
+// dealt with, and none in which the engine is changed under a job still
+// counting as running.
+//
+// giveUp is called with the lock let go, as everywhere else: closing a pool
+// takes a while, and every reader of the queue would be waiting behind it.
 func (v *Supervisor) finished() {
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	v.cancel()
 	v.running, v.cancel = 0, nil
+	var spent []engine
+	if v.pending != nil {
+		waiting := v.pending
+		v.pending = nil
+		// The job is already no longer running, so the stop install would send to
+		// it goes nowhere, and the engine it hands back to be given up is the one
+		// the next job would have used rather than the one this job was inside.
+		spent = v.install(waiting)
+	}
+	v.mu.Unlock()
+	v.giveUp(spent)
 }
 
 // runJob reads back what the job has left and takes it through the engine the
