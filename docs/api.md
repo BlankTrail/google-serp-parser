@@ -311,3 +311,10 @@ Three things to plan for:
   came back in 3.0s, because by then the identities were warm. If your program
   cannot spend the warm-up, send searches to a server that has been up a while,
   or set a job going instead.
+
+The server does **not** warm the pool when it starts, and that is a decision
+rather than an omission. A job of any size warms it within its first handful of
+queries, so the warm-up gets paid by work somebody asked for; a server started
+to serve the pages would otherwise spend identities and solver time on searches
+nobody wanted. If your program's first call must be fast, set a small job going
+first.
