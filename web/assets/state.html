@@ -26,6 +26,18 @@
 <div class="metric"><dt class="label">{{.T "state.expected"}}</dt><dd class="figure" id="run-expected">{{.Running.Expected}}</dd></div>
 <div class="metric"><dt class="label">{{.T "state.rest"}}</dt><dd class="figure" id="run-rest">{{.Running.Rest}}</dd></div>
 </dl>
+{{/* Stopping a run is watched, so the stop stands where it is watched from, and
+     the press says which screen it was made on so it can come back to it: an
+     operator moved off this screen by their own stop loses it at the moment they
+     most want to read it. Like every other button here it is a form that sends
+     itself, and it needs no script. */}}
+<div class="actions">
+<form method="post" action="/api/stop">
+<input type="hidden" name="job" value="{{.Running.ID}}">
+<input type="hidden" name="back" value="{{.Back}}">
+<button type="submit">{{.T "job.stop"}}</button>
+</form>
+</div>
 </section>
 {{else}}
 <section class="card">

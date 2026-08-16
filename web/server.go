@@ -132,15 +132,17 @@ func parsePages() (map[string]*template.Template, error) {
 }
 
 func (s *Server) routes() {
-	s.mux.HandleFunc("GET /{$}", s.index)
-	// What is happening right now, which is what an operator watching a run came
-	// to see. It has an address of its own so it can be opened, bookmarked and
-	// sent to whoever is on the next shift.
-	s.mux.HandleFunc("GET /state", s.state)
-	s.mux.HandleFunc("GET /new", s.newJob)
-	s.mux.HandleFunc("POST /new", s.createJob)
+	// What is happening right now is what the bare address answers with, because
+	// whoever keeps this open all day is following a run rather than reading a
+	// list. Every other screen has an address of its own for the same reason this
+	// one does: it can be opened cold, bookmarked, and sent to whoever is on the
+	// next shift.
+	s.mux.HandleFunc("GET "+stateAt+"{$}", s.state)
+	s.mux.HandleFunc("GET "+jobsAt, s.jobs)
+	s.mux.HandleFunc("GET "+newAt, s.newJob)
+	s.mux.HandleFunc("POST "+newAt, s.createJob)
 	s.mux.HandleFunc("GET /job/{id}", s.job)
-	s.mux.HandleFunc("GET /history", s.history)
+	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)
 	// What the job page polls, and what its two buttons send. Both buttons are
 	// registered for post alone, so a browser prefetching a link, or anything
@@ -194,7 +196,8 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 // page is what every template is handed, whatever else the page carries. The
-// layout can then count on the language and the switcher being there.
+// layout can then count on the language, the switcher and the header being
+// there.
 type page struct {
 	// Lang is the language the page is written in.
 	Lang Lang
@@ -203,6 +206,14 @@ type page struct {
 	Title string
 	// Langs is the switcher, offering this same address in each language.
 	Langs []langLink
+	// Tabs is the header, with the screen being read already marked.
+	Tabs []tabLink
+	// Refresh is how often this screen asks the server to draw it again, in the
+	// milliseconds a browser counts in, and nought when nothing on it is going to
+	// come back different. Whether a screen is worth watching is a decision, so
+	// it is made here and carried in the markup rather than guessed at in the
+	// browser.
+	Refresh int64
 }
 
 // T is how a template asks for a phrase. Templates name a key and never a
@@ -210,24 +221,29 @@ type page struct {
 func (p page) T(key string) string { return p.Lang.T(key) }
 
 // frame builds the part of a page that does not depend on what is on it.
-func frame(r *http.Request, lang Lang, title string) page {
-	return page{Lang: lang, Title: title, Langs: switcher(r, lang)}
+//
+// The tab is named separately from the title because they are not the same
+// thing: a job's own page is titled after that job and stands under the list of
+// jobs, and a screen that lit no tab would tell the reader they had left the
+// program.
+func frame(r *http.Request, lang Lang, title, under string) page {
+	return page{Lang: lang, Title: title, Langs: switcher(r, lang), Tabs: tabsFor(under)}
 }
 
-// indexPage is the job list.
-type indexPage struct {
+// jobsPage is the list of everything that has been run.
+type jobsPage struct {
 	page
 	Jobs []store.JobSummary
 }
 
-func (s *Server) index(w http.ResponseWriter, r *http.Request) {
+func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 	lang := rememberLang(w, r)
 	jobs, err := s.store.Jobs(r.Context(), 0)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, "index.html", indexPage{page: frame(r, lang, "jobs.title"), Jobs: jobs})
+	s.render(w, r, "jobs.html", jobsPage{page: frame(r, lang, "jobs.title", jobsAt), Jobs: jobs})
 }
 
 // render writes a page, and says so plainly when it cannot.

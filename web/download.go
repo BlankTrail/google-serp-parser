@@ -175,7 +175,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, "history.html", historyPage{
-		page:      frame(r, lang, "history.title"),
+		page:      frame(r, lang, "history.title", historyAt),
 		Host:      host,
 		Positions: positions,
 	})

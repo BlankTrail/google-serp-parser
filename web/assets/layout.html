@@ -9,26 +9,39 @@
 <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
-<header>
+{{/* The header travels with the screen: it carries which tab is lit and it
+     offers this same address in the other language, and both of those are about
+     the screen underneath it. */}}
+<header id="header">
 {{/* The name is written here rather than looked up in the catalogue. A product
      name is the same word in every language, and translating it would leave two
      programs where there is one. */}}
 <a class="brand" href="/">BlankTrail Google Parser</a>
-{{/* Starting a job is what this program is for, so the page that starts one is
-     offered from every page rather than reached by typing its address. */}}
-{{/* What is happening comes first: whoever has this open all day is watching a
-     run, not filling in a form. */}}
-<nav class="pages">
-<a href="/state">{{.T "state.title"}}</a>
-<a href="/new">{{.T "new.title"}}</a>
-<a href="/history">{{.T "history.title"}}</a>
-</nav>
+{{/* Every screen is a page of its own with an address of its own, and these are
+     ordinary links to them: what a browser does with one when nothing else
+     happens is exactly what this program wants done. The script intercepts the
+     press, fetches the same address and puts what comes back in place of what is
+     on the screen; without it the browser fetches the same address itself.
+
+     Which tab is lit was decided by the server before this page was written, so
+     a screen the script swapped in is marked exactly as one the browser
+     fetched. */}}
+<nav class="pages" id="tabs" aria-label="{{.T "nav.pages"}}">
+{{range .Tabs}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}
+{{end}}</nav>
 <nav class="langs" aria-label="{{.T "nav.language"}}">
 {{range .Langs}}{{if .Current}}<span aria-current="true">{{.Name}}</span>{{else}}<a href="{{.URL}}">{{.Name}}</a>{{end}}
 {{end}}</nav>
 </header>
-<main>
+{{/* Whether this screen is worth watching was decided by the server too, and it
+     says so here. A screen that has nothing moving on it carries no interval and
+     is asked for nothing more. */}}
+<main id="page"{{if .Refresh}} data-refresh="{{.Refresh}}"{{end}}>
 {{block "main" .}}{{end}}
 </main>
+{{/* One script, out of this binary, after the page it improves. Everything on
+     every screen is drawn before it runs, and a browser that never runs it
+     follows the links instead. */}}
+<script src="/assets/app.js" defer></script>
 </body>
 </html>

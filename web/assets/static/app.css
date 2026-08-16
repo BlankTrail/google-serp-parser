@@ -83,6 +83,14 @@ header {
 	margin-right: auto;
 }
 
+/* The screen being read is marked by the line under it going from a hairline to
+   the weight of the text. Colour is not spent on this: the one filled thing on
+   a screen is the bar, and a reader who cannot tell two half-tones apart can
+   still see a line. */
+.pages a[aria-current] {
+	text-decoration-color: var(--ink);
+}
+
 .langs {
 	display: flex;
 	font-size: var(--small);

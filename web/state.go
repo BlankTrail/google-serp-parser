@@ -14,6 +14,16 @@ import (
 	"github.com/blanktrail/google-serp-parser/store"
 )
 
+// stateRefresh is how often this screen asks the server to draw it again while
+// there is something on it that moves.
+//
+// It is slower than the job page's poll because what comes back is the whole
+// screen — the pool, the queue and the refusals with it — rather than four
+// counts, and because not one of those figures says anything different a second
+// later. What it buys for that is a screen that can never be half new: every
+// number on it was worked out in one reading of one server.
+const stateRefresh = 5 * time.Second
+
 // noFigure stands where a figure would stand if there were anything to work it
 // out from.
 //
@@ -63,6 +73,10 @@ type statePage struct {
 	Failures *failureView
 	Pool     poolView
 	Queue    queueView
+	// Back is where a button pressed on this screen brings the reader: back here.
+	// Stopping a run is watched, and a stop that moved the operator to another
+	// page would take the screen away at the moment they most want to read it.
+	Back string
 }
 
 // runningView is the job in flight, drawn large.
@@ -143,7 +157,15 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	view.page = frame(r, lang, "state.title")
+	view.page = frame(r, lang, "state.title", stateAt)
+	view.Back = stateAt
+	// The screen asks for itself again only while the supervisor is holding
+	// something. With nothing running and nothing waiting, every figure on it —
+	// the counts, the queue, the ports — is moved by a run and by nothing else, so
+	// it will read at three in the morning exactly as it reads now.
+	if view.Running != nil || view.Queue.Waiting > 0 {
+		view.Refresh = stateRefresh.Milliseconds()
+	}
 	s.render(w, r, "state.html", view)
 }
 

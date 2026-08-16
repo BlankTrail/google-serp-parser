@@ -99,8 +99,11 @@ func TestNewJob_BothButtonsAreSubmitsOfTheOneForm(t *testing.T) {
 			t.Errorf("the form carries no button with %s:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "<script") {
-		t.Error("the page reaches for a script to do what a form already does")
+	// The form itself reaches for nothing. Every screen loads the one script that
+	// puts a fetched screen in place of the one on show, and that script does no
+	// part of this form's work, so the form is read on its own here.
+	if form := oneTag(t, body, "form"); strings.Contains(form, "<script") {
+		t.Error("the form reaches for a script to do what it already does itself")
 	}
 }
 

@@ -183,7 +183,7 @@ func TestState_ShowsTheNumbersWithoutDrawingAConclusion(t *testing.T) {
 	running, _, _ := stateServer(t)
 	for _, s := range []*Server{running, idleServer(t)} {
 		for _, l := range Languages() {
-			body := get(t, s, "/state?lang="+string(l)).Body.String()
+			body := get(t, s, stateAt+"?lang="+string(l)).Body.String()
 			if word, judged := verdictIn(body); judged {
 				t.Errorf("the %s screen decides for the reader on %q:\n%s", l, word, body)
 			}
@@ -192,7 +192,7 @@ func TestState_ShowsTheNumbersWithoutDrawingAConclusion(t *testing.T) {
 
 	// The screen had every opportunity to draw the conclusion: both numbers the
 	// conclusion would be drawn from are on it, and they disagree.
-	body := get(t, running, "/state").Body.String()
+	body := get(t, running, stateAt).Body.String()
 	elapsed, expected := shown(t, body, "run-elapsed"), shown(t, body, "run-expected")
 	if elapsed == "" || expected == "" {
 		t.Fatalf("the screen shows elapsed %q against expected %q, so it never had the two to compare",
@@ -221,7 +221,7 @@ func TestState_ReservesColourAndIconsForWhatIsActuallyBroken(t *testing.T) {
 	// ordinary number is the same claim as a sentence about it, made where the
 	// reader cannot argue with it.
 	s, _, _ := stateServer(t)
-	body := get(t, s, "/state").Body.String()
+	body := get(t, s, stateAt).Body.String()
 
 	if drawn := strings.Count(body, "<progress"); drawn > 1 {
 		t.Errorf("the screen fills %d bars with the accent, and one screen has one accent", drawn)
@@ -247,7 +247,7 @@ func TestState_PutsElapsedAndExpectedSideBySide(t *testing.T) {
 	}
 	s.now = func() time.Time { return sum.CreatedAt.Add(24 * time.Minute) }
 
-	body := get(t, s, "/state").Body.String()
+	body := get(t, s, stateAt).Body.String()
 	if got := shown(t, body, "run-elapsed"); got != "24m" {
 		t.Errorf("the screen says %q has passed, and 24 minutes have", got)
 	}
@@ -284,7 +284,7 @@ func TestState_ShowsWhatIsLeftAtThePaceTheJobIsActuallyKeeping(t *testing.T) {
 	}
 	s.now = func() time.Time { return sum.CreatedAt.Add(time.Duration(stateDone+stateFailed) * 10 * time.Minute) }
 
-	body := get(t, s, "/state").Body.String()
+	body := get(t, s, stateAt).Body.String()
 	if got := shown(t, body, "run-rest"); got != spell(statePending*10*time.Minute) {
 		t.Errorf("the screen says %q is left at this pace, and %q is", got, spell(statePending*10*time.Minute))
 	}
@@ -295,7 +295,7 @@ func TestState_BreaksFailuresDownByWhatCameBack(t *testing.T) {
 	// is written down when the query is settled, and the whole point of showing
 	// the share is to be able to look under it.
 	s, _, _ := stateServer(t)
-	body := get(t, s, "/state").Body.String()
+	body := get(t, s, stateAt).Body.String()
 
 	settled := stateDone + stateFailed
 	if got, want := shown(t, body, "fail-share"), strconv.Itoa(stateFailed*100/settled)+"%"; got != want {
@@ -350,7 +350,7 @@ func TestState_ShowsThePoolWithoutAJobRunning(t *testing.T) {
 	// only reported it while something was running would go quiet exactly when
 	// the ports are being left alone to recover.
 	s := idleServer(t)
-	body := get(t, s, "/state").Body.String()
+	body := get(t, s, stateAt).Body.String()
 
 	for cell, want := range map[string]string{
 		"pool-alive":       strconv.Itoa(fakePool.Stats.Available),
@@ -372,7 +372,7 @@ func TestState_InvitesAJobWhenThereIsNothingToShow(t *testing.T) {
 	// An empty screen reads as a broken one. A screen that says nothing is
 	// running and offers to start something reads as a working program with
 	// nothing to do.
-	idle := get(t, idleServer(t), "/state").Body.String()
+	idle := get(t, idleServer(t), stateAt).Body.String()
 	if !strings.Contains(idle, LangEN.T("state.invite")) {
 		t.Errorf("the screen neither shows a job nor offers to start one:\n%s", idle)
 	}
@@ -380,7 +380,7 @@ func TestState_InvitesAJobWhenThereIsNothingToShow(t *testing.T) {
 	// And it stops offering once there is something to watch, or the invitation
 	// is furniture rather than an answer.
 	s, _, _ := stateServer(t)
-	if busy := get(t, s, "/state").Body.String(); strings.Contains(busy, LangEN.T("state.invite")) {
+	if busy := get(t, s, stateAt).Body.String(); strings.Contains(busy, LangEN.T("state.invite")) {
 		t.Errorf("the screen offers to start a job while one is running:\n%s", busy)
 	}
 }
@@ -405,7 +405,7 @@ func TestState_CountsTheQueueFromTheSupervisorNotTheHistory(t *testing.T) {
 		}
 	}
 
-	body := get(t, s, "/state").Body.String()
+	body := get(t, s, stateAt).Body.String()
 	if got := shown(t, body, "queue-waiting"); got != "2" {
 		t.Errorf("the screen says %q jobs are waiting, and two are", got)
 	}
@@ -432,7 +432,7 @@ func TestState_ShowsNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 	running, _, _ := stateServer(t)
 	for _, s := range []*Server{running, idleServer(t), testServer(t)} {
 		for _, l := range Languages() {
-			body := get(t, s, "/state?lang="+string(l)).Body.String()
+			body := get(t, s, stateAt+"?lang="+string(l)).Body.String()
 			for key := range catalogue[l] {
 				if strings.Contains(body, key) {
 					t.Errorf("the %s screen shows the key %q where its text belongs", l, key)

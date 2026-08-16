@@ -88,7 +88,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	at := s.progress(sum)
 
 	s.render(w, r, "job.html", jobPage{
-		page: frame(r, lang, "job.title"),
+		page: frame(r, lang, "job.title", jobsAt),
 		Job: settings{
 			Name:     sum.Name,
 			Started:  sum.CreatedAt,

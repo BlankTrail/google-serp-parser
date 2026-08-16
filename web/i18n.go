@@ -78,6 +78,7 @@ func (l Lang) T(key string) string {
 var catalogue = map[Lang]map[string]string{
 	LangEN: {
 		"nav.language":         "Language",
+		"nav.pages":            "Screens",
 		"jobs.title":           "Jobs",
 		"jobs.none":            "No jobs yet.",
 		"jobs.name":            "Name",
@@ -168,6 +169,7 @@ var catalogue = map[Lang]map[string]string{
 	},
 	LangRU: {
 		"nav.language":         "Язык",
+		"nav.pages":            "Экраны",
 		"jobs.title":           "Задания",
 		"jobs.none":            "Заданий пока нет.",
 		"jobs.name":            "Название",

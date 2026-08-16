@@ -357,7 +357,7 @@ func TestJobList_LinksEveryJobToItsOwnPage(t *testing.T) {
 	s := testServer(t)
 	id := seedJob(t, s, "nightly", 2, 1, 0)
 
-	if body := get(t, s, "/").Body.String(); !strings.Contains(body, `href="`+jobPath(id)+`"`) {
+	if body := get(t, s, jobsAt).Body.String(); !strings.Contains(body, `href="`+jobPath(id)+`"`) {
 		t.Errorf("the list does not link to the job it names:\n%s", body)
 	}
 }

@@ -189,7 +189,7 @@ type newPage struct {
 func (s *Server) newJob(w http.ResponseWriter, r *http.Request) {
 	lang := rememberLang(w, r)
 	s.render(w, r, "new.html", newPage{
-		page: frame(r, lang, "new.title"),
+		page: frame(r, lang, "new.title", newAt),
 		Form: blankForm(),
 		Do:   buttons(),
 	})
@@ -216,7 +216,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, "new.html", newPage{
-		page:       frame(r, lang, "new.title"),
+		page:       frame(r, lang, "new.title", newAt),
 		Form:       form,
 		Complaints: complaints,
 		Estimate:   estimateOf(form, queries),
