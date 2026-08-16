@@ -80,6 +80,11 @@ func pages() []page {
 		{"Имеет ли смысл проверять всё", "qna.habr.com", "q › 1234567", "Обсуждение границ разумного покрытия."},
 		{"Инструменты тестирования API", "testengineer.ru", "tools", "Обзор инструментов и их сильных сторон."},
 		{"Проверка ответов сервера", "apitest.dev", "guides › responses", "Что именно стоит утверждать в ответе."},
+		// A Google property under the encrypted form: the destination is not in
+		// the page, so the cite is the only place a Google host can show up,
+		// and it must be filtered the same way classifyLink filters direct and
+		// redirect links — measured to differ by link form otherwise.
+		{"Google Search Help", "support.google.com", "websearch › answer", "Справка по операторам поиска Google."},
 	}
 	cards := []result{
 		{"ChatGPT начинает блокировать прямые запросы", "", "", "Новость о смене политики доступа."},
@@ -223,9 +228,25 @@ func render(p page) string {
 	// Related searches are links back into search, which is what identifies
 	// them: everything else on the page points outwards.
 	b.WriteString(`<div id="botstuff">` + "\n")
-	for _, phrase := range []string{"related one", "related two", "related three"} {
-		fmt.Fprintf(&b, `<a href="/search?q=%s" data-ved="x">%s</a>`+"\n", esc(phrase), esc(phrase))
+	for _, rel := range []struct{ q, text string }{
+		{"related one", "related one"},
+		{"related two", "related two"},
+		// One real chip's anchor text arrives out of visual order — measured
+		// on a real page — so the phrase must come from the query parameter,
+		// never from the anchor text.
+		{"related three", "threerelated"},
+	} {
+		fmt.Fprintf(&b, `<a href="/search?q=%s" data-ved="x">%s</a>`+"\n", esc(rel.q), esc(rel.text))
 	}
+	// The pagination bar: real captures show it living in the very same
+	// container as the related-search chips, answering to the same href
+	// prefix, so it must be excluded by structure (role="navigation" and the
+	// start parameter) rather than by counting or position.
+	b.WriteString(`<div role="navigation">` + "\n")
+	for pn := 2; pn <= 5; pn++ {
+		fmt.Fprintf(&b, `<a href="/search?q=%s&amp;start=%d">%d</a>`+"\n", esc(p.query), (pn-1)*10, pn)
+	}
+	b.WriteString("</div>\n")
 	b.WriteString("</div>\n</body></html>\n")
 	return b.String()
 }
@@ -245,9 +266,26 @@ func renderResult(p page, i int, r result) string {
 	if !p.cards && r.host != "" {
 		cite = fmt.Sprintf(`<cite>https://%s › %s</cite>`, esc(r.host), esc(r.path))
 	}
+	// The snippet lives in a div that is a SIBLING of the title+cite wrapper,
+	// both under the outer data-snc box — not nested inside that wrapper.
+	// Measured on real pages: a climb that stops at the nearest ancestor
+	// (the inner wrapper) finds the title and the cite but never reaches the
+	// description at all.
 	return fmt.Sprintf(
-		`<div data-snc="r%d"><div><a href="%s" data-ved="x">%s</a>%s<div>%s</div></div></div>`+"\n",
-		i, esc(href), title, cite, esc(r.snippet))
+		`<div data-snc="r%d"><div><a href="%s" data-ved="x">%s</a>%s</div><div>%s</div></div>`+"\n",
+		i, esc(href), title, cite, snippetHTML(r.snippet))
+}
+
+// snippetHTML renders a snippet with its first word wrapped in em, the way
+// Google emphasises the query's own terms inside a real snippet. ownText
+// alone cannot see through that wrapping — see snippetOf's doc comment — so a
+// fixture with no em anywhere in its snippet could not catch that bug.
+func snippetHTML(snippet string) string {
+	words := strings.Fields(snippet)
+	if len(words) == 0 {
+		return esc(snippet)
+	}
+	return fmt.Sprintf("<em>%s</em> %s", esc(words[0]), esc(strings.Join(words[1:], " ")))
 }
 
 func renderAd(i int, a advert) string {
