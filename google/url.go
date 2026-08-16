@@ -91,24 +91,28 @@ func (q Query) URL() (string, error) {
 
 // AcceptLanguage is the header value this capture must send.
 //
-// BlankTrail spoofs the User-Agent, Accept and sec-ch-ua from the port's
-// profile but passes Accept-Language through untouched, by deliberate design
-// on its side. That makes this header the parser's own responsibility, and it
-// has to agree with hl: a page requested in Russian by a browser claiming to
-// prefer German is a mismatch no real browser produces.
+// Setting this header is this program's own responsibility, and it has to
+// agree with hl: a page requested in one language by a client claiming to
+// prefer another is a mismatch this program would be creating.
 func (q Query) AcceptLanguage() string {
-	lang := strings.ToLower(strings.TrimSpace(q.Language))
+	lang := strings.TrimSpace(q.Language)
 	if lang == "" {
 		return "en-US,en;q=0.9"
 	}
-	base := lang
-	if i := strings.IndexAny(base, "-_"); i > 0 {
-		base = base[:i]
+
+	base, region := lang, ""
+	if i := strings.IndexAny(lang, "-_"); i > 0 {
+		base, region = lang[:i], lang[i+1:]
 	}
-	if base == lang {
-		return lang + "," + base + ";q=0.9"
+	base = strings.ToLower(base)
+
+	if region != "" {
+		return base + "-" + strings.ToUpper(region) + "," + base + ";q=0.9"
 	}
-	return lang + "," + base + ";q=0.9"
+	if country := strings.TrimSpace(q.Country); country != "" {
+		return base + "-" + strings.ToUpper(country) + "," + base + ";q=0.9"
+	}
+	return base
 }
 
 // Home is the domain's front page, which a session visits before its first
