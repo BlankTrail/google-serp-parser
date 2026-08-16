@@ -471,6 +471,48 @@ func TestRotor_ARecordStillMatchesItsAddressAfterAReleaseReordersTheList(t *test
 	}
 }
 
+func TestRotor_OneRestEndingDoesNotDelayTheNextOne(t *testing.T) {
+	// Addresses are benched as they fail, so their rests end one after another,
+	// each on its own clock. Serving one rest must not move when the rest behind
+	// it is served: an address held past its rest is out of the rotation for
+	// longer than the rotor is configured to hold it, and on a list that fails
+	// steadily every rest after the first would drift further out.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2\n3.3.3.3:3", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0]) // rests until the hour
+	}
+	clock = clock.Add(30 * time.Minute)
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[1]) // rests until half an hour after that
+	}
+
+	clock = clock.Add(30 * time.Minute)
+	seen := map[string]bool{}
+	for i := 0; i < 4; i++ {
+		u, _ := r.Next()
+		seen[u.Host] = true
+	}
+	if !seen["1.1.1.1"] {
+		t.Fatal("the first address did not come back when its rest ended")
+	}
+	if seen["2.2.2.2"] {
+		t.Fatal("the second address came back half an hour early")
+	}
+
+	clock = clock.Add(30 * time.Minute)
+	var back bool
+	for i := 0; i < 4 && !back; i++ {
+		u, _ := r.Next()
+		back = u.Host == "2.2.2.2"
+	}
+	if !back {
+		t.Error("the second address never came back, so serving the first rest pushed it out")
+	}
+}
+
 func TestRotor_EmptyListReportsFalse(t *testing.T) {
 	if _, ok := NewStaticRotor(nil).Next(); ok {
 		t.Error("Next on an empty rotor returned true")
