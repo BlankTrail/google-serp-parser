@@ -204,3 +204,35 @@ func TestEstimate_AnsweredWithoutAPortToRunOn(t *testing.T) {
 		t.Errorf("Floor=%v, want none", est.Floor)
 	}
 }
+
+func TestEstimateFor_AnswersBeforeThereIsAPoolToAskAbout(t *testing.T) {
+	// The first thing a user does with ten thousand queries is ask what it will
+	// cost, and that answer must not require opening the ports first: the cost
+	// of finding out would then be a share of the cost being asked about.
+	est := EstimateFor(Job{Queries: make([]google.Query, 100), Pages: 3}, 4, 10*time.Second)
+
+	if est.Searches != 300 || est.Warmups != 4 || est.Requests != 304 {
+		t.Errorf("Searches=%d Warmups=%d Requests=%d, want 300, 4 and 304",
+			est.Searches, est.Warmups, est.Requests)
+	}
+	if est.Ports != 4 || est.Cooldown != 10*time.Second {
+		t.Errorf("Ports=%d Cooldown=%v, want the four and the ten seconds it was given",
+			est.Ports, est.Cooldown)
+	}
+	if est.Floor != 240*time.Second {
+		t.Errorf("Floor=%v, want 240s — twenty-five queries a port, twenty-four gaps", est.Floor)
+	}
+}
+
+func TestEstimate_AsksThePoolItWillRunOn(t *testing.T) {
+	// The method exists so a caller holding a pool does not have to take it
+	// apart to describe it. Reading the size and the gap from somewhere else
+	// would quote a job on a pool it is not going to run on.
+	f := poolFacing(t, answeringOrigin(t).addr(), 4, tenSecondGap)
+
+	r := &Runner{Pool: f.Pool, Threads: 2}
+	j := Job{Queries: make([]google.Query, 100), Pages: 3}
+	if got, want := r.Estimate(j), EstimateFor(j, f.Pool.Size(), f.Pool.Cooldown()); got != want {
+		t.Errorf("Estimate=%+v, want the same as EstimateFor on the pool's own numbers %+v", got, want)
+	}
+}

@@ -51,6 +51,16 @@ type Estimate struct {
 // four ports. Sizing the estimate by threads would tell a user that adding
 // threads makes a job faster, which is the one thing it cannot do.
 func (r *Runner) Estimate(j Job) Estimate {
+	return EstimateFor(j, r.Pool.Size(), r.Pool.Cooldown())
+}
+
+// EstimateFor works out the same cost for a pool that has not been opened yet.
+//
+// It takes the two numbers the estimate turns on rather than a pool, because
+// the question comes up before there is one: a user asking what ten thousand
+// queries will cost should not have to open the ports to find out, and the
+// answer is the same either way.
+func EstimateFor(j Job, ports int, cooldown time.Duration) Estimate {
 	pages := j.Pages
 	if pages < 1 {
 		pages = 1
@@ -64,8 +74,8 @@ func (r *Runner) Estimate(j Job) Estimate {
 		Queries:  len(j.Queries),
 		Pages:    pages,
 		Searches: len(j.Queries) * pages,
-		Ports:    r.Pool.Size(),
-		Cooldown: r.Pool.Cooldown(),
+		Ports:    ports,
+		Cooldown: cooldown,
 	}
 
 	est.Warmups = min(est.Queries, est.Ports)
