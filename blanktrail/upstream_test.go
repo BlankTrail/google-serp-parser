@@ -243,6 +243,34 @@ func TestRotor_AFailureShortOfTheLimitDoesNotBenchAnAddress(t *testing.T) {
 	}
 }
 
+func TestRotor_AFailureReportedDuringARestDoesNotPushTheReturnBack(t *testing.T) {
+	// Failures arrive from callers that took the address before it was benched,
+	// so they keep coming for a while after it has left the rotation. If each
+	// one restarted the rest, a busy list would hold its addresses far longer
+	// than the rest it is configured with, and a steady trickle would hold one
+	// out for good.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	for i := 0; i < 3; i++ {
+		r.MarkBad(ups[0])
+	}
+	clock = clock.Add(30 * time.Minute)
+	r.MarkBad(ups[0])
+	r.MarkBad(ups[0])
+	clock = clock.Add(30 * time.Minute)
+
+	var seen bool
+	for i := 0; i < 3 && !seen; i++ {
+		u, _ := r.Next()
+		seen = u.Key() == ups[0].Key()
+	}
+	if !seen {
+		t.Error("the address did not come back an hour after it was benched")
+	}
+}
+
 func TestRotor_HandsOutTheLongestRestedWhenEveryAddressIsBenched(t *testing.T) {
 	// A list where everything has failed recently is a systemic fault, not a
 	// list problem, and the caller still has to be told something. The address
