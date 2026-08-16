@@ -20,12 +20,6 @@ type Searcher interface {
 // ErrBadDepth is returned when a walk is asked for fewer than one page.
 var ErrBadDepth = errors.New("google: depth must be at least one page")
 
-// offsetPerPage is the stride between one page's start offset and the next. It
-// has to agree with the offset a Query renders, because the pagination bar's
-// links are expressed on that scale and the walk compares its own position
-// against them.
-const offsetPerPage = 10
-
 // SearchUntil walks pages 1..pages of one query, handing each to fn, and stops
 // as soon as fn says it has what it came for.
 //
