@@ -1,5 +1,10 @@
 -- SPDX-License-Identifier: MIT
 
+-- Step one, and the shape the first release shipped. It is history now: every
+-- database in the world has already run it, so changing it changes nothing for
+-- anyone and only makes the next step read as if it were building on something
+-- else. Later changes go in a file of their own; see steps in store.go.
+
 CREATE TABLE IF NOT EXISTS jobs (
     id          INTEGER PRIMARY KEY,
     name        TEXT    NOT NULL,

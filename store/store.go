@@ -17,10 +17,30 @@ import (
 )
 
 //go:embed schema.sql
-var schema string
+var schemaStep1 string
 
-// schemaVersion is what this build writes and understands.
-const schemaVersion = 1
+//go:embed schema_v2.sql
+var schemaStep2 string
+
+// steps is the upgrade path, one step per version: steps[i] takes a database at
+// version i to version i+1. A database that has never been written is version 0
+// and walks the whole list.
+//
+// The mechanism is deliberate, and the next person to change the schema should
+// read this before anything else. There is no second file describing the shape
+// a new database should have. A new database is built by the same steps an old
+// one is upgraded by, which means every test in this package runs the upgrade
+// path: a step that only works on an empty database is caught the day it is
+// written rather than the day a user upgrades. It also removes the failure the
+// obvious alternative invites, where a current-shape file and a set of patches
+// drift because someone edited one of them.
+//
+// To add version 3: write the file, embed it, append it here. Nothing else.
+var steps = []string{schemaStep1, schemaStep2}
+
+// schemaVersion is what this build writes and understands. It counts the steps,
+// so a step cannot be added without the version following it.
+var schemaVersion = len(steps)
 
 // ErrTooNew is returned when the database was written by a later build.
 var ErrTooNew = errors.New("store: the database was written by a newer version")
@@ -52,7 +72,7 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-// migrate applies the schema to a database that has not seen it.
+// migrate walks a database up from whatever version it is at to this one.
 //
 // The version is kept in SQLite's own user_version rather than in a table of
 // this package's own, because a table would itself need creating before it
@@ -66,16 +86,40 @@ func (s *Store) migrate() error {
 	if have > schemaVersion {
 		return fmt.Errorf("%w: found version %d, this build writes %d", ErrTooNew, have, schemaVersion)
 	}
-	if have == schemaVersion {
-		return nil
+	for v := have; v < schemaVersion; v++ {
+		if err := s.step(v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// step applies one upgrade and records the version it produced, both inside a
+// single transaction.
+//
+// The transaction is the point: an upgrade that adds three columns and then
+// cannot create a table must leave the database at the version it arrived with,
+// because a database carrying half a step and the number of the whole one is a
+// database no version describes, and the next open would skip the rest of the
+// step forever.
+func (s *Store) step(from int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin schema step %d: %w", from+1, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(steps[from]); err != nil {
+		return fmt.Errorf("store: applying schema step %d: %w", from+1, err)
 	}
 	// PRAGMA user_version takes no bound parameter, so the version is formatted
-	// in. It is a package constant, never anything a caller supplies.
-	if _, err := s.db.Exec(schema); err != nil {
-		return fmt.Errorf("store: applying the schema: %w", err)
+	// in. It is this package's own count of its steps, never anything a caller
+	// supplies.
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, from+1)); err != nil {
+		return fmt.Errorf("store: recording schema version %d: %w", from+1, err)
 	}
-	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
-		return fmt.Errorf("store: recording the schema version: %w", err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: committing schema step %d: %w", from+1, err)
 	}
 	return nil
 }
