@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
@@ -79,14 +81,99 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 }
 
 // runCommand works a list of queries, writing each one down as it lands.
-func runCommand(args []string, out io.Writer) error {
+func runCommand(ctx context.Context, args []string, out io.Writer) error {
 	var opts runOptions
 	fs := runFlags(&opts)
 	fs.SetOutput(out)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return runJob(context.Background(), out, opts)
+	// The interruption is heard here rather than in main so that the whole of
+	// what a stopped run does is inside the command under test: a test ends the
+	// context this one is built on and gets the same path a user gets, without
+	// raising a signal at the process running the tests.
+	ctx, stop := interruptible(ctx, out)
+	defer stop()
+	return runJob(ctx, out, opts)
+}
+
+// stoppingNotice is what a user is told the moment they interrupt a run. It
+// answers the two things anyone wants to know having just pressed Ctrl+C on an
+// hour of work: that the program heard them, and that the hour is not being
+// thrown away.
+const stoppingNotice = "stopping; everything already recorded is kept"
+
+// interruptible returns a context that ends when the user interrupts, and the
+// function that gives the interrupt back.
+//
+// Stopping a long command over a network is the ordinary way a user ends one,
+// so it is a shutdown and not a process kill: the query in flight finishes, the
+// history is closed and the run says what it managed.
+//
+// The returned function waits for the watch to end, so a caller that has
+// returned is a caller nothing is still printing behind.
+func interruptible(parent context.Context, out io.Writer) (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt)
+
+	done := make(chan struct{})
+	var watching sync.WaitGroup
+	watching.Add(1)
+	go func() {
+		defer watching.Done()
+		if !stopping(ctx, done) {
+			return
+		}
+		_, _ = fmt.Fprintln(out, stoppingNotice)
+
+		// Opened only now. signal.NotifyContext keeps listening after it has
+		// cancelled, so a channel opened alongside it would already hold the
+		// interrupt that got us here and would read as a second one.
+		again := make(chan os.Signal, 1)
+		signal.Notify(again, os.Interrupt)
+		defer signal.Stop(again)
+		insist(again, done, func() { os.Exit(interruptExit) })
+	}()
+
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() {
+			// Closed before the context is cancelled below, so a watch woken by
+			// that cancellation always finds it closed and knows the run ended
+			// of its own accord.
+			close(done)
+			stop()
+		})
+		watching.Wait()
+	}
+}
+
+// stopping reports whether ctx ended because something outside the run ended
+// it, rather than because the run finished and gave the interrupt back.
+func stopping(ctx context.Context, done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return false
+	case <-ctx.Done():
+	}
+	select {
+	case <-done:
+		return false
+	default:
+		return true
+	}
+}
+
+// insist ends the process if a second interrupt arrives before the shutdown has
+// finished.
+//
+// A graceful shutdown that cannot itself be interrupted is a hang, and a user
+// pressing Ctrl+C twice has stopped asking politely.
+func insist(again <-chan os.Signal, done <-chan struct{}, kill func()) {
+	select {
+	case <-again:
+		kill()
+	case <-done:
+	}
 }
 
 // plan is the work a run is about to do, whether it was just read from a list

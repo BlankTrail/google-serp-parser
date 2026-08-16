@@ -12,13 +12,47 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/export"
 	"github.com/blanktrail/google-serp-parser/google"
 	"github.com/blanktrail/google-serp-parser/run"
 	"github.com/blanktrail/google-serp-parser/store"
 )
+
+// syncBuffer is written by the goroutine that watches for the interruption
+// while the test reads it, which a plain buffer does not survive.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// waitFor waits for something another goroutine will do, and says what was
+// waited for when it never happens.
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		if ok() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("%s never happened", what)
+}
 
 // listOf writes a query list and returns its path.
 func listOf(t *testing.T, dir, content string) string {
@@ -37,7 +71,7 @@ func TestRunCommand_EstimatesWithoutSendingAnything(t *testing.T) {
 	list := listOf(t, dir, "iphone 13\ngolang generics\n\n# a comment\n")
 
 	var out bytes.Buffer
-	err := runCommand([]string{
+	err := runCommand(context.Background(), []string{
 		"-queries", list, "-db", filepath.Join(dir, "h.db"),
 		"-pages", "3", "-ports", "4", "-dry-run",
 	}, &out)
@@ -59,7 +93,7 @@ func TestRunCommand_LeavesNoHistoryBehindWhenItOnlyEstimates(t *testing.T) {
 	db := filepath.Join(dir, "h.db")
 
 	var out bytes.Buffer
-	if err := runCommand([]string{"-queries", listOf(t, dir, "a\n"), "-db", db, "-dry-run"}, &out); err != nil {
+	if err := runCommand(context.Background(), []string{"-queries", listOf(t, dir, "a\n"), "-db", db, "-dry-run"}, &out); err != nil {
 		t.Fatalf("runCommand: %v", err)
 	}
 	if _, err := os.Stat(db); !errors.Is(err, os.ErrNotExist) {
@@ -72,7 +106,7 @@ func TestRunCommand_SkipsBlankLinesAndComments(t *testing.T) {
 	list := listOf(t, dir, "  \n# note\na\n\nb\n")
 
 	var out bytes.Buffer
-	if err := runCommand([]string{"-queries", list, "-db", filepath.Join(dir, "h.db"), "-dry-run"}, &out); err != nil {
+	if err := runCommand(context.Background(), []string{"-queries", list, "-db", filepath.Join(dir, "h.db"), "-dry-run"}, &out); err != nil {
 		t.Fatalf("runCommand: %v", err)
 	}
 	if !strings.Contains(out.String(), "2 queries") {
@@ -85,7 +119,7 @@ func TestRunCommand_SaysWhichFormatsItKnows(t *testing.T) {
 	list := listOf(t, dir, "a\n")
 
 	var out bytes.Buffer
-	err := runCommand([]string{
+	err := runCommand(context.Background(), []string{
 		"-queries", list, "-db", filepath.Join(dir, "h.db"),
 		"-out", filepath.Join(dir, "o.txt"), "-format", "xlsx", "-dry-run",
 	}, &out)
@@ -106,7 +140,7 @@ func TestRunCommand_RefusesAMisspeltFormatBeforeItOpensAnything(t *testing.T) {
 	db := filepath.Join(dir, "h.db")
 
 	var out bytes.Buffer
-	err := runCommand([]string{
+	err := runCommand(context.Background(), []string{
 		"-queries", listOf(t, dir, "a\n"), "-db", db,
 		"-out", filepath.Join(dir, "o.txt"), "-format", "tsv",
 	}, &out)
@@ -126,7 +160,7 @@ func TestRunCommand_RefusesAnEmptyQueryList(t *testing.T) {
 	list := listOf(t, dir, "\n# only a comment\n")
 
 	var out bytes.Buffer
-	if err := runCommand([]string{"-queries", list, "-db", filepath.Join(dir, "h.db"), "-dry-run"}, &out); err == nil {
+	if err := runCommand(context.Background(), []string{"-queries", list, "-db", filepath.Join(dir, "h.db"), "-dry-run"}, &out); err == nil {
 		t.Error("a list with no queries was accepted")
 	}
 }
@@ -161,7 +195,7 @@ func TestRunCommand_ResumesWhatIsLeftAtTheDepthTheJobWasCreatedWith(t *testing.T
 	startedJob(t, db, "nightly")
 
 	var out bytes.Buffer
-	err := runCommand([]string{"-db", db, "-name", "nightly", "-resume", "-pages", "1", "-dry-run"}, &out)
+	err := runCommand(context.Background(), []string{"-db", db, "-name", "nightly", "-resume", "-pages", "1", "-dry-run"}, &out)
 	if err != nil {
 		t.Fatalf("runCommand: %v", err)
 	}
@@ -180,7 +214,7 @@ func TestRunCommand_SaysSoWhenThereIsNoJobOfThatNameToTakeUp(t *testing.T) {
 	startedJob(t, db, "nightly")
 
 	var out bytes.Buffer
-	err := runCommand([]string{"-db", db, "-name", "weekly", "-resume", "-dry-run"}, &out)
+	err := runCommand(context.Background(), []string{"-db", db, "-name", "weekly", "-resume", "-dry-run"}, &out)
 	if err == nil {
 		t.Fatal("a resume of a name that was never run was accepted")
 	}
@@ -210,7 +244,7 @@ func TestRunCommand_SaysSoWhenAResumedJobHasNothingLeft(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runCommand([]string{"-db", db, "-name", "nightly", "-resume", "-dry-run"}, &out); err == nil {
+	if err := runCommand(context.Background(), []string{"-db", db, "-name", "nightly", "-resume", "-dry-run"}, &out); err == nil {
 		t.Error("a job with nothing left was taken up again")
 	}
 }
@@ -481,6 +515,65 @@ func TestSettle_StampsAJobThatHasNothingLeftAsDone(t *testing.T) {
 	if _, err := s.LastUnfinished(context.Background(), "j"); !errors.Is(err, store.ErrNoUnfinishedJob) {
 		t.Errorf("LastUnfinished returned %v, want the job to be stamped done", err)
 	}
+}
+
+func TestInterrupt_TellsTheUserTheJobIsStoppingAndThatWhatIsRecordedIsKept(t *testing.T) {
+	// A long job over a network is stopped with Ctrl+C, and a user who has just
+	// pressed it wants to know two things at once: that the program heard them,
+	// and that the hour it has already spent is not being thrown away.
+	parent, interrupt := context.WithCancel(context.Background())
+	var out syncBuffer
+	ctx, give := interruptible(parent, &out)
+	defer give()
+
+	interrupt()
+	<-ctx.Done()
+	waitFor(t, "the notice that the job is stopping", func() bool { return out.String() != "" })
+
+	got := out.String()
+	for _, want := range []string{"stopping", "kept"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the interrupted run does not say %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestInterrupt_SaysNothingWhenTheRunSimplyFinished(t *testing.T) {
+	// A run that reached the end was not stopped, and telling every finished job
+	// that it is stopping makes the line worthless on the one occasion it means
+	// something.
+	var out syncBuffer
+	_, give := interruptible(context.Background(), &out)
+	give()
+
+	if got := out.String(); got != "" {
+		t.Errorf("a run that finished on its own printed %q", got)
+	}
+}
+
+func TestSecondInterrupt_EndsTheProcessWithoutWaitingForTheShutdown(t *testing.T) {
+	// A graceful shutdown that cannot itself be interrupted is a hang, and the
+	// user pressing Ctrl+C a second time has stopped asking politely.
+	again := make(chan os.Signal, 1)
+	killed := make(chan struct{})
+	go insist(again, nil, func() { close(killed) })
+
+	again <- os.Interrupt
+	select {
+	case <-killed:
+	case <-time.After(5 * time.Second):
+		t.Error("a second interrupt did not end the process")
+	}
+}
+
+func TestSecondInterrupt_DoesNotEndAProcessThatHasAlreadyStoppedOnItsOwn(t *testing.T) {
+	// The watch is given up when the run winds up. Killing then would turn every
+	// ordinary exit into one, losing whatever the shutdown was still doing.
+	stopped := make(chan struct{})
+	close(stopped)
+	insist(make(chan os.Signal), stopped, func() {
+		t.Error("the process was killed after the run had already stopped")
+	})
 }
 
 func TestResumedPlan_KeepsTheNumberEachQueryHadInTheOriginalList(t *testing.T) {
