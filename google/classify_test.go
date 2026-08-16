@@ -121,7 +121,7 @@ func TestClassify_StatusCodesMapToTheirOwnClasses(t *testing.T) {
 
 func TestClassify_AnHonestEmptyAnswerIsUsable(t *testing.T) {
 	// Google genuinely finding nothing is a successful capture, not a
-	// failure, and must not be retried on another port.
+	// failure, and must not be retried.
 	body := []byte(`<html><body><div id="search"><div id="rso"></div>` +
 		`<p>Your search - <b>zzqqxx</b> - did not match any documents.</p></div></body></html>`)
 	got, err := Classify(200, "https://www.google.com/search?q=zzqqxx", body)
@@ -133,5 +133,36 @@ func TestClassify_AnHonestEmptyAnswerIsUsable(t *testing.T) {
 	}
 	if !got.Usable() {
 		t.Error("an honest empty answer reports itself unusable")
+	}
+}
+
+func TestClassify_TheOtherEnglishWordingIsAlsoAnEmptyAnswer(t *testing.T) {
+	// A missed empty marker degrades to ClassShell, which is retried forever
+	// against a page that will never change its mind.
+	body := []byte(`<html><body><div id="search"><div id="rso"></div>` +
+		`<p>No results found for <b>zzqqxx</b>.</p></div></body></html>`)
+	got, err := Classify(200, "https://www.google.com/search?q=zzqqxx", body)
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if got != ClassEmpty {
+		t.Errorf("class=%q, want %q", got, ClassEmpty)
+	}
+}
+
+func TestClassify_AnOrdinaryRussianPhraseIsNotAnEmptyAnswer(t *testing.T) {
+	// "по запросу" is an everyday Russian phrase — "on request", "by query" —
+	// and carries no claim that nothing was found. As an empty marker it would
+	// turn any resultless page that happens to use the words into a recorded
+	// zero, and ClassEmpty is Usable, so that zero is kept and never retried.
+	// A false Empty is the most expensive misclassification in the set.
+	body := []byte(`<html><body><div id="search"><div id="rso"></div>` +
+		`<p>Документы предоставляются по запросу пользователя.</p></div></body></html>`)
+	got, err := Classify(200, "https://www.google.com/search?q=x", body)
+	if got == ClassEmpty {
+		t.Errorf("class=%q — an ordinary phrase was recorded as a genuine zero", got)
+	}
+	if !errors.Is(err, ErrNotSERP) {
+		t.Errorf("err=%v, want ErrNotSERP so the capture is retried", err)
 	}
 }
