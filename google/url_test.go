@@ -4,7 +4,6 @@ package google
 
 import (
 	"net/url"
-	"strings"
 	"testing"
 )
 
@@ -50,16 +49,27 @@ func TestQuery_LanguageIsIndependentOfCountry(t *testing.T) {
 }
 
 func TestQuery_AcceptLanguageMatchesTheLanguageAxis(t *testing.T) {
-	// BlankTrail never spoofs Accept-Language — it is strict client
-	// passthrough — so this header is the parser's own responsibility and
-	// must agree with hl, or the page language and the browser language
+	// Setting this header is the parser's own responsibility, and it has to
+	// agree with hl, or the page language and the client's declared language
 	// disagree on every request.
-	got := Query{Text: "x", Language: "ru"}.AcceptLanguage()
-	if !strings.HasPrefix(got, "ru") {
-		t.Errorf("AcceptLanguage()=%q, want it to lead with ru", got)
+	cases := []struct {
+		name     string
+		language string
+		country  string
+		want     string
+	}{
+		{"empty language", "", "", "en-US,en;q=0.9"},
+		{"language carries a region", "pt-BR", "", "pt-BR,pt;q=0.9"},
+		{"bare language with a country", "ru", "ru", "ru-RU,ru;q=0.9"},
+		{"bare language with no country", "ru", "", "ru"},
 	}
-	if !strings.Contains(got, "q=0.9") {
-		t.Errorf("AcceptLanguage()=%q, want a weighted list as a browser sends", got)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Query{Text: "x", Language: c.language, Country: c.country}.AcceptLanguage()
+			if got != c.want {
+				t.Errorf("AcceptLanguage()=%q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
