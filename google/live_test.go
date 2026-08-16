@@ -17,7 +17,7 @@ import (
 // TestLive_MeasuresWhatTheSpecLeftOpen answers, against a running BlankTrail,
 // the questions the design deliberately refused to guess:
 //
-//  1. Which link form does a logged-out proxy session actually receive?
+//  1. Which link form does a logged-out session actually receive?
 //  2. How long does an encrypted link stay resolvable after capture?
 //  3. Does any page state a result total, given every capture so far has
 //     carried an empty #result-stats?
@@ -92,10 +92,19 @@ func TestLive_MeasuresWhatTheSpecLeftOpen(t *testing.T) {
 	t.Logf("MEASUREMENT total stated: %v (%d)", serp.HasTotal, serp.TotalResults)
 
 	// Measurement 2: resolution, immediately and after a delay.
+	//
+	// The link is origin-relative under the encrypted form, so it is joined to
+	// the origin the page came from. Hardcoding www.google.com here would be
+	// wrong for every capture that is not Country "us" — the page, and the
+	// redirector on it, live on the ccTLD the query was aimed at.
+	t.Logf("MEASUREMENT origin: %q", serp.Origin)
 	var encrypted string
 	for _, r := range serp.Results {
 		if r.Form == google.LinkEncrypted && r.Link != "" {
-			encrypted = "https://www.google.com" + r.Link
+			if serp.Origin == "" {
+				t.Fatal("the capture reported no origin; an origin-relative link cannot be resolved")
+			}
+			encrypted = serp.Origin + r.Link
 			break
 		}
 	}

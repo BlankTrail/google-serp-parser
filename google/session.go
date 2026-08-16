@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 )
 
 // maxBody caps how much of a response is read. A result page runs to a couple
@@ -34,8 +35,9 @@ type Session struct {
 	last   string
 }
 
-// NewSession builds a session over one transport — in production, a client
-// leased from a proxy port.
+// NewSession builds a session over one transport. Everything about how the
+// request leaves the machine belongs to that transport; this package adds only
+// the navigation headers below.
 func NewSession(rt http.RoundTripper) *Session {
 	return &Session{Client: &http.Client{Transport: rt}}
 }
@@ -67,7 +69,31 @@ func (s *Session) Search(ctx context.Context, q Query) (SERP, error) {
 	if class, err := Classify(status, finalURL, body); err != nil {
 		return SERP{}, fmt.Errorf("google: search %q: %w (class %s)", q.Text, err, class)
 	}
-	return ParseSERP(q.Text, body)
+	serp, err := ParseSERP(q.Text, body)
+	if err != nil {
+		return SERP{}, err
+	}
+	// A result's link is origin-relative under the encrypted form, so the
+	// origin has to travel with the page or the caller has to guess it — and
+	// the guess is wrong for every country whose results come from a ccTLD.
+	// It is taken from where the response landed rather than from where the
+	// request was aimed, because a redirect makes those two different.
+	serp.Origin = originOf(finalURL)
+	if serp.Origin == "" {
+		serp.Origin = originOf(target)
+	}
+	return serp, nil
+}
+
+// originOf reduces an address to the scheme and host that an origin-relative
+// link has to be joined to. It returns empty rather than a partial origin: a
+// scheme with no host would produce links that fail later and further away.
+func originOf(target string) string {
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func (s *Session) fetch(ctx context.Context, target string, q Query) ([]byte, error) {

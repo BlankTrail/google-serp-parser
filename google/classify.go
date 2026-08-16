@@ -33,7 +33,7 @@ const (
 
 // Usable reports whether the response can be parsed for data. Only a page of
 // results and an honest empty answer qualify; everything else must be retried
-// on another port rather than recorded as a result.
+// rather than recorded as a result.
 func (c Class) Usable() bool { return c == ClassSERP || c == ClassEmpty }
 
 // ErrNotSERP wraps every class that carries no data, so a caller can branch

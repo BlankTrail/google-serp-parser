@@ -98,8 +98,8 @@ func isGoogleHost(host string) bool {
 // not followed, so the destination site is never contacted and no body is
 // read. The work is also independent of the session that captured the page —
 // measured with links resolved hours later, from a different address, with no
-// cookies — so it can be spread across a whole pool of ports, deferred, and
-// retried on its own.
+// cookies — so it can be deferred, retried on its own, and carried out by a
+// different client from the one that captured the page.
 type Resolver struct {
 	// Client carries the request. It must not follow redirects; NewResolver
 	// builds one that does not.

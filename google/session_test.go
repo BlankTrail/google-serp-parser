@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,19 +159,27 @@ func TestSession_SurfacesAShellAsAnError(t *testing.T) {
 func TestSession_TreatsAnOversizedBodyAsAnError(t *testing.T) {
 	// LimitReader alone returns io.EOF at its boundary exactly as it would at
 	// a genuine end of body, so a response beyond maxBody would otherwise be
-	// cut off with no error — a truncated page that still parses into
-	// plausible, incomplete results, which is the failure mode this whole
-	// milestone exists to avoid.
+	// cut off with no error at all.
+	//
+	// The oversized body here is a real result page followed by padding, so
+	// the first maxBody bytes of it are a whole page: without the size check
+	// the truncated body parses into eight plausible results and a nil error,
+	// which is the failure mode this milestone exists to avoid. A body of one
+	// repeated character could not show that — it parses into nothing and
+	// would fail the classifier for an unrelated reason.
+	page, err := os.ReadFile(filepath.Join("testdata", "serp_direct_us.html"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 		if r.URL.Path != "/search" {
 			_, _ = w.Write([]byte("<html><body>home</body></html>"))
 			return
 		}
-		// One byte over maxBody, written in chunks rather than one huge
-		// allocation.
+		written, _ := w.Write(page)
+		// Past maxBody, written in chunks rather than one huge allocation.
 		chunk := bytes.Repeat([]byte("a"), 1<<20) // 1 MiB
-		written := 0
 		for written < maxBody+1 {
 			n, _ := w.Write(chunk)
 			written += n
@@ -178,11 +187,52 @@ func TestSession_TreatsAnOversizedBodyAsAnError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
+	// The premise, stated as an assertion rather than as a claim in a comment:
+	// what a silent truncation would have handed the caller.
+	truncated, terr := ParseSERP("iphone", append(append([]byte{}, page...),
+		bytes.Repeat([]byte("a"), maxBody-len(page))...))
+	if terr != nil {
+		t.Fatalf("the truncated prefix did not parse, so this test cannot show what truncation costs: %v", terr)
+	}
+	if len(truncated.Results) == 0 {
+		t.Fatal("the truncated prefix yielded no results, so this test cannot show what truncation costs")
+	}
+
 	s := NewSession(rewriteHost{target: srv.URL})
 	if _, err := s.Search(context.Background(), Query{Text: "iphone"}); err == nil {
 		t.Fatal("Search accepted a body beyond maxBody without error")
 	} else if !strings.Contains(err.Error(), "exceeds") {
 		t.Errorf("error=%q, want it to mention the size limit", err)
+	}
+}
+
+func TestSession_ReportsTheOriginAnEncryptedLinkMustBeJoinedTo(t *testing.T) {
+	// Result.Link is origin-relative under the encrypted form. Without the
+	// origin travelling with the page, a caller has to invent one, and the
+	// obvious invention — www.google.com — is wrong for every capture aimed at
+	// a ccTLD.
+	p := newRecordingProxy(t, "serp_goto_ru.html")
+	s := NewSession(rewriteHost{target: p.srv.URL})
+	got, err := s.Search(context.Background(), Query{Text: "тест", Country: "ru"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if got.Origin == "" {
+		t.Fatal("the parsed page carries no origin")
+	}
+	if len(got.Results) == 0 {
+		t.Fatal("no results to check a link against")
+	}
+	// Joined to the origin, an origin-relative link is a URL an http.Client
+	// will accept — which the bare link is not.
+	joined, err := url.Parse(got.Origin + got.Results[0].Link)
+	if err != nil || joined.Scheme == "" || joined.Host == "" {
+		t.Fatalf("origin %q joined to link %q is not an absolute URL: %v",
+			got.Origin, got.Results[0].Link, err)
+	}
+	if bare, err := url.Parse(got.Results[0].Link); err == nil && bare.Scheme != "" {
+		t.Errorf("link %q is already absolute; this test no longer pins anything",
+			got.Results[0].Link)
 	}
 }
 
