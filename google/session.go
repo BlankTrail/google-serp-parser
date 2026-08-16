@@ -20,6 +20,10 @@ const maxBody = 8 << 20
 // It holds no cookie jar of its own — the transport it is given owns that,
 // and a second jar layered on top would present two identities on one
 // connection.
+//
+// A Session is not safe for concurrent use: its referrer chain is mutable
+// state advanced by each call to Search, the way one tab's navigation history
+// is. Each goroutine that needs to search should hold its own Session.
 type Session struct {
 	Client *http.Client
 
@@ -102,9 +106,15 @@ func (s *Session) get(ctx context.Context, target string, q Query) (body []byte,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	// Read one byte beyond the cap so hitting it is distinguishable from a
+	// genuine end of body: LimitReader alone returns io.EOF for both, and a
+	// silently truncated page would parse into plausible, incomplete results.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return nil, "", resp.StatusCode, fmt.Errorf("google: read body: %w", err)
+	}
+	if int64(len(raw)) > maxBody {
+		return nil, "", resp.StatusCode, fmt.Errorf("google: response exceeds %d bytes", maxBody)
 	}
 	final := target
 	if resp.Request != nil && resp.Request.URL != nil {
