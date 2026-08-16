@@ -266,3 +266,80 @@ func TestFinishJob_StampsTheJobAsDone(t *testing.T) {
 		t.Error("the job carries no finish time")
 	}
 }
+
+func TestLastUnfinished_TakesTheNewestJobOfThatNameThatStillHasWork(t *testing.T) {
+	// A resume asks for a job by the name the user knows it by. Handing back the
+	// oldest one would take up a run somebody abandoned days ago instead of the
+	// one that just died.
+	s := testStore(t)
+	older, err := s.CreateJob(context.Background(), JobSpec{Name: "nightly", Pages: 1}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	newer, err := s.CreateJob(context.Background(), JobSpec{Name: "nightly", Pages: 1}, []string{"b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	got, err := s.LastUnfinished(context.Background(), "nightly")
+	if err != nil {
+		t.Fatalf("LastUnfinished: %v", err)
+	}
+	if got.ID != newer {
+		t.Errorf("LastUnfinished chose job %d, want the newer %d rather than %d", got.ID, newer, older)
+	}
+}
+
+func TestLastUnfinished_WalksPastAJobThatIsAlreadyDone(t *testing.T) {
+	// The newest job of a name is usually the finished one from last night.
+	// Picking it up would rerun a job that has nothing left and record the
+	// results against a run that was already reported.
+	s := testStore(t)
+	unfinished, err := s.CreateJob(context.Background(), JobSpec{Name: "nightly", Pages: 1}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	done, err := s.CreateJob(context.Background(), JobSpec{Name: "nightly", Pages: 1}, []string{"b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.FinishJob(context.Background(), done); err != nil {
+		t.Fatalf("FinishJob: %v", err)
+	}
+
+	got, err := s.LastUnfinished(context.Background(), "nightly")
+	if err != nil {
+		t.Fatalf("LastUnfinished: %v", err)
+	}
+	if got.ID != unfinished {
+		t.Errorf("LastUnfinished chose job %d, want %d — the finished one is not work", got.ID, unfinished)
+	}
+}
+
+func TestLastUnfinished_CarriesTheSettingsTheJobWasCreatedWith(t *testing.T) {
+	// A job picked up part way has to run as the job it is. Taking today's
+	// depth or today's country would put results of one shape into a run made
+	// of another, and nothing in the history would say which rows were which.
+	s := testStore(t)
+	if _, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "nightly", Pages: 3, SpecName: "desktop", Country: "de", Language: "de"},
+		[]string{"a"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	got, err := s.LastUnfinished(context.Background(), "nightly")
+	if err != nil {
+		t.Fatalf("LastUnfinished: %v", err)
+	}
+	want := JobSpec{Name: "nightly", Pages: 3, SpecName: "desktop", Country: "de", Language: "de"}
+	if got.Spec != want {
+		t.Errorf("LastUnfinished returned %+v, want %+v", got.Spec, want)
+	}
+}
+
+func TestLastUnfinished_SaysSoWhenThereIsNothingToTakeUp(t *testing.T) {
+	s := testStore(t)
+	if _, err := s.LastUnfinished(context.Background(), "never-ran"); !errors.Is(err, ErrNoUnfinishedJob) {
+		t.Errorf("LastUnfinished returned %v, want ErrNoUnfinishedJob", err)
+	}
+}

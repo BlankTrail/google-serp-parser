@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -11,6 +12,10 @@ import (
 
 // ErrNoQueries is returned when a job is created with nothing to run.
 var ErrNoQueries = errors.New("store: a job needs at least one query")
+
+// ErrNoUnfinishedJob is returned when no job of that name is waiting to be
+// taken up.
+var ErrNoUnfinishedJob = errors.New("store: no unfinished job of this name")
 
 // JobSpec is what a job was asked to do, kept so a later reader can tell one
 // night's numbers from another's without guessing at the settings behind them.
@@ -113,6 +118,44 @@ func (s *Store) Pending(ctx context.Context, jobID int64) ([]PendingQuery, error
 		return nil, fmt.Errorf("store: reading pending queries: %w", err)
 	}
 	return out, nil
+}
+
+// UnfinishedJob is a job that was never stamped as done, with the settings it
+// was created under.
+type UnfinishedJob struct {
+	ID   int64
+	Spec JobSpec
+}
+
+// LastUnfinished finds the newest job of a name that still has to be taken up.
+//
+// A job is looked up by name because that is what the person who started it
+// knows it by; asking them for the id of a run that died in the night is asking
+// them to read the database first.
+//
+// The settings come back with it. A job picked up part way has to run as the
+// job it is: taking today's depth or today's country instead would mix results
+// of two shapes into one run, and nothing in the history would say which rows
+// were which.
+//
+// Jobs stamped in the same second are ordered by the one written last, so a
+// name used twice in a minute resumes the later of the two rather than either.
+func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
+	var j UnfinishedJob
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, name, pages, spec_name, country, language
+		   FROM jobs
+		  WHERE name = ? AND finished_at IS NULL
+		  ORDER BY created_at DESC, id DESC
+		  LIMIT 1`, name).
+		Scan(&j.ID, &j.Spec.Name, &j.Spec.Pages, &j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language)
+	if errors.Is(err, sql.ErrNoRows) {
+		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
+	}
+	if err != nil {
+		return UnfinishedJob{}, fmt.Errorf("store: looking for an unfinished %q: %w", name, err)
+	}
+	return j, nil
 }
 
 // FinishJob stamps a job as done.
