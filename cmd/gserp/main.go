@@ -13,21 +13,26 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/version"
 )
 
+// interruptExit is what the shell is told when the user stopped the job.
+// A shell reports a program a signal ended as 128 plus that signal's number,
+// and a job stopped on purpose is not the same event as one that failed.
+const interruptExit = 130
+
 func main() {
-	if err := dispatch(os.Args[1:]); err != nil {
+	if err := dispatch(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "gserp:", err)
 		os.Exit(1)
 	}
 }
 
-func dispatch(args []string) error {
+func dispatch(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		usage()
 		return nil
 	}
 	switch args[0] {
 	case "run":
-		return runCommand(args[1:], os.Stdout)
+		return runCommand(ctx, args[1:], os.Stdout)
 	case "doctor":
 		return doctorCommand(args[1:])
 	case "version", "--version", "-v":
