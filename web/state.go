@@ -23,6 +23,14 @@ import (
 // number on it was worked out in one reading of one server.
 const stateRefresh = 5 * time.Second
 
+// listRefresh is how often the list of jobs asks to be drawn again while
+// something on it is moving.
+//
+// Slower than the screen a job is watched from: the list says which jobs there
+// are and roughly where each has got to, and nobody follows a single query on
+// it. The job's own page is where that is watched.
+const listRefresh = 5 * time.Second
+
 // noFigure stands where a figure would stand if there were anything to work it
 // out from.
 //

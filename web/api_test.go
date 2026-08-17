@@ -4,11 +4,14 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/blanktrail/google-serp-parser/store"
 )
 
 // askProgress reads the answer the page's own script polls for.
@@ -250,5 +253,85 @@ func TestStop_SaysSoOnAServerThatWasNeverGivenAnythingToRunWith(t *testing.T) {
 	n, _ := res.Body.Read(body)
 	if !strings.Contains(string(body[:n]), LangEN.T("form.norunner")) {
 		t.Errorf("the reader was not told why nothing happened: %q", body[:n])
+	}
+}
+
+func TestDeleteJob_TakesTheJobOffTheListAndSendsTheReaderThere(t *testing.T) {
+	// Deleting is done from the list, so the list is where the reader lands. The
+	// job's own page would be a page about something that is not there.
+	s := testServerWithSupervisor(t)
+	id := seedJob(t, s, "nightly", 2, 1, 0)
+
+	rec := postForm(t, s, "/api/delete", url.Values{"job": {strconv.FormatInt(id, 10)}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("deleting came back %d, want the list:\n%s", rec.Code, rec.Body.String())
+	}
+	if to := rec.Header().Get("Location"); to != jobsAt {
+		t.Errorf("the reader was sent to %q, want the list of jobs", to)
+	}
+	if body := get(t, s, jobsAt).Body.String(); strings.Contains(body, "nightly") {
+		t.Errorf("the deleted job is still on the list:\n%s", body)
+	}
+	if _, err := s.store.Progress(t.Context(), id); !errors.Is(err, store.ErrNoJob) {
+		t.Errorf("the job reads back as %v, want gone", err)
+	}
+}
+
+func TestDeleteJob_RefusesAJobThatIsRunningRatherThanStoppingItFirst(t *testing.T) {
+	// A button that stops a run as a side effect of another word is a button
+	// nobody can predict, and what it would throw away is a run somebody is
+	// watching. The refusal says which one it is.
+	s, v, _ := heldServer(t)
+	id := enqueue(t, v, "nightly", "a", "b")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == id
+	})
+
+	rec := postForm(t, s, "/api/delete", url.Values{"job": {strconv.FormatInt(id, 10)}})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("deleting a running job came back %d, want a refusal", rec.Code)
+	}
+	if _, err := s.store.Progress(t.Context(), id); err != nil {
+		t.Errorf("the running job was deleted anyway: %v", err)
+	}
+}
+
+func TestDeleteJob_IsAPostAndNothingElse(t *testing.T) {
+	// A delete behind a link is a delete that a browser prefetching that link, or
+	// anything else walking these pages, carries out on somebody else's history.
+	s := testServerWithSupervisor(t)
+	id := seedJob(t, s, "nightly", 2, 1, 0)
+
+	rec := get(t, s, "/api/delete?job="+strconv.FormatInt(id, 10))
+	if rec.Code == http.StatusSeeOther {
+		t.Error("a delete went through on a plain fetch of its address")
+	}
+	if _, err := s.store.Progress(t.Context(), id); err != nil {
+		t.Errorf("fetching the address deleted the job: %v", err)
+	}
+}
+
+func TestJobsPage_OffersToDeleteAndAsksBeforeItDoes(t *testing.T) {
+	// The button is a form that posts, so nothing walking these pages can press
+	// it. The sentence it carries is asked by the script; a reader with no script
+	// is not stopped, because a button that needs a script to be safe is a button
+	// that is not safe.
+	s := testServerWithSupervisor(t)
+	seedJob(t, s, "nightly", 2, 1, 0)
+	body := get(t, s, jobsAt).Body.String()
+
+	if !strings.Contains(body, `action="/api/delete"`) {
+		t.Errorf("the list offers no way to delete a job:\n%s", body)
+	}
+	if !strings.Contains(body, `method="post"`) {
+		t.Errorf("the delete is not a post:\n%s", body)
+	}
+	if !strings.Contains(body, "data-confirm=") {
+		t.Errorf("the delete carries no sentence to ask before it goes:\n%s", body)
+	}
+	script := mustAsset(t, "static/app.js")
+	if !strings.Contains(script, "data-confirm") || !strings.Contains(script, "window.confirm") {
+		t.Error("nothing in the script asks before a form that cannot be undone is sent")
 	}
 }

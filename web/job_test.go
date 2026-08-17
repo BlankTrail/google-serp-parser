@@ -221,7 +221,7 @@ func TestJobPage_AsksTheBrowserToWatchOnlyWhileSomethingIsStillComing(t *testing
 		got, ok := v.Running()
 		return ok && got == id
 	})
-	if body := get(t, s, jobPath(id)).Body.String(); !strings.Contains(body, "data-poll") {
+	if body := get(t, s, jobPath(id)).Body.String(); !strings.Contains(body, "data-refresh") {
 		t.Errorf("the page of a running job asks the browser for nothing more:\n%s", body)
 	}
 
@@ -233,7 +233,7 @@ func TestJobPage_AsksTheBrowserToWatchOnlyWhileSomethingIsStillComing(t *testing
 		t.Fatalf("Stop: %v", err)
 	}
 	waitUntil(t, "the job has stopped", func() bool { _, ok := v.Running(); return !ok })
-	if body := get(t, s, jobPath(id)).Body.String(); strings.Contains(body, "data-poll") {
+	if body := get(t, s, jobPath(id)).Body.String(); strings.Contains(body, "data-refresh") {
 		t.Errorf("the page of an abandoned job keeps asking for more:\n%s", body)
 	}
 
@@ -242,7 +242,7 @@ func TestJobPage_AsksTheBrowserToWatchOnlyWhileSomethingIsStillComing(t *testing
 	}
 	eng.let(t, 1)
 	waitUntil(t, "the job is done", func() bool { return progress(t, s.store, id).Finished })
-	if body := get(t, s, jobPath(id)).Body.String(); strings.Contains(body, "data-poll") {
+	if body := get(t, s, jobPath(id)).Body.String(); strings.Contains(body, "data-refresh") {
 		t.Errorf("the page of a finished job keeps asking for more:\n%s", body)
 	}
 }

@@ -345,3 +345,76 @@ func TestStop_LeavesTheOperatorOnTheScreenItWasPressedOn(t *testing.T) {
 		})
 	}
 }
+
+func TestScreens_AskAgainOnlyWhileSomethingCanAnswerDifferently(t *testing.T) {
+	// Three screens follow a run, and each has to stop on its own. A page left
+	// open overnight on a machine running nothing would otherwise fetch itself
+	// until morning, and every answer would say what the last one said.
+	s, v, _ := heldServer(t)
+
+	// Nothing running: none of them asks for anything.
+	for _, at := range []string{stateAt, jobsAt} {
+		if body := get(t, s, at).Body.String(); strings.Contains(body, "data-refresh") {
+			t.Errorf("%s asks to be drawn again with nothing running:\n%s", at, body)
+		}
+	}
+
+	id := enqueue(t, v, "nightly", "a", "b")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == id
+	})
+	for _, at := range []string{stateAt, jobsAt, jobPath(id)} {
+		if body := get(t, s, at).Body.String(); !strings.Contains(body, "data-refresh") {
+			t.Errorf("%s does not follow a job that is running:\n%s", at, body)
+		}
+	}
+
+	if err := v.Stop(id); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitUntil(t, "the job has stopped", func() bool { _, ok := v.Running(); return !ok })
+	for _, at := range []string{stateAt, jobsAt, jobPath(id)} {
+		if body := get(t, s, at).Body.String(); strings.Contains(body, "data-refresh") {
+			t.Errorf("%s keeps asking after the job stopped:\n%s", at, body)
+		}
+	}
+}
+
+func TestScript_AsksNothingWhileNobodyIsLookingAtTheTab(t *testing.T) {
+	// A run takes hours and a browser holds a dozen tabs. One that kept fetching
+	// a whole screen every few seconds behind another window would spend the
+	// afternoon drawing pages nobody sees.
+	//
+	// No line of the script runs here — there is no runtime to run it with — so
+	// what is pinned is that the file consults whether the tab is being looked at
+	// and listens for that changing. Both halves are needed: without the second,
+	// a tab that went away never starts again.
+	script := mustAsset(t, "static/app.js")
+	for _, part := range []string{"document.hidden", "visibilitychange"} {
+		if !strings.Contains(script, part) {
+			t.Errorf("the script never mentions %s, so a hidden tab is fetched like any other", part)
+		}
+	}
+	// One listener for the whole file rather than one per screen: a reader who
+	// moves between screens all afternoon would otherwise collect a listener for
+	// every screen they have left.
+	if got := strings.Count(script, `addEventListener("visibilitychange"`); got != 1 {
+		t.Errorf("the script listens for the tab coming back %d times, want once", got)
+	}
+}
+
+func TestScript_FollowsAScreenByFetchingTheWholeOfIt(t *testing.T) {
+	// The counts used to be written in place, one figure at a time, which was
+	// cheaper and could never show a result arriving. There is one mechanism now,
+	// and what it puts on the page is a whole screen the server drew — so a count
+	// and the results beside it are never from two different moments.
+	script := mustAsset(t, "static/app.js")
+	if strings.Contains(script, "/api/progress") {
+		t.Error("the script still fetches counts on their own, which is a second " +
+			"mechanism that can disagree with the first")
+	}
+	if !strings.Contains(script, "dataset.refresh") {
+		t.Error("the script does not read how often the server said to ask")
+	}
+}

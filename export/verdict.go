@@ -42,12 +42,14 @@ type VerdictWriter interface {
 // It answers for the same names New does. An operator picks a format, not a
 // format and a kind of job, and a menu offering something that then refuses is
 // a menu that lies.
-func NewVerdicts(format string, w io.Writer) (VerdictWriter, error) {
+func NewVerdicts(format string, w io.Writer, sep rune) (VerdictWriter, error) {
 	switch format {
 	case "csv":
 		return NewVerdictCSV(w), nil
 	case "jsonl":
 		return NewVerdictJSONL(w), nil
+	case "txt":
+		return &verdictCSV{w: separated(w, sep)}, nil
 	default:
 		return nil, fmt.Errorf("%w: %q, want one of %v", ErrUnknownFormat, format, Formats())
 	}

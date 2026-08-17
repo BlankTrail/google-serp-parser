@@ -1,12 +1,11 @@
 {{define "main"}}
 <h1>{{.T "job.title"}}: {{.Job.Name}}</h1>
 
-{{/* Every count is written here, by the server. The script replaces these same
-     numbers in place and puts nothing on the page that was not already on it,
-     so a reader with no script reads the job as it stood when the page was
-     drawn. data-poll is what tells the script to ask again, and it is absent
-     whenever nothing is going to answer differently. */}}
-<section class="card" data-job="{{.Progress.ID}}"{{if .Progress.Watch}} data-poll="{{.RefreshMS}}"{{end}} id="progress">
+{{/* Every count is written here, by the server, and the whole screen is what
+     comes back when it is asked for again — so a figure and the results beside
+     it are never from two different moments. A reader with no script reads the
+     job as it stood when the page was drawn. */}}
+<section class="card" data-job="{{.Progress.ID}}" id="progress">
 {{/* The one thing on this screen filled with colour. It is drawn only for a job
      that has queries to get through: a bar with nothing behind it is a bar that
      says the job is at the beginning of nothing. */}}
@@ -102,9 +101,21 @@
 
 <section class="card">
 <h2>{{.T "job.export"}}</h2>
-<p class="export">
-{{range .Formats}}<a href="/export?job={{$.Progress.ID}}&format={{.}}">{{.}}</a>
-{{end}}</p>
+{{/* The separator travels with the link because a download is a link: the box
+     is read when the link is pressed, so a reader who typed a semicolon and
+     pressed txt gets semicolons. It is a plain form so that a browser with no
+     script sends it the same way, landing on the same address. */}}
+<form method="get" action="/export" class="export-form">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<div class="field">
+<label for="sep">{{.T "job.export.sep"}}</label>
+<input id="sep" name="sep" size="4" maxlength="1" value="" placeholder="TAB">
+</div>
+<p class="empty">{{.T "job.export.sep.why"}}</p>
+<div class="actions">
+{{range .Formats}}<button type="submit" name="format" value="{{.}}">{{.}}</button>
+{{end}}</div>
+</form>
 {{/* What the page carried besides its results, each in a file of its own: an ad
      has a placement and no rank, a suggestion is a phrase and nothing else, and
      folding either into the results would give every result columns that are

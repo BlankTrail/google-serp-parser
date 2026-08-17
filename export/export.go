@@ -59,7 +59,7 @@ var ErrUnknownFormat = errors.New("export: unknown format")
 var ErrClosed = errors.New("export: the export is already finished")
 
 // Formats lists what New accepts, for help text and for a menu.
-func Formats() []string { return []string{"csv", "jsonl"} }
+func Formats() []string { return []string{"csv", "jsonl", "txt"} }
 
 // Writes reports whether this package can write a named format.
 //
@@ -82,11 +82,20 @@ func New(format string, w io.Writer) (Writer, error) {
 // thing from one nobody asked to keep — and on a job of ten million results it
 // is also several hundred megabytes of separators.
 func NewWith(format string, w io.Writer, cols []string) (Writer, error) {
+	return NewSeparated(format, w, cols, TabSeparator)
+}
+
+// NewSeparated is NewWith, with the separator a text file uses. It is ignored
+// by every other format: a comma-separated file is separated by commas and a
+// file of one object per line is separated by nothing.
+func NewSeparated(format string, w io.Writer, cols []string, sep rune) (Writer, error) {
 	switch format {
 	case "csv":
 		return newCSVWith(w, cols), nil
 	case "jsonl":
 		return newJSONLWith(w, cols), nil
+	case "txt":
+		return NewText(w, cols, sep), nil
 	default:
 		return nil, fmt.Errorf("%w: %q, want one of %v", ErrUnknownFormat, format, Formats())
 	}

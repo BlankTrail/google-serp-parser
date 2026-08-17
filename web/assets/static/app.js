@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-// Swaps one screen for another without reloading the browser tab, and keeps the
-// counts of a running job up to date.
+// Swaps one screen for another without reloading the browser tab, and asks a
+// screen that is following something for itself again while it is being read.
 //
 // Every screen this puts on the page was drawn whole by the server at an address
 // of its own. This file fetches that same address and moves what came back into
@@ -25,6 +25,12 @@
 	// this, the job that was on the screen a minute ago goes on being asked after
 	// and written into a page that no longer holds it.
 	var showing = 0;
+
+	// What to do when the tab is looked at again. It is one function held here
+	// rather than a listener added per screen: a reader who moves between screens
+	// all afternoon would otherwise collect a listener for every screen they have
+	// left, each of them doing nothing, forever.
+	var wake = null;
 
 	function part(doc, name) {
 		return doc.getElementById(name);
@@ -88,18 +94,27 @@
 	// abandons whatever the screen before it had begun.
 	function watch() {
 		showing++;
-		follow(showing);
+		// The screen that was here may have left a way to be woken. It belongs to a
+		// screen that is gone, and a screen with nothing to follow leaves none.
+		wake = null;
 		refresh(showing);
 	}
+
+	document.addEventListener("visibilitychange", function () {
+		if (!document.hidden && wake) {
+			wake();
+		}
+	});
 
 	// refresh asks a screen's own address for that screen again, as often as the
 	// server said to and only while it says so.
 	//
 	// What comes back is the whole screen, so nothing on it can be half new: there
 	// is no way here to move one figure and leave the one beside it as it was an
-	// hour ago. A screen the server marked with no interval is one where nothing
-	// can come back different until somebody presses something, and it is left
-	// alone rather than asked all night.
+	// hour ago. It is also how a result that has just arrived reaches the page —
+	// the counts alone could never show one. A screen the server marked with no
+	// interval is one where nothing can come back different until somebody presses
+	// something, and it is left alone rather than asked all night.
 	function refresh(mine) {
 		var screen = part(document, screenAt);
 		var every = screen ? Number(screen.dataset.refresh) : 0;
@@ -110,8 +125,19 @@
 		// forever, and one answer lost on the way is not a server that has gone
 		// away.
 		var triesLeft = 3;
+		var waiting = false;
+
 		var ask = function () {
+			waiting = false;
 			if (mine !== showing) {
+				return;
+			}
+			// A tab nobody is looking at is asked nothing. A run takes hours and a
+			// browser holds a dozen tabs; a hidden one that kept fetching a page
+			// every three seconds would spend an afternoon drawing screens nobody
+			// sees. What it costs is that the figures are stale for as long as the
+			// tab is away, which is put right the instant it comes back.
+			if (document.hidden) {
 				return;
 			}
 			fetched(window.location.href).then(function (html) {
@@ -121,90 +147,31 @@
 			}).catch(function () {
 				triesLeft--;
 				if (triesLeft > 0) {
-					window.setTimeout(ask, every);
+					later();
 				}
 			});
 		};
-		window.setTimeout(ask, every);
-	}
 
-	// follow keeps the counts of a running job up to date without redrawing the
-	// screen around them.
-	//
-	// Everything it writes is already on the page: the server drew each number
-	// before this ran, so a browser that never runs this file shows the job as it
-	// stood when the page was fetched. The markup says whether there is anything
-	// to wait for; a job nobody is running will read the same in the morning, and
-	// asking every two seconds until then is knocking on a door with nobody
-	// behind it.
-	function follow(mine) {
-		var box = document.getElementById("progress");
-		if (!box || !box.dataset.poll) {
-			return;
-		}
-		var job = box.dataset.job;
-		var every = Number(box.dataset.poll);
-		var triesLeft = 3;
-
-		var write = function (cell, value) {
-			var at = document.getElementById(cell);
-			if (at) {
-				at.textContent = value;
+		var later = function () {
+			if (waiting || mine !== showing) {
+				return;
 			}
+			waiting = true;
+			window.setTimeout(ask, every);
 		};
 
-		// The bar is filled by the numbers the server just sent, not by counting
-		// anything here. It is absent on a job with no queries behind it, which is
-		// why it is looked up rather than assumed.
-		var fill = function (done, total) {
-			var bar = document.getElementById("bar");
-			if (bar) {
-				bar.max = total;
-				bar.value = done;
-			}
-		};
-
-		var ask = function () {
+		// Coming back to the tab asks straight away rather than waiting out the
+		// gap: somebody who has just looked at a screen is asking about now, and a
+		// screen three seconds stale reads as a screen that has stopped.
+		wake = function () {
 			if (mine !== showing) {
 				return;
 			}
-			fetch("/api/progress?job=" + encodeURIComponent(job), {
-				headers: { "Accept": "application/json" }
-			}).then(function (answer) {
-				if (!answer.ok) {
-					throw new Error(answer.status);
-				}
-				return answer.json();
-			}).then(function (at) {
-				if (mine !== showing) {
-					return;
-				}
-				write("count-total", at.total);
-				write("count-done", at.done);
-				write("count-failed", at.failed);
-				write("count-pending", at.pending);
-				// The figure for dropped repeats is drawn only for a job that has a
-				// filter, and write leaves alone what is not on the page.
-				write("count-dropped", at.dropped);
-				fill(at.done, at.total);
-				triesLeft = 3;
-				if (at.watch) {
-					window.setTimeout(ask, every);
-					return;
-				}
-				// The job has stopped, so what changed is not only the counts: the
-				// results are there to be read and the buttons are not the ones drawn
-				// before. The page the server draws is the answer to all of that.
-				window.location.reload();
-			}).catch(function () {
-				triesLeft--;
-				if (triesLeft > 0) {
-					window.setTimeout(ask, every);
-				}
-			});
+			triesLeft = 3;
+			ask();
+			later();
 		};
-
-		window.setTimeout(ask, every);
+		later();
 	}
 
 	// A press on a tab is taken over only where the browser would otherwise have
@@ -228,6 +195,20 @@
 			// it would have done had this file never loaded.
 			window.location.assign(address);
 		});
+	});
+
+	// A form that undoes something nothing can put back asks first.
+	//
+	// It asks here rather than from an attribute in the markup, because a page
+	// that runs anything out of its own markup is a second script nobody can read
+	// as one and no test reads at all. A reader with no script is not stopped:
+	// the form sends itself, the server does what it says, and a button that
+	// needed a script to be safe would be a button that is not safe.
+	document.addEventListener("submit", function (sending) {
+		var said = sending.target.getAttribute ? sending.target.getAttribute("data-confirm") : null;
+		if (said && !window.confirm(said)) {
+			sending.preventDefault();
+		}
 	});
 
 	// Back and forward walk the addresses already written down, and the screen has

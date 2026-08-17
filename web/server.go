@@ -194,6 +194,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/progress", s.apiProgress)
 	s.mux.HandleFunc("POST /api/stop", s.apiStop)
 	s.mux.HandleFunc("POST /api/resume", s.apiResume)
+	s.mux.HandleFunc("POST /api/delete", s.apiDelete)
 	s.mux.HandleFunc("POST /api/reshape", s.apiReshape)
 	// The settings are offered only by a server that has somewhere to write them.
 	// A page that took a connection and dropped it is worse than no page: the
@@ -222,7 +223,7 @@ func (s *Server) Handler() http.Handler { return s.mux }
 // package's own addresses: a page that grows another one grows it here, and a
 // list kept anywhere else is a list somebody has to remember to update.
 func BrowserPolls() []string {
-	return []string{"/api/progress", "/api/stop", "/api/resume", "/api/reshape"}
+	return []string{"/api/progress", "/api/stop", "/api/resume", "/api/reshape", "/api/delete"}
 }
 
 // ServeHandler runs the given handler on this server's socket and wind-down,
@@ -329,7 +330,27 @@ func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, "jobs.html", jobsPage{page: s.frame(r, lang, "jobs.title", jobsAt), Jobs: jobs})
+	view := jobsPage{page: s.frame(r, lang, "jobs.title", jobsAt), Jobs: jobs}
+	// Asked for again only while something on it can come back different. A list
+	// where every job has finished reads the same in the morning, and asking
+	// every few seconds until then is knocking on a door with nobody behind it.
+	if s.sup != nil && s.anythingMoving() {
+		view.Refresh = listRefresh.Milliseconds()
+	}
+	s.render(w, r, "jobs.html", view)
+}
+
+// anythingMoving reports whether a job is running or waiting to.
+//
+// It asks the queue rather than the list: a job is written down when it is
+// created, so every unfinished job in the history reads as waiting, including
+// the ones nobody has asked for. A page that followed those would knock all
+// night on jobs nothing will ever pick up.
+func (s *Server) anythingMoving() bool {
+	if _, running := s.sup.Running(); running {
+		return true
+	}
+	return len(s.sup.Queued()) > 0
 }
 
 // render writes a page, and says so plainly when it cannot.

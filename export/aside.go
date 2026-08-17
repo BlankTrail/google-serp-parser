@@ -57,24 +57,28 @@ type SuggestionWriter interface {
 // neither is a result: an ad has a placement and no rank, a suggestion is a
 // phrase and nothing else, and folding either in would give every result
 // several columns that are always empty.
-func NewAds(format string, w io.Writer) (AdWriter, error) {
+func NewAds(format string, w io.Writer, sep rune) (AdWriter, error) {
 	switch format {
 	case "csv":
 		return &adCSV{w: csv.NewWriter(w)}, nil
 	case "jsonl":
 		return &adJSONL{enc: lines(w)}, nil
+	case "txt":
+		return &adCSV{w: separated(w, sep)}, nil
 	default:
 		return nil, fmt.Errorf("%w: %q, want one of %v", ErrUnknownFormat, format, Formats())
 	}
 }
 
 // NewSuggestions builds the writer for a named format.
-func NewSuggestions(format string, w io.Writer) (SuggestionWriter, error) {
+func NewSuggestions(format string, w io.Writer, sep rune) (SuggestionWriter, error) {
 	switch format {
 	case "csv":
 		return &suggestionCSV{w: csv.NewWriter(w)}, nil
 	case "jsonl":
 		return &suggestionJSONL{enc: lines(w)}, nil
+	case "txt":
+		return &suggestionCSV{w: separated(w, sep)}, nil
 	default:
 		return nil, fmt.Errorf("%w: %q, want one of %v", ErrUnknownFormat, format, Formats())
 	}

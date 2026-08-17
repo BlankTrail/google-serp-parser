@@ -12,6 +12,7 @@
 <th>{{.T "jobs.failed"}}</th>
 <th>{{.T "jobs.left"}}</th>
 <th>{{.T "jobs.state"}}</th>
+<th></th>
 </tr>
 </thead>
 <tbody>
@@ -32,6 +33,15 @@
      colour of everything around it: nothing has gone wrong on this machine, a
      file stopped arriving. */}}
 <td>{{if not .PlanReady}}{{$.T "job.state.listunfinished"}}{{else if .Finished}}{{$.T "job.state.finished"}}{{else}}{{$.T "job.state.unfinished"}}{{end}}</td>
+{{/* Deleting takes the job and everything it gathered, and nothing brings it
+     back. It is a form that sends itself by post, so nothing walking these
+     pages can carry it out, and it carries the sentence a script asks before
+     it goes — a reader with no script is not stopped, because a button that
+     needs a script to be safe is a button that is not safe. */}}
+<td><form method="post" action="/api/delete" data-confirm="{{$.T "jobs.delete.sure"}}">
+<input type="hidden" name="job" value="{{.ID}}">
+<button type="submit">{{$.T "jobs.delete"}}</button>
+</form></td>
 </tr>
 {{end}}
 </tbody>

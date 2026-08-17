@@ -125,7 +125,7 @@ func TestNewVerdicts_WritesTheSameFormatsTheResultsOfAJobAreWrittenIn(t *testing
 	// works for one job and refuses for another is a menu that lies.
 	for _, format := range Formats() {
 		var buf bytes.Buffer
-		w, err := NewVerdicts(format, &buf)
+		w, err := NewVerdicts(format, &buf, TabSeparator)
 		if err != nil {
 			t.Fatalf("NewVerdicts(%q): %v", format, err)
 		}
@@ -142,7 +142,7 @@ func TestNewVerdicts_WritesTheSameFormatsTheResultsOfAJobAreWrittenIn(t *testing
 }
 
 func TestNewVerdicts_RefusesAFormatItCannotWrite(t *testing.T) {
-	if _, err := NewVerdicts("xlsx", &bytes.Buffer{}); !errors.Is(err, ErrUnknownFormat) {
+	if _, err := NewVerdicts("xlsx", &bytes.Buffer{}, TabSeparator); !errors.Is(err, ErrUnknownFormat) {
 		t.Errorf("NewVerdicts(\"xlsx\") returned %v, want ErrUnknownFormat", err)
 	}
 }
@@ -152,7 +152,7 @@ func TestVerdictWriters_RefuseAnAddressThatArrivesAfterTheFileIsFinished(t *test
 	// caller believing an answer reached the operator when it did not.
 	for _, format := range Formats() {
 		var buf bytes.Buffer
-		w, err := NewVerdicts(format, &buf)
+		w, err := NewVerdicts(format, &buf, TabSeparator)
 		if err != nil {
 			t.Fatalf("NewVerdicts(%q): %v", format, err)
 		}

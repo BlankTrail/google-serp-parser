@@ -45,6 +45,15 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "That is not a format this program writes.", http.StatusBadRequest)
 		return
 	}
+	// What a text file separates its columns with, refused here rather than half
+	// way down the file: a separator this program cannot write has to be said
+	// before a byte has gone out, because a file that stops looks finished to
+	// whoever downloaded it. Every other format ignores it.
+	sep, err := export.SeparatorOf(r.URL.Query().Get(separatorField))
+	if err != nil {
+		http.Error(w, "That cannot separate columns.", http.StatusBadRequest)
+		return
+	}
 
 	id, err := strconv.ParseInt(r.URL.Query().Get("job"), 10, 64)
 	if err != nil {
@@ -95,7 +104,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	// The writers are built here rather than above because which one to build is
 	// not known until the job has been read, and neither writes anything until it
 	// is given something. The format was settled before any of it.
-	if err := s.writeExport(r.Context(), w, format, part, job); err != nil {
+	if err := s.writeExport(r.Context(), w, format, part, sep, job); err != nil {
 		// The header is out and part of the file with it, so there is nothing
 		// left to tell the reader. The log is where this has to be visible.
 		s.log.Error("an export stopped part way through", "job", job.ID, "format", format, "error", err)
@@ -103,21 +112,22 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeExport writes the file a job's kind calls for.
-func (s *Server) writeExport(ctx context.Context, w io.Writer, format, part string, job store.JobSummary) error {
+func (s *Server) writeExport(ctx context.Context, w io.Writer, format, part string,
+	sep rune, job store.JobSummary) error {
 	switch part {
 	case partAds:
-		return s.streamAds(ctx, w, format, job.ID)
+		return s.streamAds(ctx, w, format, sep, job.ID)
 	case partRelated:
-		return s.streamSuggestions(ctx, w, format, job.ID)
+		return s.streamSuggestions(ctx, w, format, sep, job.ID)
 	}
 	if job.Kind == store.KindIndex {
-		out, err := export.NewVerdicts(format, w)
+		out, err := export.NewVerdicts(format, w, sep)
 		if err != nil {
 			return err
 		}
 		return s.streamVerdicts(ctx, out, job.ID)
 	}
-	return s.stream(ctx, w, format, job)
+	return s.stream(ctx, w, format, sep, job)
 }
 
 // stream hands every row of a job to the file being written, and stops at
@@ -126,12 +136,12 @@ func (s *Server) writeExport(ctx context.Context, w io.Writer, format, part stri
 // The refusal is passed back rather than swallowed, and that is what ends the
 // walk: a reader who closed the tab leaves every write failing, and an export
 // that reads on regardless spends the whole job on a socket nobody is holding.
-func (s *Server) stream(ctx context.Context, w io.Writer, format string, job store.JobSummary) error {
+func (s *Server) stream(ctx context.Context, w io.Writer, format string, sep rune, job store.JobSummary) error {
 	// Only the columns this job kept. A column it never kept would stand in the
 	// file empty, which reads as a result that had none of that rather than as
 	// one nobody asked to keep — and on a job of ten million results it is also
 	// several hundred megabytes of separators.
-	out, err := export.NewWith(format, w, columnsOf(job.Fields))
+	out, err := export.NewSeparated(format, w, columnsOf(job.Fields), sep)
 	if err != nil {
 		return err
 	}
@@ -297,6 +307,11 @@ const (
 	partRelated = "related"
 )
 
+// separatorField is what a text file separates its columns with. Nothing said
+// is a tab, which is what a column of addresses is pasted into a spreadsheet
+// with, and every other format ignores it.
+const separatorField = "sep"
+
 // partField2field is the part of a job a download names, as the name the job's
 // own choice of what to keep uses.
 func fieldOfPart(part string) string {
@@ -307,8 +322,8 @@ func fieldOfPart(part string) string {
 }
 
 // streamAds writes every paid placement the job captured.
-func (s *Server) streamAds(ctx context.Context, w io.Writer, format string, jobID int64) error {
-	out, err := export.NewAds(format, w)
+func (s *Server) streamAds(ctx context.Context, w io.Writer, format string, sep rune, jobID int64) error {
+	out, err := export.NewAds(format, w, sep)
 	if err != nil {
 		return err
 	}
@@ -326,8 +341,8 @@ func (s *Server) streamAds(ctx context.Context, w io.Writer, format string, jobI
 }
 
 // streamSuggestions writes every search the pages offered beside their results.
-func (s *Server) streamSuggestions(ctx context.Context, w io.Writer, format string, jobID int64) error {
-	out, err := export.NewSuggestions(format, w)
+func (s *Server) streamSuggestions(ctx context.Context, w io.Writer, format string, sep rune, jobID int64) error {
+	out, err := export.NewSuggestions(format, w, sep)
 	if err != nil {
 		return err
 	}

@@ -688,3 +688,58 @@ func column(t *testing.T, recs [][]string, row int, name string) string {
 	t.Fatalf("the file has no %q column: %v", name, recs[0])
 	return ""
 }
+
+func TestDownload_SeparatesATextFileByWhatWasAskedFor(t *testing.T) {
+	// The separator travels on the address, because a download is a link. If it
+	// stopped anywhere between the link and the writer, every file would come
+	// back tab-separated whatever the reader typed — and the box would be a box
+	// that does nothing.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 2, 1, 0)
+	fill(t, s, id, 1, 1, 1)
+
+	rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=txt&sep=%3B")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the download came back %d:\n%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, ";") {
+		t.Errorf("nothing in the file is separated by the semicolon that was asked for:\n%s", body)
+	}
+	if strings.Contains(body, "\t") {
+		t.Errorf("the file is separated by tabs although a semicolon was asked for:\n%s", body)
+	}
+}
+
+func TestDownload_WritesATabFileWhenNothingWasAskedFor(t *testing.T) {
+	// The other half of the same rule: the links on the page carry no separator,
+	// and what they must produce is the tab this program documents.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 2, 1, 0)
+	fill(t, s, id, 1, 1, 1)
+
+	rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=txt")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the download came back %d:\n%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "\t") {
+		t.Errorf("a txt file with nothing asked for is not tab separated:\n%q", rec.Body.String())
+	}
+}
+
+func TestDownload_RefusesASeparatorItCannotWriteBeforeAnyBytesGoOut(t *testing.T) {
+	// Refused before the header goes out, for the reason a format is: once a byte
+	// of a file has gone, the only thing left to do with a mistake is stop
+	// writing, and a file that stops looks finished to whoever downloaded it.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 2, 1, 0)
+	fill(t, s, id, 1, 1, 1)
+
+	rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=txt&sep=ab")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("a separator of two characters came back %d, want a refusal", rec.Code)
+	}
+	if rec.Header().Get("Content-Disposition") != "" {
+		t.Error("the refusal went out as a download, which a browser saves as a file")
+	}
+}

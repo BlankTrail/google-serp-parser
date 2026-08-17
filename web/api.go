@@ -128,6 +128,45 @@ func (s *Server) apiResume(w http.ResponseWriter, r *http.Request) {
 	s.pressed(w, r, func(v *Supervisor, jobID int64) error { return v.Resume(jobID) })
 }
 
+// apiDelete removes a job and everything it gathered.
+//
+// It is a press of its own rather than one more thing pressed does, because it
+// is the one button here that cannot be pressed twice: a stop pressed on a job
+// that has already stopped is a race, and a delete pressed on a job that is
+// running would throw away a run somebody is watching. It refuses that outright
+// rather than stopping the job first — a button that stops a run as a side
+// effect of another word is a button nobody can predict.
+func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {
+	sum, ok := s.jobAsked(w, r, r.FormValue("job"))
+	if !ok {
+		return
+	}
+	if s.sup != nil {
+		if running, ok := s.sup.Running(); ok && running == sum.ID {
+			http.Error(w, pickLang(r).T("jobs.delete.running"), http.StatusConflict)
+			return
+		}
+		for _, queued := range s.sup.Queued() {
+			if queued == sum.ID {
+				http.Error(w, pickLang(r).T("jobs.delete.running"), http.StatusConflict)
+				return
+			}
+		}
+	}
+	if err := s.store.DeleteJob(r.Context(), sum.ID); err != nil {
+		if errors.Is(err, store.ErrNoJob) {
+			// Deleted twice, or deleted from another tab. The list is the answer to
+			// both: the job is not on it.
+			http.Redirect(w, r, jobsAt, http.StatusSeeOther)
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	// Never back to the job: there is no job. The list is where the reader was.
+	http.Redirect(w, r, jobsAt, http.StatusSeeOther)
+}
+
 // pressed does what a button on the job page does and sends the reader back to
 // the page they pressed it on.
 //

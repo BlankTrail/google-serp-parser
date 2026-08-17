@@ -23,10 +23,19 @@ import (
 // well as a million, on a screen somebody can actually see the bottom of.
 const rowsShown = 50
 
-// refreshEvery is how often the page asks what has changed. The answer is four
-// numbers, so asking costs nothing worth counting, and asking faster would only
-// tighten the loop around queries that take seconds each.
-const refreshEvery = 2 * time.Second
+// refreshEvery is how often this page asks to be drawn again while its job is
+// moving.
+//
+// What comes back is the whole screen: the counts, the speed, the sample of
+// results and the buttons, all drawn by the server in one pass. It used to be
+// four numbers written in place by the browser, which was cheaper and could
+// never show a result arriving — and the sample of results is the part somebody
+// watching actually reads.
+//
+// Three seconds rather than two, because the answer is now a page rather than
+// four numbers, and because a query takes seconds: asking faster than the work
+// happens only tightens a loop around nothing.
+const refreshEvery = 3 * time.Second
 
 // jobPath is where a job's own page lives. The list links to it and every
 // button sends the reader back to it, so the address is written once.
@@ -119,10 +128,6 @@ type jobPage struct {
 	Formats   []string
 	CanStop   bool
 	CanResume bool
-	// RefreshMS is how often the page asks again, in the milliseconds a browser
-	// counts in. It reaches the script through the markup so that the interval
-	// is decided in one place and not in two.
-	RefreshMS int64
 }
 
 // job draws one job and everything a reader can do with it.
@@ -170,8 +175,14 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	// run that dropped results as one that dropped none.
 	filter, _ := filterKey(string(sum.UniqueBy))
 
+	frame := s.frame(r, lang, "job.title", jobsAt)
+	// Asked for again only while the job can answer differently. A job nobody is
+	// running reads the same in the morning.
+	if at.Watch {
+		frame.Refresh = refreshEvery.Milliseconds()
+	}
 	s.render(w, r, "job.html", jobPage{
-		page: s.frame(r, lang, "job.title", jobsAt),
+		page: frame,
 		Job: jobSetup{
 			Name:        sum.Name,
 			Started:     sum.CreatedAt,
@@ -212,7 +223,6 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		// queries it holds are a fraction of a list, and nothing will run them.
 		CanResume: s.sup != nil && sum.PlanReady &&
 			!at.Running && !at.Queued && !at.Finished && at.Pending > 0,
-		RefreshMS: refreshEvery.Milliseconds(),
 	})
 }
 
