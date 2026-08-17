@@ -3,11 +3,15 @@
 package blanktrail
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1500,6 +1504,319 @@ func TestPool_KeepsAPortsAddressWhenTheListNoLongerHasIt(t *testing.T) {
 	if got := fake.UpstreamOf(port); got != fresh {
 		t.Errorf("the port rotated onto %q, want %q from the list as it now stands", got, fresh)
 	}
+}
+
+// refuseOpen sits in front of the control API and refuses to open the port
+// numbers a test chooses, passing every other call through and recording the
+// number each open was attempted on.
+//
+// The fake control API can be told to fail the next open, but not to fail the
+// open of a particular NUMBER — and which number a failure lands on is the whole
+// question here. A stand that refuses whichever number happens to come first
+// cannot tell a pool that steps over a taken number from one that never tries.
+type refuseOpen struct {
+	// rt carries the calls that are not refused. Left nil it is the ordinary
+	// transport; a test that wants a control API which cannot be reached at all
+	// sets its own.
+	rt http.RoundTripper
+	// refuse decides, for the number an open names and which attempt this is,
+	// whether to answer it with status and body instead of opening it.
+	refuse func(port, attempt int) (status int, body string, refuse bool)
+
+	mu    sync.Mutex
+	tried []int
+}
+
+func (r *refuseOpen) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path != "/api/v1/ports/open" {
+		return r.rt.RoundTrip(req)
+	}
+	raw, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+
+	var open struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(raw, &open); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	r.tried = append(r.tried, open.Port)
+	attempt := len(r.tried)
+	r.mu.Unlock()
+
+	status, body, refuse := r.refuse(open.Port, attempt)
+	if !refuse {
+		return r.rt.RoundTrip(req)
+	}
+	return &http.Response{
+		StatusCode:    status,
+		Status:        http.StatusText(status),
+		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Request:       req,
+	}, nil
+}
+
+// attempts lists the port numbers opens were attempted on, in order.
+func (r *refuseOpen) attempts() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]int(nil), r.tried...)
+}
+
+// deadTransport stands for a control API that cannot be reached at all — the
+// failure that arrives without any answer from the proxy to read.
+type deadTransport struct{}
+
+func (deadTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("dial tcp: connect: connection refused")
+}
+
+// portTakenBody is what a control API answers when the number it was asked for
+// is already held.
+const portTakenBody = `{"error":"port already open"}`
+
+// poolConfigRefusing is testPoolConfig with every open passing through r first.
+func poolConfigRefusing(t *testing.T, fake *fakebt.Server, clock *fakeClock, threads, perThread int, r *refuseOpen) PoolConfig {
+	t.Helper()
+	cfg := testPoolConfig(t, fake, clock, threads, perThread)
+	if r.rt == nil {
+		r.rt = http.DefaultTransport
+	}
+	c, err := NewClient(fake.URL(), fake.Key(), WithHTTPClient(&http.Client{Transport: r, Timeout: 15 * time.Second}))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	cfg.Client = c
+	return cfg
+}
+
+func TestNewPool_APortNumberAlreadyTakenCostsAnotherNumberNotThePool(t *testing.T) {
+	// The number came from the proxy, which knows about its own ports and
+	// nothing else on the machine. Something else holding it is a fact about
+	// that number, not about the pool.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	const taken, free = 20000, 20001
+
+	r := &refuseOpen{refuse: func(port, _ int) (int, string, bool) {
+		return http.StatusConflict, portTakenBody, port == taken
+	}}
+	cfg := poolConfigRefusing(t, fake, clock, 1, 1, r)
+	cfg.PortRange = [2]int{taken, free}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool gave up because one number was taken: %v", err)
+	}
+	if p.Size() != 1 {
+		t.Errorf("Size=%d, want 1", p.Size())
+	}
+	if got := fake.OpenPorts(); len(got) != 1 || got[0] != free {
+		t.Fatalf("open ports=%v, want just %d", got, free)
+	}
+	// A refused number has to be marked used. pickPort avoids only what the pool
+	// marked, so a number left unmarked is handed straight back and refused
+	// again until the attempts run out.
+	if got, want := r.attempts(), []int{taken, free}; !sameInts(got, want) {
+		t.Errorf("opens were attempted on %v, want %v", got, want)
+	}
+	// And the number the pool wrote down is the number that opened. Keeping the
+	// refused one would hand out leases dialling a port this program never held.
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if l.Port() != free {
+		t.Errorf("the lease came back on port %d, want the one that opened, %d", l.Port(), free)
+	}
+	l.Release()
+
+	// Whatever holds the taken number, this program did not open it, and closing
+	// a port it does not own is the one thing the pool must never do.
+	p.Close()
+	for _, req := range fake.Requests() {
+		if req.Path == "/api/v1/ports/close" && strings.Contains(req.Body, `"port":20000`) {
+			t.Errorf("the pool closed port %d, which it never opened", taken)
+		}
+	}
+}
+
+func TestNewPool_TheLastPortOfThePoolStepsOverATakenNumberToo(t *testing.T) {
+	// The hard arrangement: the taken number is the one the LAST port of the
+	// pool was given. A retry reached only while ports remain to be opened — an
+	// off-by-one, or a step tucked inside the wrong loop — passes a stand where
+	// the first number is taken and fails here.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	const size = 3
+
+	r := &refuseOpen{refuse: func(_, attempt int) (int, string, bool) {
+		return http.StatusConflict, portTakenBody, attempt == size
+	}}
+	p, err := NewPool(context.Background(), poolConfigRefusing(t, fake, clock, 1, size, r))
+	if err != nil {
+		t.Fatalf("NewPool gave up on the last port of the pool: %v", err)
+	}
+	defer p.Close()
+
+	if p.Size() != size {
+		t.Errorf("Size=%d, want %d", p.Size(), size)
+	}
+	tried := r.attempts()
+	if len(tried) != size+1 {
+		t.Fatalf("opens were attempted on %v, want %d numbers: one of them was taken", tried, size+1)
+	}
+	open := fake.OpenPorts()
+	if len(open) != size {
+		t.Fatalf("the proxy holds %v, want %d ports", open, size)
+	}
+	for _, n := range open {
+		if n == tried[size-1] {
+			t.Errorf("port %d is open although the proxy refused it", n)
+		}
+	}
+}
+
+func TestNewPool_WithNoNumberTakenNothingExtraIsAskedFor(t *testing.T) {
+	// The other half of the same arrangement: with nothing in the way, the pool
+	// asks for exactly as many numbers as it opens. A retry that fires on a
+	// success, or a number marked used twice, shows up here and nowhere else —
+	// on a live proxy each wasted number is another port opened and abandoned.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	const size = 4
+
+	r := &refuseOpen{refuse: func(int, int) (int, string, bool) { return 0, "", false }}
+	p, err := NewPool(context.Background(), poolConfigRefusing(t, fake, clock, 2, 2, r))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if got := r.attempts(); len(got) != size {
+		t.Errorf("opens were attempted on %v, want %d — one number per port", got, size)
+	}
+	if got := fake.OpenPorts(); len(got) != size {
+		t.Errorf("the proxy holds %v, want %d ports", got, size)
+	}
+}
+
+func TestNewPool_ARefusalNoOtherNumberWouldFixIsNotRepeated(t *testing.T) {
+	// Such a refusal answers the same on every number. Trying more of them turns
+	// a sentence the operator can act on — the key was rejected, the tariff does
+	// not allow a pool — into a long wait ending in a vaguer one.
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"the key was rejected", http.StatusUnauthorized, `{"error":"authentication required"}`},
+		{"the tariff does not include a pool", http.StatusForbidden, `{"error":"pool not licensed"}`},
+		{"the request itself was wrong", http.StatusBadRequest, `{"error":"invalid JSON body"}`},
+		{"the proxy broke", http.StatusInternalServerError, `{"error":"boom"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := fakebt.New(t)
+			clock := newFakeClock()
+			r := &refuseOpen{refuse: func(int, int) (int, string, bool) {
+				return tc.status, tc.body, true
+			}}
+			p, err := NewPool(context.Background(), poolConfigRefusing(t, fake, clock, 1, 2, r))
+			if err == nil {
+				p.Close()
+				t.Fatal("NewPool came up although every open was refused")
+			}
+			if n := len(r.attempts()); n != 1 {
+				t.Errorf("%d numbers were tried after %q, want 1", n, tc.name)
+			}
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.Status != tc.status {
+				t.Errorf("error %v does not carry the %d the proxy answered", err, tc.status)
+			}
+		})
+	}
+}
+
+func TestNewPool_ARefusalWithNoAnswerAtAllIsNotRepeatedEither(t *testing.T) {
+	// Nothing was heard from the proxy, so there is nothing in the answer to
+	// read a number out of. The port range keeps the failure on the open itself:
+	// with it set, no number is asked for over the wire.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	r := &refuseOpen{
+		rt:     deadTransport{},
+		refuse: func(int, int) (int, string, bool) { return 0, "", false },
+	}
+	cfg := poolConfigRefusing(t, fake, clock, 1, 1, r)
+	cfg.PortRange = [2]int{20000, 20010}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err == nil {
+		p.Close()
+		t.Fatal("NewPool came up although the control API was not answering")
+	}
+	if n := len(r.attempts()); n != 1 {
+		t.Errorf("%d numbers were tried against a control API that is not there, want 1", n)
+	}
+}
+
+func TestNewPool_GivesUpOnTakenNumbersAtTheCeilingTheSearchAlreadyUses(t *testing.T) {
+	// Two things belong together here: the retry ends, and it ends where
+	// pickPort's own search for a number ends. Two ceilings in two places drift.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	// A retry that never stops has to fail this test rather than run it out of
+	// time, so past a generous bound the stand answers something not retryable.
+	const guard = 500
+
+	r := &refuseOpen{refuse: func(_, attempt int) (int, string, bool) {
+		switch {
+		case attempt == 1:
+			return 0, "", false // the first port opens, so the rollback has work to do
+		case attempt > guard:
+			return http.StatusUnauthorized, `{"error":"a retry that would not stop"}`, true
+		default:
+			return http.StatusConflict, portTakenBody, true
+		}
+	}}
+	cfg := poolConfigRefusing(t, fake, clock, 1, 2, r)
+
+	p, err := NewPool(context.Background(), cfg)
+	if err == nil {
+		p.Close()
+		t.Fatal("NewPool came up although every number for its second port was taken")
+	}
+	if n, want := len(r.attempts()), 1+3*cfg.Size()+12; n != want {
+		t.Errorf("%d numbers were tried, want %d: one that opened, then the ceiling pickPort uses", n, want)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
+		t.Errorf("error %v does not carry the refusal that ended the search", err)
+	}
+	if got := fake.OpenPorts(); len(got) != 0 {
+		t.Errorf("ports left open after a pool that never came up: %v", got)
+	}
+}
+
+// sameInts reports whether two number lists are equal, order included.
+func sameInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // writeList puts a proxy list where a source can read it, and replaces one that

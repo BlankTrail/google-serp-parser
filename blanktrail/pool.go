@@ -319,8 +319,9 @@ func (p *Pool) Stats() Stats {
 	return st
 }
 
-// NewPool opens Threads × PortsPerThread ports and returns a ready pool. On any
-// failure it closes every port it had already opened.
+// NewPool opens Threads × PortsPerThread ports and returns a ready pool. A port
+// number that turns out to be taken costs another number, not the pool — see
+// openOne. On any failure it closes every port it had already opened.
 func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	if cfg.Client == nil {
 		return nil, errors.New("blanktrail: PoolConfig.Client is required")
@@ -446,20 +447,14 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 			_ = p.Close()
 			return nil, fmt.Errorf("blanktrail: channel %q has no egress to hand out", ch.Name())
 		}
-		num, err := p.pickPort(ctx, used)
-		if err != nil {
-			_ = p.Close()
-			return nil, err
-		}
-		used[num] = true
-
 		spec := cfg.Spec
 		if specNames[i] != "" {
 			spec = specByName(cfg.Specs, specNames[i])
 		}
-		if _, err := p.cl.OpenPort(ctx, num, spec, eg); err != nil {
+		num, err := p.openOne(ctx, used, spec, eg)
+		if err != nil {
 			_ = p.Close()
-			return nil, fmt.Errorf("blanktrail: open port %d: %w", num, err)
+			return nil, err
 		}
 
 		pt := &poolPort{
@@ -510,6 +505,89 @@ func groupChannels(assigned []Channel) [][]Channel {
 	return groups
 }
 
+// openOne opens one port under spec on eg and returns the number it settled on.
+// Every number it worked through, opened or not, is recorded in used.
+//
+// A number the proxy just suggested can still refuse to open. The proxy knows
+// about the ports it holds itself and nothing else on the machine, and a number
+// this program has only just closed is kept by the operating system for a while
+// afterwards. With a pool that lives for one job — opened and closed all day —
+// that stops being rare, so a taken number costs another number rather than the
+// whole pool.
+//
+// A number that was refused is left exactly as it was found: whatever holds it,
+// this program did not open it, and reaching for a port it does not own is the
+// one thing the pool never does.
+func (p *Pool) openOne(ctx context.Context, used map[int]bool, spec PortSpec, eg Egress) (int, error) {
+	var lastTaken error
+	tries := p.portAttempts()
+	for i := 0; i < tries; i++ {
+		num, err := p.pickPort(ctx, used)
+		if err != nil {
+			if lastTaken != nil {
+				// Without this the caller reads "the range is exhausted" as a
+				// range too small for the pool, when in truth its numbers were
+				// held by something the proxy cannot see.
+				return 0, fmt.Errorf("%w; a number tried before that was already taken: %w", err, lastTaken)
+			}
+			return 0, err
+		}
+		// The number is spent whether or not it opens: pickPort avoids only what
+		// used holds, so a refused number left unmarked would be handed back on
+		// the next turn and refused again for as long as the attempts last.
+		used[num] = true
+
+		if _, err := p.cl.OpenPort(ctx, num, spec, eg); err != nil {
+			if !numberTaken(err) {
+				return 0, fmt.Errorf("blanktrail: open port %d: %w", num, err)
+			}
+			lastTaken = err
+			continue
+		}
+		return num, nil
+	}
+	return 0, fmt.Errorf("blanktrail: %d port numbers in a row were already taken, the last with: %w",
+		tries, lastTaken)
+}
+
+// numberTaken reports whether an OpenPort failure was about the port NUMBER —
+// something already holds it — and could therefore succeed on another one.
+//
+// This is the one judgement in the retry, and it cannot be made with certainty.
+// What a live BlankTrail answers when a number is busy has not been measured;
+// 409 Conflict is the status HTTP has for "what you named is already taken" and
+// what the fake control API answers, but nothing rules out the proxy reporting
+// the bind failure as a 500, or a 400 with the reason in the body.
+//
+// So the list is deliberately short and errs towards NOT trying another number.
+// Both mistakes are possible and they are not equal:
+//
+//   - Reading a taken number as something else gives up on it — which is what
+//     this program did before any of this existed: one clear sentence, at once.
+//   - Reading "the key was rejected" or "no licence for a pool" as a taken
+//     number retries an answer that will be identical on every number, and turns
+//     a sentence the operator can act on into a long silence and then a vaguer
+//     one.
+//
+// The second is the worse trade, so anything not on this list ends the open and
+// carries its own error out. When a run against a real proxy shows what a busy
+// number actually answers, this is the place to add it.
+//
+// A failure that is not an *APIError never reached the proxy at all — a refused
+// connection, a spent deadline — and no other number would fare better.
+func numberTaken(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Status == http.StatusConflict
+}
+
+// portAttempts is how many port numbers one open may work through. It is also
+// the ceiling pickPort uses on the proxy's suggestions, kept in one place so the
+// search for a number and the giving up on it cannot drift apart.
+func (p *Pool) portAttempts() int { return 3*p.cfg.Size() + 12 }
+
 func (p *Pool) pickPort(ctx context.Context, used map[int]bool) (int, error) {
 	if p.cfg.PortRange[1] > 0 {
 		for n := p.cfg.PortRange[0]; n <= p.cfg.PortRange[1]; n++ {
@@ -520,7 +598,7 @@ func (p *Pool) pickPort(ctx context.Context, used map[int]bool) (int, error) {
 		return 0, fmt.Errorf("blanktrail: port range %d-%d exhausted (need %d ports)",
 			p.cfg.PortRange[0], p.cfg.PortRange[1], p.cfg.Size())
 	}
-	for i := 0; i < 3*p.cfg.Size()+12; i++ {
+	for i := 0; i < p.portAttempts(); i++ {
 		n, err := p.cl.SuggestPort(ctx)
 		if err != nil {
 			return 0, err
