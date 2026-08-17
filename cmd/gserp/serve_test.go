@@ -343,13 +343,18 @@ func TestServe_TellsAProgramItHasNoQueueRatherThanFallingOverWithoutOne(t *testi
 	}
 }
 
-func TestServe_HandsTheSearchInsideARequestTheIdentitiesTheJobsRunOn(t *testing.T) {
+func TestServe_HandsTheSearchInsideARequestAPoolOfThisServersOwn(t *testing.T) {
 	// The address somebody else's program already calls is the whole reason this
 	// interface exists, and what it needs is identities rather than the queue: a
 	// search waiting behind a job of ten thousand queries is a socket held open
 	// for an hour. An interface built without them serves that address, refuses
 	// every request on it with one sentence, and from the outside looks exactly
 	// like one that works.
+	//
+	// The identities are this server's own and not any job's. A job raises its
+	// pool when its turn comes and takes it down when it ends, so an address
+	// borrowing that would answer only while somebody happened to be running
+	// something.
 	//
 	// What stands where the identities go answers the control API and nothing
 	// else, so this search reaches no network and comes back with no results.
@@ -388,7 +393,7 @@ func TestServe_HandsTheSearchInsideARequestTheIdentitiesTheJobsRunOn(t *testing.
 		t.Fatalf("nothing serves the address somebody else's program calls:\n%s", said)
 	}
 	if strings.Contains(string(said), "without identities") {
-		t.Errorf("the search was never taken to the identities the jobs run on: %d\n%s",
+		t.Errorf("the search was never taken to the identities this server keeps: %d\n%s",
 			res.StatusCode, said)
 	}
 }
@@ -543,6 +548,87 @@ func TestServe_CarriesTheSavedSourceWholeToTheListItReads(t *testing.T) {
 		if src.Refresh != saved.Refresh {
 			t.Errorf("the list is read again every %v, want the %v that was saved", src.Refresh, saved.Refresh)
 		}
+	}
+}
+
+func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *testing.T) {
+	// This is the far end of a job naming its pool: where two numbers become
+	// ports opened against the service. The queue asks for the job's own sizes,
+	// or for this server's where the job named none, and what is asked for is
+	// what has to be opened — a raiser with a size of its own would make every
+	// number on the job page a number that changes nothing.
+	//
+	// Two pools are opened, of sizes that are not each other's, because a raiser
+	// that ignored what it was asked for would open the same one twice.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	t.Setenv(envControlURL, "")
+	t.Setenv(envAPIKey, "")
+	t.Setenv(envProxyList, "")
+
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	opts.Threads, opts.Ports = 3, 5
+	saved, _ := opts.saved(io.Discard)
+	raise := opts.raise(saved, false)
+
+	// A job that named no size reaches here already stood in for, so what this end
+	// is asked for is the pair this server was started with.
+	own, err := raise(t.Context(), opts.Ports, opts.Threads)
+	if err != nil {
+		t.Fatalf("raising the pool of a job that named no size: %v", err)
+	}
+	if got, want := len(fake.OpenPorts()), opts.Threads*opts.Ports; got != want {
+		t.Errorf("%d ports were opened, want the %d this server was started with", got, want)
+	}
+	if err := own.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := len(fake.OpenPorts()); got != 0 {
+		t.Fatalf("%d ports are still open after that pool was given up", got)
+	}
+
+	named, err := raise(t.Context(), 2, 1)
+	if err != nil {
+		t.Fatalf("raising the pool a job named: %v", err)
+	}
+	t.Cleanup(func() { _ = named.Close() })
+	if got := len(fake.OpenPorts()); got != 2 {
+		t.Errorf("%d ports were opened, want the 2 the job asked for", got)
+	}
+}
+
+func TestServe_KeepsThePoolTheSearchUsesWhileEveryJobRaisesItsOwn(t *testing.T) {
+	// The queue is handed a way of opening pools rather than a pool. The search
+	// answered inside a request is handed one that is already open, and it has to
+	// go on being open between jobs: an interface where half the addresses work
+	// only while a job runs is one nobody can build against.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	t.Setenv(envControlURL, "")
+	t.Setenv(envAPIKey, "")
+	t.Setenv(envProxyList, "")
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), Threads: 1, Ports: 1,
+	})
+
+	st, err := store.Open(opts.DB)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	var out bytes.Buffer
+	sup, pool := opts.jobs(t.Context(), &out, st)
+	t.Cleanup(func() { _ = sup.Close() })
+
+	if pool == nil {
+		t.Fatalf("nothing was left for the search inside a request to go to:\n%s", out.String())
+	}
+	if !sup.CanRun() {
+		t.Errorf("the queue was given no way of raising a pool for a job:\n%s", out.String())
+	}
+	if got := len(fake.OpenPorts()); got == 0 {
+		t.Errorf("no identities are held with no job running, so the search has none:\n%s", out.String())
 	}
 }
 

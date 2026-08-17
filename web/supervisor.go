@@ -85,32 +85,97 @@ type poolFacts struct {
 	Cooldown time.Duration
 }
 
-// poolEngine takes every job through the one pool the supervisor was handed.
+// poolEngine takes one job through one pool of identities.
 //
-// The pool is a field and never something this builds, and that is the whole
-// shape of the decision behind this file. A pool answers better the longer it
-// has been used, and getting there costs minutes. A pool opened per job pays
-// that again every time and holds twice as much while it does: the measurement
-// this was decided on got no answer at all in 393 seconds from a fresh pool,
-// and an answer on the first attempt in 5 from one that had been used.
+// The pool is raised for that job out of the sizes that job named, and given up
+// when the job lets go of it. The price is known and is paid on purpose:
+// reaching a port that answers was measured at between 27 seconds and 9 minutes
+// 10, and a pool per job pays that again every time instead of once. What it
+// buys is that no two jobs ever share identities — one job's list can no longer
+// spoil the next one's — and that the size a job runs at is changed by editing
+// that job rather than by starting the server again.
 type poolEngine struct {
 	pool    *blanktrail.Pool
 	threads int
 }
 
-// Run builds a runner per job and a pool never. A runner is a few fields around
-// the pool, and the sink is the one part of it that belongs to a single job.
+// Run builds a runner around the pool this job was raised. A runner is a few
+// fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
 	return (&run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink}).Run(ctx, j)
 }
 
-// Close gives up the identities. It runs when the supervisor shuts down and at
-// no point between two jobs.
+// Close gives up the identities. It runs when the job this pool was raised for
+// has let go of it.
 func (e *poolEngine) Close() error { return e.pool.Close() }
 
-// Pool is the one pool, as it stands right now.
+// Pool is this job's pool, as it stands right now.
 func (e *poolEngine) Pool() poolFacts {
 	return poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown()}
+}
+
+// Dial raises the identities one job asked to run on.
+//
+// The two numbers are that job's own, already stood in for where the job named
+// nothing, so whatever is behind this is told a size it can act on rather than a
+// zero it has to interpret a second time.
+//
+// The context is the job's: a job stopped while its pool is still going up stops
+// there, rather than after ports it will never use have been opened.
+type Dial func(ctx context.Context, ports, threads int) (engine, error)
+
+// OpenPool opens the identities one job asked to run on. It is Dial as a caller
+// outside this package can write it: what a pool is opened as, how long its
+// ports rest and what is checked before they are opened is decided by the
+// command that starts this server, and an interface with a second opinion about
+// that would give a job set up here a different cost from the same job set up
+// there.
+type OpenPool func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error)
+
+// source is where the pool for the next job comes from.
+//
+// raise is the whole of it for a job that has its own pool put up. held is the
+// bridge that is left: the settings page opens a pool itself and hands the
+// finished thing over, so a source made that way has one already-open set of
+// identities that every job it starts is taken through, and that it has to give
+// back when it stops being what jobs are started from. It goes when the settings
+// page hands over a connection instead of a pool.
+type source struct {
+	raise Dial
+	held  engine
+}
+
+// standing makes a source out of a set of identities somebody else opened.
+//
+// Every job it starts is handed that same one, which is exactly what a pool per
+// job is not; it is here because the page that opens pools has not been changed
+// over yet, and it is the one path in this file where two jobs share identities.
+func standing(eng engine) source {
+	if eng == nil {
+		return source{}
+	}
+	return source{
+		raise: func(context.Context, int, int) (engine, error) { return eng, nil },
+		held:  eng,
+	}
+}
+
+// dialing makes a source that puts up a pool for each job.
+func dialing(open OpenPool) source {
+	if open == nil {
+		return source{}
+	}
+	return source{raise: func(ctx context.Context, ports, threads int) (engine, error) {
+		pool, err := open(ctx, ports, threads)
+		if err != nil {
+			return nil, err
+		}
+		// The engine is told the same number of threads the pool was opened for,
+		// because that number paces the job and is what the screen puts into its
+		// estimate: two answers to how wide this job runs would put a figure on the
+		// screen that no run ever matched.
+		return &poolEngine{pool: pool, threads: threads}, nil
+	}}
 }
 
 // jobSink files a finished query in the history under the job it belongs to.
@@ -136,24 +201,24 @@ func (s jobSink) Record(ctx context.Context, res run.QueryResult) error {
 	})
 }
 
-// Supervisor runs jobs one at a time, in the order they were asked for, on one
-// set of identities that outlives every job it carries.
+// Supervisor runs jobs one at a time, in the order they were asked for, each on
+// a pool of identities raised for it and given up when it lets go.
 //
 // One goroutine runs the jobs and nothing else does. It owns everything to do
-// with the job in flight: the plan read back from the history, the runner, the
-// results going into the history, and the stamp at the end. No caller reaches
-// any of that.
+// with the job in flight: the plan read back from the history, the pool that
+// plan is taken through, the results going into the history, and the stamp at
+// the end. No caller reaches any of that.
 //
 // What the callers and the worker share is the queue, the id of the job
 // running, the function that ends it, whether the supervisor has been shut
-// down, and the three engine fields below — and every one of them is read and
-// written under mu and nowhere else. The id and the cancel function are always
-// written together in one critical section, so a reader sees either no job at
-// all or a job together with the means of stopping exactly that job; there is
-// no ordering in which a stop can reach the job that came after the one it was
-// aimed at. The same holds of a swap: the engine to come, the engine in use and
-// the engine waiting move together, so no reader can find two of them
-// disagreeing.
+// down, and the three fields below that say where pools come from — and every
+// one of them is read and written under mu and nowhere else. The id and the
+// cancel function are always written together in one critical section, so a
+// reader sees either no job at all or a job together with the means of stopping
+// exactly that job; there is no ordering in which a stop can reach the job that
+// came after the one it was aimed at. The source to come, the pool in use and
+// the source waiting move together for the same reason, so no reader can find
+// two of them disagreeing.
 //
 // Nothing that leaves this type points into any of it. The queue is copied out,
 // and the running job is a number.
@@ -161,6 +226,12 @@ type Supervisor struct {
 	// Set once, before the worker starts, and never written again.
 	st  *store.Store
 	log *slog.Logger
+	// ports and threads are what a job that named no size runs at. They are the
+	// sizes this server was started with, handed in by whoever started it,
+	// because a job that named nothing has to run at some size and this package
+	// has no honest number of its own to put there.
+	ports   int
+	threads int
 
 	// wake carries one signal, which is all the worker needs: it empties the
 	// queue before it waits again, so a signal it missed is one it had already
@@ -176,30 +247,44 @@ type Supervisor struct {
 	running int64
 	cancel  context.CancelFunc
 	closed  bool
-	// eng is what the next job will be taken through. It is nil on a machine
+	// src is where the pool for the next job comes from. It is empty on a machine
 	// whose connection has not been set up yet, and it is replaced while the
 	// server runs, which is why it is here rather than among the fields set once.
-	eng engine
-	// inUse is the engine the job in flight was handed. It is what keeps an
-	// engine that has been replaced alive until the job inside it has let go.
+	src source
+	// inUse is the pool the job in flight is being taken through. It is what the
+	// screens read the identities off, and what release gives back.
 	inUse engine
-	// pending is an engine waiting for the job in flight to end.
-	pending engine
+	// pending is a source waiting for the job in flight to end.
+	pending source
 }
 
 // NewSupervisor starts the worker and hands back the queue in front of it.
 //
-// The pool comes from the caller and is closed when the supervisor is. Nothing
-// here can open one, which is what makes a job unable to cost a fresh set of
-// identities however this file is later rewritten.
-func NewSupervisor(st *store.Store, pool *blanktrail.Pool, threads int) *Supervisor {
-	return newSupervisor(st, &poolEngine{pool: pool, threads: threads})
+// Every job it takes has a pool opened for it by open and given up when that job
+// lets go. The two numbers are what a job that named no size runs at: they are
+// the sizes this server was started with, which on the command that starts it
+// are the -threads and -ports flags, so a job that named nothing costs what the
+// same job costs from the command line.
+func NewSupervisor(st *store.Store, open OpenPool, ports, threads int) *Supervisor {
+	return start(st, dialing(open), ports, threads)
 }
 
+// newSupervisor starts a worker that takes every job through the one set of
+// identities handed in, and nil for a machine that has none.
+//
+// It is the settings page's way in and the last of the shape this file had
+// before a pool belonged to a job. It goes when that page hands over a
+// connection rather than a finished pool.
 func newSupervisor(st *store.Store, eng engine) *Supervisor {
+	return start(st, standing(eng), 0, 0)
+}
+
+func start(st *store.Store, src source, ports, threads int) *Supervisor {
 	v := &Supervisor{
-		st:  st,
-		eng: eng,
+		st:      st,
+		src:     src,
+		ports:   ports,
+		threads: threads,
 		// The process logger, which stamps its lines and can be pointed
 		// elsewhere. A worker whose only account of itself is unstamped text is
 		// a worker nobody can operate.
@@ -297,6 +382,15 @@ func (v *Supervisor) Stop(jobID int64) error {
 // Swap changes what the jobs after this one are taken through, without the
 // server stopping.
 //
+// It is what is left of a supervisor that held one set of identities for the
+// whole server, and it survives only because the settings page still opens a
+// pool itself and hands the finished thing over. Jobs started through what it
+// hands over share that one pool, which is the very thing a pool per job is not.
+// It goes when that page hands over a connection instead — and with it go
+// SwapWhen, PendingSwap and ErrNoSwap, since a job reads the connection afresh
+// every time it raises its own pool and there is then nothing left to change on
+// the way past.
+//
 // The engine handed in becomes the supervisor's, and the one it replaces is
 // given up as soon as no job is inside it: it holds ports nobody will use
 // again. Which of the two the job in flight finishes on is the caller's choice.
@@ -317,17 +411,17 @@ func (v *Supervisor) Swap(ctx context.Context, eng engine, when SwapWhen) error 
 		return ErrClosed
 	}
 	var spent []engine
-	if v.pending != nil {
+	if v.pending.held != nil {
 		// Somebody who saved twice before a job ended meant the second save. The
 		// engine built for the first is never going to be used, and left open it
 		// holds its ports for as long as the process runs.
-		spent = append(spent, v.pending)
-		v.pending = nil
+		spent = append(spent, v.pending.held)
+		v.pending = source{}
 	}
 	if when == SwapAfterThisJob && v.running != 0 {
-		v.pending = eng
+		v.pending = standing(eng)
 	} else {
-		spent = append(spent, v.install(eng)...)
+		spent = append(spent, v.install(standing(eng))...)
 	}
 	v.mu.Unlock()
 	v.giveUp(spent)
@@ -341,7 +435,7 @@ func (v *Supervisor) Swap(ctx context.Context, eng engine, when SwapWhen) error 
 func (v *Supervisor) PendingSwap() bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.pending != nil
+	return v.pending.raise != nil
 }
 
 // CanRun reports whether there is anything for a job to be taken through.
@@ -356,28 +450,28 @@ func (v *Supervisor) CanRun() bool { return v.canRun() }
 
 // canRun says whether there is anything for a job to be taken through.
 //
-// A supervisor with no engine is what a machine whose connection has not been
-// set up yet has. It writes down what it is given and holds it, because a list
-// somebody has just typed in is not something to throw away over a setting they
-// are about to change.
+// A supervisor with nowhere to raise a pool from is what a machine whose
+// connection has not been set up yet has. It writes down what it is given and
+// holds it, because a list somebody has just typed in is not something to throw
+// away over a setting they are about to change.
 func (v *Supervisor) canRun() bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.eng != nil
+	return v.src.raise != nil
 }
 
-// install takes an engine into use and hands back what that leaves to be given
+// install takes a source into use and hands back what that leaves to be given
 // up. It is called with mu held.
 //
-// The engine the job in flight is inside is never among them. Closing it under
-// a running job would take away the ports that job is in the middle of using,
-// so it is left to the worker to give up as it lets go.
-func (v *Supervisor) install(eng engine) []engine {
+// The pool the job in flight is inside is never among them. Closing it under a
+// running job would take away the ports that job is in the middle of using, so
+// it is left to the worker to give up as it lets go.
+func (v *Supervisor) install(next source) []engine {
 	var spent []engine
-	if v.eng != nil && v.eng != v.inUse {
-		spent = append(spent, v.eng)
+	if v.src.held != nil && v.src.held != v.inUse {
+		spent = append(spent, v.src.held)
 	}
-	v.eng = eng
+	v.src = next
 	// The job in flight is stopped, not cancelled: what it recorded stays
 	// recorded and what it did not reach stays waiting, which is the whole of
 	// what a resume takes up.
@@ -411,19 +505,28 @@ func (v *Supervisor) Running() (int64, bool) {
 	return v.running, v.running != 0
 }
 
-// pool is what the identities behind every job report.
+// pool is what the identities the job in flight is running on report.
 //
-// The engine is read under the lock because a swap replaces it, and asked under
-// none, because what it answers with is the pool's own snapshot taken under the
-// pool's own lock and holding two locks to get one number invites waiting on
-// them in two orders.
+// The pool of the job in flight is what a screen is asking about, so it is
+// preferred to anything else; a source that stands on one already-open set of
+// identities answers between jobs as well, because those identities are there
+// between jobs and a screen saying nothing about them would be describing a
+// server that had given them up.
+//
+// The engine is read under the lock because the worker replaces it as jobs come
+// and go, and asked under none, because what it answers with is the pool's own
+// snapshot taken under the pool's own lock and holding two locks to get one
+// number invites waiting on them in two orders.
 func (v *Supervisor) pool() poolFacts {
 	v.mu.Lock()
-	eng := v.eng
+	eng := v.inUse
+	if eng == nil {
+		eng = v.src.held
+	}
 	v.mu.Unlock()
 	if eng == nil {
-		// A supervisor with nothing to run on holds no identities. The numbers of
-		// an engine that has been given up would describe something that is gone.
+		// No job is running, and nothing is held between jobs. The numbers of a
+		// pool that has been given up would describe something that is gone.
 		return poolFacts{}
 	}
 	return eng.Pool()
@@ -461,33 +564,34 @@ func (v *Supervisor) Close() error {
 	// An engine waiting for the job in flight is waiting for something that will
 	// not happen now, and its ports are held as surely as the ones in use.
 	waiting := v.pending
-	v.pending = nil
+	v.pending = source{}
 	v.mu.Unlock()
 
 	close(v.stopping)
 	<-v.done
 
-	// The worker has returned, so no job is inside an engine any more and what
-	// is left is the one the next job would have run on.
+	// The worker has returned, so the pool of the job that was in flight has been
+	// given back already and what is left is whatever a source holds open between
+	// jobs — nothing at all for a source that raises a pool per job.
 	v.mu.Lock()
-	eng := v.eng
-	v.eng = nil
+	src := v.src
+	v.src = source{}
 	v.mu.Unlock()
 
-	if waiting != nil {
-		v.giveUp([]engine{waiting})
+	if waiting.held != nil {
+		v.giveUp([]engine{waiting.held})
 	}
-	if eng == nil {
+	if src.held == nil {
 		return nil
 	}
-	return eng.Close()
+	return src.held.Close()
 }
 
 // work is the one goroutine that runs jobs.
 func (v *Supervisor) work() {
 	defer close(v.done)
 	for {
-		id, ctx, eng, ok := v.next()
+		id, ctx, src, ok := v.next()
 		if !ok {
 			select {
 			case <-v.wake:
@@ -496,9 +600,9 @@ func (v *Supervisor) work() {
 				return
 			}
 		}
-		v.runJob(ctx, eng, id)
-		// Before the job is settled, because an engine the job has left holds
-		// ports for nothing and settling takes a write to a database.
+		v.runJob(ctx, src, id)
+		// Before the job is settled, because a pool the job has left holds ports
+		// for nothing and settling takes a write to a database.
 		v.release()
 		v.settle(id)
 		// The job stops being the one running and the swap that was waiting for
@@ -514,41 +618,89 @@ func (v *Supervisor) work() {
 // id in the same critical section, so a stop aimed at this job can never arrive
 // early enough to find the id without it.
 //
-// The engine goes with them. The worker takes it here and uses that one for the
-// whole job, so a swap part way through cannot leave the job running on one
-// engine and reporting on another.
+// The source goes with them. The worker takes it here and raises this job's
+// pool from that one, so a source replaced part way through cannot leave the
+// job running on one pool and reporting on another.
 //
-// A supervisor with no engine takes nothing. The job stays at the front of the
-// queue and starts when there is something to take it through.
-func (v *Supervisor) next() (int64, context.Context, engine, bool) {
+// A supervisor with nowhere to raise a pool from takes nothing. The job stays at
+// the front of the queue and starts when there is something to take it through.
+//
+// The pool a source holds open between jobs is recorded as in use here, in the
+// same critical section that takes the job, so that a source replaced while this
+// job is being set up cannot have those identities closed out from under it. A
+// source that raises a pool per job has nothing to record yet: what this job will
+// run on does not exist until raise has put it up, and nothing else can reach it
+// until raise has written it down.
+func (v *Supervisor) next() (int64, context.Context, source, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || v.eng == nil || len(v.queue) == 0 {
-		return 0, nil, nil, false
+	if v.closed || v.src.raise == nil || len(v.queue) == 0 {
+		return 0, nil, source{}, false
 	}
 	id := v.queue[0]
 	v.queue = v.queue[1:]
 	ctx, cancel := context.WithCancel(context.Background())
 	v.running, v.cancel = id, cancel
-	v.inUse = v.eng
-	return id, ctx, v.eng, true
+	v.inUse = v.src.held
+	return id, ctx, v.src, true
 }
 
-// release gives back the engine the job was taken through.
+// raise puts up the pool this job asked for and records it as the one in use.
 //
-// It closes that engine when a swap replaced it while the job was inside it:
-// the swap could not close it then, because the job was still sending through
-// its ports. This is the moment that stops being true, and this is the only
-// place that gives such an engine up.
+// It runs after the job has been taken and with the lock let go, because raising
+// a pool takes minutes: under the lock every screen reading the queue would wait
+// out the whole warm-up, and before the job was taken it would be a pool raised
+// for a job nobody had chosen yet.
 //
-// What it does not do is take the engine waiting for this job. That happens
+// A source standing on identities somebody else opened answers here with those,
+// having raised nothing. It is the one path where two jobs are handed the same
+// pool, and keeping it inside the source rather than as a case here is what stops
+// the rest of this file from having to know which kind of source it is holding.
+func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary) (engine, error) {
+	eng, err := src.raise(ctx, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads))
+	if err != nil {
+		return nil, err
+	}
+	// Written down before the job goes into it, so that a stop or a shutdown
+	// arriving now finds a pool to give back rather than one nothing points at.
+	v.mu.Lock()
+	v.inUse = eng
+	v.mu.Unlock()
+	return eng, nil
+}
+
+// asked is the size a job named, or the size this server was started with where
+// the job named none.
+//
+// Nought is a job that said nothing about its pool — every job written down
+// before jobs carried sizes reads back that way — and the history hands it on as
+// the nought it is rather than filling it in, because filling it in there would
+// make a job that named nothing impossible to tell from one that named exactly
+// that number. This is where it is filled in, because this is where a pool goes
+// up.
+func asked(named, started int) int {
+	if named < 1 {
+		return started
+	}
+	return named
+}
+
+// release gives back the pool the job was taken through.
+//
+// A pool raised for this job is closed here, and this is the only place that
+// closes it: the job was sending through its ports until the moment it let go,
+// and until then there is nothing to give back. Identities a source holds open
+// between jobs are left alone unless that source has since been replaced, in
+// which case they are what the swap could not close at the time.
+//
+// What it does not do is take the source waiting for this job. That happens
 // where the job stops counting as running, because anything between the two
 // would be a stretch in which a swap is told the job is still running, records
 // itself as waiting for its end, and is never come back for.
 func (v *Supervisor) release() {
 	v.mu.Lock()
 	var spent []engine
-	if v.inUse != nil && v.inUse != v.eng {
+	if v.inUse != nil && v.inUse != v.src.held {
 		spent = append(spent, v.inUse)
 	}
 	v.inUse = nil
@@ -574,22 +726,28 @@ func (v *Supervisor) finished() {
 	v.cancel()
 	v.running, v.cancel = 0, nil
 	var spent []engine
-	if v.pending != nil {
+	if v.pending.raise != nil {
 		waiting := v.pending
-		v.pending = nil
+		v.pending = source{}
 		// The job is already no longer running, so the stop install would send to
-		// it goes nowhere, and the engine it hands back to be given up is the one
-		// the next job would have used rather than the one this job was inside.
+		// it goes nowhere, and what it hands back to be given up is what the next
+		// job would have used rather than what this job was inside.
 		spent = v.install(waiting)
 	}
 	v.mu.Unlock()
 	v.giveUp(spent)
 }
 
-// runJob reads back what the job has left and takes it through the engine the
-// job was given.
-func (v *Supervisor) runJob(ctx context.Context, eng engine, id int64) {
-	j, err := v.plan(ctx, id)
+// runJob reads back what the job has left, puts up the pool it asked for and
+// takes the one through the other.
+//
+// The plan is read first and the pool raised second, so a job with nothing left
+// costs no warm-up at all. A pool that would not go up leaves the job exactly as
+// it was found: nothing has been recorded against it and nothing stamps it, so
+// it is still there to be carried on, and the reason is in the log because it is
+// a refusal from something on this machine rather than anything the job did.
+func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
+	j, sum, err := v.plan(ctx, id)
 	if err != nil {
 		if ctx.Err() == nil {
 			v.log.Error("a job could not be read back before it ran", "job", id, "error", err)
@@ -599,25 +757,36 @@ func (v *Supervisor) runJob(ctx context.Context, eng engine, id int64) {
 	if len(j.Queries) == 0 {
 		return
 	}
+	eng, err := v.raise(ctx, src, sum)
+	if err != nil {
+		if ctx.Err() == nil {
+			v.log.Error("the identities a job asked for could not be raised, and the job is still there to be carried on",
+				"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
+				"error", err)
+		}
+		return
+	}
 	if rep := eng.Run(ctx, j, jobSink{st: v.st, jobID: id}); rep.Err != nil {
 		v.log.Error("a job was refused before anything was sent", "job", id, "error", rep.Err)
 	}
 }
 
 // plan is the work a job has left, dressed in the settings it was created
-// under.
+// under, beside the job as the history holds it.
 //
 // The settings come from the job and not from anything current: a job picked up
 // part way has to run as the job it is, or the history holds two shapes of
-// result under one name.
-func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, error) {
+// result under one name. The summary goes back with it because the sizes the
+// pool is raised at are read from the same row, and reading that row twice would
+// let a job be raised at one shape and run as another.
+func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSummary, error) {
 	sum, err := v.st.Progress(ctx, id)
 	if err != nil {
-		return run.Job{}, err
+		return run.Job{}, store.JobSummary{}, err
 	}
 	left, err := v.st.Pending(ctx, id)
 	if err != nil {
-		return run.Job{}, err
+		return run.Job{}, store.JobSummary{}, err
 	}
 	j := run.Job{Kind: runKind(sum.Kind), Pages: sum.Pages, SpecName: sum.SpecName}
 	for _, q := range left {
@@ -628,7 +797,7 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, error) {
 		// against the wrong query.
 		j.Ordinals = append(j.Ordinals, q.Ordinal)
 	}
-	return j, nil
+	return j, sum, nil
 }
 
 // settle stamps a job that has nothing left and leaves alone one that has.

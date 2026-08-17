@@ -5,6 +5,9 @@ package web
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,6 +44,10 @@ type heldEngine struct {
 	// stop, which is the one arrangement in which «given up too early» differs
 	// from «given up». Nil lets a job leave the moment it is done.
 	linger chan struct{}
+	// gone, when set, is told the instant this engine is given up. It is how
+	// whatever raised it counts how many are open at once, which is the only way
+	// to tell a pool per job from one pool for all of them while jobs are running.
+	gone func()
 
 	mu     sync.Mutex
 	jobs   []run.Job
@@ -94,8 +101,14 @@ func (e *heldEngine) Pool() poolFacts { return fakePool }
 
 func (e *heldEngine) Close() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.closes++
+	gone := e.gone
+	e.mu.Unlock()
+	// Told with this engine's own lock let go, because what is told takes a lock
+	// of its own and holding both would be two locks taken in two orders.
+	if gone != nil {
+		gone()
+	}
 	return nil
 }
 
@@ -179,6 +192,149 @@ func (e *heldEngine) took(query string) bool {
 		}
 	}
 	return false
+}
+
+// poolShape is the size one job asked the pool raised for it to be.
+type poolShape struct{ Ports, Threads int }
+
+// raisedPools stands where the pools go.
+//
+// It records the size every job asked for, hands each job an engine of its own,
+// and counts how many are open at the same time — which is the only way to tell
+// a pool per job from one pool handed to all of them while the jobs are still
+// running: once they have all ended, the two look alike.
+type raisedPools struct {
+	// hold and linger are given to every engine it raises, so a test can drive a
+	// job query by query and hold it inside the pool that was raised for it.
+	hold   chan struct{}
+	linger chan struct{}
+
+	mu    sync.Mutex
+	asked []poolShape
+	open  int
+	most  int
+	shut  int
+	// refuse is what raising comes back with while it is set: a machine where
+	// nothing will answer.
+	refuse error
+}
+
+// raise is the Dial a supervisor is built on.
+func (r *raisedPools) raise(_ context.Context, ports, threads int) (engine, error) {
+	r.mu.Lock()
+	r.asked = append(r.asked, poolShape{Ports: ports, Threads: threads})
+	if r.refuse != nil {
+		err := r.refuse
+		r.mu.Unlock()
+		return nil, err
+	}
+	r.open++
+	if r.open > r.most {
+		r.most = r.open
+	}
+	r.mu.Unlock()
+	return &heldEngine{hold: r.hold, linger: r.linger, gone: r.gaveUp}, nil
+}
+
+func (r *raisedPools) gaveUp() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.open--
+	r.shut++
+}
+
+// tried is how many times a pool was asked for, whether or not one went up.
+func (r *raisedPools) tried() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.asked)
+}
+
+// up is how many pools have been raised, and down how many have been given up.
+func (r *raisedPools) up() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.shut + r.open
+}
+
+func (r *raisedPools) down() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.shut
+}
+
+// mostAtOnce is the largest number of pools that were ever open together.
+func (r *raisedPools) mostAtOnce() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.most
+}
+
+// shapes are the sizes asked for, in the order they were asked for.
+func (r *raisedPools) shapes() []poolShape {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.asked)
+}
+
+// answering stops the refusing, so a job that could not be run can be carried on.
+func (r *raisedPools) answering() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refuse = nil
+}
+
+// let releases n queries of whichever job is inside a pool right now.
+func (r *raisedPools) let(t *testing.T, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		select {
+		case r.hold <- struct{}{}:
+		case <-time.After(patience):
+			t.Fatalf("the supervisor did not reach query %d", i+1)
+		}
+	}
+}
+
+// recorded is what the supervisor said, readable while it is still saying things.
+type recorded struct {
+	mu   sync.Mutex
+	said strings.Builder
+}
+
+func (s *recorded) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.said.Write(p)
+}
+
+func (s *recorded) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.said.String()
+}
+
+// raisingSupervisor is a supervisor that raises a pool for each job, at the
+// sizes that job named and at the two handed in where the job named none.
+func raisingSupervisor(t *testing.T, pools *raisedPools, ports, threads int) (*Supervisor, *store.Store) {
+	t.Helper()
+	st := testStore(t)
+	v := start(st, source{raise: pools.raise}, ports, threads)
+	t.Cleanup(func() { _ = v.Close() })
+	return v, st
+}
+
+// enqueueSized starts a job that names the pool it wants. Nought in either is a
+// job that named none.
+func enqueueSized(t *testing.T, v *Supervisor, name string, ports, threads int, queries ...string) int64 {
+	t.Helper()
+	id, err := v.Enqueue(store.JobSpec{
+		Name: name, Pages: 1, Country: "us", Language: "en", Ports: ports, Threads: threads,
+	}, queries)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	return id
 }
 
 // supervisorOn is a supervisor built on the engine handed in, shut down when the
@@ -297,68 +453,283 @@ func TestSupervisor_RunsOneJobAtATimeAndQueuesTheNext(t *testing.T) {
 	}
 }
 
-// standInPool opens a pool against a stand-in for the service behind it. What
-// it hands out reaches nothing on this machine, so every query fails and no
-// request leaves — which is beside the point here: what is asked is whether the
-// pool still holds what it held between two jobs, and a pool that was given up
-// is one the stand-in no longer lists anything for.
-func standInPool(t *testing.T, ports int) (*blanktrail.Pool, *fakebt.Server) {
+// standInPools opens real pools against a stand-in for the service behind them.
+// What they hand out reaches nothing on this machine, so every query fails and
+// no request leaves — which is beside the point: what is asked is whether the
+// ports a job's pool was opened with are still listed by the service after that
+// job has ended, and only a real pool can answer that.
+func standInPools(t *testing.T) (OpenPool, *fakebt.Server) {
 	t.Helper()
 	fake := fakebt.New(t)
 	cl, err := blanktrail.NewClient(fake.URL(), fake.Key())
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	p, err := blanktrail.NewPool(context.Background(), blanktrail.PoolConfig{
-		Client:           cl,
-		Threads:          ports,
-		PortsPerThread:   1,
-		Spec:             blanktrail.DefaultPortSpec(),
-		Channels:         []blanktrail.Channel{blanktrail.NewDirectChannel("direct")},
-		Insecure:         true,
-		Cooldown:         time.Nanosecond,
-		MaxRetriesPerReq: 1,
-		Sleep:            func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
-	})
-	if err != nil {
-		t.Fatalf("NewPool: %v", err)
-	}
-	t.Cleanup(func() { _ = p.Close() })
-	return p, fake
+	return func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
+		return blanktrail.NewPool(ctx, blanktrail.PoolConfig{
+			Client:           cl,
+			Threads:          threads,
+			PortsPerThread:   ports,
+			Spec:             blanktrail.DefaultPortSpec(),
+			Channels:         []blanktrail.Channel{blanktrail.NewDirectChannel("direct")},
+			Insecure:         true,
+			Cooldown:         time.Nanosecond,
+			MaxRetriesPerReq: 1,
+			Sleep:            func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+		})
+	}, fake
 }
 
-func TestSupervisor_KeepsThePoolBetweenJobs(t *testing.T) {
-	// A pool of identities answers better the longer it has been used, and
-	// getting there costs minutes of work. A supervisor that opened one per job
-	// would pay that again for every job and hold twice as much while it did.
+func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThemEnds(t *testing.T) {
+	// Everything else in this file counts pools against a stand-in, and a
+	// stand-in cannot say whether closing a real pool actually gives the ports
+	// back. This is the one place a real pool goes up.
 	//
-	// The closing assertion is what gives the other two teeth: what the pool
-	// holds does disappear when the pool is given up, so finding it still there
-	// after a job means the pool outlived the job.
-	pool, fake := standInPool(t, 2)
+	// The first half is what gives the second half teeth: opening one here and
+	// closing it shows that what the service lists does move, so nought listed
+	// after a job is a pool that was given up rather than one that was never
+	// opened.
+	open, fake := standInPools(t)
+	ctx := t.Context()
+
+	proof, err := open(ctx, 2, 1)
+	if err != nil {
+		t.Fatalf("opening a pool: %v", err)
+	}
+	if got := len(fake.OpenPorts()); got != 2 {
+		t.Fatalf("the service lists %d ports for a pool of 2, so it cannot say what a job holds", got)
+	}
+	if err := proof.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := len(fake.OpenPorts()); got != 0 {
+		t.Fatalf("the service still lists %d ports for a pool that was closed", got)
+	}
+
+	// Counted as well as listed, because nought ports listed is also what a
+	// supervisor that never opened a pool at all would leave behind.
+	var counting sync.Mutex
+	opened := 0
+	count := func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
+		counting.Lock()
+		opened++
+		counting.Unlock()
+		return open(ctx, ports, threads)
+	}
+	raised := func() int {
+		counting.Lock()
+		defer counting.Unlock()
+		return opened
+	}
+
 	st := testStore(t)
-	v := NewSupervisor(st, pool, 1)
+	v := NewSupervisor(st, count, 2, 1)
 	t.Cleanup(func() { _ = v.Close() })
 
 	first := enqueue(t, v, "first", "a")
 	waitUntil(t, "the first job is done", func() bool { return progress(t, st, first).Finished })
-	if pool.Size() == 0 || len(fake.OpenPorts()) == 0 {
-		t.Fatalf("the identities were given up when the first job ended: %d held, %d open",
-			pool.Size(), len(fake.OpenPorts()))
-	}
+	waitUntil(t, "the first job's identities are handed back",
+		func() bool { return len(fake.OpenPorts()) == 0 })
 
 	second := enqueue(t, v, "second", "b")
 	waitUntil(t, "the second job is done", func() bool { return progress(t, st, second).Finished })
-	if pool.Size() == 0 || len(fake.OpenPorts()) == 0 {
-		t.Fatalf("the identities were given up between the two jobs: %d held, %d open",
-			pool.Size(), len(fake.OpenPorts()))
+	waitUntil(t, "the second job's identities are handed back",
+		func() bool { return len(fake.OpenPorts()) == 0 })
+
+	if got := raised(); got != 2 {
+		t.Errorf("%d pools were opened for two jobs, want one each", got)
 	}
+}
+
+func TestSupervisor_RaisesAPoolOfItsOwnForEveryJobAndGivesItBackAsThatJobEnds(t *testing.T) {
+	// Three jobs, because a queue of one cannot tell a pool per job from one pool
+	// for all of them: with a single job the two raise once, give up once and
+	// leave the same history behind. Each names a different size, and none names
+	// the size this server was started with, so a supervisor reusing one pool and
+	// a supervisor raising them all from the default both fail here.
+	//
+	// The counts are read while the jobs are running, one job at a time. Read at
+	// the end they would say only that three pools went up and three came down,
+	// which is also what three pools opened at once and closed together says.
+	pools := &raisedPools{hold: make(chan struct{})}
+	v, st := raisingSupervisor(t, pools, 6, 5)
+
+	ids := []int64{
+		enqueueSized(t, v, "first", 3, 2, "a"),
+		enqueueSized(t, v, "second", 9, 4, "b"),
+		enqueueSized(t, v, "third", 11, 7, "c"),
+	}
+	for n, id := range ids {
+		waitUntilRunning(t, v, id)
+		waitUntil(t, "the job in flight has a pool", func() bool { return pools.up() == n+1 })
+		if got := pools.down(); got != n {
+			t.Fatalf("%d pools had been given up while job %d was still running, want %d", got, n+1, n)
+		}
+		pools.let(t, 1)
+	}
+	waitUntil(t, "every job is done", func() bool {
+		for _, id := range ids {
+			if !progress(t, st, id).Finished {
+				return false
+			}
+		}
+		return true
+	})
+	waitUntil(t, "the last job's pool has been given up", func() bool { return pools.down() == 3 })
+
+	if got := pools.up(); got != 3 {
+		t.Errorf("%d pools were raised for three jobs, want one each", got)
+	}
+	if got := pools.mostAtOnce(); got != 1 {
+		t.Errorf("%d pools were open at once, want one at a time", got)
+	}
+	want := []poolShape{{Ports: 3, Threads: 2}, {Ports: 9, Threads: 4}, {Ports: 11, Threads: 7}}
+	if got := pools.shapes(); !slices.Equal(got, want) {
+		t.Errorf("the pools were raised at %v, want the sizes the three jobs named: %v", got, want)
+	}
+}
+
+func TestSupervisor_GivesUpAJobsPoolOnlyOnceThatJobHasLetGoOfIt(t *testing.T) {
+	// A job does not let go of its pool at the instant its last query lands, and
+	// a pool given up in between has its ports taken back while the job is still
+	// sending through them. The job is held inside the pool here so that the two
+	// moments are far apart and the count below is read between them; a test that
+	// let the job leave straight away would be reading whichever of the two
+	// goroutines got there first.
+	pools := &raisedPools{hold: make(chan struct{}), linger: make(chan struct{})}
+	v, st := raisingSupervisor(t, pools, 6, 5)
+	id := enqueueSized(t, v, "nightly", 3, 2, "a", "b")
+
+	waitUntilRunning(t, v, id)
+	pools.let(t, 2)
+	waitUntil(t, "both queries are recorded", func() bool { return progress(t, st, id).Done == 2 })
+	if got := pools.down(); got != 0 {
+		t.Errorf("the pool was given up %d times while the job was still inside it", got)
+	}
+
+	close(pools.linger)
+	waitUntilIdle(t, v)
+	waitUntil(t, "the pool has been given up", func() bool { return pools.down() == 1 })
+	if got := pools.up(); got != 1 {
+		t.Errorf("%d pools were raised for one job", got)
+	}
+}
+
+func TestSupervisor_RunsAJobThatNamedNoSizeOnWhatTheServerWasStartedWith(t *testing.T) {
+	// Nought is a job that said nothing about its pool, and every job written down
+	// before jobs carried sizes reads back that way. It has to run, and it runs at
+	// the size this machine was started at.
+	//
+	// The second job names sizes of its own, and neither is the server's. Without
+	// it a supervisor that ignored the job entirely and always used the default
+	// would pass, and with only the second a supervisor that never used the
+	// default would.
+	pools := &raisedPools{hold: make(chan struct{})}
+	v, st := raisingSupervisor(t, pools, 6, 5)
+	silent := enqueueSized(t, v, "said nothing", 0, 0, "a")
+	spoken := enqueueSized(t, v, "said so", 3, 2, "b")
+
+	waitUntilRunning(t, v, silent)
+	pools.let(t, 1)
+	waitUntilRunning(t, v, spoken)
+	pools.let(t, 1)
+	waitUntil(t, "both jobs are done", func() bool {
+		return progress(t, st, silent).Finished && progress(t, st, spoken).Finished
+	})
+
+	want := []poolShape{{Ports: 6, Threads: 5}, {Ports: 3, Threads: 2}}
+	if got := pools.shapes(); !slices.Equal(got, want) {
+		t.Errorf("the pools were raised at %v, want %v — this server's own sizes, then the job's", got, want)
+	}
+}
+
+func TestSupervisor_LeavesAJobWhosePoolWouldNotGoUpToBeCarriedOn(t *testing.T) {
+	// Reaching identities that answer is the part of this that fails, and it fails
+	// on machines nobody can inspect afterwards. A job lost to it — stamped done
+	// with nothing recorded, or dropped out of the queue with no trace — is a
+	// list somebody typed in and will never get back.
+	pools := &raisedPools{hold: make(chan struct{}), refuse: errors.New("no port answered")}
+	v, st := raisingSupervisor(t, pools, 6, 5)
+	// Written before anything is queued, and read after: the worker takes the
+	// queue under the lock the enqueue below releases, so it sees this rather than
+	// racing with it.
+	said := &recorded{}
+	v.log = slog.New(slog.NewTextHandler(said, nil))
+
+	id := enqueueSized(t, v, "nightly", 3, 2, "a", "b")
+	waitUntil(t, "the pool was asked for", func() bool { return pools.tried() == 1 })
+	waitUntilIdle(t, v)
+
+	sum := progress(t, st, id)
+	if sum.Finished {
+		t.Error("the job was stamped done, and nothing is left to carry it on")
+	}
+	if sum.Done != 0 || sum.Failed != 0 || sum.Pending != 2 {
+		t.Errorf("done=%d failed=%d pending=%d, want 0/0/2 — the job kept everything it had",
+			sum.Done, sum.Failed, sum.Pending)
+	}
+	if q := v.Queued(); len(q) != 0 {
+		t.Errorf("the job is still queued as %v, so the queue is stuck on it", q)
+	}
+	if !strings.Contains(said.String(), "no port answered") {
+		t.Errorf("nothing says why the job did not run:\n%s", said.String())
+	}
+
+	// And it is a job, not a wreck: with something answering it carries on from
+	// where it never started.
+	pools.answering()
+	if err := v.Resume(id); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	waitUntilRunning(t, v, id)
+	pools.let(t, 2)
+	waitUntil(t, "the job is done", func() bool { return progress(t, st, id).Finished })
+	if got := progress(t, st, id).Done; got != 2 {
+		t.Errorf("the carried-on job recorded %d queries, want the 2 it had waiting", got)
+	}
+}
+
+func TestSupervisor_GivesUpThePoolOfAJobThatWasStopped(t *testing.T) {
+	// A job that was stopped has ended, and its pool holds ports for nothing. It
+	// is the ending nobody arranges for, so it is the one where a pool is left
+	// open until the process ends.
+	pools := &raisedPools{hold: make(chan struct{})}
+	v, st := raisingSupervisor(t, pools, 6, 5)
+	id := enqueueSized(t, v, "nightly", 3, 2, "a", "b", "c")
+
+	waitUntilRunning(t, v, id)
+	pools.let(t, 1)
+	waitUntil(t, "one query is recorded", func() bool { return progress(t, st, id).Done == 1 })
+	if err := v.Stop(id); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitUntilIdle(t, v)
+
+	waitUntil(t, "the stopped job's pool has been given up", func() bool { return pools.down() == 1 })
+	if got := pools.up(); got != 1 {
+		t.Errorf("%d pools were raised, want the one the stopped job was taken through", got)
+	}
+	if sum := progress(t, st, id); sum.Finished || sum.Pending != 2 {
+		t.Errorf("the stopped job: finished=%v pending=%d, want false/2", sum.Finished, sum.Pending)
+	}
+}
+
+func TestSupervisor_GivesUpThePoolOfTheJobInFlightWhenItShutsDown(t *testing.T) {
+	// A shutdown that left the pool of the job it ended open would hold those
+	// ports until the process died, and the process is what is dying.
+	pools := &raisedPools{hold: make(chan struct{})}
+	st := testStore(t)
+	v := start(st, source{raise: pools.raise}, 6, 5)
+
+	id := enqueueSized(t, v, "nightly", 3, 2, "a", "b")
+	waitUntilRunning(t, v, id)
+	waitUntil(t, "the job has a pool", func() bool { return pools.up() == 1 })
 
 	if err := v.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if got := len(fake.OpenPorts()); got != 0 {
-		t.Errorf("%d identities still open after the supervisor closed, want none", got)
+	if got := pools.down(); got != 1 {
+		t.Errorf("the pool of the job in flight was given up %d times, want 1", got)
 	}
 }
 

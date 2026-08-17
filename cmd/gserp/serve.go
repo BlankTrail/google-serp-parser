@@ -163,9 +163,11 @@ func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
 		cfg.Supervisor = sup
 	}
 	// A search answered inside the request goes to the identities directly rather
-	// than through the queue, so it is handed the pool the jobs run on and not the
-	// queue in front of it. It competes for ports with a running job, which is why
-	// it is capped at the number of ports there are.
+	// than through the queue, so it is handed a pool and not the queue in front of
+	// it. That pool is this server's own and is not the one any job runs on: a job
+	// raises its own and takes it down again, and an address that answered only
+	// while a job happened to be running would be an address nobody could build
+	// anything on. How large it is belongs in the settings and is not there yet.
 	if pool != nil {
 		cfg.Search = api.SearchConfig{
 			Searcher: &run.Attempt{Pool: pool},
@@ -202,8 +204,8 @@ func mount(pages, programs http.Handler) http.Handler {
 	return mux
 }
 
-// jobs opens the ports the interface will run jobs on, or says why it has none
-// yet.
+// jobs hands the interface the way to open ports for a job, or says why it has
+// none yet.
 //
 // There is always a supervisor. Neither a missing key nor ports that would not
 // open is a reason to refuse to start: half of what this interface does is read
@@ -211,12 +213,17 @@ func mount(pages, programs http.Handler) http.Handler {
 // supervisor with nothing to run on, which is what lets a connection set up in
 // the browser be taken into use without the process being started again.
 //
-// The pool comes back beside the queue because a search answered inside a
-// request does not go through that queue: it takes a port of its own from the
-// same set, and it can only do that if it is handed them. The supervisor closes
-// the pool when it closes, so both ways in end together and neither is left
-// searching on identities that have been given up. A server with nothing to run
-// on hands back no pool, and the programmable side says so rather than waiting.
+// No job runs on the pool that comes back. Each job raises one of its own, at
+// the sizes it named, and gives it up when it lets go — so the pool here is
+// opened for one thing only: the search answered inside a request, which cannot
+// wait behind a queue and must go on answering between jobs as well as during
+// them. It is opened at startup so that whether it answers does not depend on
+// whether anybody has started a job. A server with nothing to run on hands back
+// no pool, and the programmable side says so rather than waiting.
+//
+// Opening it is also the check that this connection works at all, which is why a
+// failure here is reported the same way it always was: the alternative is a
+// server that comes up looking healthy and refuses the first job an hour later.
 //
 // The key is read from the environment and is not a flag, for the reason it is
 // not one anywhere else in this command: a key on a command line is a key in the
@@ -227,12 +234,16 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	saved, configured := o.saved(out)
 	threads, ports := o.runOn(saved, configured)
 
+	// What this process was started with wins. Somebody who put a key in the
+	// environment for this run meant it for this run, and a job raising its pool
+	// an hour from now has to read the connection the same way this does or the
+	// interface would be running on one connection and reporting another.
+	fromEnv := os.Getenv(envAPIKey) != ""
+
 	var pool *blanktrail.Pool
 	var err error
 	switch {
-	case os.Getenv(envAPIKey) != "":
-		// What this process was started with wins. Somebody who put a key in the
-		// environment for this run meant it for this run.
+	case fromEnv:
 		pool, err = openPool(ctx, out, poolConfig(threads, ports))
 	case saved.APIKey != "":
 		pool, err = o.dial(ctx, saved, threads, ports)
@@ -249,7 +260,42 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 		_, _ = fmt.Fprintln(out, "gserp doctor prints the whole report")
 		return web.NewSupervisorWithoutAPool(st), nil
 	}
-	return web.NewSupervisor(st, pool, threads), pool
+	// The two numbers are what a job that named no size runs at, and this is
+	// where that stands in: they are the sizes this server was started with — the
+	// -threads and -ports flags, or what a settings file the caller left the flags
+	// alone for overrode them with. Every job written down before jobs carried
+	// sizes reads back as nought, and the size this machine was started at is the
+	// only one anybody on it has actually chosen.
+	return web.NewSupervisor(st, o.raise(saved, fromEnv), ports, threads), pool
+}
+
+// raise is how one job's own pool is opened.
+//
+// It is handed to the queue rather than called here, because a job's pool goes
+// up when that job's turn comes and comes down when the job lets go. The sizes
+// are the job's own, already stood in for where it named none, so nothing here
+// decides how large anything is.
+//
+// The connection is this server's, read the same way it was read at startup, and
+// captured rather than reread: the settings file may be rewritten while the
+// server runs, and a job that raised its pool against a half-written file would
+// fail for a reason nobody could reconstruct afterwards. Changing what later jobs
+// connect through is the settings page's, and it does it by handing the queue
+// something new.
+//
+// Nothing is printed. What openPool writes is written for somebody watching a
+// command start, and a pool going up hours later for one job of many would print
+// into the middle of whatever the operator is reading — and would be a second
+// goroutine writing to a stream this command's caller owns. The refusal comes
+// back as an error, and the queue puts it in the log against the job it belongs
+// to.
+func (o serveOptions) raise(saved settings.Settings, fromEnv bool) web.OpenPool {
+	return func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
+		if fromEnv {
+			return openPool(ctx, io.Discard, poolConfig(threads, ports))
+		}
+		return o.dial(ctx, saved, threads, ports)
+	}
 }
 
 // connect opens the ports a connection just saved in the browser describes.
