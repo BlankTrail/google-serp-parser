@@ -199,6 +199,19 @@ type poolPort struct {
 	specName string
 	spec     PortSpec
 
+	// hot marks a port of the standing set: one this machine keeps open and
+	// warm between jobs. A job that needs more than there are grows the pool and
+	// gives the growth back when it ends, and this is what says which ports the
+	// growth was — the standing ones are never the ones given back.
+	//
+	// It also decides which port a lease is offered first. A warm port answers
+	// where a cold one waits on a challenge, so the run starts producing at once
+	// rather than in a minute; and because a port that has just been used is not
+	// ready again until its cooldown has passed, preferring the warm ones cannot
+	// starve the rest — the work spreads by itself and the rest warm up as it
+	// does.
+	hot bool
+
 	mu          sync.Mutex
 	eg          Egress
 	lastUsed    time.Time
@@ -416,46 +429,75 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		byNum: map[int]*poolPort{},
 	}
 
-	size := cfg.Size()
-	specNames, err := planSpecs(cfg.Specs, size)
-	if err != nil {
+	if err := p.openBatch(ctx, cfg.Size(), true); err != nil {
+		_ = p.Close()
 		return nil, err
+	}
+	return p, nil
+}
+
+// openBatch opens count more ports and lays them over the channels and the
+// templates the pool was configured with.
+//
+// It is one function because a pool is built and grown the same way: the
+// alternative is two layouts that agree today and one of them changed later,
+// after which a grown pool would be spread over its egress channels differently
+// from a pool of the same size opened whole — and no two runs would be
+// comparable again.
+//
+// hot says whether these are the standing ports. The ones a job grows the pool
+// by are not, and they are what Shrink gives back.
+func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
+	if count <= 0 {
+		return nil
+	}
+	specNames, err := planSpecs(p.cfg.Specs, count)
+	if err != nil {
+		return err
 	}
 	// The mixer decides how many ports each channel gets; spreadSpecs decides
 	// which ports those are, so that no template ends up confined to one egress.
-	groups := groupChannels(p.mixer.Assign(size))
+	groups := groupChannels(p.mixer.Assign(count))
 	counts := make([]int, len(groups))
 	total := 0
 	for i, g := range groups {
 		counts[i] = len(g)
 		total += len(g)
 	}
-	if total != size {
+	if total != count {
 		// Assign hands back nothing once every channel has been penalised to a
 		// weight of zero.
-		return nil, errors.New("blanktrail: no usable egress channel")
+		return errors.New("blanktrail: no usable egress channel")
 	}
 	layout := spreadSpecs(specNames, counts)
 	taken := make([]int, len(groups))
 
+	// The numbers already in this pool are spent. Without them a growth would be
+	// handed a number it is already listening on, and the open would be refused
+	// for a reason that reads as the range being full.
 	used := map[int]bool{}
-	for i := 0; i < size; i++ {
+	p.mu.Lock()
+	for num := range p.byNum {
+		used[num] = true
+	}
+	host := p.host
+	p.mu.Unlock()
+
+	for i := 0; i < count; i++ {
 		g := layout[i]
 		ch := groups[g][taken[g]]
 		taken[g]++
 		eg, ok := ch.Next()
 		if !ok {
-			_ = p.Close()
-			return nil, fmt.Errorf("blanktrail: channel %q has no egress to hand out", ch.Name())
+			return fmt.Errorf("blanktrail: channel %q has no egress to hand out", ch.Name())
 		}
-		spec := cfg.Spec
+		spec := p.cfg.Spec
 		if specNames[i] != "" {
-			spec = specByName(cfg.Specs, specNames[i])
+			spec = specByName(p.cfg.Specs, specNames[i])
 		}
 		num, err := p.openOne(ctx, used, spec, eg)
 		if err != nil {
-			_ = p.Close()
-			return nil, err
+			return err
 		}
 
 		pt := &poolPort{
@@ -464,12 +506,13 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 			eg:        eg,
 			specName:  specNames[i],
 			spec:      spec,
-			base:      newBaseTransport(host, num, cfg.CA, cfg.Insecure),
-			renewedAt: cfg.Now(),
+			hot:       hot,
+			base:      newBaseTransport(host, num, p.cfg.CA, p.cfg.Insecure),
+			renewedAt: p.cfg.Now(),
 		}
 		// lastUsed stays zero so a fresh port is immediately available.
 		pt.client = &http.Client{
-			Timeout:   cfg.RequestTimeout,
+			Timeout:   p.cfg.RequestTimeout,
 			Transport: &ladder{rt: pt.base, port: num, rem: p},
 		}
 		p.mu.Lock()
@@ -477,7 +520,103 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		p.byNum[num] = pt
 		p.mu.Unlock()
 	}
-	return p, nil
+	return nil
+}
+
+// Grow opens extra more ports on top of the ones already open.
+//
+// It is how a job larger than the standing pool is run: the ports this machine
+// keeps warm stay as they are, the job's own are opened beside them, and one
+// pool hands out both. Opened as a second pool they would be a second set of
+// statistics, a second cooldown and a second answer to "how many identities is
+// this run on".
+//
+// A growth that fails part way leaves what it managed open. They are ports of
+// this pool like any other and Shrink gives them back; the alternative is
+// unwinding a partial growth while a job is already leasing from it.
+func (p *Pool) Grow(ctx context.Context, extra int) error {
+	if p.isClosed() {
+		return ErrPoolExhausted
+	}
+	return p.openBatch(ctx, extra, false)
+}
+
+// Shrink closes every port this pool has grown by, and keeps the standing ones.
+//
+// It is what a job's end does. A port still leased is closed with the rest: the
+// caller has let go of the pool by the time this is called, and a port left open
+// because somebody forgot to release it is a port nothing will ever close.
+func (p *Pool) Shrink(ctx context.Context) (int, error) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return 0, nil
+	}
+	var keep, drop []*poolPort
+	for _, pt := range p.ports {
+		if pt.hot {
+			keep = append(keep, pt)
+			continue
+		}
+		drop = append(drop, pt)
+		delete(p.byNum, pt.num)
+	}
+	p.ports = keep
+	p.mu.Unlock()
+
+	var firstErr error
+	for _, pt := range drop {
+		if err := p.cl.ClosePort(ctx, pt.num); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		pt.base.CloseIdleConnections()
+	}
+	return len(drop), firstErr
+}
+
+// AcquireIdleHot leases a standing port that nobody has used for at least the
+// given span, and reports whether there was one.
+//
+// It is what keeps the standing ports warm without getting in the way of the
+// work: a port the run is using does not need warming, and one the run has just
+// used is not idle. Nothing waits here — a pool with nothing idle answers no
+// straight away, and the caller comes back later.
+func (p *Pool) AcquireIdleHot(idle time.Duration) (*Lease, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, false
+	}
+	now := p.cfg.Now()
+	for _, pt := range p.ports {
+		if !pt.hot {
+			continue
+		}
+		pt.mu.Lock()
+		free := !pt.leased && !pt.quarantined && now.Sub(pt.lastUsed) >= idle
+		if free {
+			pt.leased = true
+			pt.lastUsed = now
+		}
+		pt.mu.Unlock()
+		if free {
+			return &Lease{pool: p, pt: pt}, true
+		}
+	}
+	return nil, false
+}
+
+// Hot is how many ports of the standing set this pool holds.
+func (p *Pool) Hot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, pt := range p.ports {
+		if pt.hot {
+			n++
+		}
+	}
+	return n
 }
 
 // groupChannels collects one assignment slot list per channel, keeping both the
@@ -826,7 +965,13 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 			continue
 		}
 		if elapsed := now.Sub(last); elapsed >= p.cool {
-			if best == nil || last.Before(bestUsed) {
+			// Warm before cold, and within each the one that has rested longest.
+			// A warm port answers where a cold one waits on a challenge; the
+			// cooldown above keeps this from becoming "always the same ten".
+			switch {
+			case best == nil,
+				pt.hot && !best.hot,
+				pt.hot == best.hot && last.Before(bestUsed):
 				best, bestUsed = pt, last
 			}
 			continue
