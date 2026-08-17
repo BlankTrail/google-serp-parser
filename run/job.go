@@ -73,6 +73,10 @@ type Job struct {
 	// An index job ignores it: presence is settled by the first page, and taking
 	// a second would spend a request to re-answer a question already answered.
 	Pages int
+	// Mobile says this job runs on phones. It travels with the job because it is
+	// what the job was set up as, and it reaches the header that has to differ.
+	Mobile bool
+
 	// SpecName asks for ports opened under a named template, so a run that wants
 	// mobile results is not quietly answered from a desktop one. Empty takes any
 	// port.
@@ -186,7 +190,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 
 	// One Attempt for the whole job. It keeps a session per port, and a port is
 	// leased to one thread at a time, so the threads never meet inside it.
-	attempt := &Attempt{Pool: r.Pool, SpecName: j.SpecName, Tries: j.Tries}
+	attempt := &Attempt{Pool: r.Pool, SpecName: j.SpecName, Tries: j.Tries, Mobile: j.Mobile}
 
 	queue := make(chan int)
 	var wg sync.WaitGroup

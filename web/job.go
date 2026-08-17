@@ -64,7 +64,9 @@ type jobSetup struct {
 	Pages    int
 	Country  string
 	Language string
-	Spec     string
+	// Device is which kind of result page this job asked Google for, as the key
+	// of what to call it: every phrase on every page goes through the catalogue.
+	Device string
 	// Ports, Threads and Tries are the pool this job runs on, and the three
 	// things about it that can still be changed. Everything above them is what
 	// the job is: the depth, the country and the filter are settled by the work
@@ -174,6 +176,9 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	// reason a kind is: a page that called it "keep everything" would describe a
 	// run that dropped results as one that dropped none.
 	filter, _ := filterKey(string(sum.UniqueBy))
+	// A kind of result page the catalogue has no word for is named by its own
+	// word, for the reason a kind of job is.
+	device, _ := deviceKey(sum.Device)
 
 	frame := s.frame(r, lang, "job.title", jobsAt)
 	// Asked for again only while the job can answer differently. A job nobody is
@@ -192,7 +197,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Pages:       sum.Pages,
 			Country:     sum.Country,
 			Language:    sum.Language,
-			Spec:        sum.SpecName,
+			Device:      device,
 			Ports:       sum.Ports,
 			Threads:     sum.Threads,
 			Tries:       sum.Tries,

@@ -39,7 +39,8 @@ type stubConnect struct {
 	err   error
 }
 
-func (c *stubConnect) open(_ context.Context, saved settings.Settings, ports, threads int) (*blanktrail.Pool, error) {
+func (c *stubConnect) open(_ context.Context, saved settings.Settings, ports, threads int,
+	_ string) (*blanktrail.Pool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.with = append(c.with, saved)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/run"
 	"github.com/blanktrail/google-serp-parser/store"
 )
@@ -34,10 +35,12 @@ type jobForm struct {
 	Queries  string
 	Country  string
 	Language string
-	SpecName string
-	Pages    int
-	Threads  int
-	Ports    int
+	// Device is which kind of result page this job asks Google for: a desktop or
+	// a phone.
+	Device  string
+	Pages   int
+	Threads int
+	Ports   int
 	// Tries is how many identities one query may be taken to before it is
 	// written off, and From says which of the two ways the phrases arrived by.
 	Tries int
@@ -105,11 +108,10 @@ func blankForm() jobForm {
 		// it is the answer nearly everybody opening this page came for.
 		Country:  defaultCountry,
 		Language: defaultLanguage,
-		// SpecName is left out on purpose, and is the one box here with no answer
-		// that is right for everybody: it names a template on the operator's own
-		// service, so any name written in would be one most machines do not have,
-		// and a job asking for a template that is not there fails on every query.
-		// Empty means whatever the pool opened.
+		// The desktop, because that is the page most people mean when they say
+		// "the results": it is what a search from a computer answers with, and it
+		// is what every job this program ran before there was a choice ran on.
+		Device:  blanktrail.DeviceDesktop,
 		Pages:   1,
 		Threads: 2,
 		Ports:   6,
@@ -359,7 +361,7 @@ func (f jobForm) spec() store.JobSpec {
 		Pages:    f.depth(),
 		Country:  f.Country,
 		Language: f.Language,
-		SpecName: f.SpecName,
+		Device:   f.Device,
 		Ports:    f.Ports,
 		Threads:  f.Threads,
 		Tries:    f.Tries,
@@ -382,7 +384,7 @@ func formOf(r *http.Request) jobForm {
 		Queries:  r.FormValue("queries"),
 		Country:  strings.TrimSpace(r.FormValue("country")),
 		Language: strings.TrimSpace(r.FormValue("language")),
-		SpecName: strings.TrimSpace(r.FormValue("spec")),
+		Device:   strings.TrimSpace(r.FormValue("device")),
 		Pages:    atoi("pages"),
 		Threads:  atoi("threads"),
 		Ports:    atoi("ports"),
@@ -403,6 +405,10 @@ type newPage struct {
 	Kinds []jobKind
 	// Filters is every way of dropping repeats, offered on the same terms.
 	Filters []jobFilter
+	// Devices is every kind of result page, on the same terms again. The list
+	// comes from the package that opens the ports, so a kind offered here is one
+	// that can actually be opened.
+	Devices []jobDevice
 	// Sources is the two ways the phrases can arrive, on the same terms again.
 	Sources []jobSource
 	// Keeps is every part of a result that can be kept, each with whether this
@@ -464,6 +470,7 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		Complaints: complaints,
 		Kinds:      kinds(),
 		Filters:    filters(),
+		Devices:    devicesOffered(form.Device),
 		Sources:    sources(),
 		Keeps:      keeps(form),
 		Chose:      choseField,
@@ -524,4 +531,50 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, form jobForm, que
 		return
 	}
 	http.Redirect(w, r, "/job/"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+}
+
+// jobDevice is one kind of result page, with the key of what to call it.
+//
+// It travels the way a kind does, for the same reason: the markup must not
+// offer a choice the handler does not take, or file a job under a word the
+// database refuses.
+type jobDevice struct {
+	Value   string
+	Label   string
+	Current bool
+}
+
+// devicesOffered is every kind of result page, with the one in use already
+// chosen. The list comes from the package that opens the ports, so a kind
+// offered here is a kind that can actually be opened.
+func devicesOffered(current string) []jobDevice {
+	if current == "" {
+		current = blanktrail.DeviceDesktop
+	}
+	offered := make([]jobDevice, 0, len(blanktrail.Devices()))
+	for _, device := range blanktrail.Devices() {
+		offered = append(offered, jobDevice{
+			Value:   device,
+			Label:   "form.device." + device,
+			Current: device == current,
+		})
+	}
+	return offered
+}
+
+// deviceKey is the key of what to call a kind of result page, and whether it is
+// one at all.
+//
+// The empty string is a desktop, because that is what every job written before
+// there was a choice ran on. Anything else that is not a kind comes back as
+// itself, for the reason an untranslated key does: it is ugly and it reports
+// itself, which beats a page calling a job something it is not.
+func deviceKey(device string) (string, bool) {
+	if device == "" {
+		return "form.device." + blanktrail.DeviceDesktop, true
+	}
+	if blanktrail.KnownDevice(device) {
+		return "form.device." + device, true
+	}
+	return device, false
 }

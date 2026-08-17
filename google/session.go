@@ -28,6 +28,16 @@ const maxBody = 8 << 20
 type Session struct {
 	Client *http.Client
 
+	// Mobile says the identity behind this session is a phone, which changes one
+	// header this package sets: what a browser will accept.
+	//
+	// It is set from the same choice the ports were opened under. Nothing here
+	// invents the user agent or the client hints — those belong to the identity
+	// and the proxy owns them — but the accepted types are ours to get right, and
+	// they differ between the two: Chrome lists the image formats it can decode,
+	// and Safari does not.
+	Mobile bool
+
 	// warmed records that the home page has been visited, so the first search
 	// of a session is a navigation from somewhere and later ones do not repeat
 	// the visit.
@@ -111,6 +121,12 @@ func (s *Session) get(ctx context.Context, target string, q Query) (body []byte,
 	// one navigation header set here that depends on the query, and it must
 	// agree with hl.
 	req.Header.Set("Accept-Language", q.AcceptLanguage())
+	// And so is Accept, on the evidence. Measured through a real port: a Chrome
+	// identity arrives with the full Chrome list already on it, and a Safari one
+	// arrives with no Accept at all — a request no browser has ever made. Setting
+	// it here fills that in; where the proxy sets its own, this is a header it
+	// already had an opinion about.
+	req.Header.Set("Accept", s.accepts())
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	req.Header.Set("Sec-Fetch-Dest", "document")
 	req.Header.Set("Sec-Fetch-Mode", "navigate")
@@ -147,4 +163,29 @@ func (s *Session) get(ctx context.Context, target string, q Query) (body []byte,
 		final = resp.Request.URL.String()
 	}
 	return raw, final, resp.StatusCode, nil
+}
+
+// The document types a browser says it will take.
+//
+// Written out rather than assembled, because they are quotations: this is
+// exactly what each browser sends, in exactly that order, and a list this
+// program shortened or sorted would be a browser nobody has.
+const (
+	acceptChrome = "text/html,application/xhtml+xml,application/xml;q=0.9," +
+		"image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+	acceptSafari = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+)
+
+// accepts is the Accept header for the identity behind this session.
+//
+// A phone here is Safari or Chrome for Android, and only one of the two can be
+// answered: nothing in this package knows which port the transport is on. The
+// shorter list is chosen, because it is the one both browsers would be believed
+// sending — Safari sends exactly it, and Chrome sending it claims less than it
+// can do rather than more.
+func (s *Session) accepts() string {
+	if s.Mobile {
+		return acceptSafari
+	}
+	return acceptChrome
 }

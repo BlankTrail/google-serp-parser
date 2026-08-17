@@ -72,7 +72,7 @@ type Config struct {
 // how long they rest and what they are opened as is decided by the command that
 // starts this server. A browser interface with a second opinion about that would
 // give a job set up here a different cost from the same job set up there.
-type Connect func(ctx context.Context, saved settings.Settings, ports, threads int) (*blanktrail.Pool, error)
+type Connect func(ctx context.Context, saved settings.Settings, ports, threads int, device string) (*blanktrail.Pool, error)
 
 // Server is the browser interface.
 type Server struct {

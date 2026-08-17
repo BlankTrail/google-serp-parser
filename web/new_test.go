@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/store"
 )
 
@@ -739,16 +740,26 @@ func TestNewForm_AsksGoogleForOneAnswerRatherThanWhicheverTheIdentitySuggests(t 
 	}
 }
 
-func TestNewForm_LeavesTheProfileEmptyBecauseNoNameIsRightOnEveryMachine(t *testing.T) {
-	// The profile names a template on the operator's own service. Any name filled
-	// in here would be one most machines do not have, and a job asking for a
-	// template that is not there fails on every query it makes.
-	if form := blankForm(); form.SpecName != "" {
-		t.Errorf("a new job asks for the profile %q, which is a name this machine "+
-			"may not have", form.SpecName)
+func TestNewForm_AsksForTheDesktopPageUnlessSomebodySaysOtherwise(t *testing.T) {
+	// The box that used to stand here asked for the name of a template on the
+	// operator's own service, and nothing ever opened one: every name it could
+	// usefully hold was a name no machine had, and a job carrying one failed on
+	// every query it made. What replaces it is a question with two answers, and
+	// the one it starts on is the page most people mean by "the results".
+	if form := blankForm(); form.Device != blanktrail.DeviceDesktop {
+		t.Errorf("a new job asks Google for %q, want the desktop page", form.Device)
 	}
-	tag := openingTag(t, get(t, testServer(t), "/new").Body.String(), `input id="spec"`)
-	if !strings.Contains(tag, `value=""`) {
-		t.Errorf("the profile box is not empty: <%s>", tag)
+	body := get(t, testServer(t), "/new").Body.String()
+	if strings.Contains(body, `name="spec"`) {
+		t.Errorf("the form still asks for a template name:\n%s", body)
+	}
+	// Both kinds are offered, and the desktop is the one already chosen.
+	for _, device := range blanktrail.Devices() {
+		if !strings.Contains(body, `value="`+device+`"`) {
+			t.Errorf("the form does not offer %q:\n%s", device, body)
+		}
+	}
+	if !strings.Contains(body, `value="`+blanktrail.DeviceDesktop+`" selected`) {
+		t.Errorf("the form starts on something other than the desktop page:\n%s", body)
 	}
 }

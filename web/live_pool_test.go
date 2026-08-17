@@ -85,7 +85,7 @@ func TestLiveRaise_LeavesAJobWhosePoolWouldNotGoUpWhereItCanBeCarriedOn(t *testi
 	liveEnv(t)
 
 	st := testStore(t)
-	sup := NewSupervisor(st, func(context.Context, int, int) (*blanktrail.Pool, error) {
+	sup := NewSupervisor(st, func(context.Context, int, int, string) (*blanktrail.Pool, error) {
 		return nil, errors.New("the control service refused this connection")
 	}, livePorts, liveThreads)
 	t.Cleanup(func() { _ = sup.Close() })
@@ -147,4 +147,54 @@ func jobIDIn(t *testing.T, res *http.Response) int64 {
 		fatalf(t, "the answer sent the browser to %q, whose job is not a number", where)
 	}
 	return id
+}
+
+func TestLiveStart_SaysWhereTheTimeGoesBetweenTheButtonAndTheFirstAnswer(t *testing.T) {
+	// An operator presses start and watches a screen of noughts. This says which
+	// part of the wait is what, so the answer is a number rather than a guess.
+	//
+	// The pieces measured elsewhere: the connection check is about three seconds
+	// and runs before every raise, a list of fifteen thousand addresses loads in
+	// about one, and a hundred ports open in under a tenth. What is left is the
+	// first query itself, and that is the identity waking up.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	base, st := liveServer(ctx, t)
+	cl := browser()
+
+	form := liveForm()
+	form.Set("name", "how long until the first answer")
+	form.Set("queries", strings.Join(liveQueries[:4], "\n"))
+	form.Set("pages", "1")
+
+	pressed := time.Now()
+	res := submit(t, cl, base+newAt, form)
+	if res.StatusCode != http.StatusSeeOther {
+		fatalf(t, "starting the job came back %d:\n%s", res.StatusCode, body(t, res))
+	}
+	id := jobIDIn(t, res)
+	logf(t, "MEASUREMENT start: the form answered %v after the press",
+		time.Since(pressed).Round(time.Millisecond))
+
+	// The first settled query, read from the history rather than from the screen:
+	// the moment is written down beside the query, so this is when it happened
+	// and not when somebody looked.
+	waitUntilLive(t, ctx, "the first query to settle", func() bool {
+		sum, err := st.Progress(ctx, id)
+		return err == nil && sum.Done+sum.Failed > 0
+	})
+	pace, err := st.Pace(ctx, id)
+	if err != nil {
+		fatalf(t, "Pace: %v", err)
+	}
+	logf(t, "MEASUREMENT start: the first query settled %v after the press",
+		time.Since(pressed).Round(time.Second))
+
+	waitUntilLive(t, ctx, "the job to finish", func() bool {
+		sum, err := st.Progress(ctx, id)
+		return err == nil && sum.Finished
+	})
+	logf(t, "MEASUREMENT start: all four settled %v after the press, at %.1f a minute",
+		time.Since(pressed).Round(time.Second), pace.PerMinute())
 }

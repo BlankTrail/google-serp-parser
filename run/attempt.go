@@ -49,6 +49,12 @@ const defaultTries = 30
 type Attempt struct {
 	// Pool leases the identities. Required.
 	Pool *blanktrail.Pool
+	// Mobile says the ports this attempt leases are phones, which changes one
+	// header the session sets: what a browser will accept. It is not a choice
+	// made here — the pool was opened as phones or as desktops — it is that same
+	// choice, carried to the one place that has to act on it.
+	Mobile bool
+
 	// SpecName asks for a port opened under a named template, so a run that
 	// wants mobile results is not quietly answered from a desktop one. Empty
 	// takes any port.
@@ -262,6 +268,7 @@ func (a *Attempt) sessionFor(l *blanktrail.Lease) *google.Session {
 
 	client := l.Client()
 	s := google.NewSession(client.Transport)
+	s.Mobile = a.Mobile
 	// The pool was told how long one request may take. A session built on the
 	// transport alone would drop that bound, and a call with no deadline of its
 	// own would then wait on an unreachable identity for as long as it took.

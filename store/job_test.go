@@ -56,25 +56,25 @@ func TestCreateJob_KeepsTheSettingsTheJobWasGiven(t *testing.T) {
 	// anything apart if the settings behind each are written down with them.
 	s := testStore(t)
 	id, err := s.CreateJob(context.Background(),
-		JobSpec{Name: "nightly", Pages: 3, SpecName: "desktop", Country: "de", Language: "de"},
+		JobSpec{Name: "nightly", Pages: 3, Device: "desktop", Country: "de", Language: "de"},
 		[]string{"a"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
 
 	var (
-		name, specName, country, language string
-		pages                             int
-		created                           string
+		name, device, country, language string
+		pages                           int
+		created                         string
 	)
 	if err := s.db.QueryRow(
-		`SELECT name, pages, spec_name, country, language, created_at FROM jobs WHERE id = ?`, id,
-	).Scan(&name, &pages, &specName, &country, &language, &created); err != nil {
+		`SELECT name, pages, device, country, language, created_at FROM jobs WHERE id = ?`, id,
+	).Scan(&name, &pages, &device, &country, &language, &created); err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if name != "nightly" || pages != 3 || specName != "desktop" || country != "de" || language != "de" {
-		t.Errorf("the job reads back as %q pages=%d spec=%q country=%q language=%q",
-			name, pages, specName, country, language)
+	if name != "nightly" || pages != 3 || device != "desktop" || country != "de" || language != "de" {
+		t.Errorf("the job reads back as %q pages=%d device=%q country=%q language=%q",
+			name, pages, device, country, language)
 	}
 	if created == "" {
 		t.Error("the job carries no start time")
@@ -333,7 +333,7 @@ func TestLastUnfinished_CarriesTheSettingsTheJobWasCreatedWith(t *testing.T) {
 	// of them swapped anywhere along the way is a failure rather than a pass.
 	s := testStore(t)
 	if _, err := s.CreateJob(context.Background(),
-		JobSpec{Name: "nightly", Pages: 3, SpecName: "desktop", Country: "de", Language: "de",
+		JobSpec{Name: "nightly", Pages: 3, Device: "desktop", Country: "de", Language: "de",
 			Ports: 4, Threads: 7},
 		[]string{"a"}); err != nil {
 		t.Fatalf("CreateJob: %v", err)
@@ -344,7 +344,7 @@ func TestLastUnfinished_CarriesTheSettingsTheJobWasCreatedWith(t *testing.T) {
 		t.Fatalf("LastUnfinished: %v", err)
 	}
 	want := JobSpec{Name: "nightly", Kind: KindParse, Pages: 3,
-		SpecName: "desktop", Country: "de", Language: "de", Ports: 4, Threads: 7}
+		Device: "desktop", Country: "de", Language: "de", Ports: 4, Threads: 7}
 	if got.Spec != want {
 		t.Errorf("LastUnfinished returned %+v, want %+v", got.Spec, want)
 	}

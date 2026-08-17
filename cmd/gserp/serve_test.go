@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 	"github.com/blanktrail/google-serp-parser/settings"
 	"github.com/blanktrail/google-serp-parser/store"
@@ -574,7 +575,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 
 	// A job that named no size reaches here already stood in for, so what this end
 	// is asked for is the pair this server was started with.
-	own, err := raise(t.Context(), opts.Ports, opts.Threads)
+	own, err := raise(t.Context(), opts.Ports, opts.Threads, blanktrail.DeviceDesktop)
 	if err != nil {
 		t.Fatalf("raising the pool of a job that named no size: %v", err)
 	}
@@ -588,7 +589,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 		t.Fatalf("%d ports are still open after that pool was given up", got)
 	}
 
-	named, err := raise(t.Context(), 2, 1)
+	named, err := raise(t.Context(), 2, 1, blanktrail.DeviceDesktop)
 	if err != nil {
 		t.Fatalf("raising the pool a job named: %v", err)
 	}

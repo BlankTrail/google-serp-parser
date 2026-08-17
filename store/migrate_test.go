@@ -111,6 +111,7 @@ func windBackToVersionSix(t *testing.T, s *Store) {
 	for _, stmt := range []string{
 		// The index goes first: SQLite will not drop a column an index is built
 		// on, and the message it gives says nothing about the index.
+		`ALTER TABLE jobs DROP COLUMN device`,
 		`DROP INDEX IF EXISTS queries_settled_at`,
 		`ALTER TABLE queries DROP COLUMN settled_at`,
 		`ALTER TABLE jobs DROP COLUMN fields`,
@@ -341,7 +342,7 @@ func TestOpen_CarriesAFilledDatabaseThroughTheTableBeingRebuiltForTheThirdKind(t
 	}
 	id, err := s.CreateJob(context.Background(),
 		JobSpec{Name: "nightly", Kind: KindIndex, Pages: 2, UniqueBy: UniqueHost,
-			SpecName: "mobile", Country: "de", Language: "de", Ports: 5, Threads: 3},
+			Country: "de", Language: "de", Ports: 5, Threads: 3},
 		[]string{"a", "b"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
@@ -403,9 +404,16 @@ func TestOpen_CarriesAFilledDatabaseThroughTheTableBeingRebuiltForTheThirdKind(t
 	case sum.Pages != 2 || sum.Ports != 5 || sum.Threads != 3:
 		t.Errorf("the upgraded job reads as %d pages, %d ports, %d threads — want 2, 5 and 3",
 			sum.Pages, sum.Ports, sum.Threads)
-	case sum.Country != "de" || sum.Language != "de" || sum.SpecName != "mobile":
-		t.Errorf("the upgraded job reads as country %q, language %q, profile %q — want de, de and mobile",
-			sum.Country, sum.Language, sum.SpecName)
+	case sum.Country != "de" || sum.Language != "de":
+		t.Errorf("the upgraded job reads as country %q, language %q — want de and de",
+			sum.Country, sum.Language)
+	// The kind of result page is empty, and has to be: this database was wound
+	// back to a version that had no such column, so there was nothing for the
+	// upgrade to carry. Empty is the desktop, which is what every job written
+	// before there was a choice ran on.
+	case sum.Device != "":
+		t.Errorf("a job from before the column reads as asking for %q, want the desktop it ran on",
+			sum.Device)
 	case sum.Total != 2 || sum.Done != 1 || sum.Pending != 1:
 		t.Errorf("the upgraded job reads as %d queries, %d done, %d pending — want 2, 1, 1",
 			sum.Total, sum.Done, sum.Pending)

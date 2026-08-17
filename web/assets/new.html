@@ -63,9 +63,16 @@
 <label for="language">{{.T "form.language"}}</label>
 <input id="language" name="language" size="4" value="{{.Form.Language}}">
 </div>
+{{/* Which page Google is asked for. It is a choice and not a box to type in,
+     because there are two answers and a typed one that is neither would be a
+     job that cannot run. It is settled here and not afterwards: the ports are
+     opened as desktops or as phones, and the results of the two are different
+     pages. */}}
 <div class="field">
-<label for="spec">{{.T "form.spec"}}</label>
-<input id="spec" name="spec" size="10" value="{{.Form.SpecName}}">
+<label for="device">{{.T "form.device"}}</label>
+<select id="device" name="device">
+{{range .Devices}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
 </div>
 </div>
 {{/* What to do with repeats. It stands with the settings of the run because

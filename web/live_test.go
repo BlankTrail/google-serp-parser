@@ -376,7 +376,7 @@ func pendingPlaces(ctx context.Context, t *testing.T, st *store.Store, jobID int
 }
 
 // livePool opens the identities the supervisor will run every job on.
-func livePool(ctx context.Context, t *testing.T, ports, threads int) *blanktrail.Pool {
+func livePool(ctx context.Context, t *testing.T, ports, threads int, device string) *blanktrail.Pool {
 	t.Helper()
 	control, key, listURL := liveEnv(t)
 
@@ -406,7 +406,7 @@ func livePool(ctx context.Context, t *testing.T, ports, threads int) *blanktrail
 	started := time.Now()
 	pool, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 		Client: client, Threads: threads, PortsPerThread: max(ports/threads, 1),
-		Spec: blanktrail.DefaultPortSpec(), CA: pre.CA,
+		Spec: blanktrail.DefaultPortSpec(), Specs: blanktrail.SpecsFor(device), CA: pre.CA,
 		Channels:    []blanktrail.Channel{blanktrail.NewListChannel("list", blanktrail.NewStaticRotor(ups))},
 		DelayMin:    2 * time.Second,
 		DelayMax:    5 * time.Second,
@@ -427,8 +427,8 @@ func livePool(ctx context.Context, t *testing.T, ports, threads int) *blanktrail
 // longer is. It costs a warm-up per job, and that cost is one of the things
 // this file exists to report.
 func liveRaise(t *testing.T) OpenPool {
-	return func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
-		return livePool(ctx, t, ports, threads), nil
+	return func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
+		return livePool(ctx, t, ports, threads, device), nil
 	}
 }
 
@@ -1332,7 +1332,7 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 // liveConnect opens the ports a connection just saved describes, doing what the
 // command does: the check first, then the ports, then the list behind them.
 func liveConnect(t *testing.T) Connect {
-	return func(ctx context.Context, saved settings.Settings, ports, threads int) (*blanktrail.Pool, error) {
+	return func(ctx context.Context, saved settings.Settings, ports, threads int, device string) (*blanktrail.Pool, error) {
 		client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 		if err != nil {
 			return nil, err

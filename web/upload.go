@@ -240,8 +240,8 @@ func (f jobForm) carrying(box, value string) jobForm {
 		f.Country = value
 	case "language":
 		f.Language = value
-	case "spec":
-		f.SpecName = value
+	case "device":
+		f.Device = value
 	case fromField:
 		f.From = value
 	case choseField:

@@ -252,7 +252,11 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	case fromEnv:
 		pool, err = openPool(ctx, out, poolConfig(threads, ports))
 	case saved.APIKey != "":
-		pool, err = o.dial(ctx, saved, threads, ports)
+		// The pool this server keeps standing is the one a search answered inside a
+		// request goes through, and a search has no job behind it to have chosen a
+		// kind of result page. It is a desktop, which is what that address has
+		// always answered as.
+		pool, err = o.dial(ctx, saved, threads, ports, blanktrail.DeviceDesktop)
 	default:
 		_, _ = fmt.Fprintf(out,
 			"%s is not set and no connection has been saved: this interface shows the history and runs nothing until the connection is set up in it\n",
@@ -296,11 +300,13 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 // back as an error, and the queue puts it in the log against the job it belongs
 // to.
 func (o serveOptions) raise(saved settings.Settings, fromEnv bool) web.OpenPool {
-	return func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
+	return func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
 		if fromEnv {
-			return openPool(ctx, io.Discard, poolConfig(threads, ports))
+			cfg := poolConfig(threads, ports)
+			cfg.Specs = blanktrail.SpecsFor(device)
+			return openPool(ctx, io.Discard, cfg)
 		}
-		return o.dial(ctx, saved, threads, ports)
+		return o.dial(ctx, saved, threads, ports, device)
 	}
 }
 
@@ -316,11 +322,11 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool) web.OpenPool 
 // settings has said which they want, and a flag from last week that quietly won
 // would make the box on the screen a box that does nothing.
 func (o serveOptions) connect(ctx context.Context, saved settings.Settings,
-	ports, threads int) (*blanktrail.Pool, error) {
-	// The size comes from the job, through the supervisor, and the connection
-	// from the settings. Neither knows the other's half, and this is where the
-	// two are put together.
-	return o.dial(ctx, saved, threads, ports)
+	ports, threads int, device string) (*blanktrail.Pool, error) {
+	// The size and the kind of result page come from the job, through the
+	// supervisor, and the connection from the settings. Neither knows the other's
+	// half, and this is where the two are put together.
+	return o.dial(ctx, saved, threads, ports, device)
 }
 
 // dial opens a pool against the connection described, after the check that says
@@ -329,7 +335,8 @@ func (o serveOptions) connect(ctx context.Context, saved settings.Settings,
 // The check is the one gserp doctor runs, for the reason it is run before a run
 // from the command line: the most common way a job is dead on arrival is one a
 // single request would have shown.
-func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads, ports int) (*blanktrail.Pool, error) {
+func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads, ports int,
+	device string) (*blanktrail.Pool, error) {
 	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 	if err != nil {
 		return nil, o.scrubbed(err)
@@ -341,6 +348,11 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 		ports = o.Ports
 	}
 	cfg := poolConfig(threads, ports)
+	// Which kind of result page this job asked for. Desktop opens every port
+	// under the one default template, as this program always has; mobile hands
+	// the pool two named templates and it spreads the ports over both, so a run
+	// on phones is a run on more than one phone.
+	cfg.Specs = blanktrail.SpecsFor(device)
 	if saved.Cooldown > 0 {
 		cfg.Cooldown = saved.Cooldown
 	}

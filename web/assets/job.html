@@ -68,7 +68,7 @@
 <div><dt>{{.T "form.pages"}}</dt><dd>{{.Job.Pages}}</dd></div>
 <div><dt>{{.T "form.country"}}</dt><dd>{{if .Job.Country}}{{.Job.Country}}{{else}}—{{end}}</dd></div>
 <div><dt>{{.T "form.language"}}</dt><dd>{{if .Job.Language}}{{.Job.Language}}{{else}}—{{end}}</dd></div>
-<div><dt>{{.T "form.spec"}}</dt><dd>{{if .Job.Spec}}{{.Job.Spec}}{{else}}—{{end}}</dd></div>
+<div><dt>{{.T "form.device"}}</dt><dd>{{.T .Job.Device}}</dd></div>
 </dl>
 
 {{/* The three that can still be changed, and only those. What stands above

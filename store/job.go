@@ -85,9 +85,22 @@ type JobSpec struct {
 	// so a job whose filter changed part way would hold results gathered under
 	// two rules with nothing to say which was which.
 	UniqueBy UniqueBy
-	SpecName string
 	Country  string
 	Language string
+
+	// Device is which kind of result page this job asks Google for: a desktop or
+	// a phone. Google answers the two differently — different results, in a
+	// different order — and which was wanted cannot be worked out from the
+	// results afterwards, nor changed part way through: it is a property of the
+	// identities the requests go through, settled when the ports are opened.
+	//
+	// The empty string is a desktop, which is what every job written before there
+	// was a choice ran on.
+	//
+	// It replaces a field that named a template on the operator's own service.
+	// Nothing ever opened a named template, so every value that field could
+	// usefully hold was a name no machine had.
+	Device string
 
 	// Ports is how many Google identities this job runs on at once, and Threads
 	// is how many queries it keeps in flight over them. They belong to the job
@@ -222,10 +235,10 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, spec_name, country, language, ports, threads, tries, fields, plan_ready)
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, fields, plan_ready)
 		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
-		spec.SpecName, spec.Country, spec.Language, ports, threads, tries, string(spec.Fields))
+		spec.Device, spec.Country, spec.Language, ports, threads, tries, string(spec.Fields))
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -325,13 +338,13 @@ type UnfinishedJob struct {
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
 	var j UnfinishedJob
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, spec_name, country, language, ports, threads, tries, fields
+		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, fields
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
-			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads, &j.Spec.Tries, &j.Spec.Fields)
+			&j.Spec.Device, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads, &j.Spec.Tries, &j.Spec.Fields)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}

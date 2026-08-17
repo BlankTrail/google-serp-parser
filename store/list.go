@@ -48,7 +48,9 @@ type JobSummary struct {
 	Pages    int
 	Country  string
 	Language string
-	SpecName string
+	// Device is which kind of result page this job asked Google for. Empty is a
+	// desktop — see JobSpec.Device.
+	Device string
 
 	// Ports and Threads are the pool this job asks to be run on. Zero in either
 	// is a job that named no size rather than one asking for nothing at all — see
@@ -83,7 +85,7 @@ type JobSummary struct {
 const jobSummaryQuery = `
 	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind, j.target,
 	       j.unique_by, j.dropped,
-	       j.pages, j.country, j.language, j.spec_name,
+	       j.pages, j.country, j.language, j.device,
 	       j.ports, j.threads, j.tries, j.fields, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
@@ -155,7 +157,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 	var created, finished string
 	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind, &sum.Target,
 		&sum.UniqueBy, &sum.Dropped,
-		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName,
+		&sum.Pages, &sum.Country, &sum.Language, &sum.Device,
 		&sum.Ports, &sum.Threads, &sum.Tries, &sum.Fields, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {

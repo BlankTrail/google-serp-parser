@@ -279,7 +279,7 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 		Queries:  searchQueries(p.queries, p.spec),
 		Ordinals: p.ordinals,
 		Pages:    p.spec.Pages,
-		SpecName: p.spec.SpecName,
+		Mobile:   p.spec.Device == blanktrail.DeviceMobile,
 	}
 	// The estimate is printed on every run, not only on a dry one: the number a
 	// user is about to spend is worth a line whether or not they asked for it.

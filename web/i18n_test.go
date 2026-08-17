@@ -29,13 +29,45 @@ func TestCatalogue_BothLanguagesSayTheSameThings(t *testing.T) {
 	}
 }
 
+// sameInBoth are the phrases that are deliberately one word in both languages.
+//
+// The rule below exists to catch a line somebody forgot to translate, and every
+// exception to it weakens that. These two are names rather than sentences: a
+// Russian-speaking operator asking for the phone results asks for "Mobile",
+// which is what the word is in the trade, and translating it would be inventing
+// a term nobody uses. Anything added here has to be a name in the same way.
+var sameInBoth = map[string]bool{
+	"form.device.desktop": true,
+	"form.device.mobile":  true,
+}
+
 func TestCatalogue_SaysNothingTwiceTheSameWay(t *testing.T) {
 	// Two languages holding the same key with the same text means one of them
-	// was never translated. Names of programs and units would be the honest
-	// exception, and the catalogue holds none: it is sentences.
+	// was never translated. The exceptions above are named one by one, so an
+	// untranslated line cannot hide among them.
 	for key, text := range catalogue[LangEN] {
+		if sameInBoth[key] {
+			continue
+		}
 		if catalogue[LangRU][key] == text {
 			t.Errorf("%q reads the same in both languages: %q", key, text)
+		}
+	}
+}
+
+func TestCatalogue_KeepsItsExceptionsHonest(t *testing.T) {
+	// An exception for a key the catalogue no longer holds, or for one whose two
+	// languages have since been written differently, is an exception nobody would
+	// notice had stopped applying — and the next one added under its cover would
+	// be a line nobody translated.
+	for key := range sameInBoth {
+		text, ok := catalogue[LangEN][key]
+		if !ok {
+			t.Errorf("%q is excused from being translated and is not in the catalogue", key)
+			continue
+		}
+		if catalogue[LangRU][key] != text {
+			t.Errorf("%q is excused from being translated and has been translated anyway", key)
 		}
 	}
 }

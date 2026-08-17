@@ -163,7 +163,7 @@ func TestProgress_CarriesTheSettingsAndTheTimes(t *testing.T) {
 	// this morning's desktop one.
 	s := testStore(t)
 	id, err := s.CreateJob(context.Background(),
-		JobSpec{Name: "nightly", Pages: 3, Country: "us", Language: "en", SpecName: "desktop"},
+		JobSpec{Name: "nightly", Pages: 3, Country: "us", Language: "en", Device: "desktop"},
 		[]string{"a"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
@@ -174,7 +174,7 @@ func TestProgress_CarriesTheSettingsAndTheTimes(t *testing.T) {
 		t.Fatalf("Progress: %v", err)
 	}
 	if got.Name != "nightly" || got.Pages != 3 || got.Country != "us" ||
-		got.Language != "en" || got.SpecName != "desktop" {
+		got.Language != "en" || got.Device != "desktop" {
 		t.Errorf("settings came back as %+v", got)
 	}
 	if got.CreatedAt.IsZero() {

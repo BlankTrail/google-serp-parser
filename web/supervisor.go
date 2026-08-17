@@ -106,7 +106,7 @@ func (e *poolEngine) Pool() poolFacts {
 //
 // The context is the job's: a job stopped while its pool is still going up stops
 // there, rather than after ports it will never use have been opened.
-type Dial func(ctx context.Context, ports, threads int) (engine, error)
+type Dial func(ctx context.Context, ports, threads int, device string) (engine, error)
 
 // OpenPool opens the identities one job asked to run on. It is Dial as a caller
 // outside this package can write it: what a pool is opened as, how long its
@@ -114,7 +114,7 @@ type Dial func(ctx context.Context, ports, threads int) (engine, error)
 // command that starts this server, and an interface with a second opinion about
 // that would give a job set up here a different cost from the same job set up
 // there.
-type OpenPool func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error)
+type OpenPool func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error)
 
 // source is where the pool for the next job comes from.
 //
@@ -139,7 +139,7 @@ func standing(eng engine) source {
 		return source{}
 	}
 	return source{
-		raise: func(context.Context, int, int) (engine, error) { return eng, nil },
+		raise: func(context.Context, int, int, string) (engine, error) { return eng, nil },
 		held:  eng,
 	}
 }
@@ -149,8 +149,8 @@ func dialing(open OpenPool) source {
 	if open == nil {
 		return source{}
 	}
-	return source{raise: func(ctx context.Context, ports, threads int) (engine, error) {
-		pool, err := open(ctx, ports, threads)
+	return source{raise: func(ctx context.Context, ports, threads int, device string) (engine, error) {
+		pool, err := open(ctx, ports, threads, device)
 		if err != nil {
 			return nil, err
 		}
@@ -619,7 +619,7 @@ func (v *Supervisor) next() (int64, context.Context, source, bool) {
 // pool, and keeping it inside the source rather than as a case here is what stops
 // the rest of this file from having to know which kind of source it is holding.
 func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary) (engine, error) {
-	eng, err := src.raise(ctx, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads))
+	eng, err := src.raise(ctx, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -757,8 +757,12 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSumm
 	// many identities a query is worth depends on the list, and the list is the
 	// operator's. A job that named none is run at whatever the run layer takes
 	// as its own default, which is the one place that number is written down.
+	// Mobile reaches the run because one header depends on it: what a browser
+	// will accept differs between a phone and a desktop, and the ports were
+	// already opened as one or the other.
 	j := run.Job{Kind: runKind(sum.Kind), Target: sum.Target,
-		Pages: sum.Pages, SpecName: sum.SpecName, Tries: sum.Tries}
+		Pages: sum.Pages, Tries: sum.Tries,
+		Mobile: runsOnPhones(sum.Device)}
 	for _, q := range left {
 		j.Queries = append(j.Queries,
 			google.Query{Text: q.Text, Country: sum.Country, Language: sum.Language})
@@ -828,3 +832,13 @@ func (v *Supervisor) isClosed() bool {
 	defer v.mu.Unlock()
 	return v.closed
 }
+
+// runsOnPhones says whether a job's ports are phones.
+//
+// It is a function rather than a comparison written where it is needed, because
+// it decides a header: what a browser will accept differs between the two, and
+// it is the one header the proxy leaves alone for a Safari identity. Written
+// twice it would one day be written differently in one of the two places, and
+// what would come of that is a phone sending no Accept at all — which is a
+// request no browser has ever made.
+func runsOnPhones(device string) bool { return device == blanktrail.DeviceMobile }

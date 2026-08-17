@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -220,7 +222,7 @@ type raisedPools struct {
 }
 
 // raise is the Dial a supervisor is built on.
-func (r *raisedPools) raise(_ context.Context, ports, threads int) (engine, error) {
+func (r *raisedPools) raise(_ context.Context, ports, threads int, _ string) (engine, error) {
 	r.mu.Lock()
 	r.asked = append(r.asked, poolShape{Ports: ports, Threads: threads})
 	if r.refuse != nil {
@@ -465,8 +467,9 @@ func standInPools(t *testing.T) (OpenPool, *fakebt.Server) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	return func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
+	return func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
 		return blanktrail.NewPool(ctx, blanktrail.PoolConfig{
+			Specs:            blanktrail.SpecsFor(device),
 			Client:           cl,
 			Threads:          threads,
 			PortsPerThread:   ports,
@@ -492,7 +495,7 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	open, fake := standInPools(t)
 	ctx := t.Context()
 
-	proof, err := open(ctx, 2, 1)
+	proof, err := open(ctx, 2, 1, blanktrail.DeviceDesktop)
 	if err != nil {
 		t.Fatalf("opening a pool: %v", err)
 	}
@@ -510,11 +513,11 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	// supervisor that never opened a pool at all would leave behind.
 	var counting sync.Mutex
 	opened := 0
-	count := func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
+	count := func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
 		counting.Lock()
 		opened++
 		counting.Unlock()
-		return open(ctx, ports, threads)
+		return open(ctx, ports, threads, device)
 	}
 	raised := func() int {
 		counting.Lock()
@@ -966,7 +969,7 @@ func TestReconnect_ChangesWhereTheNextJobsPoolComesFrom(t *testing.T) {
 	// the only way it can is by changing what raises their pools.
 	v, _, _ := heldSupervisor(t)
 	next := &heldEngine{}
-	if err := v.Reconnect(func(context.Context, int, int) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -985,7 +988,7 @@ func TestReconnect_LeavesTheJobInFlightOnThePoolItRaised(t *testing.T) {
 	id := enqueue(t, v, "one", "a")
 	waitUntilRunning(t, v, id)
 
-	if err := v.Reconnect(func(context.Context, int, int) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1005,7 +1008,7 @@ func TestReconnect_GivesUpAStandingSetOfIdentitiesNobodyIsInside(t *testing.T) {
 	// follow raise their own, those ports are nobody's, and left open they are
 	// held for as long as the process runs.
 	v, _, standing := heldSupervisor(t)
-	if err := v.Reconnect(func(context.Context, int, int) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1031,7 +1034,7 @@ func TestSupervisor_RefusesARaiseThatCameBackWithNeitherAPoolNorAReason(t *testi
 	// that caused it. It is refused where it happens instead, and the job stays
 	// there to be carried on.
 	st := testStore(t)
-	v := start(st, dialing(func(context.Context, int, int) (*blanktrail.Pool, error) {
+	v := start(st, dialing(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
 		return nil, nil
 	}), 1, 1)
 	t.Cleanup(func() { _ = v.Close() })
@@ -1067,7 +1070,7 @@ func TestSupervisor_HoldsAJobUntilThereIsSomethingToRunItOn(t *testing.T) {
 	}
 
 	eng := &heldEngine{}
-	if err := v.Reconnect(func(context.Context, int, int) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1158,4 +1161,85 @@ func TestSupervisor_TakesAJobToAsManyIdentitiesAsTheJobAskedFor(t *testing.T) {
 		t.Errorf("the job ran at %d identities per query, want the 17 it asked for", got.Tries)
 	}
 	_ = id
+}
+
+func TestCreateJob_KeepsWhichKindOfResultPageWasAskedFor(t *testing.T) {
+	// It cannot be worked out from the results afterwards and cannot be changed
+	// part way through: Google simply answers a phone and a desktop with
+	// different pages. A job that lost the answer would be a run nobody could
+	// say what it measured.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name": {"phones"}, "queries": {"iphone 13"}, "pages": {"1"},
+		"device": {blanktrail.DeviceMobile},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("starting a mobile job came back %d:\n%s", rec.Code, rec.Body.String())
+	}
+
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("%d jobs were written, want the one", len(jobs))
+	}
+	if jobs[0].Device != blanktrail.DeviceMobile {
+		t.Errorf("the job was filed as asking for %q, want the phone", jobs[0].Device)
+	}
+	// And the job's own page says so, in words rather than in the word the
+	// database files it under.
+	body := get(t, s, jobPath(jobs[0].ID)).Body.String()
+	if !strings.Contains(body, LangEN.T("form.device.mobile")) {
+		t.Errorf("the job's page does not say which kind of page it asked for:\n%s", body)
+	}
+}
+
+func TestSupervisor_RaisesThePoolAsTheKindOfPageTheJobAskedFor(t *testing.T) {
+	// The choice reaches the one place that can act on it: the ports are opened
+	// as phones or as desktops, and nothing afterwards can change what they are.
+	st := testStore(t)
+	var asked []string
+	var mu sync.Mutex
+	v := start(st, source{raise: func(_ context.Context, _, _ int, device string) (engine, error) {
+		mu.Lock()
+		asked = append(asked, device)
+		mu.Unlock()
+		return &heldEngine{}, nil
+	}}, 1, 1)
+	t.Cleanup(func() { _ = v.Close() })
+
+	id, err := v.Enqueue(store.JobSpec{Name: "phones", Pages: 1,
+		Device: blanktrail.DeviceMobile}, []string{"a"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	waitUntil(t, "the job to have been taken up", func() bool {
+		sum, err := st.Progress(t.Context(), id)
+		return err == nil && sum.Finished
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) == 0 {
+		t.Fatal("no pool was raised at all")
+	}
+	if asked[0] != blanktrail.DeviceMobile {
+		t.Errorf("the pool was raised as %q, and the job asked for a phone", asked[0])
+	}
+}
+
+func TestRunsOnPhones_IsWhatDecidesTheOneHeaderThatDiffers(t *testing.T) {
+	// What a browser will accept differs between a phone and a desktop, and it is
+	// the one header the proxy leaves alone for a Safari identity — measured
+	// through a real port. Read wrongly here, a phone sends no Accept at all,
+	// which is a request no browser has ever made.
+	if !runsOnPhones(blanktrail.DeviceMobile) {
+		t.Error("a job on phones is treated as a desktop")
+	}
+	for _, device := range []string{blanktrail.DeviceDesktop, "", "tractor"} {
+		if runsOnPhones(device) {
+			t.Errorf("a job asking for %q is treated as a phone", device)
+		}
+	}
 }

@@ -68,7 +68,7 @@ type createJSON struct {
 	Pages    int      `json:"pages"`
 	Country  string   `json:"country"`
 	Language string   `json:"language"`
-	Spec     string   `json:"spec"`
+	Device   string   `json:"device"`
 	// Ports and Threads shape the estimate and nothing else. They describe the
 	// pool the caller runs, which this interface does not decide for them.
 	Ports   int `json:"ports"`
@@ -86,7 +86,7 @@ type jobJSON struct {
 	Pages    int    `json:"pages"`
 	Country  string `json:"country"`
 	Language string `json:"language"`
-	Spec     string `json:"spec"`
+	Device   string `json:"device"`
 
 	Total   int `json:"total"`
 	Done    int `json:"done"`
@@ -328,7 +328,7 @@ func (s *Server) view(sum store.JobSummary) jobJSON {
 		Pages:     sum.Pages,
 		Country:   sum.Country,
 		Language:  sum.Language,
-		Spec:      sum.SpecName,
+		Device:    sum.Device,
 		Total:     sum.Total,
 		Done:      sum.Done,
 		Failed:    sum.Failed,
@@ -391,7 +391,7 @@ func (c createJSON) spec() store.JobSpec {
 		Pages:    c.pages(),
 		Country:  c.Country,
 		Language: c.Language,
-		SpecName: c.Spec,
+		Device:   c.Device,
 	}
 }
 
@@ -418,7 +418,7 @@ func (c createJSON) estimate(queries []string) estimateJSON {
 	if threads < 1 {
 		threads = startingThreads
 	}
-	j := run.Job{Pages: c.pages(), SpecName: c.Spec}
+	j := run.Job{Pages: c.pages(), Mobile: c.Device == blanktrail.DeviceMobile}
 	for _, text := range queries {
 		j.Queries = append(j.Queries,
 			google.Query{Text: text, Country: c.Country, Language: c.Language})
