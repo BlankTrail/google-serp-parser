@@ -25,8 +25,21 @@
      rather than averaged over the whole run: on a job that spent its first hour
      crawling, an average answers wrongly for the rest of the day. */}}
 <div class="metric"><dt class="label">{{.T "state.speed"}}</dt><dd class="figure" id="run-speed">{{.Speed}}</dd></div>
+<div class="metric"><dt class="label">{{.T "state.speed.pages"}}</dt><dd class="figure" id="run-page-speed">{{.PageSpeed}}</dd></div>
 <div class="metric"><dt class="label">{{.T "jobs.state"}}</dt><dd class="state" id="state">{{.T .State}}</dd></div>
 </dl>
+{{/* What one thread is fetching this second. It is in a box rather than in a
+     line of text so the whole address can be selected and copied in one go, and
+     so an address as long as a query makes it cannot push this page sideways: a
+     box scrolls inside itself and a paragraph does not. It is drawn only while
+     there is one — a stale address left on a finished job would read as a job
+     still working. */}}
+{{if .Asking}}
+<div class="field">
+<label for="asking">{{.T "job.asking"}}</label>
+<input id="asking" class="address" value="{{.Asking}}" readonly spellcheck="false">
+</div>
+{{end}}
 </section>
 
 {{/* Each button is a form that sends itself, by post. Nothing here needs a

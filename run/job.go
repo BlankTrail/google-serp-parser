@@ -84,6 +84,12 @@ type Job struct {
 	// Tries is how many identities one query may be taken to before it is
 	// recorded as failed. Non-positive means defaultTries.
 	Tries int
+
+	// Asking, when set, is told the address of each search as it goes out, from
+	// whichever thread is making it. It is what a screen showing "what is this
+	// job doing now" is drawn from, and it is a job's rather than a runner's
+	// because it is one job somebody is watching.
+	Asking func(url string)
 }
 
 // QueryResult is what one query produced.
@@ -190,7 +196,8 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 
 	// One Attempt for the whole job. It keeps a session per port, and a port is
 	// leased to one thread at a time, so the threads never meet inside it.
-	attempt := &Attempt{Pool: r.Pool, SpecName: j.SpecName, Tries: j.Tries, Mobile: j.Mobile}
+	attempt := &Attempt{Pool: r.Pool, SpecName: j.SpecName, Tries: j.Tries, Mobile: j.Mobile,
+		Asking: j.Asking}
 
 	queue := make(chan int)
 	var wg sync.WaitGroup

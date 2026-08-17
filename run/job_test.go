@@ -110,6 +110,41 @@ func TestRunner_HandsEveryQueryToTheSinkBeforeTheJobIsOver(t *testing.T) {
 	}
 }
 
+func TestRunner_TellsTheWatcherTheAddressOfEachSearchAsItGoesOut(t *testing.T) {
+	// What a screen watching a run is drawn from. Without it the only honest
+	// thing a page can say about a job between two settled queries is a row of
+	// numbers that have not moved, and a job taken a hundred pages deep settles
+	// one query for every hundred requests it makes.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2)
+
+	var mu sync.Mutex
+	var seen []string
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: &recordingSink{}}
+	rep := r.Run(context.Background(), Job{
+		Queries: []google.Query{usQuery("golang channels")},
+		Pages:   1,
+		Asking: func(url string) {
+			mu.Lock()
+			seen = append(seen, url)
+			mu.Unlock()
+		},
+	})
+	if rep.Err != nil {
+		t.Fatalf("the job: %v", rep.Err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("the watcher was told nothing, so a screen has nothing to show")
+	}
+	last := seen[len(seen)-1]
+	if !strings.Contains(last, "q=golang+channels") {
+		t.Errorf("the watcher was told %q, which is not the address of the query it ran", last)
+	}
+}
+
 func TestRunner_CarriesTheOriginalNumberingThroughAJobPickedUpPartWay(t *testing.T) {
 	// A resumed job holds only what is left. Numbering those from zero would
 	// file every result against the wrong query.

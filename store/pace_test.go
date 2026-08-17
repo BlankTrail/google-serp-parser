@@ -182,3 +182,55 @@ func TestRecord_WritesDownWhenAQuerySettled(t *testing.T) {
 		t.Errorf("the query says it settled at %v, which is not now", at)
 	}
 }
+
+// tookPages writes down that a settled query captured a number of pages, the
+// way a run does when it records what it took.
+func tookPages(t *testing.T, s *Store, jobID int64, ordinal, pages int) {
+	t.Helper()
+	var queryID int64
+	if err := s.db.QueryRow(`SELECT id FROM queries WHERE job_id = ? AND ordinal = ?`,
+		jobID, ordinal).Scan(&queryID); err != nil {
+		t.Fatalf("finding query %d: %v", ordinal, err)
+	}
+	for n := 1; n <= pages; n++ {
+		if _, err := s.db.Exec(`INSERT INTO pages(query_id, number) VALUES(?, ?)`,
+			queryID, n); err != nil {
+			t.Fatalf("recording page %d of query %d: %v", n, ordinal, err)
+		}
+	}
+}
+
+func TestPace_CountsThePagesThoseQueriesTookAsWellAsTheQueries(t *testing.T) {
+	// A job taken ten pages deep settles one query for every ten requests it
+	// makes. Told only in queries, it reads as a job that has nearly stopped
+	// while it is working as hard as it ever does — so the pages are counted
+	// beside them, and the two are shown side by side.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(), JobSpec{Name: "deep", Pages: 10},
+		[]string{"a", "b", "c"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	start := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	for i := range 3 {
+		settleAt(t, s, id, i, start.Add(time.Duration(i)*30*time.Second))
+		tookPages(t, s, id, i, 10)
+	}
+
+	pace, err := s.Pace(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Pace: %v", err)
+	}
+	// Two gaps of thirty seconds, and the two newest queries' pages in them. The
+	// oldest query's pages are left out for the reason its settling is: they were
+	// taken before the span this speed is measured over.
+	if pace.Pages != 20 {
+		t.Errorf("the span holds %d pages, and the two queries in it took ten each", pace.Pages)
+	}
+	if got := pace.PagesPerMinute(); got != 20 {
+		t.Errorf("PagesPerMinute() = %v, want the twenty a minute this job kept", got)
+	}
+	if got := pace.PerMinute(); got != 2 {
+		t.Errorf("PerMinute() = %v, want the two queries a minute beside them", got)
+	}
+}

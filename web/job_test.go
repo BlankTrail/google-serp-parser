@@ -4,6 +4,7 @@ package web
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"sort"
@@ -151,6 +152,70 @@ func TestJobPage_OffersToStopOnlyTheJobThatIsRunning(t *testing.T) {
 	}
 	if strings.Contains(stopped, LangEN.T("job.stop")) {
 		t.Error("a job that is not running is offered a stop")
+	}
+}
+
+func TestJobPage_ShowsTheAddressTheJobIsFetchingInSomethingCopyable(t *testing.T) {
+	// Between two settled queries the only honest thing the counts can say is
+	// that nothing has moved, and on a job taken a hundred pages deep that is a
+	// hundred requests of silence. This is the line that says what is happening
+	// this second.
+	//
+	// It is a box and not a sentence for two reasons, and both are checked: the
+	// whole address has to be selectable in one press, and an address as long as
+	// a query must not push the page sideways.
+	s, v, _ := heldServer(t)
+	id := enqueue(t, v, "nightly", "a", "b", "c")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == id
+	})
+	at := "https://www.google.com/search?gl=us&hl=en&q=golang+channels"
+	v.asking.note(id, at)
+
+	body := get(t, s, jobPath(id)).Body.String()
+	// Read back the way a browser reads it: the address carries the characters a
+	// page has to escape, and comparing the escaped text to the address would
+	// fail on a page that is perfectly correct.
+	tag := openingTag(t, body, `input id="asking"`)
+	if !strings.Contains(html.UnescapeString(tag), at) {
+		t.Errorf("the page does not carry the address being fetched: <%s>", tag)
+	}
+	if !strings.Contains(tag, "readonly") {
+		t.Errorf("the address can be typed over, so a reader can lose it: <%s>", tag)
+	}
+	if !strings.Contains(tag, `class="address"`) {
+		t.Errorf("the address box is drawn as an ordinary one, and a long address in an "+
+			"ordinary one widens the page: <%s>", tag)
+	}
+}
+
+func TestJobPage_LeavesOutTheAddressWhenThisJobIsNotTheOneRunning(t *testing.T) {
+	// An address left on the screen of a job that has stopped reads as a job
+	// still working, which is the one thing this line must never say.
+	s, v, eng := heldServer(t)
+	running := enqueue(t, v, "nightly", "a", "b", "c")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == running
+	})
+	v.asking.note(running, "https://www.google.com/search?q=one")
+
+	other, err := v.st.CreateJob(t.Context(),
+		store.JobSpec{Name: "another", Pages: 1}, []string{"z"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if body := get(t, s, jobPath(other)).Body.String(); strings.Contains(body, `id="asking"`) {
+		t.Errorf("a job that is not running carries an address being fetched:\n%s", body)
+	}
+
+	// And the job itself once it is over: the address goes with the job, so its
+	// own page stops claiming to be fetching something.
+	eng.let(t, 3)
+	waitUntil(t, "the job is over", func() bool { _, ok := v.Running(); return !ok })
+	if body := get(t, s, jobPath(running)).Body.String(); strings.Contains(body, `id="asking"`) {
+		t.Errorf("a job that has finished still shows an address being fetched:\n%s", body)
 	}
 }
 

@@ -251,14 +251,19 @@ func TestState_ShowsHowLongAndHowFastSideBySide(t *testing.T) {
 		t.Errorf("the screen says %q has passed, and 24 minutes have", got)
 	}
 
-	// In order and with nothing between them.
+	// In order and with nothing between them. The two speeds stand together
+	// because they are one measurement told two ways: the queries a job settles,
+	// and the pages it asks Google for to settle them — which on a job taken a
+	// hundred pages deep differ by a factor of a hundred.
 	from := strings.Index(body, `id="run-elapsed"`)
 	through := strings.Index(body, `id="run-speed"`)
+	pages := strings.Index(body, `id="run-page-speed"`)
 	to := strings.Index(body, `id="run-rest"`)
-	if from < 0 || through < 0 || to < 0 || from >= through || through >= to {
-		t.Fatalf("the screen does not carry the three figures in order:\n%s", body)
+	if from < 0 || through < 0 || pages < 0 || to < 0 ||
+		from >= through || through >= pages || pages >= to {
+		t.Fatalf("the screen does not carry the four figures in order:\n%s", body)
 	}
-	if between := body[from:to]; strings.Count(between, `id="`) != 2 {
+	if between := body[from:to]; strings.Count(between, `id="`) != 3 {
 		t.Errorf("something else stands between how long it has taken and how much is left:\n%s", between)
 	}
 }

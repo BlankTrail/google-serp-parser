@@ -695,3 +695,36 @@ func TestDefaultTries_OutlastsAListThatRefusesMostRequests(t *testing.T) {
 			"this was measured against", defaultTries, odds*100)
 	}
 }
+
+func TestAttempt_TellsThePoolWhichIdentitiesHaveAnswered(t *testing.T) {
+	// What makes an identity warm, and the only place it can be said: a challenge
+	// comes back as a request that succeeded, so nothing below this layer can
+	// tell a page from a refusal. The pool offers a warm identity before a cold
+	// one — the first request on a cold one costs one to three minutes and every
+	// one after it costs one to two seconds — and an identity nobody vouches for
+	// is one that preference can never reach.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2)
+	a := &Attempt{Pool: f.Pool}
+
+	if got := f.Pool.Stats().Warm; got != 0 {
+		t.Fatalf("%d identities are warm before anything was asked, want none", got)
+	}
+	if _, err := a.Search(context.Background(), usQuery("golang channels")); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if got := f.Pool.Stats().Warm; got != 1 {
+		t.Errorf("%d identities are warm after one answered a search, want one", got)
+	}
+
+	// And the walk, which holds one identity for every page it takes and is the
+	// path an ordinary parse job runs on.
+	walked := poolFacing(t, o.addr(), 2)
+	w := &Attempt{Pool: walked.Pool}
+	if _, err := w.Walk(context.Background(), usQuery("golang channels"), 2); err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if got := walked.Pool.Stats().Warm; got != 1 {
+		t.Errorf("%d identities are warm after one answered a walk, want one", got)
+	}
+}

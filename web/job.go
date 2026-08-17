@@ -129,7 +129,19 @@ type jobPage struct {
 	// little has settled to measure. It is on this page as well as the one before
 	// it because this is the page somebody opens when they want to know whether
 	// to leave the job alone.
-	Speed     string
+	Speed string
+	// PageSpeed is the same measurement in result pages a minute, which is what
+	// this program is actually asking Google for. A job taken to a hundred pages
+	// settles one query per hundred requests, and a screen showing only the
+	// queries reads as a job that has nearly stopped.
+	PageSpeed string
+	// Asking is the address one of this job's threads is fetching this second,
+	// and is empty when the job is not the one running or has sent nothing yet.
+	// One address and not one per thread: a job on twenty threads has twenty in
+	// flight, and twenty lines refreshed every three seconds is a screen nobody
+	// reads. What this answers is "is it moving, and where" — for which any one
+	// of them is the whole answer.
+	Asking    string
 	Formats   []string
 	CanStop   bool
 	CanResume bool
@@ -220,10 +232,12 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		// There is always more than this on a job of any size, and the page says
 		// so rather than leaving a reader to wonder whether twenty results is all
 		// their list produced.
-		Sampled: len(rows)+len(standings)+len(verdicts) >= rowsShown,
-		Shown:   rowsShown,
-		Speed:   perMinute(pace.PerMinute()),
-		Formats: export.Formats(),
+		Sampled:   len(rows)+len(standings)+len(verdicts) >= rowsShown,
+		Shown:     rowsShown,
+		Asking:    s.asking(sum.ID),
+		Speed:     perMinute(pace.PerMinute()),
+		PageSpeed: perMinute(pace.PagesPerMinute()),
+		Formats:   export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
 		// somebody presses until they conclude the job cannot be stopped at all.
@@ -257,6 +271,15 @@ func (s *Server) jobAsked(w http.ResponseWriter, r *http.Request, asked string) 
 		return store.JobSummary{}, false
 	}
 	return sum, true
+}
+
+// asking is the address the given job is fetching, or empty when this server
+// runs nothing.
+func (s *Server) asking(job int64) string {
+	if s.sup == nil {
+		return ""
+	}
+	return s.sup.Asking(job)
 }
 
 func stateOf(p progressJSON, listReady bool) string {

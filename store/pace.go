@@ -33,6 +33,14 @@ type Pace struct {
 	Settled int
 	Over    time.Duration
 	Known   bool
+
+	// Pages is how many result pages those settled queries took between them.
+	//
+	// It is a second figure and not a replacement, because the two answer
+	// different questions. A job taken to a hundred pages settles one query for
+	// every hundred requests it makes, so a screen showing only queries reads as
+	// a job that has nearly stopped while it is working as hard as it ever does.
+	Pages int
 }
 
 // PerMinute is the speed, in queries a minute.
@@ -43,6 +51,15 @@ func (p Pace) PerMinute() float64 {
 	return float64(p.Settled) / p.Over.Minutes()
 }
 
+// PagesPerMinute is the speed in result pages a minute, which is the number of
+// requests this program is actually making.
+func (p Pace) PagesPerMinute() float64 {
+	if !p.Known || p.Over <= 0 {
+		return 0
+	}
+	return float64(p.Pages) / p.Over.Minutes()
+}
+
 // Pace reads how fast a job is settling queries.
 //
 // The queries written before this program kept the moment carry none, and are
@@ -50,10 +67,10 @@ func (p Pace) PerMinute() float64 {
 // settled two of its own, which is the truth about what can be measured.
 func (s *Store) Pace(ctx context.Context, jobID int64) (Pace, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT settled_at
-		   FROM queries
-		  WHERE job_id = ? AND settled_at <> ''
-		  ORDER BY settled_at DESC
+		`SELECT q.settled_at, (SELECT count(*) FROM pages p WHERE p.query_id = q.id)
+		   FROM queries q
+		  WHERE q.job_id = ? AND q.settled_at <> ''
+		  ORDER BY q.settled_at DESC
 		  LIMIT ?`, jobID, PaceSample)
 	if err != nil {
 		return Pace{}, fmt.Errorf("store: reading the pace of job %d: %w", jobID, err)
@@ -61,9 +78,11 @@ func (s *Store) Pace(ctx context.Context, jobID int64) (Pace, error) {
 	defer func() { _ = rows.Close() }()
 
 	var moments []time.Time
+	var pages []int
 	for rows.Next() {
 		var text string
-		if err := rows.Scan(&text); err != nil {
+		var took int
+		if err := rows.Scan(&text, &took); err != nil {
 			return Pace{}, fmt.Errorf("store: reading a settled moment: %w", err)
 		}
 		at, err := time.Parse(time.RFC3339Nano, text)
@@ -74,6 +93,7 @@ func (s *Store) Pace(ctx context.Context, jobID int64) (Pace, error) {
 			continue
 		}
 		moments = append(moments, at)
+		pages = append(pages, took)
 	}
 	if err := rows.Err(); err != nil {
 		return Pace{}, fmt.Errorf("store: reading the pace of job %d: %w", jobID, err)
@@ -89,5 +109,12 @@ func (s *Store) Pace(ctx context.Context, jobID int64) (Pace, error) {
 	if span <= 0 {
 		return Pace{}, nil
 	}
-	return Pace{Settled: len(moments) - 1, Over: span, Known: true}, nil
+	// The oldest query's pages are left out for the same reason its settling is:
+	// the span begins where that query ended, so the pages it took were taken
+	// before the span this speed is measured over.
+	took := 0
+	for _, n := range pages[:len(pages)-1] {
+		took += n
+	}
+	return Pace{Settled: len(moments) - 1, Over: span, Pages: took, Known: true}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
@@ -66,6 +67,12 @@ type Warmer struct {
 	// warmed is called after each warming that got through, so a test can count
 	// them without reading the pool's own statistics.
 	warmed func()
+	// warmAtOnce overrides how many identities are warmed at the same time, so a
+	// test can pin the number instead of deriving it from the set's size.
+	warmAtOnce int
+	// beforeSearch runs just before each warming request goes out, so a test can
+	// hold them all and see whether they are in flight together.
+	beforeSearch func()
 }
 
 // Run warms every standing port that is due, until the context ends.
@@ -95,28 +102,69 @@ func (w *Warmer) Run(ctx context.Context) {
 	}
 }
 
-// oneRound warms every port that has been idle long enough, one at a time.
+// oneRound warms every port that has been idle long enough, several at a time.
 //
-// One at a time because they are warmed through the pool the work uses: a round
-// that took every idle port at once would hold the whole standing set while it
-// waited on Google, and a job starting in that moment would find nothing free.
+// Several, and not all of them, because they are warmed through the pool the
+// work uses: a round that took every idle port at once would hold the whole
+// standing set while it waited on Google, and a job starting in that moment
+// would find nothing free. Half the set is held at most, so there is always as
+// much left free as is being warmed.
+//
+// It was one at a time, and one at a time was the defect a machine felt. The
+// first request on a cold identity costs one to three minutes, measured; a set
+// of twelve opened from cold therefore took a quarter of an hour or more to
+// become worth anything, and a job started inside that window ran on identities
+// the operator had been told were warm.
 func (w *Warmer) oneRound(ctx context.Context, idle time.Duration) {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	held := 0
 	for {
 		if ctx.Err() != nil {
+			return
+		}
+		if held >= w.atOnce() {
+			// As many as may be held at once are in flight. Waiting for all of
+			// them beats waiting for one: they finish at their own pace, and the
+			// next round picks up whatever is still due.
 			return
 		}
 		lease, ok := w.Pool.AcquireIdleHot(idle)
 		if !ok {
 			return
 		}
-		w.warmOne(ctx, lease)
+		held++
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.warmOne(ctx, lease)
+		}()
 	}
+}
+
+// atOnce is how many standing identities may be warmed at the same time.
+//
+// Half of what the machine keeps, and never fewer than one: whatever is being
+// warmed is held, and a job that starts mid-round finds the other half. On a set
+// of one that half is the whole of it, which is the same thing.
+func (w *Warmer) atOnce() int {
+	if w.warmAtOnce > 0 {
+		return w.warmAtOnce
+	}
+	if hot := w.Pool.Hot(); hot > 1 {
+		return hot / 2
+	}
+	return 1
 }
 
 // warmOne makes one ordinary search through a port and throws the answer away.
 func (w *Warmer) warmOne(ctx context.Context, lease *blanktrail.Lease) {
 	defer lease.Release()
 
+	if w.beforeSearch != nil {
+		w.beforeSearch()
+	}
 	sess := google.NewSession(lease.Client().Transport)
 	sess.Client.Timeout = lease.Client().Timeout
 	q := google.Query{
@@ -131,6 +179,10 @@ func (w *Warmer) warmOne(ctx context.Context, lease *blanktrail.Lease) {
 		}
 		return
 	}
+	// The identity answered, so the pool may offer it before a cold one. This is
+	// the whole point of the round: warming a port that nothing then prefers is
+	// a request made for nobody.
+	lease.Answered()
 	if w.warmed != nil {
 		w.warmed()
 	}

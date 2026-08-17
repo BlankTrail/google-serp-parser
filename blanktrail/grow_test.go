@@ -108,10 +108,10 @@ func TestTake_OffersAWarmPortBeforeAColdOne(t *testing.T) {
 		t.Fatalf("Grow: %v", err)
 	}
 
-	// The warm port is made the most recently used of them, which is what it is
-	// on a real machine: the warmer has just been through it, and the ones the
-	// job opened have never been used at all. The clock is then moved past the
-	// cooldown so it is a candidate again.
+	// The warm port is one that has answered and is the most recently used of
+	// them, which is what it is on a real machine: the warmer has just been
+	// through it, and the ones the job opened have never answered anything. The
+	// clock is then moved past the cooldown so it is a candidate again.
 	//
 	// Now "the one that has rested longest" and "the warm one" are different
 	// ports, and only a rule that prefers the warm one picks it. Without the
@@ -121,6 +121,7 @@ func TestTake_OffersAWarmPortBeforeAColdOne(t *testing.T) {
 		t.Fatalf("warming the standing port: %v", err)
 	}
 	warmedPort := warmed.Port()
+	warmed.Answered()
 	warmed.Release()
 	clock.Advance(2 * time.Minute)
 
@@ -230,4 +231,153 @@ func TestReduceTo_LeavesAlonePortsSomebodyIsHolding(t *testing.T) {
 	if len(open) != 1 || open[0] != held.Port() {
 		t.Errorf("the ports left open are %v, want only the one being held (%d)", open, held.Port())
 	}
+}
+
+func TestTake_DoesNotTakeAStandingPortThatHasNeverAnsweredForAWarmOne(t *testing.T) {
+	// Being kept is not being warm. A standing port that has never made a
+	// request meets the same challenge a fresh one does — measured at one to
+	// three minutes against one to two seconds — so a rule that reads the
+	// standing mark as warmth hands a job the identity that costs it the
+	// minutes, which is what a machine keeping identities open was meant to
+	// avoid.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, f, clock, 1, 1)
+	cfg.Cooldown = time.Minute
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("opening one standing port: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+	pool.KeepWarm()
+	if err := pool.Grow(context.Background(), 1); err != nil {
+		t.Fatalf("Grow: %v", err)
+	}
+	standing, grown := hotAndGrown(t, pool)
+
+	// The standing port is used and answers nothing; the grown one answers, and
+	// answers later. So "rested longest" points at the standing port and only
+	// warmth points at the grown one.
+	leaseNum(t, pool, standing).Release()
+	clock.Advance(time.Second)
+	warm := leaseNum(t, pool, grown)
+	warm.Answered()
+	warm.Release()
+	clock.Advance(2 * time.Minute)
+
+	next, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer next.Release()
+	if next.Port() != grown {
+		t.Errorf("the lease went to port %d, and the one that has answered is %d — a "+
+			"standing port that has never answered was taken for a warm one",
+			next.Port(), grown)
+	}
+}
+
+func TestStats_CountTheIdentitiesThatHaveAnswered(t *testing.T) {
+	// Twelve kept and two warm is a set worth almost nothing yet, and a screen
+	// that can only say "twelve" cannot tell anybody that.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	pool, err := NewPool(context.Background(), testPoolConfig(t, f, clock, 1, 3))
+	if err != nil {
+		t.Fatalf("opening three ports: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	if got := pool.Stats().Warm; got != 0 {
+		t.Errorf("%d of three ports are warm before any of them has answered, want none", got)
+	}
+	lease, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	lease.Answered()
+	lease.Release()
+	if got := pool.Stats().Warm; got != 1 {
+		t.Errorf("%d ports are warm after one answered, want one", got)
+	}
+}
+
+func TestAcquireIdleHot_WarmsThePortThatHasNeverAnsweredFirst(t *testing.T) {
+	// A set just opened is entirely of ports that have never answered and is
+	// worth nothing until that changes, while a port that answered a while ago
+	// is warm already. Warming them in the order they happen to be listed leaves
+	// the cold ones cold for as long as the warm ones keep coming round.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	pool, err := NewPool(context.Background(), testPoolConfig(t, f, clock, 1, 2))
+	if err != nil {
+		t.Fatalf("opening two ports: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+	pool.KeepWarm()
+
+	// The first port in the list is the one that has answered, so a warmer that
+	// simply walks the list would take it.
+	pool.mu.Lock()
+	first := pool.ports[0].num
+	pool.mu.Unlock()
+	answered := leaseNum(t, pool, first)
+	answered.Answered()
+	answered.Release()
+
+	got, ok := pool.AcquireIdleHot(0)
+	if !ok {
+		t.Fatal("nothing was offered for warming, and both ports are idle")
+	}
+	defer got.Release()
+	if got.Port() == first {
+		t.Errorf("warming went to port %d, which has answered already, while one that "+
+			"never has was standing idle", got.Port())
+	}
+}
+
+// hotAndGrown names the standing port and the one a Grow added, for a pool of
+// exactly one of each.
+func hotAndGrown(t *testing.T, p *Pool) (standing, grown int) {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pt := range p.ports {
+		if pt.hot {
+			standing = pt.num
+			continue
+		}
+		grown = pt.num
+	}
+	if standing == 0 || grown == 0 {
+		t.Fatalf("the fixture holds standing %d and grown %d, want one of each", standing, grown)
+	}
+	return standing, grown
+}
+
+// leaseNum takes leases until the wanted port comes up, holding the others so
+// none of them can come up twice, and gives those back before it returns.
+func leaseNum(t *testing.T, p *Pool, num int) *Lease {
+	t.Helper()
+	var held []*Lease
+	defer func() {
+		for _, l := range held {
+			l.Release()
+		}
+	}()
+	p.mu.Lock()
+	tries := len(p.ports)
+	p.mu.Unlock()
+	for i := 0; i < tries; i++ {
+		l, err := p.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("Acquire: %v", err)
+		}
+		if l.Port() == num {
+			return l
+		}
+		held = append(held, l)
+	}
+	t.Fatalf("port %d never came up in %d leases", num, tries)
+	return nil
 }

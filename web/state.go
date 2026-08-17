@@ -106,7 +106,10 @@ type runningView struct {
 	// at that speed. Both are the mark when too little has settled to measure,
 	// which is not the same as a job that has stopped.
 	Speed string
-	Rest  string
+	// PageSpeed is the same measurement in result pages a minute — the requests
+	// themselves rather than the queries they belong to.
+	PageSpeed string
+	Rest      string
 }
 
 // successView is how much of a job is coming back answered, and what the rest
@@ -143,8 +146,14 @@ type reasonView struct {
 // would have nothing to say at exactly the moment somebody is deciding whether
 // to start one.
 type poolView struct {
-	Alive       int
-	Ports       int
+	Alive int
+	Ports int
+	// Warm is how many of those ports have brought back an answer under their
+	// current identity. It is drawn beside the count of ports because the two
+	// differ for the first quarter of an hour of every machine's day, and that
+	// difference is the whole of what a job started in that window feels: a cold
+	// identity's first request costs minutes and a warm one's costs seconds.
+	Warm        int
 	Rotations   int64
 	Quarantined int
 	Revived     int64
@@ -206,6 +215,7 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 	view.Pool = poolView{
 		Alive:       facts.Stats.Available,
 		Ports:       facts.Stats.Ports,
+		Warm:        facts.Stats.Warm,
 		Rotations:   facts.Stats.EgressRotations,
 		Quarantined: facts.Stats.Quarantined,
 		Revived:     facts.Stats.Revivals,
@@ -254,15 +264,16 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 // the figure that used to do that was read as a promise and was not one.
 func (s *Server) runningView(sum store.JobSummary, pace store.Pace) *runningView {
 	view := &runningView{
-		ID:      sum.ID,
-		Name:    sum.Name,
-		Total:   sum.Total,
-		Done:    sum.Done,
-		Failed:  sum.Failed,
-		Pending: sum.Pending,
-		Elapsed: spell(s.now().Sub(sum.CreatedAt)),
-		Speed:   noFigure,
-		Rest:    noFigure,
+		ID:        sum.ID,
+		Name:      sum.Name,
+		Total:     sum.Total,
+		Done:      sum.Done,
+		Failed:    sum.Failed,
+		Pending:   sum.Pending,
+		Elapsed:   spell(s.now().Sub(sum.CreatedAt)),
+		Speed:     noFigure,
+		PageSpeed: noFigure,
+		Rest:      noFigure,
 	}
 	if !pace.Known {
 		return view
@@ -272,6 +283,7 @@ func (s *Server) runningView(sum store.JobSummary, pace store.Pace) *runningView
 	// spent its first hour crawling, an average answers wrongly for the rest of
 	// the day, and both figures here are read by somebody asking about now.
 	view.Speed = perMinute(pace.PerMinute())
+	view.PageSpeed = perMinute(pace.PagesPerMinute())
 	if perMin := pace.PerMinute(); perMin > 0 && sum.Pending > 0 {
 		view.Rest = spell(time.Duration(float64(sum.Pending) / perMin * float64(time.Minute)))
 	}

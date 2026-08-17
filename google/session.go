@@ -38,6 +38,14 @@ type Session struct {
 	// and Safari does not.
 	Mobile bool
 
+	// Asking, when set, is told the address of each search before it goes out.
+	//
+	// It exists so a screen can say what a run is doing this second. Nothing here
+	// keeps that address: a session is used by one goroutine and read by another,
+	// and a field read without a lock is a race however harmless the value looks.
+	// The caller holds it wherever it can be read safely.
+	Asking func(url string)
+
 	// warmed records that the home page has been visited, so the first search
 	// of a session is a navigation from somewhere and later ones do not repeat
 	// the visit.
@@ -57,6 +65,9 @@ func (s *Session) Search(ctx context.Context, q Query) (SERP, error) {
 	target, err := q.URL()
 	if err != nil {
 		return SERP{}, err
+	}
+	if s.Asking != nil {
+		s.Asking(target)
 	}
 
 	if !s.warmed {

@@ -27,6 +27,7 @@
      as a promise it could not keep. */}}
 <div class="metric"><dt class="label">{{.T "state.elapsed"}}</dt><dd class="figure" id="run-elapsed">{{.Running.Elapsed}}</dd></div>
 <div class="metric"><dt class="label">{{.T "state.speed"}}</dt><dd class="figure" id="run-speed">{{.Running.Speed}}</dd></div>
+<div class="metric"><dt class="label">{{.T "state.speed.pages"}}</dt><dd class="figure" id="run-page-speed">{{.Running.PageSpeed}}</dd></div>
 <div class="metric"><dt class="label">{{.T "state.rest"}}</dt><dd class="figure" id="run-rest">{{.Running.Rest}}</dd></div>
 </dl>
 {{/* Stopping a run is watched, so the stop stands where it is watched from, and
@@ -82,6 +83,7 @@
 {{if .Pool.Ports}}
 <dl class="detail">
 <dt>{{.T "state.pool.ports"}}</dt><dd id="pool-ports">{{.Pool.Ports}}</dd>
+<dt>{{.T "state.pool.warm"}}</dt><dd id="pool-warm">{{.Pool.Warm}}</dd>
 <dt>{{.T "state.pool.rotate"}}</dt><dd id="pool-rotations">{{.Pool.Rotations}}</dd>
 <dt>{{.T "state.pool.aside"}}</dt><dd id="pool-quarantined">{{.Pool.Quarantined}}</dd>
 <dt>{{.T "state.pool.back"}}</dt><dd id="pool-revived">{{.Pool.Revived}}</dd>

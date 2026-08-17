@@ -205,15 +205,24 @@ type poolPort struct {
 	// gives the growth back when it ends, and this is what says which ports the
 	// growth was — the standing ones are never the ones given back.
 	//
-	// It also decides which port a lease is offered first. A warm port answers
-	// where a cold one waits on a challenge, so the run starts producing at once
-	// rather than in a minute; and because a port that has just been used is not
-	// ready again until its cooldown has passed, preferring the warm ones cannot
-	// starve the rest — the work spreads by itself and the rest warm up as it
-	// does.
+	// It used to decide which port a lease is offered first as well, and that
+	// was wrong: being kept is not being warm. A standing port that has never
+	// made a request meets the same challenge a fresh one does — measured at one
+	// to three minutes against one to two seconds — so what a lease is offered
+	// first is decided by answered below.
 	hot bool
 
-	mu          sync.Mutex
+	mu sync.Mutex
+	// answered says this port has brought back an answer somebody accepted since
+	// its identity was last changed. It is what "warm" actually means: the first
+	// request on an identity meets a challenge and costs minutes, and every
+	// request after it on the same identity costs seconds. It is the pool's own
+	// word for it, said by the caller through Lease.Answered, because only the
+	// caller knows whether what came back was a page or a refusal.
+	//
+	// It is cleared wherever the identity changes, because the challenge is
+	// solved against the identity and not against the port number.
+	answered    bool
 	eg          Egress
 	lastUsed    time.Time
 	leased      bool
@@ -296,6 +305,12 @@ type Stats struct {
 	// Revivals counts quarantined ports given another egress and put back into
 	// rotation.
 	Revivals int64
+
+	// Warm counts the ports whose current identity has brought back an answer
+	// somebody accepted. It is what a machine keeping identities open has to
+	// report: twelve kept and two warm is a set that is still worth almost
+	// nothing, and a screen saying only "twelve" cannot tell anybody that.
+	Warm int
 }
 
 // Stats returns a snapshot of pool activity.
@@ -307,12 +322,16 @@ func (p *Pool) Stats() Stats {
 	st.Quarantined = 0
 
 	var bySpec map[string]SpecStats
+	st.Warm = 0
 	for _, pt := range p.ports {
 		pt.mu.Lock()
-		quarantined, name := pt.quarantined, pt.specName
+		quarantined, name, answered := pt.quarantined, pt.specName, pt.answered
 		pt.mu.Unlock()
 		if quarantined {
 			st.Quarantined++
+		}
+		if answered {
+			st.Warm++
 		}
 		if name == "" {
 			continue
@@ -589,19 +608,26 @@ func (p *Pool) AcquireIdleHot(idle time.Duration) (*Lease, bool) {
 		return nil, false
 	}
 	now := p.cfg.Now()
-	for _, pt := range p.ports {
-		if !pt.hot {
-			continue
-		}
-		pt.mu.Lock()
-		free := !pt.leased && !pt.quarantined && now.Sub(pt.lastUsed) >= idle
-		if free {
-			pt.leased = true
-			pt.lastUsed = now
-		}
-		pt.mu.Unlock()
-		if free {
-			return &Lease{pool: p, pt: pt}, true
+	// Never answered first, and only then the ones that have gone quiet. A set
+	// just opened is entirely of the first kind and worth nothing to anybody
+	// until that changes, while a port that answered ten minutes ago is warm
+	// already and warming it again buys nothing this round.
+	for _, cold := range []bool{true, false} {
+		for _, pt := range p.ports {
+			if !pt.hot {
+				continue
+			}
+			pt.mu.Lock()
+			free := !pt.leased && !pt.quarantined &&
+				pt.answered != cold && now.Sub(pt.lastUsed) >= idle
+			if free {
+				pt.leased = true
+				pt.lastUsed = now
+			}
+			pt.mu.Unlock()
+			if free {
+				return &Lease{pool: p, pt: pt}, true
+			}
 		}
 	}
 	return nil, false
@@ -1013,6 +1039,7 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 	now := p.cfg.Now()
 	var best *poolPort
 	var bestUsed time.Time
+	var bestWarm bool
 	soonest := time.Duration(-1)
 	alive := 0
 
@@ -1023,6 +1050,7 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		pt.mu.Lock()
 		quarantined, leased, last := pt.quarantined, pt.leased, pt.lastUsed
 		revivals, since := pt.revivals, pt.quarantinedAt
+		answered := pt.answered
 		pt.mu.Unlock()
 		// A port that has waited out its quarantine is a candidate again. take
 		// holds p.mu and must not call the control API, so it only decides that
@@ -1036,13 +1064,17 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		}
 		if elapsed := now.Sub(last); elapsed >= p.cool {
 			// Warm before cold, and within each the one that has rested longest.
-			// A warm port answers where a cold one waits on a challenge; the
-			// cooldown above keeps this from becoming "always the same ten".
+			// A warm port answers in seconds where a cold one waits minutes on a
+			// challenge; the cooldown above keeps this from becoming "always the
+			// same ten". Warm is "has answered", not "is kept": a standing port
+			// that has never made a request is as cold as a fresh one, and
+			// offering it first was the whole of what a job felt when it started
+			// on a set that was still warming up.
 			switch {
 			case best == nil,
-				pt.hot && !best.hot,
-				pt.hot == best.hot && last.Before(bestUsed):
-				best, bestUsed = pt, last
+				answered && !bestWarm,
+				answered == bestWarm && last.Before(bestUsed):
+				best, bestUsed, bestWarm = pt, last, answered
 			}
 			continue
 		}
@@ -1163,6 +1195,23 @@ func (l *Lease) Session() string {
 	return strconv.Itoa(l.pt.num) + "#" + strconv.FormatUint(l.pt.session, 10)
 }
 
+// Answered says this port's identity brought back an answer that was accepted.
+//
+// It is what makes the port warm, and it is said by the caller because only the
+// caller can tell a page from a refusal: the request that carries a challenge
+// back succeeds at every level this package can see. What it buys is measured —
+// the first request on an identity costs one to three minutes and every one
+// after it costs one to two seconds — so a pool that could not tell the two
+// apart would offer a job the identity that has never answered as readily as
+// the one that has.
+//
+// Safe to call more than once, and safe to call before Release.
+func (l *Lease) Answered() {
+	l.pt.mu.Lock()
+	l.pt.answered = true
+	l.pt.mu.Unlock()
+}
+
 // Release returns the port to the pool and starts its cooldown. Safe to call
 // more than once.
 func (l *Lease) Release() {
@@ -1268,6 +1317,7 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	}
 	pt.mu.Lock()
 	pt.session++
+	pt.answered = false
 	pt.mu.Unlock()
 	p.mu.Lock()
 	p.stats.EgressRotations++
@@ -1448,6 +1498,7 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	pt.broken = false
 	pt.renewedAt = now
 	pt.session++
+	pt.answered = false
 	pt.mu.Unlock()
 
 	p.mu.Lock()

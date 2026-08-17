@@ -55,6 +55,12 @@ type Attempt struct {
 	// choice, carried to the one place that has to act on it.
 	Mobile bool
 
+	// Asking, when set, is told the address of each search this attempt makes,
+	// as it goes out. It is how a screen says what the run is doing this second;
+	// on several threads it is told each thread's address in turn and whoever
+	// holds it decides what to keep.
+	Asking func(url string)
+
 	// SpecName asks for a port opened under a named template, so a run that
 	// wants mobile results is not quietly answered from a desktop one. Empty
 	// takes any port.
@@ -181,6 +187,11 @@ func (a *Attempt) walkOnce(ctx context.Context, q google.Query, from, to int) ([
 	var out []google.SERP
 	err = google.SearchFrom(ctx, boundSearcher{attempt: a, lease: lease}, q, from, to,
 		func(_ int, serp google.SERP) bool {
+			// This identity has brought back a page, which is what makes it warm:
+			// the next request through it costs seconds where the first cost
+			// minutes. It is said here rather than at the end of the walk because
+			// a walk refused on page seven has still proved the identity on six.
+			lease.Answered()
 			out = append(out, serp)
 			return false
 		})
@@ -224,6 +235,10 @@ func (a *Attempt) once(ctx context.Context, q google.Query) (google.SERP, error)
 
 	serp, err := a.sessionFor(lease).Search(ctx, q)
 	if err == nil {
+		// The identity answered, which is what makes it warm. The pool offers a
+		// warm identity before a cold one, and this is the only place that can
+		// tell it: a challenge comes back as a successful request.
+		lease.Answered()
 		return serp, nil
 	}
 	if _, classified := google.ClassOf(err); classified {
@@ -269,6 +284,7 @@ func (a *Attempt) sessionFor(l *blanktrail.Lease) *google.Session {
 	client := l.Client()
 	s := google.NewSession(client.Transport)
 	s.Mobile = a.Mobile
+	s.Asking = a.Asking
 	// The pool was told how long one request may take. A session built on the
 	// transport alone would drop that bound, and a call with no deadline of its
 	// own would then wait on an unreachable identity for as long as it took.

@@ -27,11 +27,11 @@ func warmingPool(t *testing.T, hot int) *blanktrail.Pool {
 
 func TestWarmer_WarmsEveryStandingPortAndThenLeavesThemAlone(t *testing.T) {
 	// The two halves of the arrangement. Every port is cold when it is opened
-	// and every one of them is warmed at once, because that is the moment it is
-	// most worth doing. Then nothing: a port warmed a moment ago is not idle,
-	// and a warmer that went round again would be this program hammering its own
-	// identities on a timer.
-	pool := warmingPool(t, 3)
+	// and they are warmed as fast as the bound below allows, because that is the
+	// moment it is most worth doing. Then nothing: a port warmed a moment ago is
+	// not idle, and a warmer that went round again would be this program
+	// hammering its own identities on a timer.
+	pool := warmingPool(t, 4)
 
 	var warmed atomic.Int64
 	w := &Warmer{
@@ -41,17 +41,59 @@ func TestWarmer_WarmsEveryStandingPortAndThenLeavesThemAlone(t *testing.T) {
 		warmed: func() { warmed.Add(1) },
 	}
 
-	// One round by hand rather than the loop, so this test is about what a round
-	// does and not about how often rounds happen.
+	// Rounds by hand rather than the loop, so this test is about what a round
+	// does and not about how often rounds happen. Two of them, because a round
+	// holds at most half the set at once and four ports are two rounds' worth.
 	w.oneRound(t.Context(), time.Hour)
-	if got := warmed.Load(); got != 3 {
-		t.Errorf("the first round warmed %d ports, want all three", got)
+	if got := warmed.Load(); got != 2 {
+		t.Errorf("the first round warmed %d of four ports, want the half it may hold", got)
+	}
+	w.oneRound(t.Context(), time.Hour)
+	if got := warmed.Load(); got != 4 {
+		t.Errorf("two rounds warmed %d of four ports, want all of them", got)
 	}
 
 	// And again: nothing is idle now, so nothing is warmed.
 	w.oneRound(t.Context(), time.Hour)
-	if got := warmed.Load(); got != 3 {
-		t.Errorf("a second round warmed %d more ports, want none — they are all warm", got-3)
+	if got := warmed.Load(); got != 4 {
+		t.Errorf("a third round warmed %d more ports, want none — they are all warm", got-4)
+	}
+}
+
+func TestWarmer_WarmsSeveralAtOnceRatherThanOneAfterAnother(t *testing.T) {
+	// The defect this replaced: one identity at a time, each costing the one to
+	// three minutes a cold identity's first request costs, so a set of twelve
+	// took a quarter of an hour to become worth anything — and a job started
+	// inside that window ran on identities the operator had been told were warm.
+	//
+	// The stand-in Google holds every request until all of them have arrived, so
+	// a round that warms one at a time cannot finish this test at all.
+	pool := warmingPool(t, 4)
+
+	together := make(chan struct{})
+	var arrived atomic.Int64
+	w := &Warmer{Pool: pool, idle: time.Hour, round: time.Millisecond, warmAtOnce: 4,
+		warmed: func() {}}
+	w.beforeSearch = func() {
+		if arrived.Add(1) == 4 {
+			close(together)
+		}
+		select {
+		case <-together:
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.oneRound(t.Context(), time.Hour)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("only %d of four warmings were in flight at once, so they are being "+
+			"made one after another", arrived.Load())
 	}
 }
 

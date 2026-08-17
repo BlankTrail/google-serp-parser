@@ -377,6 +377,22 @@ legend {
 	overflow-wrap: anywhere;
 }
 
+/* The address a job is fetching this second. It is a box so the whole of it can
+   be selected and copied in one press, and a box is also what keeps an address
+   as long as a query from pushing this page sideways: it scrolls inside itself
+   and stops at the width of the card. It is read-only and drawn quieter than a
+   box somebody is meant to fill in, because nothing is expected of the reader
+   here beyond copying it. */
+.address {
+	background: var(--sunken);
+	color: var(--quiet);
+	font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+	font-size: var(--small);
+	max-width: 100%;
+	text-overflow: ellipsis;
+	width: 100%;
+}
+
 /* A cell holding something as long as an address. Without this the table is as
    wide as its longest link and the page scrolls sideways to read a column that
    was never the point. */

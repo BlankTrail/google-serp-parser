@@ -234,6 +234,13 @@ type Supervisor struct {
 	ports   int
 	threads int
 
+	// asking is the address of the last request that went out and the job it
+	// went out for. It is kept behind a lock of its own rather than the one
+	// above: every request of every thread writes it, and taking the lock that
+	// guards the queue on each of them would put the whole run behind the screen
+	// that watches it.
+	asking askingNow
+
 	// wake carries one signal, which is all the worker needs: it empties the
 	// queue before it waits again, so a signal it missed is one it had already
 	// acted on.
@@ -755,6 +762,12 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
 		"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
 		"took", time.Since(read).Round(time.Millisecond))
 
+	// What this job is fetching, for the screen somebody is watching it on. It is
+	// set here rather than inside the plan because it is about this run of this
+	// job and not about what the job is.
+	j.Asking = func(url string) { v.asking.note(id, url) }
+	defer v.asking.forget(id)
+
 	if rep := eng.Run(ctx, j, jobSink{st: v.st, jobID: id}); rep.Err != nil {
 		v.log.Error("a job was refused before anything was sent", "job", id, "error", rep.Err)
 	}
@@ -859,6 +872,50 @@ func (v *Supervisor) isClosed() bool {
 	defer v.mu.Unlock()
 	return v.closed
 }
+
+// askingNow is what a job is fetching this second.
+//
+// One address and not one per thread: a job on twenty threads has twenty
+// requests in flight and a screen showing all of them would be a screen nobody
+// reads. What it answers is "is this thing moving, and where is it" — for which
+// any one of the twenty, refreshed every few seconds, is the whole answer.
+type askingNow struct {
+	mu  sync.Mutex
+	job int64
+	url string
+}
+
+// note records the address of a request going out for a job.
+func (a *askingNow) note(job int64, url string) {
+	a.mu.Lock()
+	a.job, a.url = job, url
+	a.mu.Unlock()
+}
+
+// forget clears the address once a job is no longer running, so a finished job's
+// last request is not still shown as what is happening now.
+func (a *askingNow) forget(job int64) {
+	a.mu.Lock()
+	if a.job == job {
+		a.job, a.url = 0, ""
+	}
+	a.mu.Unlock()
+}
+
+// at is the address this job is fetching, or empty when the job in flight is
+// another one or there is none.
+func (a *askingNow) at(job int64) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.job != job {
+		return ""
+	}
+	return a.url
+}
+
+// Asking is the address the given job is fetching this second, or empty when it
+// is not the job in flight or has not sent anything yet.
+func (v *Supervisor) Asking(job int64) string { return v.asking.at(job) }
 
 // runsOnPhones says whether a job's ports are phones.
 //
