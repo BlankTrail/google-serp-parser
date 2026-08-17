@@ -85,7 +85,7 @@ func TestLiveRaise_LeavesAJobWhosePoolWouldNotGoUpWhereItCanBeCarriedOn(t *testi
 	liveEnv(t)
 
 	st := testStore(t)
-	sup := NewSupervisor(st, func(context.Context, int, int, string) (*blanktrail.Pool, error) {
+	sup := NewSupervisor(st, func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, errors.New("the control service refused this connection")
 	}, livePorts, liveThreads)
 	t.Cleanup(func() { _ = sup.Close() })

@@ -111,6 +111,7 @@ func windBackToVersionSix(t *testing.T, s *Store) {
 	for _, stmt := range []string{
 		// The index goes first: SQLite will not drop a column an index is built
 		// on, and the message it gives says nothing about the index.
+		`ALTER TABLE jobs DROP COLUMN cooldown_ms`,
 		`ALTER TABLE jobs DROP COLUMN device`,
 		`DROP INDEX IF EXISTS queries_settled_at`,
 		`ALTER TABLE queries DROP COLUMN settled_at`,
@@ -324,7 +325,7 @@ func TestOpen_CarriesAJobWrittenBeforeThePoolColumnsAndLeavesItRunnable(t *testi
 	if len(pending) != 1 {
 		t.Errorf("%d queries left to run after the upgrade, want the one that was not done", len(pending))
 	}
-	if err := again.Reshape(context.Background(), id, 5, 9, 5); err != nil {
+	if err := again.Reshape(context.Background(), id, 5, 9, 5, 0); err != nil {
 		t.Errorf("a job that came through the upgrade cannot be given a pool: %v", err)
 	}
 }

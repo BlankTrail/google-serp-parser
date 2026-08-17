@@ -265,7 +265,7 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 			cfg.Specs = blanktrail.SpecsFor(device)
 			return openPool(ctx, io.Discard, cfg)
 		}
-		return o.dial(ctx, saved, 1, want, device)
+		return o.dial(ctx, saved, 1, want, device, 0)
 	}
 
 	if saved.APIKey == "" && !fromEnv {
@@ -340,7 +340,8 @@ func deviceOr(device string) string {
 // back as an error, and the queue puts it in the log against the job it belongs
 // to.
 func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet) web.OpenPool {
-	return func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
+	return func(ctx context.Context, ports, threads int, device string,
+		cooldown time.Duration) (*blanktrail.Pool, error) {
 		// A job of the kind the standing identities were opened for runs on them,
 		// grown to its own size. It gives the growth back when it ends and the
 		// standing ones stay warm for the next.
@@ -357,7 +358,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			cfg.Specs = blanktrail.SpecsFor(device)
 			return openPool(ctx, io.Discard, cfg)
 		}
-		return o.dial(ctx, saved, threads, ports, device)
+		return o.dial(ctx, saved, threads, ports, device, cooldown)
 	}
 }
 
@@ -373,11 +374,11 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 // settings has said which they want, and a flag from last week that quietly won
 // would make the box on the screen a box that does nothing.
 func (o serveOptions) connect(ctx context.Context, saved settings.Settings,
-	ports, threads int, device string) (*blanktrail.Pool, error) {
+	ports, threads int, device string, cooldown time.Duration) (*blanktrail.Pool, error) {
 	// The size and the kind of result page come from the job, through the
 	// supervisor, and the connection from the settings. Neither knows the other's
 	// half, and this is where the two are put together.
-	return o.dial(ctx, saved, threads, ports, device)
+	return o.dial(ctx, saved, threads, ports, device, cooldown)
 }
 
 // dial opens a pool against the connection described, after the check that says
@@ -387,7 +388,7 @@ func (o serveOptions) connect(ctx context.Context, saved settings.Settings,
 // from the command line: the most common way a job is dead on arrival is one a
 // single request would have shown.
 func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads, ports int,
-	device string) (*blanktrail.Pool, error) {
+	device string, cooldown time.Duration) (*blanktrail.Pool, error) {
 	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 	if err != nil {
 		return nil, o.scrubbed(err)
@@ -404,8 +405,11 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	// the pool two named templates and it spreads the ports over both, so a run
 	// on phones is a run on more than one phone.
 	cfg.Specs = blanktrail.SpecsFor(device)
-	if saved.Cooldown > 0 {
-		cfg.Cooldown = saved.Cooldown
+	// The gap between two requests on one identity is the job's. Nought is a job
+	// that named none, and the pool then derives it from the ports and the pause
+	// range — which is the one place that number is worked out.
+	if cooldown > 0 {
+		cfg.Cooldown = cooldown
 	}
 
 	report, err := o.checked(ctx, client, cfg.Size())

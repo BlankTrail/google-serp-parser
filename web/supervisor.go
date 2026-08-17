@@ -117,7 +117,7 @@ func (e *poolEngine) Pool() poolFacts {
 //
 // The context is the job's: a job stopped while its pool is still going up stops
 // there, rather than after ports it will never use have been opened.
-type Dial func(ctx context.Context, ports, threads int, device string) (engine, error)
+type Dial func(ctx context.Context, ports, threads int, device string, cooldown time.Duration) (engine, error)
 
 // OpenPool opens the identities one job asked to run on. It is Dial as a caller
 // outside this package can write it: what a pool is opened as, how long its
@@ -125,7 +125,7 @@ type Dial func(ctx context.Context, ports, threads int, device string) (engine, 
 // command that starts this server, and an interface with a second opinion about
 // that would give a job set up here a different cost from the same job set up
 // there.
-type OpenPool func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error)
+type OpenPool func(ctx context.Context, ports, threads int, device string, cooldown time.Duration) (*blanktrail.Pool, error)
 
 // source is where the pool for the next job comes from.
 //
@@ -150,7 +150,7 @@ func standing(eng engine) source {
 		return source{}
 	}
 	return source{
-		raise: func(context.Context, int, int, string) (engine, error) { return eng, nil },
+		raise: func(context.Context, int, int, string, time.Duration) (engine, error) { return eng, nil },
 		held:  eng,
 	}
 }
@@ -160,8 +160,8 @@ func dialing(open OpenPool) source {
 	if open == nil {
 		return source{}
 	}
-	return source{raise: func(ctx context.Context, ports, threads int, device string) (engine, error) {
-		pool, err := open(ctx, ports, threads, device)
+	return source{raise: func(ctx context.Context, ports, threads int, device string, cooldown time.Duration) (engine, error) {
+		pool, err := open(ctx, ports, threads, device, cooldown)
 		if err != nil {
 			return nil, err
 		}
@@ -630,7 +630,7 @@ func (v *Supervisor) next() (int64, context.Context, source, bool) {
 // pool, and keeping it inside the source rather than as a case here is what stops
 // the rest of this file from having to know which kind of source it is holding.
 func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary) (engine, error) {
-	eng, err := src.raise(ctx, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device)
+	eng, err := src.raise(ctx, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown)
 	if err != nil {
 		return nil, err
 	}

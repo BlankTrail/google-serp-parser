@@ -222,7 +222,8 @@ type raisedPools struct {
 }
 
 // raise is the Dial a supervisor is built on.
-func (r *raisedPools) raise(_ context.Context, ports, threads int, _ string) (engine, error) {
+func (r *raisedPools) raise(_ context.Context, ports, threads int, _ string,
+	_ time.Duration) (engine, error) {
 	r.mu.Lock()
 	r.asked = append(r.asked, poolShape{Ports: ports, Threads: threads})
 	if r.refuse != nil {
@@ -467,7 +468,8 @@ func standInPools(t *testing.T) (OpenPool, *fakebt.Server) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	return func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
+	return func(ctx context.Context, ports, threads int, device string,
+		_ time.Duration) (*blanktrail.Pool, error) {
 		return blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 			Specs:            blanktrail.SpecsFor(device),
 			Client:           cl,
@@ -495,7 +497,7 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	open, fake := standInPools(t)
 	ctx := t.Context()
 
-	proof, err := open(ctx, 2, 1, blanktrail.DeviceDesktop)
+	proof, err := open(ctx, 2, 1, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening a pool: %v", err)
 	}
@@ -513,11 +515,12 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	// supervisor that never opened a pool at all would leave behind.
 	var counting sync.Mutex
 	opened := 0
-	count := func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
+	count := func(ctx context.Context, ports, threads int, device string,
+		_ time.Duration) (*blanktrail.Pool, error) {
 		counting.Lock()
 		opened++
 		counting.Unlock()
-		return open(ctx, ports, threads, device)
+		return open(ctx, ports, threads, device, 0)
 	}
 	raised := func() int {
 		counting.Lock()
@@ -969,7 +972,7 @@ func TestReconnect_ChangesWhereTheNextJobsPoolComesFrom(t *testing.T) {
 	// the only way it can is by changing what raises their pools.
 	v, _, _ := heldSupervisor(t)
 	next := &heldEngine{}
-	if err := v.Reconnect(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -988,7 +991,7 @@ func TestReconnect_LeavesTheJobInFlightOnThePoolItRaised(t *testing.T) {
 	id := enqueue(t, v, "one", "a")
 	waitUntilRunning(t, v, id)
 
-	if err := v.Reconnect(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1008,7 +1011,7 @@ func TestReconnect_GivesUpAStandingSetOfIdentitiesNobodyIsInside(t *testing.T) {
 	// follow raise their own, those ports are nobody's, and left open they are
 	// held for as long as the process runs.
 	v, _, standing := heldSupervisor(t)
-	if err := v.Reconnect(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1034,7 +1037,7 @@ func TestSupervisor_RefusesARaiseThatCameBackWithNeitherAPoolNorAReason(t *testi
 	// that caused it. It is refused where it happens instead, and the job stays
 	// there to be carried on.
 	st := testStore(t)
-	v := start(st, dialing(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
+	v := start(st, dialing(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
 	}), 1, 1)
 	t.Cleanup(func() { _ = v.Close() })
@@ -1069,19 +1072,16 @@ func TestSupervisor_HoldsAJobUntilThereIsSomethingToRunItOn(t *testing.T) {
 		time.Sleep(pollGap)
 	}
 
+	// What a connection being set up does, and nothing besides: from this moment
+	// there is something to raise a pool from. It is put in place in one step
+	// rather than by a raise that answers with nothing and a source swapped after
+	// it — the worker wakes on the first of those two and would take the job
+	// through the one this test is not about.
 	eng := &heldEngine{}
-	if err := v.Reconnect(func(context.Context, int, int, string) (*blanktrail.Pool, error) {
-		return nil, nil
-	}); err != nil {
-		t.Fatalf("Reconnect: %v", err)
-	}
-	// The raiser above answers with no pool, which is not what this test is
-	// about: what it is about is that the job held back starts as soon as there
-	// is something to raise at all. The engine below is what it actually runs on.
 	v.mu.Lock()
 	v.src = standing(eng)
-	v.mu.Unlock()
 	v.wakeUp()
+	v.mu.Unlock()
 	if !v.canRun() {
 		t.Error("a supervisor holding an engine says it cannot run a job")
 	}
@@ -1201,7 +1201,7 @@ func TestSupervisor_RaisesThePoolAsTheKindOfPageTheJobAskedFor(t *testing.T) {
 	st := testStore(t)
 	var asked []string
 	var mu sync.Mutex
-	v := start(st, source{raise: func(_ context.Context, _, _ int, device string) (engine, error) {
+	v := start(st, source{raise: func(_ context.Context, _, _ int, device string, _ time.Duration) (engine, error) {
 		mu.Lock()
 		asked = append(asked, device)
 		mu.Unlock()

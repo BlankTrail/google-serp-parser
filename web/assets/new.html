@@ -121,8 +121,13 @@
 <label for="tries">{{.T "form.tries"}}</label>
 <input id="tries" name="tries" type="number" min="1" value="{{.Form.Tries}}">
 </div>
+<div class="field">
+<label for="cooldown">{{.T "form.pause"}}</label>
+<input id="cooldown" name="cooldown" type="number" min="0" value="{{.Form.Cooldown}}">
+</div>
 </div>
 <p class="empty">{{.T "form.tries.why"}}</p>
+<p class="empty">{{.T "form.pause.why"}}</p>
 </fieldset>
 <div class="field">
 <label for="queries">{{.T "form.queries"}}</label>

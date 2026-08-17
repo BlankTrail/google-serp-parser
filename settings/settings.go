@@ -33,9 +33,15 @@ type ProxySource struct {
 
 // Settings is everything the interface can set.
 type Settings struct {
-	ControlURL string        `json:"control_url"`
-	APIKey     string        `json:"api_key"`
-	Cooldown   time.Duration `json:"cooldown"`
+	ControlURL string `json:"control_url"`
+	APIKey     string `json:"api_key"`
+
+	// The pause one identity keeps between two requests is not here. It was, and
+	// it was wrong: how hard a list may be pushed depends on the list and on what
+	// is being asked of it, and one machine runs a careful job and a fast one on
+	// the same afternoon. It belongs to the job, is set on the job's own form,
+	// and a file written by an older version keeps the number harmlessly — this
+	// program no longer reads it.
 
 	// HotPorts is how many identities this machine keeps open and warm between
 	// jobs, and HotDevice is which kind of result page they are opened for.
@@ -77,10 +83,7 @@ const DefaultControlURL = "http://127.0.0.1:8891/"
 
 // Defaults are what a program that has never been configured runs on.
 func Defaults() Settings {
-	return Settings{
-		ControlURL: DefaultControlURL,
-		Cooldown:   2 * time.Second,
-	}
+	return Settings{ControlURL: DefaultControlURL}
 }
 
 // Load reads the settings, or the defaults when there is no file yet.

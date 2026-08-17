@@ -67,8 +67,8 @@ type jobSetup struct {
 	// Device is which kind of result page this job asked Google for, as the key
 	// of what to call it: every phrase on every page goes through the catalogue.
 	Device string
-	// Ports, Threads and Tries are the pool this job runs on, and the three
-	// things about it that can still be changed. Everything above them is what
+	// Ports, Threads, Tries and Pause are the pool this job runs on, and the
+	// four things about it that can still be changed. Everything above them is what
 	// the job is: the depth, the country and the filter are settled by the work
 	// already done under them, and changing one afterwards would leave a job
 	// whose results were gathered under two rules with nothing saying which.
@@ -78,6 +78,9 @@ type jobSetup struct {
 	Ports   int
 	Threads int
 	Tries   int
+	// Pause is how long one identity rests between two requests, in seconds,
+	// which is the unit the box is filled in.
+	Pause int
 	// KeptAds and KeptRelated say whether this job captured what the page
 	// carried besides its results. The extra downloads are offered only where
 	// there is something to download: a link to an empty file reads as a page
@@ -201,6 +204,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Ports:       sum.Ports,
 			Threads:     sum.Threads,
 			Tries:       sum.Tries,
+			Pause:       int(sum.Cooldown / time.Second),
 			KeptAds:     sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldAds),
 			KeptRelated: sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldRelated),
 		},
@@ -278,7 +282,7 @@ func stateOf(p progressJSON, listReady bool) string {
 
 // apiReshape changes the pool a job will next run on.
 //
-// It changes those three and nothing else. What a job is — its depth, its
+// It changes those four and nothing else. What a job is — its depth, its
 // country, its filter — is settled by the work already done under it, and a
 // page that offered to change one of those would be offering to file results
 // gathered under two rules as though they were one.
@@ -294,7 +298,8 @@ func (s *Server) apiReshape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.store.Reshape(r.Context(), id,
-		countOf(r.FormValue("ports")), countOf(r.FormValue("threads")), countOf(r.FormValue("tries")))
+		countOf(r.FormValue("ports")), countOf(r.FormValue("threads")), countOf(r.FormValue("tries")),
+		time.Duration(countOf(r.FormValue("cooldown")))*time.Second)
 	switch {
 	case errors.Is(err, store.ErrNoJob):
 		http.NotFound(w, r)

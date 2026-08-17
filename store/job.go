@@ -138,6 +138,14 @@ type JobSpec struct {
 	// list, and the list is somebody's: one operator's addresses are fresh this
 	// morning and another's have been hammered for a week.
 	Tries int
+	// Cooldown is the gap this job leaves between two requests on one identity.
+	// It is the job's for the reason the three above are: how hard a list may be
+	// pushed depends on the list, and one machine runs a careful job and a fast
+	// one on the same afternoon.
+	//
+	// Nought is a job that named none, and what that becomes is decided where the
+	// pool is opened.
+	Cooldown time.Duration
 	// Fields is what each result of this job keeps. Empty is everything, which
 	// is what a job that never chose means and what every job written before the
 	// choice existed carries.
@@ -235,10 +243,11 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, fields, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
-		spec.Device, spec.Country, spec.Language, ports, threads, tries, string(spec.Fields))
+		spec.Device, spec.Country, spec.Language, ports, threads, tries,
+		spec.Cooldown.Milliseconds(), string(spec.Fields))
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -337,20 +346,26 @@ type UnfinishedJob struct {
 // name used twice in a minute resumes the later of the two rather than either.
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
 	var j UnfinishedJob
+	// The gap is read as a number and turned back into a span below: a duration
+	// in a database has to be a number, and this is one of the two places that
+	// has to know which unit the column is written in.
+	var cooldownMS int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, fields
+		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
-			&j.Spec.Device, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads, &j.Spec.Tries, &j.Spec.Fields)
+			&j.Spec.Device, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads,
+			&j.Spec.Tries, &cooldownMS, &j.Spec.Fields)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}
 	if err != nil {
 		return UnfinishedJob{}, fmt.Errorf("store: looking for an unfinished %q: %w", name, err)
 	}
+	j.Spec.Cooldown = time.Duration(cooldownMS) * time.Millisecond
 	return j, nil
 }
 
@@ -358,7 +373,9 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 // to change.
 var ErrJobFinished = errors.New("store: this job has already finished")
 
-// Reshape changes the pool a job will be run on.
+// Reshape changes the pool a job will be run on: how many identities, how many
+// at once, how many a phrase may be taken to, and how long one identity rests
+// between two requests.
 //
 // It changes nothing about the pool a job is running on this minute. The numbers
 // are read when a pool is raised, so a job already under way keeps the one it
@@ -372,7 +389,8 @@ var ErrJobFinished = errors.New("store: this job has already finished")
 // The reading and the write are one transaction because they are one decision:
 // a job that finished between a check outside a transaction and the write after
 // it would take a change this refuses, which is the exact case being refused.
-func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads, tries int) error {
+func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads, tries int,
+	cooldown time.Duration) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin reshaping job %d: %w", jobID, err)
@@ -392,8 +410,9 @@ func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads, tries 
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE jobs SET ports = ?, threads = ?, tries = ? WHERE id = ?`,
-		atLeastNone(ports), atLeastNone(threads), atLeastNone(tries), jobID); err != nil {
+		`UPDATE jobs SET ports = ?, threads = ?, tries = ?, cooldown_ms = ? WHERE id = ?`,
+		atLeastNone(ports), atLeastNone(threads), atLeastNone(tries),
+		cooldown.Milliseconds(), jobID); err != nil {
 		return fmt.Errorf("store: reshaping job %d: %w", jobID, err)
 	}
 	if err := tx.Commit(); err != nil {

@@ -89,20 +89,6 @@
 <p class="empty">{{.T "settings.source.forms"}}</p>
 </fieldset>
 
-<fieldset>
-<legend>{{.T "settings.pool"}}</legend>
-<div class="row">
-{{/* How wide a job runs is the job's own and is set where the job is. What
-     stands here is the one pool this machine keeps: the identities a search
-     answered inside a request is taken through, since a job's pool is gone
-     between jobs and that address would have nothing left to answer on. */}}
-<div class="field">
-<label for="cooldown">{{.T "settings.pause"}}</label>
-<input id="cooldown" name="cooldown" type="number" min="0" value="{{.Form.Pause}}">
-</div>
-</div>
-</fieldset>
-
 {{/* The identities this machine keeps open between jobs. What it buys is
      measured: a cold identity meets a challenge on its first request and the
      answer arrives minutes later, while one that has answered recently answers

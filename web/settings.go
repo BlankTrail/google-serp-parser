@@ -27,7 +27,6 @@ const (
 const (
 	urlField     = "control_url"
 	keyField     = "api_key"
-	pauseField   = "cooldown"
 	hotField     = "hot_ports"
 	hotKindField = "hot_device"
 	sourceField  = "source"
@@ -45,14 +44,10 @@ const (
 	sourceURL  = "url"
 )
 
-// pauseUnit and refreshUnit are what the two duration boxes are read in. A
-// person setting a pause between two requests thinks in seconds and a person
+// refreshUnit is what the one duration box on this page is read in. A person
 // setting how often a list is read again thinks in minutes, and a box holding
 // nanoseconds would be filled in wrong once and blamed on the program forever.
-const (
-	pauseUnit   = time.Second
-	refreshUnit = time.Minute
-)
+const refreshUnit = time.Minute
 
 // reachedDomains are the hosts a job cannot work without, and what the check
 // asks about. They are named one by one rather than by wildcard because a
@@ -91,7 +86,6 @@ type settingsForm struct {
 	// APIKey is empty on the way out and usually empty on the way in. The page
 	// cannot show the key, so an empty box means the key that is already saved.
 	APIKey string
-	Pause  string
 	// Hot is how many identities this machine keeps open and warm between jobs,
 	// and HotDevice is which kind of result page they are opened for.
 	Hot       string
@@ -109,7 +103,6 @@ func settingsFormOf(r *http.Request) settingsForm {
 	return settingsForm{
 		ControlURL: strings.TrimSpace(r.FormValue(urlField)),
 		APIKey:     strings.TrimSpace(r.FormValue(keyField)),
-		Pause:      strings.TrimSpace(r.FormValue(pauseField)),
 		Hot:        strings.TrimSpace(r.FormValue(hotField)),
 		HotDevice:  strings.TrimSpace(r.FormValue(hotKindField)),
 		Source:     strings.TrimSpace(r.FormValue(sourceField)),
@@ -127,7 +120,6 @@ func settingsFormOf(r *http.Request) settingsForm {
 func formShowing(saved settings.Settings) settingsForm {
 	return settingsForm{
 		ControlURL: saved.ControlURL,
-		Pause:      spellUnits(saved.Cooldown, pauseUnit),
 		Hot:        strconv.Itoa(saved.HotPorts),
 		HotDevice:  saved.HotDevice,
 		Source:     saved.Proxy.Kind,
@@ -200,7 +192,6 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	if next.HotDevice != "" && !blanktrail.KnownDevice(next.HotDevice) {
 		b.complaints = append(b.complaints, "settings.hot.kind")
 	}
-	next.Cooldown = b.span(f.Pause, saved.Cooldown, pauseUnit, "settings.pause.length")
 
 	// The list is switched off by choosing no source, which is why the source is
 	// a choice and not a box: a blank box would have to mean both "leave it" and
@@ -503,8 +494,9 @@ func (s *Server) takeIntoUse(saved settings.Settings) error {
 	// next job to start is what uses it — which is why saving settings no longer
 	// asks anybody what to do about the job that is running: it runs on the pool
 	// it raised for itself and is not touched.
-	return s.sup.Reconnect(func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
-		return s.connect(ctx, saved, ports, threads, device)
+	return s.sup.Reconnect(func(ctx context.Context, ports, threads int, device string,
+		cooldown time.Duration) (*blanktrail.Pool, error) {
+		return s.connect(ctx, saved, ports, threads, device, cooldown)
 	})
 }
 

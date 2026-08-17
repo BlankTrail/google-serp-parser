@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func testStore(t *testing.T) *Store {
@@ -438,7 +439,7 @@ func TestReshape_ChangesThePoolOfThatJobAndOfNoOther(t *testing.T) {
 		t.Fatalf("CreateJob: %v", err)
 	}
 
-	if err := s.Reshape(context.Background(), mine, 11, 3, 5); err != nil {
+	if err := s.Reshape(context.Background(), mine, 11, 3, 5, 0); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
 	if ports, threads := poolOf(t, s, mine); ports != 11 || threads != 3 {
@@ -447,6 +448,37 @@ func TestReshape_ChangesThePoolOfThatJobAndOfNoOther(t *testing.T) {
 	if ports, threads := poolOf(t, s, theirs); ports != 9 || threads != 2 {
 		t.Errorf("another job was reshaped to %d ports and %d threads, want the 9 and 2 it asked for",
 			ports, threads)
+	}
+}
+
+func TestCreateJobAndReshape_KeepThePauseTheJobNamed(t *testing.T) {
+	// The gap between two requests on one identity is the job's own. It is
+	// written in milliseconds and set in seconds, so a job that named forty-five
+	// seconds and reads back as forty-five thousand of anything is a unit lost
+	// between the form and the column.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "careful", Pages: 1, Cooldown: 45 * time.Second}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	sum, err := s.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Cooldown != 45*time.Second {
+		t.Errorf("the job rests %v between two requests on one identity, want 45s", sum.Cooldown)
+	}
+
+	if err := s.Reshape(context.Background(), id, 2, 1, 5, 90*time.Second); err != nil {
+		t.Fatalf("Reshape: %v", err)
+	}
+	sum, err = s.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Cooldown != 90*time.Second {
+		t.Errorf("after the reshape the job rests %v, want the 90s it was changed to", sum.Cooldown)
 	}
 }
 
@@ -476,10 +508,10 @@ func TestReshape_RefusesAJobThatHasAlreadyFinished(t *testing.T) {
 		t.Fatalf("FinishJob: %v", err)
 	}
 
-	if err := s.Reshape(context.Background(), done, 11, 3, 5); !errors.Is(err, ErrJobFinished) {
+	if err := s.Reshape(context.Background(), done, 11, 3, 5, 0); !errors.Is(err, ErrJobFinished) {
 		t.Errorf("Reshape returned %v, want ErrJobFinished", err)
 	}
-	if err := s.Reshape(context.Background(), running, 11, 3, 5); err != nil {
+	if err := s.Reshape(context.Background(), running, 11, 3, 5, 0); err != nil {
 		t.Errorf("a job with work left could not be reshaped: %v", err)
 	}
 	if ports, threads := poolOf(t, s, done); ports != 4 || threads != 7 {
@@ -493,7 +525,7 @@ func TestReshape_RefusesAJobThatIsNotThere(t *testing.T) {
 	// the wrong id that their change landed.
 	s := testStore(t)
 	jobWith(t, s, "a")
-	if err := s.Reshape(context.Background(), 4242, 11, 3, 5); !errors.Is(err, ErrNoJob) {
+	if err := s.Reshape(context.Background(), 4242, 11, 3, 5, 0); !errors.Is(err, ErrNoJob) {
 		t.Errorf("Reshape returned %v, want ErrNoJob", err)
 	}
 }
@@ -508,7 +540,7 @@ func TestReshape_TakesTheNumbersAJobIsAlreadyOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.Reshape(context.Background(), id, 4, 7, 5); err != nil {
+	if err := s.Reshape(context.Background(), id, 4, 7, 5, 0); err != nil {
 		t.Errorf("Reshape of a job onto the pool it already has: %v", err)
 	}
 	if ports, threads := poolOf(t, s, id); ports != 4 || threads != 7 {
@@ -526,7 +558,7 @@ func TestReshape_ReadsAPoolBelowNothingAsOneThatWasNeverNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.Reshape(context.Background(), id, -4, -7, 5); err != nil {
+	if err := s.Reshape(context.Background(), id, -4, -7, 5, 0); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
 	if ports, threads := poolOf(t, s, id); ports != 0 || threads != 0 {

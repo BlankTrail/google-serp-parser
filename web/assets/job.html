@@ -91,6 +91,10 @@
 <label for="tries">{{.T "form.tries"}}</label>
 <input id="tries" name="tries" type="number" min="1" value="{{.Job.Tries}}">
 </div>
+<div class="field">
+<label for="cooldown">{{.T "form.pause"}}</label>
+<input id="cooldown" name="cooldown" type="number" min="0" value="{{.Job.Pause}}">
+</div>
 </div>
 <div class="actions"><button type="submit">{{.T "job.reshape"}}</button></div>
 <p class="empty">{{.T "job.reshape.why"}}</p>

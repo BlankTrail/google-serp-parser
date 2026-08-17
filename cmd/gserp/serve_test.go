@@ -578,7 +578,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 
 	// A job that named no size reaches here already stood in for, so what this end
 	// is asked for is the pair this server was started with.
-	own, err := raise(t.Context(), opts.Ports, opts.Threads, blanktrail.DeviceDesktop)
+	own, err := raise(t.Context(), opts.Ports, opts.Threads, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("raising the pool of a job that named no size: %v", err)
 	}
@@ -592,7 +592,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 		t.Fatalf("%d ports are still open after that pool was given up", got)
 	}
 
-	named, err := raise(t.Context(), 2, 1, blanktrail.DeviceDesktop)
+	named, err := raise(t.Context(), 2, 1, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("raising the pool a job named: %v", err)
 	}
@@ -853,7 +853,7 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, 1, 10, blanktrail.DeviceDesktop)
+	standing, err := opts.dial(t.Context(), saved, 1, 10, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -864,7 +864,7 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 
 	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	pool, err := raise(t.Context(), 10, 10, blanktrail.DeviceDesktop)
+	pool, err := raise(t.Context(), 10, 10, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("raising a job of a hundred on ten standing: %v", err)
 	}
@@ -901,7 +901,7 @@ func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, 1, 4, blanktrail.DeviceDesktop)
+	standing, err := opts.dial(t.Context(), saved, 1, 4, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -910,7 +910,7 @@ func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.
 
 	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	own, err := raise(t.Context(), 2, 1, blanktrail.DeviceMobile)
+	own, err := raise(t.Context(), 2, 1, blanktrail.DeviceMobile, 0)
 	if err != nil {
 		t.Fatalf("raising a phone job beside the standing desktops: %v", err)
 	}
@@ -937,7 +937,7 @@ func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *t
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, 1, 10, blanktrail.DeviceDesktop)
+	standing, err := opts.dial(t.Context(), saved, 1, 10, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -946,7 +946,7 @@ func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *t
 
 	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	if _, err := raise(t.Context(), 1, 2, blanktrail.DeviceDesktop); err != nil {
+	if _, err := raise(t.Context(), 1, 2, blanktrail.DeviceDesktop, 0); err != nil {
 		t.Fatalf("raising a job of two: %v", err)
 	}
 	if got := len(fake.OpenPorts()); got != 10 {

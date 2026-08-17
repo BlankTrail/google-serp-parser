@@ -51,6 +51,9 @@ type JobSummary struct {
 	// Device is which kind of result page this job asked Google for. Empty is a
 	// desktop — see JobSpec.Device.
 	Device string
+	// Cooldown is the gap this job leaves between two requests on one identity,
+	// and nought is a job that named none — see JobSpec.Cooldown.
+	Cooldown time.Duration
 
 	// Ports and Threads are the pool this job asks to be run on. Zero in either
 	// is a job that named no size rather than one asking for nothing at all — see
@@ -86,7 +89,7 @@ const jobSummaryQuery = `
 	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind, j.target,
 	       j.unique_by, j.dropped,
 	       j.pages, j.country, j.language, j.device,
-	       j.ports, j.threads, j.tries, j.fields, j.plan_ready,
+	       j.ports, j.threads, j.tries, j.cooldown_ms, j.fields, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
 	       sum(CASE WHEN q.state = 'failed'  THEN 1 ELSE 0 END),
@@ -155,10 +158,14 @@ type scanner interface {
 func scanSummary(row scanner) (JobSummary, error) {
 	var sum JobSummary
 	var created, finished string
+	// The gap is read as a number and turned back into a span below: a duration
+	// in a database has to be a number, and this is one of the two places that
+	// has to know which unit the column is written in.
+	var cooldownMS int64
 	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind, &sum.Target,
 		&sum.UniqueBy, &sum.Dropped,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.Device,
-		&sum.Ports, &sum.Threads, &sum.Tries, &sum.Fields, &sum.PlanReady,
+		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &sum.Fields, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobSummary{}, err
@@ -168,6 +175,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 	}
 	// A stamp that cannot be read costs the reader a date, not the counts, so
 	// it comes back zero rather than ending the listing.
+	sum.Cooldown = time.Duration(cooldownMS) * time.Millisecond
 	sum.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	if finished != "" {
 		sum.FinishedAt, _ = time.Parse(time.RFC3339, finished)

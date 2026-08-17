@@ -427,7 +427,8 @@ func livePool(ctx context.Context, t *testing.T, ports, threads int, device stri
 // longer is. It costs a warm-up per job, and that cost is one of the things
 // this file exists to report.
 func liveRaise(t *testing.T) OpenPool {
-	return func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
+	return func(ctx context.Context, ports, threads int, device string,
+		_ time.Duration) (*blanktrail.Pool, error) {
 		return livePool(ctx, t, ports, threads, device), nil
 	}
 }
@@ -1308,7 +1309,6 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 	if err := settings.Save(at, settings.Settings{
 		ControlURL: control, APIKey: key,
 		HotPorts: livePorts,
-		Cooldown: 2 * time.Second,
 		Proxy:    settings.ProxySource{Kind: sourceURL, Location: listURL},
 	}); err != nil {
 		fatalf(t, "writing the settings down: %v", err)
@@ -1332,7 +1332,8 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 // liveConnect opens the ports a connection just saved describes, doing what the
 // command does: the check first, then the ports, then the list behind them.
 func liveConnect(t *testing.T) Connect {
-	return func(ctx context.Context, saved settings.Settings, ports, threads int, device string) (*blanktrail.Pool, error) {
+	return func(ctx context.Context, saved settings.Settings, ports, threads int, device string,
+		_ time.Duration) (*blanktrail.Pool, error) {
 		client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 		if err != nil {
 			return nil, err
@@ -1381,7 +1382,6 @@ func liveSettingsPost(control, listURL string, ports int) url.Values {
 		urlField:     {control},
 		keyField:     {""},
 		hotField:     {strconv.Itoa(ports)},
-		pauseField:   {"2"},
 		sourceField:  {sourceURL},
 		whereField:   {listURL},
 		refreshField: {"0"},

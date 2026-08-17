@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -403,6 +404,31 @@ func TestNewJob_OffersEveryKindAJobCanBe(t *testing.T) {
 	}
 }
 
+func TestCreateJob_FilesThePauseInTheUnitTheBoxIsFilledIn(t *testing.T) {
+	// The box is in seconds because that is what a person setting a pause between
+	// two requests thinks in; the column is in milliseconds because a duration in
+	// a database has to be a number. A unit lost between the two is a job resting
+	// a thousandth of what was asked, and nothing on any page would say so.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name": {"careful"}, "queries": {"a"}, "pages": {"1"}, "cooldown": {"5"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("starting gave %d, want a redirect: %s", rec.Code, rec.Body)
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("%d jobs, want the one just started", len(jobs))
+	}
+	if jobs[0].Cooldown != 5*time.Second {
+		t.Errorf("the job rests %v between two requests on one identity, want the 5s that were typed",
+			jobs[0].Cooldown)
+	}
+}
+
 func TestCreateJob_FilesTheJobUnderTheFilterTheFormChose(t *testing.T) {
 	// The choice on the form is what the run throws away. A filter that stopped
 	// at the handler would keep every repeat while the page said otherwise, and
@@ -737,6 +763,24 @@ func TestNewForm_AsksGoogleForOneAnswerRatherThanWhicheverTheIdentitySuggests(t 
 		if !strings.Contains(tag, `value="`+box.want+`"`) {
 			t.Errorf("the %s box does not hold %q: <%s>", box.name, box.want, tag)
 		}
+	}
+}
+
+func TestNewForm_OffersThePauseBetweenTwoRequestsOnOneIdentity(t *testing.T) {
+	// The pause was a setting of the machine, where one number served every job
+	// this machine would ever run. It is the job's: how hard a list may be pushed
+	// depends on the list and on what is being asked of it.
+	//
+	// It arrives filled in, because a box a reader has to work out a number for
+	// is a box most readers leave alone.
+	if form := blankForm(); form.Cooldown != defaultCooldown {
+		t.Errorf("a new job rests %d seconds between two requests on one identity, want %d",
+			form.Cooldown, defaultCooldown)
+	}
+	body := get(t, testServer(t), "/new").Body.String()
+	tag := openingTag(t, body, `input id="cooldown"`)
+	if !strings.Contains(tag, `value="`+strconv.Itoa(defaultCooldown)+`"`) {
+		t.Errorf("the pause box does not hold the default: <%s>", tag)
 	}
 }
 

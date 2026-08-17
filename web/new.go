@@ -45,6 +45,10 @@ type jobForm struct {
 	// written off, and From says which of the two ways the phrases arrived by.
 	Tries int
 	From  string
+	// Cooldown is how long one identity rests between two requests, in seconds,
+	// because that is the unit a person setting it thinks in. Nought is a job
+	// that named none, and the pool then works one out from its own size.
+	Cooldown int
 	// Keep is what each result of this job keeps, as the names the boxes carry,
 	// and Chose says the choice was on the form at all.
 	//
@@ -67,6 +71,14 @@ type jobForm struct {
 // name one now types over a name that already tells two jobs of the same list
 // apart. It is the local time, written largest part first so a listing sorts by
 // it, and it is a default and not a stamp: whatever is typed over it wins.
+// defaultCooldown is the pause the form offers between two requests on one
+// identity, in seconds.
+//
+// Two, which is what this program kept machine-wide before the pause belonged to
+// the job: short enough that a pool of any size is not waiting on it, long
+// enough that one identity is not asking twice in the same breath.
+const defaultCooldown = 2
+
 // defaultTries is what the form offers when nobody has said otherwise. It is
 // the run layer's own number, spelled here so the box a reader sees and the
 // number a job runs at cannot drift apart.
@@ -111,11 +123,12 @@ func blankForm() jobForm {
 		// The desktop, because that is the page most people mean when they say
 		// "the results": it is what a search from a computer answers with, and it
 		// is what every job this program ran before there was a choice ran on.
-		Device:  blanktrail.DeviceDesktop,
-		Pages:   1,
-		Threads: 2,
-		Ports:   6,
-		Tries:   defaultTries,
+		Device:   blanktrail.DeviceDesktop,
+		Pages:    1,
+		Threads:  2,
+		Ports:    6,
+		Tries:    defaultTries,
+		Cooldown: defaultCooldown,
 		// Everything the parser reads, because that is what somebody who has not
 		// thought about it means. Turning a part off is a decision about room, and
 		// a decision about room is one nobody makes before they have a list.
@@ -365,6 +378,7 @@ func (f jobForm) spec() store.JobSpec {
 		Ports:    f.Ports,
 		Threads:  f.Threads,
 		Tries:    f.Tries,
+		Cooldown: time.Duration(f.Cooldown) * time.Second,
 		Fields:   store.FieldsOf(f.Keep),
 	}
 }
@@ -389,6 +403,7 @@ func formOf(r *http.Request) jobForm {
 		Threads:  atoi("threads"),
 		Ports:    atoi("ports"),
 		Tries:    atoi("tries"),
+		Cooldown: atoi("cooldown"),
 		From:     strings.TrimSpace(r.FormValue(fromField)),
 		Keep:     r.Form["keep"],
 		Chose:    r.FormValue(choseField) != "",

@@ -19,6 +19,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 	"github.com/blanktrail/google-serp-parser/settings"
+	"github.com/blanktrail/google-serp-parser/store"
 )
 
 // stubConnect stands where the ports go. It records the settings it was asked
@@ -36,15 +37,17 @@ type stubConnect struct {
 	mu    sync.Mutex
 	with  []settings.Settings
 	sizes [][2]int
+	gaps  []time.Duration
 	err   error
 }
 
 func (c *stubConnect) open(_ context.Context, saved settings.Settings, ports, threads int,
-	_ string) (*blanktrail.Pool, error) {
+	_ string, cooldown time.Duration) (*blanktrail.Pool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.with = append(c.with, saved)
 	c.sizes = append(c.sizes, [2]int{ports, threads})
+	c.gaps = append(c.gaps, cooldown)
 	if c.err != nil {
 		return nil, c.err
 	}
@@ -52,6 +55,18 @@ func (c *stubConnect) open(_ context.Context, saved settings.Settings, ports, th
 	// never about the pool itself, so none is opened. The refusal is what keeps
 	// the supervisor from running a job on nothing.
 	return nil, errNoLivePool
+}
+
+// lastGap is the pause between two requests on one identity the last raise was
+// asked for. It is the job's own, so a raiser that read it from the machine's
+// settings instead would look identical from outside without this.
+func (c *stubConnect) lastGap() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.gaps) == 0 {
+		return 0
+	}
+	return c.gaps[len(c.gaps)-1]
 }
 
 // lastSize is the size the last raise was asked for.
@@ -283,6 +298,46 @@ func TestSaveSettings_HandsTheJobsAfterThisOneTheConnectionItJustWrote(t *testin
 		t.Errorf("the pool was raised at %v, want the 9 ports and 4 threads the job asked for", got)
 	}
 }
+func TestRaise_TakesThePauseFromTheJobAndNotFromTheMachine(t *testing.T) {
+	// How long one identity rests between two requests belongs to the job. It was
+	// a setting of the machine, and a machine-wide answer meant that changing it
+	// for the job in hand changed it for every job after — with nothing on either
+	// job's page saying so.
+	//
+	// Nought is a job that named none, and what an unnamed pause becomes is the
+	// pool's own business. This is about the number a job did name.
+	st := testStore(t)
+	v := newSupervisor(st, nil)
+	t.Cleanup(func() { _ = v.Close() })
+	s, err := New(Config{Store: st, Supervisor: v, Logger: quiet(),
+		SettingsPath: filepath.Join(t.TempDir(), "settings.json")})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	opener := &stubConnect{}
+	s.connect = opener.open
+	// A save is what puts the raiser in place, the same way the running program
+	// does it: the pool a job goes up on is opened from the settings in the file.
+	postForm(t, s, settingsAt, url.Values{
+		"control_url": {"http://127.0.0.1:2"}, "api_key": {""},
+	})
+
+	if _, err := v.Enqueue(store.JobSpec{
+		Name: "a careful one", Pages: 1, Country: "us", Language: "en",
+		Ports: 2, Threads: 1, Cooldown: 45 * time.Second,
+	}, []string{"a"}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	waitUntil(t, "the job to have asked for a pool", func() bool {
+		_, asked := opener.asked()
+		return asked
+	})
+	if got := opener.lastGap(); got != 45*time.Second {
+		t.Errorf("the pool was raised with a pause of %v, want the 45s the job asked for", got)
+	}
+}
+
 func TestSaveSettings_SavesAConnectionItCannotOpenRatherThanRefusingIt(t *testing.T) {
 	// Nothing is opened by a save. A job puts up its own pool when it starts, so
 	// a connection that will not open is discovered there and reported there —
@@ -307,20 +362,17 @@ func TestSaveSettings_SavesAConnectionItCannotOpenRatherThanRefusingIt(t *testin
 		t.Errorf("the address that was typed was not saved: %+v", got)
 	}
 }
-func TestSaveSettings_KeepsThePauseAndTheListItWasGiven(t *testing.T) {
-	// The two boxes read in units a person thinks in and the file holds lengths
-	// of time. A box read as nanoseconds is a box filled in once, and the pause
+func TestSaveSettings_KeepsTheListInTheUnitsItWasGiven(t *testing.T) {
+	// The box is read in the unit a person thinks in and the file holds a length
+	// of time. A box read as nanoseconds is a box filled in once, and the wait
 	// nobody asked for is then blamed on the program.
 	s, path := serverWithSettings(t, settings.Settings{})
 	postForm(t, s, settingsAt, url.Values{
-		"cooldown": {"3"}, "source": {"url"},
+		"source":    {"url"},
 		"source_at": {"https://example.test/list"}, "source_refresh": {"15"},
 	})
 
 	got := loaded(t, path)
-	if got.Cooldown != 3*time.Second {
-		t.Errorf("the pause is %v, want the 3 seconds that were typed", got.Cooldown)
-	}
 	want := settings.ProxySource{
 		Kind: "url", Location: "https://example.test/list", Refresh: 15 * time.Minute,
 	}
@@ -340,20 +392,6 @@ func TestSaveSettings_TakesNoSourceToMeanNoListRatherThanNoChange(t *testing.T) 
 
 	if got := loaded(t, path); got.Proxy != (settings.ProxySource{}) {
 		t.Errorf("the list is still %+v after being switched off", got.Proxy)
-	}
-}
-
-func TestSaveSettings_RefusesAPauseThatIsNotALengthOfTime(t *testing.T) {
-	// The other half of the two boxes above: what cannot be read is said rather
-	// than rounded to nought, which would be a pause nobody asked for.
-	s, path := serverWithSettings(t, settings.Settings{Cooldown: 2 * time.Second})
-	body := postBody(t, s, settingsAt, url.Values{"cooldown": {"-1"}})
-
-	if !strings.Contains(body, LangEN.T("settings.pause.length")) {
-		t.Errorf("the page does not say what is wrong with the pause:\n%s", body)
-	}
-	if got := loaded(t, path); got.Cooldown != 2*time.Second {
-		t.Errorf("the pause is now %v — a refused form was written down", got.Cooldown)
 	}
 }
 
