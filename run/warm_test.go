@@ -38,10 +38,11 @@ func TestWarmer_WarmsEveryStandingPortAndThenLeavesThemAlone(t *testing.T) {
 
 	var warmed atomic.Int64
 	w := &Warmer{
-		Pool:   pool,
-		idle:   time.Hour,
-		round:  time.Millisecond,
-		warmed: func() { warmed.Add(1) },
+		Pool:    pool,
+		idle:    time.Hour,
+		round:   time.Millisecond,
+		spacing: time.Millisecond,
+		warmed:  func() { warmed.Add(1) },
 	}
 
 	// Rounds by hand rather than the loop, so this test is about what a round
@@ -75,7 +76,7 @@ func TestWarmer_WarmsSeveralAtOnceRatherThanOneAfterAnother(t *testing.T) {
 
 	together := make(chan struct{})
 	var arrived atomic.Int64
-	w := &Warmer{Pool: pool, idle: time.Hour, round: time.Millisecond, warmAtOnce: 4,
+	w := &Warmer{Pool: pool, idle: time.Hour, round: time.Millisecond, spacing: time.Millisecond, warmAtOnce: 4,
 		warmed: func() {}}
 	w.beforeSearch = func() {
 		if arrived.Add(1) == 4 {
@@ -132,7 +133,7 @@ func TestWarmer_StopsWhenItIsToldTo(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		(&Warmer{Pool: pool, idle: time.Hour, round: time.Hour}).Run(ctx)
+		(&Warmer{Pool: pool, idle: time.Hour, round: time.Hour, spacing: time.Millisecond}).Run(ctx)
 	}()
 
 	stop()
@@ -188,7 +189,7 @@ func TestWarmer_AsksForNoLocaleSoTheAddressItselfDecidesIt(t *testing.T) {
 	pool := poolFacing(t, o.addr(), 1).Pool
 	pool.KeepWarm()
 
-	w := &Warmer{Pool: pool, idle: time.Hour, round: time.Millisecond, warmed: func() {}}
+	w := &Warmer{Pool: pool, idle: time.Hour, round: time.Millisecond, spacing: time.Millisecond, warmed: func() {}}
 	w.oneRound(t.Context(), time.Hour)
 
 	mu.Lock()
@@ -227,5 +228,43 @@ func TestWarmingPhrase_IsNotTheSameHandfulOfQuestionsAllDay(t *testing.T) {
 	if len(seen) < 100 {
 		t.Errorf("four hundred warmings produced %d different phrases, and a machine "+
 			"asking that few different questions is a machine with a habit", len(seen))
+	}
+}
+
+func TestWarmer_StartsOneWarmingASecondRatherThanAllOfThemAtOnce(t *testing.T) {
+	// How many may be in flight and how fast they may be started are different
+	// questions. A machine keeping sixty identities that warmed thirty of them in
+	// the same instant would be making thirty searches in one second, which is
+	// not something a person does — so the round is spread out, one start at a
+	// time, and the identities warm across the minute instead of in a burst.
+	pool := warmingPool(t, 4)
+
+	var mu sync.Mutex
+	var at []time.Time
+	gap := 40 * time.Millisecond
+	w := &Warmer{Pool: pool, idle: time.Hour, round: time.Hour,
+		spacing: gap, warmAtOnce: 4, warmed: func() {}}
+	w.beforeSearch = func() {
+		mu.Lock()
+		at = append(at, time.Now())
+		mu.Unlock()
+	}
+
+	started := time.Now()
+	w.oneRound(t.Context(), time.Hour)
+	took := time.Since(started)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(at) != 4 {
+		t.Fatalf("%d of four identities were warmed", len(at))
+	}
+	// Three gaps between four starts. Measured on the round rather than between
+	// each pair, because what is being checked is that the starts are spread at
+	// all: a round that fired them together would be over in the time one
+	// request takes.
+	if want := 3 * gap; took < want {
+		t.Errorf("four warmings were started inside %v, and spread one per %v they "+
+			"cannot be started in less than %v", took.Round(time.Millisecond), gap, want)
 	}
 }

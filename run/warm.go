@@ -23,6 +23,17 @@ import (
 // stay recognised, and no more visible than that.
 const IdleBeforeWarming = 15 * time.Minute
 
+// warmingSpacing is how long the warmer leaves between starting one warming and
+// starting the next.
+//
+// A second, so a machine keeping sixty identities warms them across the minute
+// rather than making sixty requests in the same instant. The bound above says
+// how many may be in flight at once; this says how fast they may be started, and
+// the two answer different questions: one is about how much of the set is held
+// away from the work, the other is about what this machine looks like from the
+// other end. Nothing a person does produces thirty searches in one second.
+const warmingSpacing = time.Second
+
 // warmingRound is how often the warmer looks for a port worth warming.
 //
 // It is shorter than the idle span because a port becomes due at whatever
@@ -97,6 +108,9 @@ type Warmer struct {
 	// warmAtOnce overrides how many identities are warmed at the same time, so a
 	// test can pin the number instead of deriving it from the set's size.
 	warmAtOnce int
+	// spacing overrides the gap left between starting one warming and the next,
+	// so a test does not have to wait a second per identity.
+	spacing time.Duration
 	// beforeSearch runs just before each warming request goes out, so a test can
 	// hold them all and see whether they are in flight together.
 	beforeSearch func()
@@ -151,6 +165,13 @@ func (w *Warmer) oneRound(ctx context.Context, idle time.Duration) {
 		if ctx.Err() != nil {
 			return
 		}
+		if held > 0 && !w.wait(ctx, w.spaced()) {
+			// The gap between one warming and the next. It is taken before the
+			// next port is taken and not after the last one is started, so a
+			// round that has nothing more to warm does not sit on a pause it owes
+			// nobody.
+			return
+		}
 		if held >= w.atOnce() {
 			// As many as may be held at once are in flight. Waiting for all of
 			// them beats waiting for one: they finish at their own pace, and the
@@ -162,11 +183,35 @@ func (w *Warmer) oneRound(ctx context.Context, idle time.Duration) {
 			return
 		}
 		held++
+		if w.Log != nil {
+			w.Log.Info("warming an identity that is being kept open",
+				"port", lease.Port(), "this round", held, "at once", w.atOnce())
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			w.warmOne(ctx, lease)
 		}()
+	}
+}
+
+// spaced is the gap left between starting one warming and the next.
+func (w *Warmer) spaced() time.Duration {
+	if w.spacing > 0 {
+		return w.spacing
+	}
+	return warmingSpacing
+}
+
+// wait sleeps for the given span and reports whether it ran out rather than
+// being cut short. A warmer told to stop stops in the pause as well as in the
+// request.
+func (w *Warmer) wait(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 
