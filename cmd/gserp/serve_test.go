@@ -470,7 +470,7 @@ func TestServe_OpensThePortsAConnectionSavedInTheBrowserDescribes(t *testing.T) 
 	t.Setenv(envAPIKey, "")
 	t.Setenv(envProxyList, "")
 	opts := configured(t, settings.Settings{
-		ControlURL: fake.URL(), APIKey: fake.Key(), Threads: 1, Ports: 1,
+		ControlURL: fake.URL(), APIKey: fake.Key(), SearchPorts: 1,
 	})
 
 	st, err := store.Open(opts.DB)
@@ -505,7 +505,7 @@ func TestServe_OpensItsPortsThroughTheAddressesTheSavedListNames(t *testing.T) {
 		t.Fatalf("writing the list: %v", err)
 	}
 	opts := configured(t, settings.Settings{
-		ControlURL: fake.URL(), APIKey: fake.Key(), Threads: 1, Ports: 1,
+		ControlURL: fake.URL(), APIKey: fake.Key(), SearchPorts: 1,
 		Proxy: settings.ProxySource{Kind: "file", Location: list},
 	})
 
@@ -608,7 +608,7 @@ func TestServe_KeepsThePoolTheSearchUsesWhileEveryJobRaisesItsOwn(t *testing.T) 
 	t.Setenv(envAPIKey, "")
 	t.Setenv(envProxyList, "")
 	opts := configured(t, settings.Settings{
-		ControlURL: fake.URL(), APIKey: fake.Key(), Threads: 1, Ports: 1,
+		ControlURL: fake.URL(), APIKey: fake.Key(), SearchPorts: 1,
 	})
 
 	st, err := store.Open(opts.DB)
@@ -647,28 +647,19 @@ func configured(t *testing.T, s settings.Settings) serveOptions {
 	}
 }
 
-func TestServe_RunsOnWhatWasSetInTheBrowserWhenTheCommandLineSaysNothing(t *testing.T) {
-	// Settings are set in a browser and read by a process that starts later.
-	// Ones that did not outlive the restart would have to be set again every
-	// time, and nothing on the screen would say so.
-	opts := configured(t, settings.Settings{Threads: 7, Ports: 9})
-
-	threads, ports := opts.runOn(opts.saved(io.Discard))
-	if threads != 7 || ports != 9 {
-		t.Errorf("threads=%d ports=%d, want the 7 and 9 that were saved", threads, ports)
-	}
-}
-
-func TestServe_ANumberOnTheCommandLineWinsOverTheSavedOne(t *testing.T) {
-	// Somebody who typed a number meant it for this run. A saved setting that
-	// overrode it would make the flag do nothing on exactly the machine where
-	// somebody had a reason to reach for it.
-	opts := configured(t, settings.Settings{Threads: 7, Ports: 9})
+func TestServe_TakesTheSizeOfAJobFromThisCommandAndNotFromTheSavedSettings(t *testing.T) {
+	// How wide a job runs is the job's own now: it is saved with the job and
+	// changed on the job's page. What this command was started with is the
+	// answer for a job that named nothing, and the settings file — which decides
+	// the connection every pool is opened through — has no say in it. A second
+	// machine-wide answer standing behind the job's own is the kind nobody can
+	// tell they are getting.
+	opts := configured(t, settings.Settings{SearchPorts: 3})
 	opts.Threads, opts.Ports = 1, 2
 
 	threads, ports := opts.runOn(opts.saved(io.Discard))
 	if threads != 1 || ports != 2 {
-		t.Errorf("threads=%d ports=%d, want the 1 and 2 that were typed", threads, ports)
+		t.Errorf("threads=%d ports=%d, want the 1 and 2 this command was given", threads, ports)
 	}
 }
 

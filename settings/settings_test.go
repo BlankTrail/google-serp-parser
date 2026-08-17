@@ -28,7 +28,7 @@ func TestSave_AndLoadBringBackWhatWasPutIn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	want := Settings{
 		ControlURL: "http://127.0.0.1:1", APIKey: "a-secret",
-		Ports: 8, Threads: 4, Cooldown: 2 * time.Second,
+		SearchPorts: 3, Cooldown: 2 * time.Second,
 		Proxy:    ProxySource{Kind: "url", Location: "https://example.test/list", Refresh: time.Hour},
 		Language: "ru",
 	}
@@ -146,9 +146,10 @@ func TestRedacted_LeavesEverythingElseAlone(t *testing.T) {
 	s := Defaults()
 	s.APIKey = "secret"
 	s.ControlURL = "http://127.0.0.1:1"
-	s.Ports = 12
+	s.SearchPorts = 12
+	s.Cooldown = 7 * time.Second
 	got := s.Redacted()
-	if got.ControlURL != s.ControlURL || got.Ports != s.Ports || got.Threads != s.Threads {
+	if got.ControlURL != s.ControlURL || got.SearchPorts != s.SearchPorts || got.Cooldown != s.Cooldown {
 		t.Errorf("redacting changed something other than the key: %+v", got)
 	}
 }

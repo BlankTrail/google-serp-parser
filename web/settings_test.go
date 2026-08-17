@@ -4,6 +4,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -24,20 +25,42 @@ import (
 // to open, because what a swap is built from is half of what a save has to get
 // right: settings written to the file and an engine built from the ones before
 // them is a server running on what the reader replaced.
+// stubConnect stands where the pools are opened from, and records the settings
+// and the size each raise was asked for. The size is recorded because it is the
+// job's own now: a raiser that took it from anywhere else would look identical
+// from outside without it.
+// errNoLivePool is what the stand answers with instead of opening anything.
+var errNoLivePool = errors.New("no pool is opened in these tests")
+
 type stubConnect struct {
-	mu   sync.Mutex
-	with []settings.Settings
-	err  error
+	mu    sync.Mutex
+	with  []settings.Settings
+	sizes [][2]int
+	err   error
 }
 
-func (c *stubConnect) open(_ context.Context, saved settings.Settings) (engine, error) {
+func (c *stubConnect) open(_ context.Context, saved settings.Settings, ports, threads int) (*blanktrail.Pool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.with = append(c.with, saved)
+	c.sizes = append(c.sizes, [2]int{ports, threads})
 	if c.err != nil {
 		return nil, c.err
 	}
-	return &heldEngine{}, nil
+	// These tests are about which settings and which size a raise was asked for,
+	// never about the pool itself, so none is opened. The refusal is what keeps
+	// the supervisor from running a job on nothing.
+	return nil, errNoLivePool
+}
+
+// lastSize is the size the last raise was asked for.
+func (c *stubConnect) lastSize() [2]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.sizes) == 0 {
+		return [2]int{}
+	}
+	return c.sizes[len(c.sizes)-1]
 }
 
 // asked is the last settings an engine was built from, and whether one ever was.
@@ -87,7 +110,7 @@ func serverWithRunningJob(t *testing.T) (*Server, string, *stubConnect) {
 	t.Cleanup(func() { _ = v.Close() })
 
 	path := settingsFile(t, settings.Settings{
-		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me", Ports: 8, Threads: 4,
+		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me", SearchPorts: 3,
 	})
 	opener := &stubConnect{}
 	s, err := New(Config{Store: st, Supervisor: v, Logger: quiet(), SettingsPath: path})
@@ -165,15 +188,15 @@ func TestSaveSettings_AnEmptyKeyFieldKeepsTheKeyThatWasThere(t *testing.T) {
 	// The field cannot show the key, so somebody opening the settings to change
 	// the port count and pressing save would otherwise lose their connection.
 	// This is the first thing anybody will do.
-	s, path := serverWithSettings(t, settings.Settings{APIKey: "keep-me", Ports: 8})
-	postForm(t, s, settingsAt, url.Values{"api_key": {""}, "ports": {"12"}})
+	s, path := serverWithSettings(t, settings.Settings{APIKey: "keep-me", SearchPorts: 3})
+	postForm(t, s, settingsAt, url.Values{"api_key": {""}, "search_ports": {"12"}})
 
 	got := loaded(t, path)
 	if got.APIKey != "keep-me" {
 		t.Errorf("the key is now %q — an empty field erased it", got.APIKey)
 	}
-	if got.Ports != 12 {
-		t.Errorf("Ports=%d, want the 12 that was asked for", got.Ports)
+	if got.SearchPorts != 12 {
+		t.Errorf("Ports=%d, want the 12 that was asked for", got.SearchPorts)
 	}
 }
 
@@ -190,21 +213,21 @@ func TestSaveSettings_ANewKeyReplacesTheOldOne(t *testing.T) {
 
 func TestSaveSettings_WritesNothingDownWhenItRefuses(t *testing.T) {
 	// A form checked after it has been written is a form that has already taken
-	// effect, and a port count of nought is a server that looks configured and
-	// runs nothing.
-	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1", Ports: 8})
+	// effect. Nought ports is not the fault here — it is how the search address
+	// is turned off — so the fault this posts is a count that is not one.
+	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1", SearchPorts: 3})
 	rec := postForm(t, s, settingsAt, url.Values{
-		"control_url": {"http://127.0.0.1:2"}, "ports": {"0"},
+		"control_url": {"http://127.0.0.1:2"}, "search_ports": {"a handful"},
 	})
 
 	if rec.Code == http.StatusSeeOther {
-		t.Fatal("a port count of nought was accepted")
+		t.Fatal("a port count that is not a number was accepted")
 	}
 	got := loaded(t, path)
-	if got.Ports != 8 || got.ControlURL != "http://127.0.0.1:1" {
+	if got.SearchPorts != 3 || got.ControlURL != "http://127.0.0.1:1" {
 		t.Errorf("the refused form was written down anyway: %+v", got)
 	}
-	if !strings.Contains(rec.Body.String(), LangEN.T("settings.ports.count")) {
+	if !strings.Contains(rec.Body.String(), LangEN.T("settings.search.count")) {
 		t.Errorf("the page does not say what is wrong:\n%s", rec.Body.String())
 	}
 }
@@ -214,7 +237,7 @@ func TestSaveSettings_KeepsWhatWasTypedWhenItRefuses(t *testing.T) {
 	// box beside it is a form filled in twice.
 	s, _ := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 	body := postBody(t, s, settingsAt, url.Values{
-		"control_url": {"http://127.0.0.1:9"}, "ports": {"nought"},
+		"control_url": {"http://127.0.0.1:9"}, "search_ports": {"nought"},
 	})
 
 	if !strings.Contains(body, "http://127.0.0.1:9") {
@@ -222,59 +245,67 @@ func TestSaveSettings_KeepsWhatWasTypedWhenItRefuses(t *testing.T) {
 	}
 }
 
-func TestSaveSettings_BuildsWhatRunsFromTheSettingsItJustWrote(t *testing.T) {
-	// Saving and then opening what was saved before it are two different
-	// connections: the file would say one thing and the work would run through
-	// another, with the screen agreeing with the file.
+func TestSaveSettings_HandsTheJobsAfterThisOneTheConnectionItJustWrote(t *testing.T) {
+	// Nothing is opened by a save any more: a job puts up its own pool when it
+	// starts, so what a save hands over is the way to open one. The test is
+	// therefore about the next job, not about the moment of saving — a raiser
+	// recorded but never reached would look identical from the settings page.
 	s, path := serverWithSettings(t, settings.Settings{
-		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me", Ports: 8, Threads: 4,
+		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me", SearchPorts: 3,
 	})
 	st := testStore(t)
-	v := newSupervisor(st, &heldEngine{})
+	v := newSupervisor(st, nil)
 	t.Cleanup(func() { _ = v.Close() })
 	s.sup = v
 	opener := &stubConnect{}
 	s.connect = opener.open
 
 	postForm(t, s, settingsAt, url.Values{
-		"control_url": {"http://127.0.0.1:2"}, "api_key": {""}, "ports": {"12"}, "threads": {"3"},
+		"control_url": {"http://127.0.0.1:2"}, "api_key": {""}, "search_ports": {"12"},
 	})
+	enqueueSized(t, v, "after the save", 9, 4, "a")
 
-	built, ok := opener.asked()
-	if !ok {
-		t.Fatal("nothing was built from the settings that were saved")
-	}
+	waitUntil(t, "the job to have asked for a pool", func() bool {
+		_, asked := opener.asked()
+		return asked
+	})
+	built, _ := opener.asked()
 	if built != loaded(t, path) {
-		t.Errorf("what runs was built from %+v, and %+v was saved", built, loaded(t, path))
+		t.Errorf("the pool was raised from %+v, and %+v was saved", built, loaded(t, path))
 	}
-	if built.ControlURL != "http://127.0.0.1:2" || built.Ports != 12 || built.APIKey != "keep-me" {
-		t.Errorf("what runs was built from %+v, want the address and count just typed and the key that was kept", built)
+	if built.ControlURL != "http://127.0.0.1:2" || built.APIKey != "keep-me" {
+		t.Errorf("raised from %+v, want the address just typed and the key that was kept", built)
+	}
+	// The size is the job's, not the settings': the two are different numbers
+	// here on purpose, so a raiser reading the wrong one cannot pass.
+	if got := opener.lastSize(); got != [2]int{9, 4} {
+		t.Errorf("the pool was raised at %v, want the 9 ports and 4 threads the job asked for", got)
 	}
 }
-
-func TestSaveSettings_SaysSoWhenNothingCouldBeOpenedWithWhatWasSaved(t *testing.T) {
-	// The settings are saved and the work goes on running where it was. A page
-	// that answered with a plain redirect would look exactly like one where the
-	// new connection had been taken into use.
+func TestSaveSettings_SavesAConnectionItCannotOpenRatherThanRefusingIt(t *testing.T) {
+	// Nothing is opened by a save. A job puts up its own pool when it starts, so
+	// a connection that will not open is discovered there and reported there —
+	// and refusing to write it down here would leave somebody unable to save a
+	// setting they are half way through repairing.
+	//
+	// What the reader has instead is the check beside the save, which tries what
+	// is in the boxes and writes nothing.
 	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 	st := testStore(t)
-	v := newSupervisor(st, &heldEngine{})
+	v := newSupervisor(st, nil)
 	t.Cleanup(func() { _ = v.Close() })
 	s.sup = v
 	s.connect = (&stubConnect{err: http.ErrServerClosed}).open
 
 	rec := postForm(t, s, settingsAt, url.Values{"control_url": {"http://127.0.0.1:2"}})
-	if rec.Code == http.StatusSeeOther {
-		t.Fatal("the reader was told nothing about a connection that was never opened")
-	}
-	if !strings.Contains(rec.Body.String(), LangEN.T("settings.opened.nothing")) {
-		t.Errorf("the page does not say that nothing was opened:\n%s", rec.Body.String())
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("saving a connection that will not open came back %d, want the settings saved",
+			rec.Code)
 	}
 	if got := loaded(t, path); got.ControlURL != "http://127.0.0.1:2" {
-		t.Errorf("ControlURL=%q — what could not be opened was not saved either", got.ControlURL)
+		t.Errorf("the address that was typed was not saved: %+v", got)
 	}
 }
-
 func TestSaveSettings_KeepsThePauseAndTheListItWasGiven(t *testing.T) {
 	// The two boxes read in units a person thinks in and the file holds lengths
 	// of time. A box read as nanoseconds is a box filled in once, and the pause
@@ -369,8 +400,8 @@ func TestSettings_DrawThemselvesOverAFileTheyCannotRead(t *testing.T) {
 	if body := getBody(t, s, settingsAt); !strings.Contains(body, LangEN.T("settings.unreadable")) {
 		t.Errorf("the page says nothing about a file it could not read:\n%s", body)
 	}
-	postForm(t, s, settingsAt, url.Values{"control_url": {"http://127.0.0.1:2"}, "ports": {"6"}})
-	if got := loaded(t, path); got.ControlURL != "http://127.0.0.1:2" || got.Ports != 6 {
+	postForm(t, s, settingsAt, url.Values{"control_url": {"http://127.0.0.1:2"}, "search_ports": {"6"}})
+	if got := loaded(t, path); got.ControlURL != "http://127.0.0.1:2" || got.SearchPorts != 6 {
 		t.Errorf("saving over the damaged file left %+v", got)
 	}
 }
@@ -429,7 +460,7 @@ func TestCheckConnection_ShowsWhatToDoAboutEveryOneOfThem(t *testing.T) {
 	s, _ := serverWithSettings(t, settings.Settings{})
 	body := postBody(t, s, checkAt, url.Values{
 		"control_url": {fake.URL()}, "api_key": {fake.Key()},
-		"threads": {"2"}, "ports": {"2"},
+		"search_ports": {"4"},
 	})
 
 	client, err := blanktrail.NewClient(fake.URL(), fake.Key())
@@ -518,62 +549,29 @@ func withKey(at url.Values, key string) url.Values {
 	return with
 }
 
-func TestSaveSettings_AsksBeforeItTouchesARunningJob(t *testing.T) {
-	// The customer chose to be asked. Deciding for them means either cutting
-	// their job off or pretending the settings took effect when they have not.
-	s, path, opener := serverWithRunningJob(t)
-	rec := postForm(t, s, settingsAt, url.Values{"ports": {"12"}})
-
-	if rec.Code == http.StatusSeeOther {
-		t.Fatal("the settings were saved without asking while a job was running")
-	}
-	if got := loaded(t, path); got.Ports == 12 {
-		t.Error("the settings were written before the question was answered")
-	}
-	if _, built := opener.asked(); built {
-		t.Error("what runs was rebuilt before the question was answered")
-	}
-	if !strings.Contains(rec.Body.String(), LangEN.T("settings.running.asks")) {
-		t.Errorf("the page does not ask anything:\n%s", rec.Body.String())
-	}
-}
-
-func TestSaveSettings_WhenAnsweredLaterLeavesTheJobRunning(t *testing.T) {
+func TestSaveSettings_DoesNotDisturbTheJobThatIsRunning(t *testing.T) {
+	// The question this used to ask — «now, or after this job?» — existed because
+	// one set of identities was shared by everything on the machine. A job holds
+	// the pool it raised for itself until it ends, so there is nothing left to
+	// take away from it and nobody to ask.
 	s, path, _ := serverWithRunningJob(t)
-	before, _ := s.sup.Running()
-	postForm(t, s, settingsAt, url.Values{"ports": {"12"}, "when": {"after"}})
+	before, running := s.sup.Running()
+	if !running {
+		t.Fatal("the fixture has no job in flight, so this test asks nothing")
+	}
 
+	rec := postForm(t, s, settingsAt, url.Values{"search_ports": {"12"}})
+	if rec.Code >= 400 {
+		t.Fatalf("saving while a job ran gave %d", rec.Code)
+	}
 	if got, ok := s.sup.Running(); !ok || got != before {
-		t.Errorf("running=%d,%v — answering «after» stopped the job", got, ok)
+		t.Errorf("running=%d,%v — saving settings took the job down", got, ok)
 	}
-	if !s.sup.PendingSwap() {
-		t.Error("nothing is waiting to be swapped in")
+	if body := rec.Body.String(); strings.Contains(body, "settings.running") {
+		t.Errorf("the page still asks about the running job: %s", body)
 	}
-	if got := loaded(t, path); got.Ports != 12 {
-		t.Errorf("Ports=%d — the answered form was not saved", got.Ports)
-	}
-}
-
-func TestSaveSettings_WhenAnsweredNowLeavesTheJobCarryable(t *testing.T) {
-	s, _, _ := serverWithRunningJob(t)
-	id, _ := s.sup.Running()
-	postForm(t, s, settingsAt, url.Values{"ports": {"12"}, "when": {"now"}})
-
-	// Nothing is left waiting, because «now» is not «after» however alike the two
-	// look from outside. It is read here rather than after the wait below, so
-	// that a save which quietly waited is reported as that rather than as a job
-	// which took ten seconds to stop.
-	if s.sup.PendingSwap() {
-		t.Fatal("answering «now» left the swap waiting for the job it was told to end")
-	}
-	waitUntilIdle(t, s.sup)
-
-	left, err := s.store.Pending(t.Context(), id)
-	if err != nil {
-		t.Fatalf("Pending: %v", err)
-	}
-	if len(left) == 0 {
-		t.Error("applying now threw the job away rather than pausing it")
+	if got := loaded(t, path); got.SearchPorts != 12 {
+		t.Errorf("SearchPorts=%d — the settings were not saved", got.SearchPorts)
 	}
 }
 
@@ -638,9 +636,9 @@ func TestSettings_ShowNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 		lang := "?lang=" + string(l)
 		bodies := []string{
 			getBody(t, s, settingsAt+lang),
-			postBody(t, s, settingsAt+lang, url.Values{"ports": {"nought"}, "source": {"nowhere"}}),
+			postBody(t, s, settingsAt+lang, url.Values{"search_ports": {"nought"}, "source": {"nowhere"}}),
 			postBody(t, s, checkAt+lang, url.Values{"control_url": {"http://127.0.0.1:1"}}),
-			postBody(t, running, settingsAt+lang, url.Values{"ports": {"12"}}),
+			postBody(t, running, settingsAt+lang, url.Values{"search_ports": {"12"}}),
 		}
 		for _, body := range bodies {
 			for key := range catalogue[l] {

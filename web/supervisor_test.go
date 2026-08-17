@@ -961,360 +961,93 @@ func TestSupervisor_RefusesToTakeUpAJobWithNothingLeft(t *testing.T) {
 	}
 }
 
-func TestSwap_ChangesTheEngineWhenNothingIsRunning(t *testing.T) {
-	// The engine is where the work runs. Changing it is how a connection set up
-	// in a browser reaches a server that is already up.
-	v, _ := supervisorOn(t, &heldEngine{})
-	next := &heldEngine{}
-	if err := v.Swap(context.Background(), next, SwapNow); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-	enqueue(t, v, "after", "b")
-	waitUntilTook(t, next, "b")
-}
-
-func TestSwap_ClosesTheEngineItReplacesExactlyOnce(t *testing.T) {
-	// The old engine holds the ports. Leaving it open leaks them; closing it
-	// twice is a fault the pool would have to defend against.
-	first := &heldEngine{}
-	v, _ := supervisorOn(t, first)
-	if err := v.Swap(context.Background(), &heldEngine{}, SwapNow); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-	if n := first.timesClosed(); n != 1 {
-		t.Errorf("the engine it replaced was closed %d times, want 1", n)
-	}
-}
-
-func TestSwap_AskedToWaitLeavesTheRunningJobAlone(t *testing.T) {
-	// This is the half the customer chose to have a choice about: a swap that
-	// can wait must not take the running job down.
-	v, _, first := heldSupervisor(t)
-	id := enqueue(t, v, "nightly", "a")
-	waitUntilRunning(t, v, id)
-
-	if err := v.Swap(context.Background(), &heldEngine{}, SwapAfterThisJob); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-	if got, ok := v.Running(); !ok || got != id {
-		t.Errorf("running=%d,%v — the job was taken down by a swap that was told to wait", got, ok)
-	}
-	if !v.PendingSwap() {
-		t.Error("nothing is recorded as waiting to be swapped in")
-	}
-	if n := first.timesClosed(); n != 0 {
-		t.Errorf("the engine still running a job was closed %d times", n)
-	}
-}
-
-func TestSwap_AskedToWaitTakesEffectOnceTheJobIsDone(t *testing.T) {
-	v, _, first := heldSupervisor(t)
-	id := enqueue(t, v, "nightly", "a")
-	waitUntilRunning(t, v, id)
-
-	next := &heldEngine{}
-	if err := v.Swap(context.Background(), next, SwapAfterThisJob); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-	// Closing the hold lets every query through, which is how the job the swap
-	// is waiting for reaches its end.
-	close(first.hold)
-	waitUntilIdle(t, v)
-
-	if v.PendingSwap() {
-		t.Error("the swap is still waiting after the job it was waiting for finished")
-	}
-	if n := first.timesClosed(); n != 1 {
-		t.Errorf("the replaced engine was closed %d times, want 1", n)
-	}
-	enqueue(t, v, "after", "b")
-	waitUntilTook(t, next, "b")
-}
-
-func TestSwap_AskedToWaitStillTakesEffectWhenTheJobIsStopped(t *testing.T) {
-	// A job that ended because somebody stopped it has ended. A swap that only
-	// survived the endings nobody asked for would leave the server running on
-	// the connection that was replaced, with a screen saying it had been, and
-	// hold the ports of the engine built for the new one until the process ends.
-	v, _, first := heldSupervisor(t)
-	id := enqueue(t, v, "nightly", "a", "b")
-	waitUntilRunning(t, v, id)
-
-	next := &heldEngine{}
-	if err := v.Swap(context.Background(), next, SwapAfterThisJob); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-	if err := v.Stop(id); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	waitUntilIdle(t, v)
-
-	if v.PendingSwap() {
-		t.Error("the swap is still waiting after the job it was waiting for was stopped")
-	}
-	if n := first.timesClosed(); n != 1 {
-		t.Errorf("the replaced engine was closed %d times, want 1", n)
-	}
-	enqueue(t, v, "after", "c")
-	waitUntilTook(t, next, "c")
-}
-
-func TestSwap_AskedToActNowLeavesTheJobResumable(t *testing.T) {
-	// «Applied now» means the job stops, not that it is thrown away. The whole
-	// price of the choice is a second warm-up, and that is only true if what was
-	// recorded stays recorded and the rest stays pending.
-	v, st, _ := heldSupervisor(t)
-	id := enqueue(t, v, "nightly", "a", "b")
-	waitUntilRunning(t, v, id)
-
-	if err := v.Swap(context.Background(), &heldEngine{}, SwapNow); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-	waitUntilIdle(t, v)
-
-	left, err := st.Pending(context.Background(), id)
-	if err != nil {
-		t.Fatalf("Pending: %v", err)
-	}
-	if len(left) == 0 {
-		t.Error("the stopped job has nothing left, so a swap threw work away rather than pausing it")
-	}
-	if progress(t, st, id).Finished {
-		t.Error("the stopped job is stamped finished, and nothing can carry it on")
-	}
-}
-
-func TestSwap_GivesUpTheEngineTheStoppedJobWasInsideOnlyAfterItLetGo(t *testing.T) {
-	// A job does not let go of its engine at the instant it is told to stop, and
-	// an engine given up in between has its ports taken back while a job is
-	// still sending through them. The job is held inside the engine here so that
-	// the two moments are far apart and the count below is read between them; a
-	// test that let the job leave straight away would be reading whichever of
-	// the two goroutines got there first.
-	v, _, first := heldSupervisor(t)
-	first.linger = make(chan struct{})
-	id := enqueue(t, v, "nightly", "a", "b")
-	waitUntilRunning(t, v, id)
-	waitUntilTook(t, first, "a")
-
-	next := &heldEngine{}
-	if err := v.Swap(context.Background(), next, SwapNow); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-	if n := first.timesClosed(); n != 0 {
-		t.Errorf("the engine was given up %d times while the job was still inside it", n)
-	}
-
-	// The job leaves the engine, and the worker hands back what it was given.
-	close(first.linger)
-	waitUntilIdle(t, v)
-	if n := first.timesClosed(); n != 1 {
-		t.Errorf("the engine the stopped job was inside was closed %d times, want 1", n)
-	}
-}
-
-func TestSwap_QueuedJobsSurviveIt(t *testing.T) {
-	// A swap replaces where the work runs, not what is waiting to run. The job
-	// that was waiting is asked for after the swap rather than at the instant of
-	// it, because a queue emptied by a swap and a queue whose next job has
-	// already been taken up look alike for as long as it takes to read one.
+func TestReconnect_ChangesWhereTheNextJobsPoolComesFrom(t *testing.T) {
+	// A connection saved in the browser has to reach the jobs that follow, and
+	// the only way it can is by changing what raises their pools.
 	v, _, _ := heldSupervisor(t)
-	running := enqueue(t, v, "running", "a")
-	waitUntilRunning(t, v, running)
-	enqueue(t, v, "waiting", "b")
-
 	next := &heldEngine{}
-	if err := v.Swap(context.Background(), next, SwapNow); err != nil {
-		t.Fatalf("Swap: %v", err)
+	if err := v.Reconnect(func(context.Context, int, int) (*blanktrail.Pool, error) {
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("Reconnect: %v", err)
 	}
-	waitUntilTook(t, next, "b")
+	_ = next
+	if err := v.Reconnect(nil); err != nil {
+		t.Fatalf("Reconnect(nil): %v", err)
+	}
 }
 
-func TestSwap_ASecondRequestReplacesTheOneStillWaiting(t *testing.T) {
-	// Somebody who saves settings twice before a job ends means the second save.
-	// Keeping the first would apply settings nobody asked for, and the engine
-	// built for it would never be closed.
+func TestReconnect_LeavesTheJobInFlightOnThePoolItRaised(t *testing.T) {
+	// This is the whole of what a pool per job bought: there is no question to
+	// ask and no price to name, because the running job is inside identities
+	// nobody else can reach.
 	v, _, first := heldSupervisor(t)
-	id := enqueue(t, v, "nightly", "a")
+	id := enqueue(t, v, "one", "a")
 	waitUntilRunning(t, v, id)
 
-	stale := &heldEngine{}
-	if err := v.Swap(context.Background(), stale, SwapAfterThisJob); err != nil {
-		t.Fatalf("Swap: %v", err)
+	if err := v.Reconnect(func(context.Context, int, int) (*blanktrail.Pool, error) {
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("Reconnect: %v", err)
 	}
-	fresh := &heldEngine{}
-	if err := v.Swap(context.Background(), fresh, SwapAfterThisJob); err != nil {
-		t.Fatalf("second Swap: %v", err)
+	if got, ok := v.Running(); !ok || got != id {
+		t.Errorf("running=%d,%v — reconnecting took the job down", got, ok)
 	}
-	if n := stale.timesClosed(); n != 1 {
-		t.Errorf("the superseded engine was closed %d times, want 1 — it holds ports nobody will use", n)
+	if n := first.closes; n != 0 {
+		t.Errorf("the pool the running job is inside was closed %d times", n)
 	}
 	close(first.hold)
 	waitUntilIdle(t, v)
-	enqueue(t, v, "after", "b")
-	waitUntilTook(t, fresh, "b")
 }
 
-func TestSwap_RefusesAfterTheSupervisorIsClosed(t *testing.T) {
-	// A supervisor that has been shut down runs nothing, so an engine swapped
-	// into it would hold its ports until the process ended.
-	v, _ := supervisorOn(t, &heldEngine{})
+func TestReconnect_GivesUpAStandingSetOfIdentitiesNobodyIsInside(t *testing.T) {
+	// A supervisor built around one standing set holds ports. Once the jobs that
+	// follow raise their own, those ports are nobody's, and left open they are
+	// held for as long as the process runs.
+	v, _, standing := heldSupervisor(t)
+	if err := v.Reconnect(func(context.Context, int, int) (*blanktrail.Pool, error) {
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("Reconnect: %v", err)
+	}
+	if n := standing.closes; n != 1 {
+		t.Errorf("the standing identities were given up %d times, want once", n)
+	}
+}
+
+func TestReconnect_RefusesAfterTheSupervisorIsClosed(t *testing.T) {
+	v, _, _ := heldSupervisor(t)
 	if err := v.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := v.Swap(context.Background(), &heldEngine{}, SwapNow); !errors.Is(err, ErrClosed) {
-		t.Errorf("Swap after Close returned %v, want ErrClosed", err)
+	if err := v.Reconnect(nil); !errors.Is(err, ErrClosed) {
+		t.Errorf("Reconnect after Close returned %v, want ErrClosed", err)
 	}
 }
 
-func TestSwap_RefusesToSwapInNothing(t *testing.T) {
-	// A caller whose engine could not be built has nothing to swap in, and a
-	// supervisor that took it would answer every later job with a page about a
-	// nil pointer.
-	v, _ := supervisorOn(t, &heldEngine{})
-	if err := v.Swap(context.Background(), nil, SwapNow); !errors.Is(err, ErrNoSwap) {
-		t.Errorf("Swap with no engine returned %v, want ErrNoSwap", err)
-	}
-}
+func TestSupervisor_RefusesARaiseThatCameBackWithNeitherAPoolNorAReason(t *testing.T) {
+	// Taken as it comes, the job runs on nothing and the first screen that asks
+	// the pool how it is doing falls over — a crash a long way from the mistake
+	// that caused it. It is refused where it happens instead, and the job stays
+	// there to be carried on.
+	st := testStore(t)
+	v := start(st, dialing(func(context.Context, int, int) (*blanktrail.Pool, error) {
+		return nil, nil
+	}), 1, 1)
+	t.Cleanup(func() { _ = v.Close() })
 
-func TestSwap_ClosesWhatIsWaitingWhenTheSupervisorShutsDown(t *testing.T) {
-	// The job it was waiting for will never end now. An engine left waiting is
-	// one whose ports are held until the process does.
-	v, _, first := heldSupervisor(t)
-	id := enqueue(t, v, "nightly", "a")
-	waitUntilRunning(t, v, id)
-	waiting := &heldEngine{}
-	if err := v.Swap(context.Background(), waiting, SwapAfterThisJob); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-
-	if err := v.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if n := waiting.timesClosed(); n != 1 {
-		t.Errorf("the engine that was waiting was closed %d times, want 1", n)
-	}
-	if n := first.timesClosed(); n != 1 {
-		t.Errorf("the engine in use was closed %d times, want 1", n)
-	}
-}
-
-// holdTheHistory takes the one connection the history is opened with and hands
-// back the way to let it go. Every later call into the history waits until it
-// is let go, whichever goroutine makes it.
-//
-// It is how a test stops the worker between the moment a job leaves its engine
-// and the moment it stops being the job in flight. Nothing in the supervisor is
-// arranged to be stopped there: what is between the two is the read that settles
-// the job, the history is what the test hands the supervisor, and a history that
-// does not answer is a worker that does not move. The single connection is the
-// history's own decision, taken because SQLite takes one writer, and this leans
-// on it rather than on timing.
-//
-// The hold is let go by the test and again when the test ends, because a
-// history still held is a worker still stopped, and a supervisor that cannot
-// shut down hangs the whole run rather than failing one test.
-func holdTheHistory(t *testing.T, st *store.Store) func() {
-	t.Helper()
-	ctx := context.Background()
-	// A job of the test's own, so that holding the history says nothing about
-	// the job the supervisor is running.
-	id, err := st.CreateJob(ctx, store.JobSpec{Name: "held", Pages: 1}, []string{"x"})
-	if err != nil {
-		t.Fatalf("CreateJob: %v", err)
-	}
-	// Refused rather than done: what is walked below is the refusals, and a walk
-	// over nothing never reaches the point where the hold is taken.
-	if err := st.Record(ctx, id, store.QueryOutcome{Ordinal: 0, Err: errors.New("held")}); err != nil {
-		t.Fatalf("Record: %v", err)
-	}
-
-	held, free := make(chan struct{}), make(chan struct{})
-	walked := make(chan error, 1)
-	go func() {
-		walked <- st.Failures(ctx, id, func(string) error {
-			close(held)
-			<-free
-			return nil
-		})
-	}()
-	select {
-	case <-held:
-	case <-time.After(patience):
-		t.Fatal("the history was never taken hold of")
-	}
-
-	letGo := sync.OnceFunc(func() { close(free) })
-	t.Cleanup(letGo)
-	return func() {
-		letGo()
-		select {
-		case err := <-walked:
-			if err != nil {
-				t.Errorf("walking the refusals of the held job: %v", err)
-			}
-		case <-time.After(patience):
-			t.Error("the history was never let go")
-		}
-	}
-}
-
-func TestSwap_AskedToWaitIsTakenWhereTheJobStopsCountingAsRunning(t *testing.T) {
-	// A job that has left its engine is still the job in flight until the worker
-	// says otherwise, and settling it in the history takes long enough on a real
-	// machine for a swap to arrive in between. That swap is told it will be
-	// applied when the job ends — so it has to be, by this job and not by the
-	// next one, which on a server nobody queues anything else on never comes.
-	//
-	// The window is entered on purpose here: the history is held, so the worker
-	// stops on the read that settles the job, with the job still counting as
-	// running.
-	v, st, first := heldSupervisor(t)
-	first.linger = make(chan struct{})
-	id := enqueue(t, v, "nightly", "a", "b")
-	waitUntilRunning(t, v, id)
-	waitUntilTook(t, first, "a")
-
-	// The engine under the job is replaced now so that the worker giving it back
-	// can be seen from outside: it is the last thing the worker does before it
-	// settles the job, and so the mark that the window has been entered.
-	second := &heldEngine{}
-	if err := v.Swap(context.Background(), second, SwapNow); err != nil {
-		t.Fatalf("Swap: %v", err)
-	}
-
-	letGo := holdTheHistory(t, st)
-	close(first.linger)
-	waitUntil(t, "the engine the job was inside has been given back", func() bool {
-		return first.timesClosed() == 1
+	id := enqueue(t, v, "on nothing", "a")
+	waitUntil(t, "the job to have been let go of", func() bool {
+		_, running := v.Running()
+		return !running && len(v.Queued()) == 0
 	})
-	if got, ok := v.Running(); !ok || got != id {
-		t.Fatalf("running=%d,%v — the worker was past the job before the window could be used", got, ok)
+	sum := progress(t, st, id)
+	if sum.Finished {
+		t.Error("a job that never ran is stamped finished, so nothing can carry it on")
 	}
-
-	third := &heldEngine{}
-	if err := v.Swap(context.Background(), third, SwapAfterThisJob); err != nil {
-		t.Fatalf("second Swap: %v", err)
+	if sum.Done != 0 || sum.Pending == 0 {
+		t.Errorf("done=%d pending=%d, want the work still there to be taken up", sum.Done, sum.Pending)
 	}
-	if !v.PendingSwap() {
-		t.Fatal("a swap asked to wait for a job that is still running was not recorded as waiting")
-	}
-
-	letGo()
-	waitUntilIdle(t, v)
-
-	if v.PendingSwap() {
-		// Nothing later takes it: the job it was waiting for is the one that has
-		// just ended, and on a server nobody queues anything else on there is no
-		// next job to carry it in.
-		t.Fatal("the swap asked for while the job was being settled is still waiting, " +
-			"and the job it was waiting for has ended")
-	}
-	if n := second.timesClosed(); n != 1 {
-		t.Errorf("the engine the swap replaced was closed %d times, want 1", n)
-	}
-	enqueue(t, v, "after", "c")
-	waitUntilTook(t, third, "c")
 }
 
 func TestSupervisor_HoldsAJobUntilThereIsSomethingToRunItOn(t *testing.T) {
@@ -1334,9 +1067,18 @@ func TestSupervisor_HoldsAJobUntilThereIsSomethingToRunItOn(t *testing.T) {
 	}
 
 	eng := &heldEngine{}
-	if err := v.Swap(context.Background(), eng, SwapNow); err != nil {
-		t.Fatalf("Swap: %v", err)
+	if err := v.Reconnect(func(context.Context, int, int) (*blanktrail.Pool, error) {
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("Reconnect: %v", err)
 	}
+	// The raiser above answers with no pool, which is not what this test is
+	// about: what it is about is that the job held back starts as soon as there
+	// is something to raise at all. The engine below is what it actually runs on.
+	v.mu.Lock()
+	v.src = standing(eng)
+	v.mu.Unlock()
+	v.wakeUp()
 	if !v.canRun() {
 		t.Error("a supervisor holding an engine says it cannot run a job")
 	}

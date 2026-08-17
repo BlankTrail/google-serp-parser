@@ -87,13 +87,13 @@
 <fieldset>
 <legend>{{.T "settings.pool"}}</legend>
 <div class="row">
+{{/* How wide a job runs is the job's own and is set where the job is. What
+     stands here is the one pool this machine keeps: the identities a search
+     answered inside a request is taken through, since a job's pool is gone
+     between jobs and that address would have nothing left to answer on. */}}
 <div class="field">
-<label for="threads">{{.T "form.threads"}}</label>
-<input id="threads" name="threads" type="number" min="1" value="{{.Form.Threads}}">
-</div>
-<div class="field">
-<label for="ports">{{.T "form.ports"}}</label>
-<input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}">
+<label for="search_ports">{{.T "settings.search"}}</label>
+<input id="search_ports" name="search_ports" type="number" min="0" value="{{.Form.Search}}">
 </div>
 <div class="field">
 <label for="cooldown">{{.T "settings.pause"}}</label>
@@ -115,22 +115,6 @@
 </div>
 </fieldset>
 
-{{if .Asking}}
-{{/* A job is running, and the two answers cost different things. Which price to
-     pay is the reader's to decide, so the save button is replaced by the two
-     answers until one of them is pressed. */}}
-<p>{{.T "settings.running.asks"}}</p>
-<p class="empty">{{.T "settings.running.cost"}}</p>
-<div class="actions">
-<button type="submit" name="{{.When.Field}}" value="{{.When.Now}}">{{.T "settings.running.now"}}</button>
-<button type="submit" name="{{.When.Field}}" value="{{.When.After}}">{{.T "settings.running.after"}}</button>
-<button type="submit" formaction="/settings/check">{{.T "settings.check"}}</button>
-</div>
-{{else}}
-<div class="actions">
-<button type="submit">{{.T "settings.save"}}</button>
-<button type="submit" formaction="/settings/check">{{.T "settings.check"}}</button>
-</div>
-{{end}}
+
 </form>
 {{end}}

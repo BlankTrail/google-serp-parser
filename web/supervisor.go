@@ -27,30 +27,14 @@ var ErrNotRunning = errors.New("web: this job is not the one running")
 // ErrNothingLeft is returned when a job asked to carry on has no query left.
 var ErrNothingLeft = errors.New("web: this job has nothing left to do")
 
+// errNoPoolCameBack is what a raiser that answers with neither a pool nor a
+// fault is turned into. It is not exported: nobody outside can be handed it,
+// because nobody outside writes the raiser this happens in.
+var errNoPoolCameBack = errors.New("web: opening a pool gave back nothing, and no reason either")
+
 // ErrClosed is returned once the supervisor has been shut down. Work taken on
 // after that would sit in a queue nobody is reading.
 var ErrClosed = errors.New("web: the supervisor has been closed")
-
-// ErrNoSwap is returned when a swap is asked for with nothing to swap in.
-var ErrNoSwap = errors.New("web: nothing is waiting to be swapped in")
-
-// SwapWhen is what a swap may do to the job that is running.
-//
-// It is a choice rather than a rule because the two answers cost different
-// things and only the person asking knows which price they would rather pay:
-// stopping the job costs a second warm-up, waiting costs however long the job
-// has left. A program that picked one would be charging that price silently.
-type SwapWhen int
-
-const (
-	// SwapNow stops the job in flight and takes the new engine into use at once.
-	// The job keeps what it recorded and everything it did not reach stays
-	// waiting, so it is a job that can be carried on rather than one thrown away.
-	SwapNow SwapWhen = iota
-	// SwapAfterThisJob leaves the job in flight to finish on the engine it
-	// started on, and takes the new one into use as that job ends.
-	SwapAfterThisJob
-)
 
 // jobSettleGrace bounds the writes around a job: creating one, reading back
 // what it has left, stamping it done. All of it is a database on this machine,
@@ -169,6 +153,12 @@ func dialing(open OpenPool) source {
 		pool, err := open(ctx, ports, threads)
 		if err != nil {
 			return nil, err
+		}
+		if pool == nil {
+			// Neither identities nor a reason. Taken as it comes, the job would run
+			// on nothing and fall over at the first screen that asks the pool how it
+			// is doing — which is a crash a long way from the mistake that caused it.
+			return nil, errNoPoolCameBack
 		}
 		// The engine is told the same number of threads the pool was opened for,
 		// because that number paces the job and is what the screen puts into its
@@ -379,63 +369,35 @@ func (v *Supervisor) Stop(jobID int64) error {
 	return nil
 }
 
-// Swap changes what the jobs after this one are taken through, without the
-// server stopping.
+// Reconnect changes where the pools for the jobs after this one come from.
 //
-// It is what is left of a supervisor that held one set of identities for the
-// whole server, and it survives only because the settings page still opens a
-// pool itself and hands the finished thing over. Jobs started through what it
-// hands over share that one pool, which is the very thing a pool per job is not.
-// It goes when that page hands over a connection instead — and with it go
-// SwapWhen, PendingSwap and ErrNoSwap, since a job reads the connection afresh
-// every time it raises its own pool and there is then nothing left to change on
-// the way past.
+// There is no question to ask and no price to name, and that is the whole of
+// what a pool per job bought here. A job holds the pool it raised for itself
+// until it ends, so a connection saved while one is running cannot disturb it,
+// and the next job raises through what was just saved. The old swap had to ask
+// "now, or after this job?" because one set of identities was shared by
+// everything; nothing is shared any more, so nobody has to choose.
 //
-// The engine handed in becomes the supervisor's, and the one it replaces is
-// given up as soon as no job is inside it: it holds ports nobody will use
-// again. Which of the two the job in flight finishes on is the caller's choice.
-//
-// The context is the caller's, and a swap asked for by a request that has
-// already been abandoned is refused: nobody is left to be told which of the two
-// prices they have just paid.
-func (v *Supervisor) Swap(ctx context.Context, eng engine, when SwapWhen) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if eng == nil {
-		return ErrNoSwap
-	}
+// A source that was holding a standing set of identities gives them back, as
+// long as no job is inside them: they hold ports nobody will ask for again. The
+// job in flight keeps what it is inside either way.
+func (v *Supervisor) Reconnect(open OpenPool) error {
 	v.mu.Lock()
 	if v.closed {
 		v.mu.Unlock()
 		return ErrClosed
 	}
 	var spent []engine
-	if v.pending.held != nil {
-		// Somebody who saved twice before a job ended meant the second save. The
-		// engine built for the first is never going to be used, and left open it
-		// holds its ports for as long as the process runs.
-		spent = append(spent, v.pending.held)
-		v.pending = source{}
+	if v.src.held != nil && v.src.held != v.inUse {
+		spent = append(spent, v.src.held)
 	}
-	if when == SwapAfterThisJob && v.running != 0 {
-		v.pending = standing(eng)
-	} else {
-		spent = append(spent, v.install(standing(eng))...)
-	}
+	v.src = dialing(open)
+	// A job written down while there was nothing to run it on has something to
+	// run on now.
+	v.wakeUp()
 	v.mu.Unlock()
 	v.giveUp(spent)
 	return nil
-}
-
-// PendingSwap says whether an engine is waiting for the job in flight to end.
-//
-// It reads under the same lock the swap is recorded under, so it answers with a
-// swap that has been recorded whole or with none at all.
-func (v *Supervisor) PendingSwap() bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.pending.raise != nil
 }
 
 // CanRun reports whether there is anything for a job to be taken through.

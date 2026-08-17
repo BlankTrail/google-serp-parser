@@ -1352,9 +1352,9 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 	at := filepath.Join(t.TempDir(), "gserp-settings.json")
 	if err := settings.Save(at, settings.Settings{
 		ControlURL: control, APIKey: key,
-		Threads: liveThreads, Ports: livePorts / liveThreads,
-		Cooldown: 2 * time.Second,
-		Proxy:    settings.ProxySource{Kind: sourceURL, Location: listURL},
+		SearchPorts: livePorts,
+		Cooldown:    2 * time.Second,
+		Proxy:       settings.ProxySource{Kind: sourceURL, Location: listURL},
 	}); err != nil {
 		fatalf(t, "writing the settings down: %v", err)
 	}
@@ -1377,20 +1377,23 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 // liveConnect opens the ports a connection just saved describes, doing what the
 // command does: the check first, then the ports, then the list behind them.
 func liveConnect(t *testing.T) Connect {
-	return func(ctx context.Context, saved settings.Settings) (*blanktrail.Pool, error) {
+	return func(ctx context.Context, saved settings.Settings, ports, threads int) (*blanktrail.Pool, error) {
 		client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 		if err != nil {
 			return nil, err
 		}
-		threads, perThread := atLeastOne(saved.Threads), atLeastOne(saved.Ports)
+		// The connection comes from the settings and the size from the job. This
+		// is the seam the command has too, and a live run that took both from one
+		// place would be measuring a program nobody runs.
+		ports, threads = atLeastOne(ports), atLeastOne(threads)
 		pre := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
-			Domains: reachedDomains, Ports: threads * perThread,
+			Domains: reachedDomains, Ports: ports,
 		})
 		if !pre.OK() {
 			return nil, errors.New("the check refused this connection")
 		}
 		cfg := blanktrail.PoolConfig{
-			Client: client, Threads: threads, PortsPerThread: perThread,
+			Client: client, Threads: threads, PortsPerThread: max(ports/threads, 1),
 			Spec: blanktrail.DefaultPortSpec(), CA: pre.CA,
 			DelayMin: 2 * time.Second, DelayMax: 5 * time.Second, ReviveAfter: time.Minute,
 		}
@@ -1418,18 +1421,16 @@ func liveConnect(t *testing.T) Connect {
 // liveSettingsPost is the settings as a reader sends them, with the key box left
 // empty: the page cannot show a key, and nobody retypes one to change a port
 // count.
-func liveSettingsPost(control, listURL string, threads, ports int, when string) url.Values {
+func liveSettingsPost(control, listURL string, ports int) url.Values {
 	return url.Values{
 		urlField:     {control},
 		keyField:     {""},
-		threadsField: {strconv.Itoa(threads)},
-		portsField:   {strconv.Itoa(ports)},
+		searchField:  {strconv.Itoa(ports)},
 		pauseField:   {"2"},
 		sourceField:  {sourceURL},
 		whereField:   {listURL},
 		refreshField: {"0"},
 		tongueField:  {""},
-		whenField:    {when},
 	}
 }
 
@@ -1444,121 +1445,16 @@ func shortLiveJob(name string) url.Values {
 	return form
 }
 
-func TestLiveSettings_SaysWhatBecomesOfTheJobInFlightUnderBothAnswers(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
-	defer cancel()
-
-	control, _, listURL := liveEnv(t)
-	base, st, v := liveSettingsServer(ctx, t)
-	cl := browser()
-
-	start := func(name string) int64 {
-		res := submit(t, cl, base+"/new", shortLiveJob(name))
-		_ = body(t, res)
-		if res.StatusCode != http.StatusSeeOther {
-			fatalf(t, "pressing start came back %d, want 303", res.StatusCode)
-		}
-		where := res.Header.Get("Location")
-		id, err := strconv.ParseInt(strings.TrimPrefix(where, "/job/"), 10, 64)
-		if err != nil {
-			fatalf(t, "start sent the browser to %q, which names no job", where)
-		}
-		return id
-	}
-	save := func(threads, ports int, when string) time.Time {
-		res := submit(t, cl, base+settingsAt, liveSettingsPost(control, listURL, threads, ports, when))
-		page := body(t, res)
-		at := time.Now()
-		if res.StatusCode != http.StatusSeeOther {
-			fatalf(t, "saving the settings came back %d, want 303:\n%s", res.StatusCode, page)
-		}
-		return at
-	}
-	moving := func(id int64) progressJSON {
-		at, _ := awaitPoll(t, cl, base, id, "the job to get somewhere with queries still left",
-			time.Now().Add(40*time.Minute), func(at progressJSON) bool {
-				return at.Done+at.Failed > 0 && at.Pending > 0
-			})
-		return at
-	}
-
-	logf(t, "MEASUREMENT settings: the screen before anything was saved: %s", readState(t, cl, base))
-
-	// Waiting for the job to end. What the reader was promised is that the job
-	// they are watching finishes on what it started on, and that the connection
-	// they have just saved is taken up as it ends.
-	waited := start("the settings change after this one")
-	moved := moving(waited)
-	logf(t, "MEASUREMENT settings: the job stood at done=%d failed=%d left=%d when the save went",
-		moved.Done, moved.Failed, moved.Pending)
-
-	savedAt := save(1, 2, whenAfter)
-	inFlight, running := v.Running()
-	logf(t, "MEASUREMENT settings (after): the save came back in %v, a swap is waiting: %v, the job in flight: %d %v",
-		time.Since(savedAt).Round(time.Millisecond), v.PendingSwap(), inFlight, running)
-
-	end, _ := awaitPoll(t, cl, base, waited, "the job to finish on what it started on",
-		time.Now().Add(40*time.Minute), func(at progressJSON) bool { return at.Finished })
-	logf(t, "MEASUREMENT settings (after): the job finished %v after the save: done=%d failed=%d left=%d",
-		time.Since(savedAt).Round(time.Second), end.Done, end.Failed, end.Pending)
-	if end.Pending != 0 || !end.Finished {
-		errorf(t, "a save that said В«after this oneВ» left the job with %d queries unfinished, finished=%v",
-			end.Pending, end.Finished)
-	}
-
-	// The swap lands where the job stops counting as running, and that is after
-	// the stamp saying it finished. A screen read on the stamp alone would be
-	// read in the moment between the two, and would report the connection this
-	// save replaced.
-	for waitUntil := time.Now().Add(time.Minute); v.PendingSwap(); {
-		if time.Now().After(waitUntil) {
-			errorf(t, "the job ended a minute ago and the swap that was waiting for it is still waiting")
-			break
-		}
-		time.Sleep(liveWatchGap)
-	}
-	afterSwap := readState(t, cl, base)
-	logf(t, "MEASUREMENT settings (after): the screen once the swap landed: %s", afterSwap)
-	if afterSwap.Ports != "2" {
-		errorf(t, "the settings asked for 2 ports and the screen shows %q", afterSwap.Ports)
-	}
-
-	// Stopping the job. It is the other price, and the reader chose to pay it:
-	// what was recorded stays recorded, and what was not reached stays waiting.
-	stopped := start("the settings change now")
-	moved = moving(stopped)
-	logf(t, "MEASUREMENT settings: the job stood at done=%d failed=%d left=%d when the save went",
-		moved.Done, moved.Failed, moved.Pending)
-
-	rowsBefore, totalBefore := rowsByOrdinal(ctx, t, st, stopped)
-	savedAt = save(1, 1, whenNow)
-	letGo, _ := awaitPoll(t, cl, base, stopped, "the job to let go of what it was holding",
-		time.Now().Add(10*time.Minute), func(at progressJSON) bool { return !at.Running && !at.Queued })
-	logf(t, "MEASUREMENT settings (now): the job let go %v after the save: done=%d failed=%d left=%d finished=%v",
-		time.Since(savedAt).Round(time.Second), letGo.Done, letGo.Failed, letGo.Pending, letGo.Finished)
-
-	rowsAfter, totalAfter := rowsByOrdinal(ctx, t, st, stopped)
-	logf(t, "MEASUREMENT settings (now): %d rows before the save and %d after it, by query %v then %v",
-		totalBefore, totalAfter, rowsBefore, rowsAfter)
-	if totalAfter < totalBefore {
-		errorf(t, "the job held %d rows before the save and %d after it, so a save took results away",
-			totalBefore, totalAfter)
-	}
-	if letGo.Finished {
-		errorf(t, "a save stamped the job it stopped as finished, so nothing was left to take up")
-	}
-
-	nowSwap := readState(t, cl, base)
-	logf(t, "MEASUREMENT settings (now): the screen once the job let go: %s", nowSwap)
-	if nowSwap.Ports != "1" {
-		errorf(t, "the settings asked for 1 port and the screen shows %q", nowSwap.Ports)
-	}
-
-	page := jobPageAt(t, cl, base+jobPath(stopped))
-	logf(t, "MEASUREMENT settings (now): the stopped job's page: %s", page)
-	if want := []string{"/api/resume"}; fmt.Sprint(page.buttons) != fmt.Sprint(want) {
-		errorf(t, "a job a save stopped part way offers %v, want %v", page.buttons, want)
-	}
+func TestLiveSettings_LeavesTheJobInFlightOnThePoolItRaised(t *testing.T) {
+	// The two answers this used to measure — «now» and «after this job» — were
+	// the price of one pool shared by everything. A job raises its own now, so a
+	// connection saved while one is running cannot reach it, and the next job
+	// starts through what was saved. What is worth measuring is that: the job
+	// goes on, and the one after it comes up on the new connection.
+	//
+	// It is left unwritten until the live run of Task 8 gives it numbers. What
+	// stands here is what it is for, so nobody has to guess later.
+	t.Skip("rewritten for a pool per job in Task 8, where it is measured")
 }
 
 // liveIndexTargets are ten pages whose answer somebody can check by opening

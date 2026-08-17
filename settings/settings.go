@@ -33,18 +33,26 @@ type ProxySource struct {
 
 // Settings is everything the interface can set.
 type Settings struct {
-	ControlURL string        `json:"control_url"`
-	APIKey     string        `json:"api_key"`
-	Ports      int           `json:"ports"`
-	Threads    int           `json:"threads"`
-	Cooldown   time.Duration `json:"cooldown"`
-	Proxy      ProxySource   `json:"proxy"`
-	Language   string        `json:"language"`
+	ControlURL string `json:"control_url"`
+	APIKey     string `json:"api_key"`
+	// SearchPorts is how many identities are held for a search answered inside
+	// a request. It is the one pool this machine keeps standing: a job puts up
+	// its own and gives it back as it ends, so between jobs there would
+	// otherwise be nothing for that address to answer on. Nought turns the
+	// address off, and it says so rather than waiting.
+	//
+	// The fields that used to stand here — how many ports and threads a job runs
+	// on — belong to the job now. A machine-wide answer to that question would be
+	// a second opinion about a number the job already carries.
+	SearchPorts int           `json:"search_ports"`
+	Cooldown    time.Duration `json:"cooldown"`
+	Proxy       ProxySource   `json:"proxy"`
+	Language    string        `json:"language"`
 }
 
 // Defaults are what a program that has never been configured runs on.
 func Defaults() Settings {
-	return Settings{Ports: 8, Threads: 4, Cooldown: 2 * time.Second}
+	return Settings{SearchPorts: 2, Cooldown: 2 * time.Second}
 }
 
 // Load reads the settings, or the defaults when there is no file yet.

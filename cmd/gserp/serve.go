@@ -309,8 +309,12 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool) web.OpenPool 
 // started with: somebody who has this moment typed a port count into the
 // settings has said which they want, and a flag from last week that quietly won
 // would make the box on the screen a box that does nothing.
-func (o serveOptions) connect(ctx context.Context, saved settings.Settings) (*blanktrail.Pool, error) {
-	return o.dial(ctx, saved, saved.Threads, saved.Ports)
+func (o serveOptions) connect(ctx context.Context, saved settings.Settings,
+	ports, threads int) (*blanktrail.Pool, error) {
+	// The size comes from the job, through the supervisor, and the connection
+	// from the settings. Neither knows the other's half, and this is where the
+	// two are put together.
+	return o.dial(ctx, saved, threads, ports)
 }
 
 // dial opens a pool against the connection described, after the check that says
@@ -441,25 +445,15 @@ func (o serveOptions) translate(out io.Writer, dir string) {
 	}
 }
 
-// runOn is how many queries this interface takes at once and how many ports
-// each of them gets.
+// runOn is what a job runs on when the job itself named nothing.
 //
-// A number the caller moved off its default is one they meant for this run, and
-// it stands. A number they left alone is one they left to whatever this machine
-// is set up with, and what it is set up with is the file the settings are saved
-// in — which is what makes a change made in a browser outlive the restart.
-func (o serveOptions) runOn(saved settings.Settings, configured bool) (threads, ports int) {
-	threads, ports = o.Threads, o.Ports
-	if !configured {
-		return threads, ports
-	}
-	if threads == defaultThreads && saved.Threads > 0 {
-		threads = saved.Threads
-	}
-	if ports == defaultPorts && saved.Ports > 0 {
-		ports = saved.Ports
-	}
-	return threads, ports
+// It is the flags this command was started with, and nothing else. The settings
+// file used to have a say here, and it no longer does: how wide a job runs is
+// the job's own, saved with it and edited on its page, and a machine-wide
+// answer standing behind that would be a second opinion nobody asked for. What
+// the file still decides is the connection every pool is opened through.
+func (o serveOptions) runOn(settings.Settings, bool) (threads, ports int) {
+	return o.Threads, o.Ports
 }
 
 // logger is where the server says what went wrong.

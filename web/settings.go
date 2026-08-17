@@ -27,22 +27,12 @@ const (
 const (
 	urlField     = "control_url"
 	keyField     = "api_key"
-	portsField   = "ports"
-	threadsField = "threads"
+	searchField  = "search_ports"
 	pauseField   = "cooldown"
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
 	tongueField  = "language"
-)
-
-// whenField is how the form answers the one question a save asks, and the two
-// answers it takes. There is no third value standing for "decide for me": that
-// is the whole point of asking.
-const (
-	whenField = "when"
-	whenNow   = "now"
-	whenAfter = "after"
 )
 
 // The two places a list of addresses can come from, as the form names them. The
@@ -100,14 +90,12 @@ type settingsForm struct {
 	// APIKey is empty on the way out and usually empty on the way in. The page
 	// cannot show the key, so an empty box means the key that is already saved.
 	APIKey  string
-	Ports   string
-	Threads string
+	Search  string
 	Pause   string
 	Source  string
 	Where   string
 	Refresh string
 	Tongue  string
-	When    string
 }
 
 // settingsFormOf reads the posted settings, leaving every box as text so a box
@@ -117,14 +105,12 @@ func settingsFormOf(r *http.Request) settingsForm {
 	return settingsForm{
 		ControlURL: strings.TrimSpace(r.FormValue(urlField)),
 		APIKey:     strings.TrimSpace(r.FormValue(keyField)),
-		Ports:      strings.TrimSpace(r.FormValue(portsField)),
-		Threads:    strings.TrimSpace(r.FormValue(threadsField)),
+		Search:     strings.TrimSpace(r.FormValue(searchField)),
 		Pause:      strings.TrimSpace(r.FormValue(pauseField)),
 		Source:     strings.TrimSpace(r.FormValue(sourceField)),
 		Where:      strings.TrimSpace(r.FormValue(whereField)),
 		Refresh:    strings.TrimSpace(r.FormValue(refreshField)),
 		Tongue:     strings.TrimSpace(r.FormValue(tongueField)),
-		When:       strings.TrimSpace(r.FormValue(whenField)),
 	}
 }
 
@@ -136,8 +122,7 @@ func settingsFormOf(r *http.Request) settingsForm {
 func formShowing(saved settings.Settings) settingsForm {
 	return settingsForm{
 		ControlURL: saved.ControlURL,
-		Ports:      strconv.Itoa(saved.Ports),
-		Threads:    strconv.Itoa(saved.Threads),
+		Search:     strconv.Itoa(saved.SearchPorts),
 		Pause:      spellUnits(saved.Cooldown, pauseUnit),
 		Source:     saved.Proxy.Kind,
 		Where:      saved.Proxy.Location,
@@ -201,8 +186,7 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	if f.APIKey != "" {
 		next.APIKey = f.APIKey
 	}
-	next.Ports = b.count(f.Ports, saved.Ports, "settings.ports.count")
-	next.Threads = b.count(f.Threads, saved.Threads, "settings.threads.count")
+	next.SearchPorts = b.count(f.Search, saved.SearchPorts, "settings.search.count")
 	next.Cooldown = b.span(f.Pause, saved.Cooldown, pauseUnit, "settings.pause.length")
 
 	// The list is switched off by choosing no source, which is why the source is
@@ -233,22 +217,6 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	return next, b.complaints
 }
 
-// chosen is what the form says to do about the job that is running, and whether
-// it said anything at all.
-//
-// A form that said nothing is not an answer of "now": deciding here would
-// either cut somebody's job off or claim the settings had taken effect while
-// the job went on running on the old ones.
-func (f settingsForm) chosen() (SwapWhen, bool) {
-	switch f.When {
-	case whenNow:
-		return SwapNow, true
-	case whenAfter:
-		return SwapAfterThisJob, true
-	}
-	return SwapNow, false
-}
-
 // findingView is one thing the check found, as the page draws it.
 //
 // Every part of it is drawn. What is wrong and what to do about it is the half
@@ -276,14 +244,11 @@ type settingsView struct {
 	// check that found nothing to report is not a check nobody ran.
 	Checked  []findingView
 	Findings bool
-	// Asking is a job in flight and a form that has not said what to do about it.
-	Asking bool
 	// Sources are the places a list of addresses can come from, in the order the
 	// page offers them.
 	Sources []sourceOption
 	// Tongues are the languages this machine can be set to answer in.
 	Tongues []tongueOption
-	When    whenAnswers
 }
 
 // sourceOption is one place a list of addresses can come from.
@@ -300,14 +265,6 @@ type tongueOption struct {
 	Name    string
 	Key     string
 	Current bool
-}
-
-// whenAnswers carries the field and the two answers onto the page, so the
-// markup and the handler cannot drift into two words for one press.
-type whenAnswers struct {
-	Field string
-	Now   string
-	After string
 }
 
 // settingsPage shows what this machine is set up with.
@@ -351,12 +308,6 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		s.showSettings(w, r, lang, view)
 		return
 	}
-	when, answered := form.chosen()
-	if _, running := s.running(); running && !answered {
-		view.Asking = true
-		s.showSettings(w, r, lang, view)
-		return
-	}
 	if err := settings.Save(s.settingsPath, next); err != nil {
 		s.fail(w, r, err)
 		return
@@ -367,7 +318,7 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if lang, known := langOf(next.Language); known {
 		writeLang(w, lang)
 	}
-	if err := s.takeIntoUse(r.Context(), next, when); err != nil {
+	if err := s.takeIntoUse(next); err != nil {
 		// The settings are saved and nothing was opened with them. The reason stays
 		// in the log: it is an address and a refusal from something on this machine,
 		// and a page quoting either helps the reader not at all.
@@ -406,7 +357,11 @@ func (s *Server) checkConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	report := blanktrail.Preflight(r.Context(), client, blanktrail.PreflightInput{
 		Domains: reachedDomains,
-		Ports:   atLeastOne(trying.Threads) * atLeastOne(trying.Ports),
+		// The check asks about the pool this machine keeps standing, because that
+		// is the only one it can size without a job in front of it. A job's own
+		// pool is asked for when the job starts, and what the check reports about
+		// the licence and the domains holds for both.
+		Ports: atLeastOne(trying.SearchPorts),
 	})
 	view.Findings = true
 	for _, f := range report.Findings {
@@ -435,7 +390,6 @@ func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, lang Lang,
 	view.page = s.frame(r, lang, "settings.title", settingsAt)
 	view.Sources = sourcesOffered(view.Form.Source)
 	view.Tongues = tonguesOffered(view.Form.Tongue)
-	view.When = whenAnswers{Field: whenField, Now: whenNow, After: whenAfter}
 	s.render(w, r, "settings.html", view)
 }
 
@@ -489,14 +443,6 @@ func (s *Server) current() (settings.Settings, []string) {
 	return saved, nil
 }
 
-// running is the job in flight, on a server that has something to run one.
-func (s *Server) running() (int64, bool) {
-	if s.sup == nil {
-		return 0, false
-	}
-	return s.sup.Running()
-}
-
 // takeIntoUse opens what the saved settings describe and puts the jobs after
 // this one through it.
 //
@@ -504,15 +450,17 @@ func (s *Server) running() (int64, bool) {
 // saves the settings and takes them into use when it is next started. That is
 // what a history being read on another machine gets, and it is the whole of the
 // difference between the two.
-func (s *Server) takeIntoUse(ctx context.Context, saved settings.Settings, when SwapWhen) error {
+func (s *Server) takeIntoUse(saved settings.Settings) error {
 	if s.sup == nil || s.connect == nil {
 		return nil
 	}
-	eng, err := s.connect(ctx, saved)
-	if err != nil {
-		return err
-	}
-	return s.sup.Swap(ctx, eng, when)
+	// Nothing is opened here. What is handed over is the way to open, and the
+	// next job to start is what uses it — which is why saving settings no longer
+	// asks anybody what to do about the job that is running: it runs on the pool
+	// it raised for itself and is not touched.
+	return s.sup.Reconnect(func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
+		return s.connect(ctx, saved, ports, threads)
+	})
 }
 
 // tongue is the language this machine was set up to answer in, and empty when

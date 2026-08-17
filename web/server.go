@@ -72,7 +72,7 @@ type Config struct {
 // how long they rest and what they are opened as is decided by the command that
 // starts this server. A browser interface with a second opinion about that would
 // give a job set up here a different cost from the same job set up there.
-type Connect func(ctx context.Context, saved settings.Settings) (*blanktrail.Pool, error)
+type Connect func(ctx context.Context, saved settings.Settings, ports, threads int) (*blanktrail.Pool, error)
 
 // Server is the browser interface.
 type Server struct {
@@ -87,7 +87,7 @@ type Server struct {
 	// connect opens what jobs run on. It is the caller's Connect, wrapped in what
 	// the supervisor takes, so that everything below this line talks about the
 	// same thing whether it came from a pool or from a stand-in.
-	connect func(ctx context.Context, saved settings.Settings) (engine, error)
+	connect Connect
 	// now is where this server reads the clock. It is a field so that a test can
 	// hold the clock still: how long a job has been running is a number on the
 	// screen, and a test that could not name the instant could only check that
@@ -123,15 +123,10 @@ func New(cfg Config) (*Server, error) {
 	if s.log == nil {
 		s.log = slog.Default()
 	}
-	if open := cfg.Connect; open != nil {
-		s.connect = func(ctx context.Context, saved settings.Settings) (engine, error) {
-			pool, err := open(ctx, saved)
-			if err != nil {
-				return nil, err
-			}
-			return &poolEngine{pool: pool, threads: atLeastOne(saved.Threads)}, nil
-		}
-	}
+	// Taken as it was given: what a job runs on is now put up per job, by the
+	// supervisor, at the size that job asked for — so there is nothing left here
+	// to wrap a pool into.
+	s.connect = cfg.Connect
 	s.routes()
 	return s, nil
 }
