@@ -5,6 +5,7 @@ package web
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,8 +41,7 @@ const nameLimit = 60
 // and the reader sees the first rows while the last are still being read.
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
-	out, err := export.New(format, w)
-	if err != nil {
+	if !export.Writes(format) {
 		http.Error(w, "That is not a format this program writes.", http.StatusBadRequest)
 		return
 	}
@@ -68,15 +68,40 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", kind)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+attachmentName(job, format)+`"`)
 
-	if err := s.stream(r.Context(), out, id); err != nil {
+	// What a job was asked settles what its file answers. An index job is run to
+	// learn which addresses are held and which are not, and its results hold only
+	// the first half: walking them would leave every address Google does not hold
+	// out of the file altogether, indistinguishable from one that was never in
+	// the list — and the file would look complete either way.
+	//
+	// The writers are built here rather than above because which one to build is
+	// not known until the job has been read, and neither writes anything until it
+	// is given something. The format was settled before any of it.
+	if err := s.writeExport(r.Context(), w, format, job); err != nil {
 		// The header is out and part of the file with it, so there is nothing
 		// left to tell the reader. The log is where this has to be visible.
-		s.log.Error("an export stopped part way through", "job", id, "format", format, "error", err)
+		s.log.Error("an export stopped part way through", "job", job.ID, "format", format, "error", err)
 	}
 }
 
-// stream hands every row of a job to the file being written, and stops at the
-// first row the file will not take.
+// writeExport writes the file a job's kind calls for.
+func (s *Server) writeExport(ctx context.Context, w io.Writer, format string, job store.JobSummary) error {
+	if job.Kind == store.KindIndex {
+		out, err := export.NewVerdicts(format, w)
+		if err != nil {
+			return err
+		}
+		return s.streamVerdicts(ctx, out, job.ID)
+	}
+	out, err := export.New(format, w)
+	if err != nil {
+		return err
+	}
+	return s.stream(ctx, out, job.ID)
+}
+
+// stream hands every row of a job to the file being written, and stops at
+// the first row the file will not take.
 //
 // The refusal is passed back rather than swallowed, and that is what ends the
 // walk: a reader who closed the tab leaves every write failing, and an export
@@ -100,6 +125,28 @@ func (s *Server) stream(ctx context.Context, out export.Writer, jobID int64) err
 	// Close is what writes the header of a file that found no rows, so an export
 	// of a job that captured nothing is an empty table rather than an empty file
 	// that reads as a failure.
+	return out.Close()
+}
+
+// streamVerdicts hands one line per checked address to the file being written.
+//
+// It streams for the same reason stream does: a list of addresses is as
+// long as somebody's file. What it leaves out is as deliberate as what it
+// writes — an address still waiting, or one whose request was refused, carries
+// no verdict, and store.Verdicts hands over neither. Writing those as not held
+// would report a check that never happened, which is the one answer this whole
+// check exists to avoid giving.
+func (s *Server) streamVerdicts(ctx context.Context, out export.VerdictWriter, jobID int64) error {
+	err := s.store.Verdicts(ctx, jobID, func(v store.Verdict) error {
+		return out.Write(export.Verdict{
+			Ordinal: v.Ordinal,
+			Target:  v.Target,
+			Held:    v.Held,
+		})
+	})
+	if err != nil {
+		return err
+	}
 	return out.Close()
 }
 
