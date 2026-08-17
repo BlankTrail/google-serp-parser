@@ -67,6 +67,10 @@
 <div class="field">
 <label for="source_at">{{.T "settings.source.at"}}</label>
 <input id="source_at" name="source_at" size="34" value="{{.Form.Where}}">
+{{/* The chooser is a link rather than a button: it leaves the form to look at
+     this machine, and a form that submitted to get there would save settings
+     nobody had finished filling in. */}}
+<a href="/settings/browse">{{.T "settings.source.choose"}}</a>
 </div>
 <div class="field">
 <label for="source_refresh">{{.T "settings.source.refresh"}}</label>

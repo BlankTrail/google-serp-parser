@@ -196,6 +196,7 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("GET "+settingsAt, s.settingsPage)
 		s.mux.HandleFunc("POST "+settingsAt, s.saveSettings)
 		s.mux.HandleFunc("POST "+checkAt, s.checkConnection)
+		s.mux.HandleFunc("GET "+browseAt, s.browse)
 	}
 	// One path element, so a name can never walk out of the directory it is
 	// looked up in.

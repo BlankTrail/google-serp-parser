@@ -1,0 +1,28 @@
+{{define "main"}}
+<h1>{{.T "browse.title"}}</h1>
+
+{{/* The directory being shown is the one thing this page is about, so it is
+     said before anything else and in full: a chooser that shows names without
+     saying where they are is one you can get lost in. */}}
+<p class="where">{{.At}}</p>
+
+{{if .Complaint}}
+<ul class="faults"><li>{{.Complaint}}</li></ul>
+{{end}}
+
+<ul class="browse">
+{{if .Up}}<li><a href="/settings/browse?at={{.Up}}">{{.T "browse.up"}}</a></li>{{end}}
+{{range .Folders}}<li><a href="/settings/browse?at={{.Path}}">{{.Name}}/</a></li>
+{{end}}
+{{range .Files}}<li><a href="/settings?source_at={{.Path}}">{{.Name}}</a></li>
+{{end}}
+</ul>
+
+{{if .Left}}<p class="empty">{{.T "browse.left"}} {{.Left}}</p>{{end}}
+
+{{if and (not .Folders) (not .Files) (not .Complaint)}}
+<p class="empty">{{.T "browse.none"}}</p>
+{{end}}
+
+<p><a href="/settings">{{.T "browse.back"}}</a></p>
+{{end}}

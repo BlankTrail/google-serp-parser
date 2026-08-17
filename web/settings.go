@@ -314,8 +314,17 @@ type whenAnswers struct {
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
 	saved, complaints := s.current()
+	form := formShowing(saved)
+	// A path chosen in the browser arrives here and fills the box, and nothing
+	// more: choosing is not saving. The reader sees what they picked standing
+	// where they would have typed it, and the settings change when they press
+	// save — which is the same rule the key box already follows.
+	if chosen := r.URL.Query().Get(whereField); chosen != "" {
+		form.Where = chosen
+		form.Source = sourceFile
+	}
 	s.showSettings(w, r, lang, settingsView{
-		Form:       formShowing(saved),
+		Form:       form,
 		KeyTail:    tailOf(saved),
 		Complaints: complaints,
 	})
