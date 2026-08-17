@@ -7,6 +7,13 @@
 # twenty megabytes as the file above and just as much not source.
 *.exe~
 *.syso
+# Resource objects are generated, and these two are kept all the same: they are
+# what puts the program's icon in the executable, "go build" reads them without
+# being told to, and a clone that had to run a tool before the icon appeared
+# would be a clone whose icon nobody has. The exception stands after the rule it
+# undoes, because the last line that matches is the one that decides.
+!cmd/gserp/rsrc_windows_amd64.syso
+!cmd/gserp/rsrc_windows_arm64.syso
 
 # runtime data
 /data/
