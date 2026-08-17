@@ -47,7 +47,7 @@ func uploadBody(t *testing.T, boxes map[string]string, list string) (string, *by
 	t.Helper()
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
-	for _, box := range []string{"name", "kind", "target", "pages", "country", "language", "spec", "unique"} {
+	for _, box := range []string{"name", "kind", "target", "from", "pages", "country", "language", "spec", "unique", "threads", "ports", "tries", "queries"} {
 		value, filled := boxes[box]
 		if !filled {
 			continue
@@ -733,5 +733,101 @@ func TestUpload_FilesTheSiteAPositionCheckWasGivenAndRefusesOneWithout(t *testin
 	}
 	if len(jobs) != 1 {
 		t.Errorf("%d jobs were written down, want only the one that was taken", len(jobs))
+	}
+}
+
+func TestNewJob_ReadsTheBoxWhenTheSwitchSaysTheBoxAndTheFileWhenItSaysTheFile(t *testing.T) {
+	// Both are on the page at once, because a box that appeared and disappeared
+	// would need a script and this page has none. So something has to say which
+	// was meant, and this is that something: with both filled in and only the
+	// switch different, the job is made of one or the other and never of both.
+	for _, c := range []struct {
+		from    string
+		want    []string
+		notWant string
+	}{
+		{from: fromBox, want: []string{"typed one", "typed two"}, notWant: "from the file"},
+		{from: fromFile, want: []string{"from the file"}, notWant: "typed one"},
+	} {
+		t.Run(c.from, func(t *testing.T) {
+			s := testServerHolding(t)
+			rec := postUpload(t, s, map[string]string{
+				"name": "both filled in", "kind": store.KindParse, "pages": "1",
+				"from": c.from, "queries": "typed one\ntyped two",
+			}, "from the file")
+			if rec.Code != http.StatusSeeOther {
+				t.Fatalf("the upload came back %d, want a redirect: %s", rec.Code, rec.Body.String())
+			}
+			job := theOneJob(t, s)
+			left, err := s.store.Pending(t.Context(), job.ID)
+			if err != nil {
+				t.Fatalf("Pending: %v", err)
+			}
+			got := make([]string, len(left))
+			for i, q := range left {
+				got[i] = q.Text
+			}
+			if len(got) != len(c.want) {
+				t.Fatalf("the job holds %v, want %v", got, c.want)
+			}
+			for i := range c.want {
+				if got[i] != c.want[i] {
+					t.Errorf("the job holds %v, want %v", got, c.want)
+					break
+				}
+			}
+			for _, q := range got {
+				if strings.Contains(q, c.notWant) {
+					t.Errorf("the job holds %q, which came from the source the switch did not name", q)
+				}
+			}
+		})
+	}
+}
+
+func TestNewJob_ObeysTheSwitchWhateverOrderThePartsArriveIn(t *testing.T) {
+	// The test above cannot see a handler that reads whichever list part it meets
+	// first: the browser sends the typed box before the file, so a handler that
+	// took the file regardless would never reach it. Here the file arrives first,
+	// which is the arrangement where taking the wrong one is visible.
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	for box, value := range map[string]string{
+		"name": "file first", "kind": store.KindParse, "pages": "1", "from": fromBox,
+	} {
+		if err := form.WriteField(box, value); err != nil {
+			t.Fatalf("writing the %s box: %v", box, err)
+		}
+	}
+	part, err := form.CreateFormFile(listField, "queries.txt")
+	if err != nil {
+		t.Fatalf("opening the file part: %v", err)
+	}
+	if _, err := io.WriteString(part, "from the file"); err != nil {
+		t.Fatalf("writing the list: %v", err)
+	}
+	if err := form.WriteField("queries", "typed one"); err != nil {
+		t.Fatalf("writing the typed box: %v", err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatalf("closing the form: %v", err)
+	}
+
+	s := testServerHolding(t)
+	req := httptest.NewRequest(http.MethodPost, uploadAt, &body)
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the upload came back %d, want a redirect: %s", rec.Code, rec.Body.String())
+	}
+
+	job := theOneJob(t, s)
+	left, err := s.store.Pending(t.Context(), job.ID)
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(left) != 1 || left[0].Text != "typed one" {
+		t.Errorf("the job holds %+v, want the typed phrase the switch named", left)
 	}
 }

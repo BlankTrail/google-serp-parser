@@ -232,48 +232,17 @@ func submit(t *testing.T, cl *http.Client, at string, form url.Values) *http.Res
 // The threads and the ports are the ones the supervisor was built with, so the
 // estimate the page shows is an estimate of the job that then runs. They change
 // the estimate and nothing else, which is what the page says of them.
-func liveForm(do string) url.Values {
+func liveForm() url.Values {
 	return url.Values{
-		"name":      {liveJobName},
-		"queries":   {strings.Join(liveQueries, "\n")},
-		"pages":     {strconv.Itoa(livePages)},
-		"country":   {"us"},
-		"language":  {"en"},
-		"threads":   {strconv.Itoa(liveThreads)},
-		"ports":     {strconv.Itoa(livePorts)},
-		actionField: {do},
+		"name":     {liveJobName},
+		"queries":  {strings.Join(liveQueries, "\n")},
+		"pages":    {strconv.Itoa(livePages)},
+		"country":  {"us"},
+		"language": {"en"},
+		"threads":  {strconv.Itoa(liveThreads)},
+		"ports":    {strconv.Itoa(livePorts)},
+		fromField:  {fromBox},
 	}
-}
-
-// estimateShown reads the estimate off the page it was shown on, as what each
-// line is called and what it says.
-//
-// It reads the page rather than working the numbers out again. What this run is
-// held against is what a reader was told before they pressed start, and a
-// second calculation is not that.
-func estimateShown(t *testing.T, html string) map[string]string {
-	t.Helper()
-	_, rest, ok := strings.Cut(html, `<section class="estimate">`)
-	if !ok {
-		fatalf(t, "the page shows no estimate:\n%s", html)
-	}
-	rest, _, _ = strings.Cut(rest, "</section>")
-
-	shown := map[string]string{}
-	var name string
-	for _, part := range strings.Split(rest, "<")[1:] {
-		tag, text, _ := strings.Cut(part, ">")
-		switch tag {
-		case "dt":
-			name = strings.TrimSpace(text)
-		case "dd":
-			shown[name] = strings.TrimSpace(text)
-		}
-	}
-	if len(shown) == 0 {
-		fatalf(t, "the estimate has no lines in it:\n%s", rest)
-	}
-	return shown
 }
 
 // watching says whether the page is still asking for more, which is the one
@@ -529,17 +498,11 @@ func TestLiveBrowser_SetsAJobUpStopsItTakesItUpAgainAndHandsItOver(t *testing.T)
 	base, st := liveServer(ctx, t)
 	cl := browser()
 
-	// What a reader is told the job will cost, before any of it is sent.
-	estimate := estimateShown(t, body(t, submit(t, cl, base+"/new", liveForm(doEstimate))))
-	for _, line := range []string{
-		"estimate.searches", "estimate.requests", "estimate.worst",
-		"estimate.expected", "estimate.floor", "form.ports",
-	} {
-		logf(t, "MEASUREMENT estimate — %s: %s", LangEN.T(line), estimate[LangEN.T(line)])
-	}
+	// The costing that used to stand on this page is gone with the button that
+	// asked for it; what the run reports is what this file measures.
 
 	pressedStart := time.Now()
-	res := submit(t, cl, base+"/new", liveForm(doStart))
+	res := submit(t, cl, base+"/new", liveForm())
 	_ = body(t, res)
 	if res.StatusCode != http.StatusSeeOther {
 		fatalf(t, "pressing start came back %d, want 303", res.StatusCode)
@@ -671,24 +634,8 @@ func TestLiveBrowser_SetsAJobUpStopsItTakesItUpAgainAndHandsItOver(t *testing.T)
 	}
 
 	whole := time.Since(pressedStart)
-	logf(t, "MEASUREMENT the whole job: %v from the form to the stamp, against an estimate of %s expected and %s at the floor",
-		whole.Round(time.Second),
-		estimate[LangEN.T("estimate.expected")], estimate[LangEN.T("estimate.floor")])
-
-	// Each of the two quoted times as the factor it was out by, which is the only
-	// form in which a quantity quoted before a run can be set beside one measured
-	// after it. What is measured here runs long by however long the job spent
-	// stopped: the estimate covers the work and this covers the form to the stamp.
-	for _, line := range []string{"estimate.expected", "estimate.floor"} {
-		quoted := estimate[LangEN.T(line)]
-		against, err := time.ParseDuration(quoted)
-		if err != nil || against <= 0 {
-			logf(t, "MEASUREMENT %s was quoted as %q, which is not a length to divide by", line, quoted)
-			continue
-		}
-		logf(t, "MEASUREMENT %s quoted %v against the %v this run took: out by a factor of %.1f",
-			line, against, whole.Round(time.Second), whole.Seconds()/against.Seconds())
-	}
+	logf(t, "MEASUREMENT the whole job: %v from the form to the stamp",
+		whole.Round(time.Second))
 
 	// What the export hands over against what the history holds. Both formats,
 	// from the same history through the same walk, so a count that differs
@@ -1053,11 +1000,11 @@ func filterCost(t *testing.T, by string, addresses int) filterRun {
 		lines[i] = "phrase number " + strconv.Itoa(i)
 	}
 	form := url.Values{
-		"name":      {"what the filter costs"},
-		"queries":   {strings.Join(lines, "\n")},
-		"pages":     {"1"},
-		"unique":    {by},
-		actionField: {doStart},
+		"name":    {"what the filter costs"},
+		"queries": {strings.Join(lines, "\n")},
+		"pages":   {"1"},
+		"unique":  {by},
+		fromField: {fromBox},
 	}
 	req := httptest.NewRequest(http.MethodPost, newAt, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1257,7 +1204,7 @@ func TestLiveState_ShowsThePoolAndTheRefusalsWhileAJobIsInFlight(t *testing.T) {
 	base, st := liveServer(ctx, t)
 	cl := browser()
 
-	res := submit(t, cl, base+"/new", liveForm(doStart))
+	res := submit(t, cl, base+"/new", liveForm())
 	_ = body(t, res)
 	if res.StatusCode != http.StatusSeeOther {
 		fatalf(t, "pressing start came back %d, want 303", res.StatusCode)
@@ -1438,7 +1385,7 @@ func liveSettingsPost(control, listURL string, ports int) url.Values {
 // the settings are changed under one job that is going to be stopped and one
 // that is going to finish, and both have to happen while somebody is waiting.
 func shortLiveJob(name string) url.Values {
-	form := liveForm(doStart)
+	form := liveForm()
 	form.Set("name", name)
 	form.Set("queries", strings.Join(liveQueries[:4], "\n"))
 	form.Set("pages", "1")
@@ -1498,7 +1445,7 @@ func TestLiveIndex_SaysHeldOnlyForThePageThatWasAskedAbout(t *testing.T) {
 	for i, target := range liveIndexTargets {
 		lines[i] = target.Target
 	}
-	form := liveForm(doStart)
+	form := liveForm()
 	form.Set("name", "is this page held")
 	form.Set("kind", store.KindIndex)
 	form.Set("queries", strings.Join(lines, "\n"))

@@ -8,35 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/google"
 	"github.com/blanktrail/google-serp-parser/run"
 	"github.com/blanktrail/google-serp-parser/store"
 )
-
-// actionField is the field the two buttons answer under, and doEstimate and
-// doStart are what each of them carries.
-//
-// They are two values of one field rather than two fields, because a button
-// says what it is worth only when it is the button that was pressed, and that
-// is how the page tells the two apart without a line of script behind it.
-const (
-	actionField = "do"
-	doEstimate  = "estimate"
-	doStart     = "start"
-)
-
-// actions carries the field and the two button values onto the page, so the
-// markup and the handler cannot drift into two words for one press.
-type actions struct {
-	Field    string
-	Estimate string
-	Start    string
-}
-
-func buttons() actions {
-	return actions{Field: actionField, Estimate: doEstimate, Start: doStart}
-}
 
 // jobForm is what the new-job page carries in both directions: filled in by the
 // reader on the way in, and handed back with its complaints on the way out.
@@ -64,6 +38,10 @@ type jobForm struct {
 	Pages    int
 	Threads  int
 	Ports    int
+	// Tries is how many identities one query may be taken to before it is
+	// written off, and From says which of the two ways the phrases arrived by.
+	Tries int
+	From  string
 }
 
 // blankForm is the form a reader is handed before they have typed anything.
@@ -77,16 +55,25 @@ type jobForm struct {
 // name one now types over a name that already tells two jobs of the same list
 // apart. It is the local time, written largest part first so a listing sorts by
 // it, and it is a default and not a stamp: whatever is typed over it wins.
+// defaultTries is what the form offers when nobody has said otherwise. It is
+// the run layer's own number, spelled here so the box a reader sees and the
+// number a job runs at cannot drift apart.
+const defaultTries = 30
+
 func blankForm() jobForm {
 	return jobForm{
 		Name: time.Now().Format("2006-01-02 15:04"),
 		// The ordinary job, and the one somebody who has not read this page yet
 		// almost certainly came for: phrases in, everything Google answered with
 		// out. The other two ask narrower questions and are chosen deliberately.
-		Kind:    store.KindParse,
+		Kind: store.KindParse,
+		// Typed in, because that is what somebody opening this page has in hand;
+		// a file is chosen by somebody who already has one.
+		From:    fromBox,
 		Pages:   1,
 		Threads: 2,
 		Ports:   6,
+		Tries:   defaultTries,
 	}
 }
 
@@ -300,18 +287,6 @@ func (f jobForm) spec() store.JobSpec {
 	}
 }
 
-// work is the job the estimate is of: the queries as they would be searched
-// for, at the depth they would be taken to.
-func (f jobForm) work(queries []string) run.Job {
-	j := run.Job{Kind: runKind(f.Kind), Target: strings.TrimSpace(f.Target),
-		Pages: f.depth(), SpecName: f.SpecName}
-	for _, text := range queries {
-		j.Queries = append(j.Queries,
-			google.Query{Text: text, Country: f.Country, Language: f.Language})
-	}
-	return j
-}
-
 // formOf reads the posted form, leaving numbers that will not parse at zero so
 // parse can complain about them in the reader's own language.
 func formOf(r *http.Request) jobForm {
@@ -334,82 +309,57 @@ func formOf(r *http.Request) jobForm {
 	}
 }
 
-// estimateView is the estimate as the page shows it: counts as counts, and the
-// two times already written out, because a template cannot round a duration.
-type estimateView struct {
-	Queries     int
-	Pages       int
-	Searches    int
-	Requests    int
-	MaxRequests int
-	Ports       int
-	Expected    string
-	Floor       string
-}
-
-// estimateOf works out what the job would cost, and answers with nothing when
-// there is no job to cost.
-//
-// It opens nothing and asks nothing over the network. This is the first thing
-// anybody presses, and an answer that had to open ports first would make the
-// question nobody can afford to skip the slowest page on the site.
-//
-// The pace is the one measured on a live run and the pause between two requests
-// is the documented one, because both belong to a run that has not started.
-func estimateOf(f jobForm, queries []string) *estimateView {
-	if len(queries) == 0 {
-		return nil
-	}
-	// The threads are named. They are the lanes the work is shared between, and
-	// passing the ports in their place quotes a job that was never asked for.
-	est := run.EstimateWith(f.work(queries), f.Ports, f.Threads,
-		blanktrail.DefaultCooldown, run.MeasuredPace)
-	return &estimateView{
-		Queries:     est.Queries,
-		Pages:       est.Pages,
-		Searches:    est.Searches,
-		Requests:    est.Requests,
-		MaxRequests: est.MaxRequests,
-		Ports:       est.Ports,
-		Expected:    est.Expected.Round(time.Second).String(),
-		Floor:       est.Floor.Round(time.Second).String(),
-	}
-}
-
 // newPage is the form, everything wrong with it, and what it would cost.
 type newPage struct {
 	page
 	Form       jobForm
 	Complaints []string
-	Estimate   *estimateView
-	Do         actions
 	// Kinds is every kind a job can be, so the choice on the page is the choice
 	// the handler takes and not a second list of it.
 	Kinds []jobKind
 	// Filters is every way of dropping repeats, offered on the same terms.
 	Filters []jobFilter
+	// Sources is the two ways the phrases can arrive, on the same terms again.
+	Sources []jobSource
+}
+
+// jobSource is one way the phrases can arrive.
+type jobSource struct {
+	Value string
+	Label string
+}
+
+// sources is where the phrases come from, in the order the form offers them.
+//
+// Both boxes are drawn whichever is chosen: a box that appeared and disappeared
+// would need a script, and this page has none. The switch is what says which of
+// the two was meant.
+func sources() []jobSource {
+	return []jobSource{
+		{Value: fromBox, Label: "form.from.box"},
+		{Value: fromFile, Label: "form.from.file"},
+	}
 }
 
 // showNew draws the new-job page, filling in the parts of it that are the same
 // however the reader got here. Every way onto this page goes through it, so the
 // page a refused upload lands on is the page a refused form lands on.
 func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
-	form jobForm, complaints []string, est *estimateView) {
+	form jobForm, complaints []string) {
 	s.render(w, r, "new.html", newPage{
 		page:       s.frame(r, lang, "new.title", newAt),
 		Form:       form,
 		Complaints: complaints,
-		Estimate:   est,
-		Do:         buttons(),
 		Kinds:      kinds(),
 		Filters:    filters(),
+		Sources:    sources(),
 	})
 }
 
 // newJob shows an empty form.
 func (s *Server) newJob(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
-	s.showNew(w, r, lang, blankForm(), nil, nil)
+	s.showNew(w, r, lang, blankForm(), nil)
 }
 
 // createJob answers the form: it costs the job, or starts it.
@@ -423,7 +373,13 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	form := formOf(r)
 	queries, complaints := form.parse()
 
-	if r.FormValue(actionField) == doStart {
+	// Every send of this form is a start. The page used to carry a second button
+	// that costed the job without running it, and the costing went with it: the
+	// dominant term in it is the time to reach an identity that answers, which
+	// was measured at anything from half a minute to nine, so the figure was
+	// read as a promise and was not one. What the operator has instead is the
+	// numbers the run itself reports.
+	{
 		switch {
 		case s.sup == nil:
 			complaints = append(complaints, "form.norunner")
@@ -439,7 +395,7 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.showNew(w, r, lang, form, complaints, estimateOf(form, queries))
+	s.showNew(w, r, lang, form, complaints)
 }
 
 // start writes the job down, queues it and sends the browser to its page.

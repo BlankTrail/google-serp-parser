@@ -26,6 +26,15 @@ import (
 const (
 	uploadAt  = "/new/upload"
 	listField = "list"
+	// fromField is the switch saying where the phrases come from, and the two
+	// answers it takes. There is no third meaning "whichever arrived": both
+	// boxes are on the page at once, because a box that appears and disappears
+	// needs a script and this page has none — so something has to say which of
+	// the two was meant.
+	queriesField = "queries"
+	fromField    = "from"
+	fromBox      = "box"
+	fromFile     = "file"
 )
 
 // lineCap is the longest line this reads. The default is 64 KB, and a line
@@ -66,7 +75,7 @@ func (s *Server) uploadList(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
 	parts, err := r.MultipartReader()
 	if err != nil {
-		s.showNew(w, r, lang, jobForm{}, []string{"form.upload.unreadable"}, nil)
+		s.showNew(w, r, lang, jobForm{}, []string{"form.upload.unreadable"})
 		return
 	}
 
@@ -77,19 +86,32 @@ func (s *Server) uploadList(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
-			s.showNew(w, r, lang, form, []string{"form.upload.broke"}, nil)
+			s.showNew(w, r, lang, form, []string{"form.upload.broke"})
 			return
 		}
-		if part.FormName() != listField {
+		switch name := part.FormName(); {
+		case name == queriesField && form.From == fromBox:
+			// Typed in rather than uploaded. It goes down the same path as a file:
+			// one way of writing a job down, whatever it arrived as.
+			s.takeUpload(w, r, lang, form, part)
+			return
+		case name == listField && form.From != fromBox:
+			s.takeUpload(w, r, lang, form, part)
+			return
+		case name == queriesField || name == listField:
+			// The other way round from what the switch says. It is read and thrown
+			// away rather than left unread: a handler that stops reading leaves the
+			// browser sending into a connection nobody is holding.
+			_, _ = io.Copy(io.Discard, part)
+			_ = part.Close()
+		default:
 			form = form.carrying(part.FormName(), readBox(part))
 			_ = part.Close()
-			continue
 		}
-		s.takeUpload(w, r, lang, form, part)
-		return
+		continue
 	}
 	// Every part went by and none of them was the list.
-	s.showNew(w, r, lang, form, []string{"form.upload.none"}, nil)
+	s.showNew(w, r, lang, form, []string{"form.upload.none"})
 }
 
 // takeUpload writes one job from the file part of an upload, and answers the
@@ -105,7 +127,7 @@ func (s *Server) takeUpload(w http.ResponseWriter, r *http.Request, lang Lang,
 		// then is their browser's own network error rather than the sentence
 		// naming the box they left empty.
 		_, _ = io.Copy(io.Discard, list)
-		s.showNew(w, r, lang, form, complaints, nil)
+		s.showNew(w, r, lang, form, complaints)
 		return
 	}
 
@@ -114,7 +136,7 @@ func (s *Server) takeUpload(w http.ResponseWriter, r *http.Request, lang Lang,
 		// The job stays where it is, without the mark that makes it work. What
 		// arrived is kept and nothing will run it, and the reader is told both.
 		s.log.Error("a list stopped arriving part way", "job", id, "lines", took, "error", err)
-		s.showNew(w, r, lang, form, []string{complaintFor(err)}, nil)
+		s.showNew(w, r, lang, form, []string{complaintFor(err)})
 		return
 	}
 	// The job is written and complete, so it is queued. A refusal here is a
@@ -220,6 +242,14 @@ func (f jobForm) carrying(box, value string) jobForm {
 		f.Language = value
 	case "spec":
 		f.SpecName = value
+	case fromField:
+		f.From = value
+	case "tries":
+		f.Tries, _ = strconv.Atoi(value)
+	case "threads":
+		f.Threads, _ = strconv.Atoi(value)
+	case "ports":
+		f.Ports, _ = strconv.Atoi(value)
 	case "pages":
 		// A number that will not parse is left at nought, so the complaint the
 		// reader gets names the depth rather than the file.

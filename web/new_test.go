@@ -3,17 +3,14 @@
 package web
 
 import (
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/google"
-	"github.com/blanktrail/google-serp-parser/run"
 	"github.com/blanktrail/google-serp-parser/store"
 )
 
@@ -44,18 +41,6 @@ func postForm(t *testing.T, s *Server, path string, values url.Values) *httptest
 	return rec
 }
 
-// tenQueries is a list long enough that the estimate's arithmetic depends on
-// every number it is given. A list shorter than the threads makes the thread
-// count stop mattering, and a test written on one cannot tell the threads from
-// the ports.
-func tenQueries() []string {
-	list := make([]string, 10)
-	for i := range list {
-		list[i] = "query " + strconv.Itoa(i)
-	}
-	return list
-}
-
 func TestNewJob_ShowsAFormWithNothingFilledIn(t *testing.T) {
 	rec := httptest.NewRecorder()
 	testServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/new", nil))
@@ -70,168 +55,64 @@ func TestNewJob_ShowsAFormWithNothingFilledIn(t *testing.T) {
 	}
 }
 
-func TestNewJob_BothButtonsAreSubmitsOfTheOneForm(t *testing.T) {
-	// Estimating and starting have to work with scripting switched off, so they
-	// are two submit buttons of one form told apart by what they carry. A page
-	// whose buttons need a script is a page half the readers cannot use at all.
+func TestNewJob_IsOneFormThatSendsItselfWithoutAScript(t *testing.T) {
+	// One form, and a switch inside it saying where the phrases come from. Two
+	// forms doing one thing made the reader choose between them before they knew
+	// what the difference was. It has to send itself with scripting switched
+	// off: a page whose button needs a script is a page half the readers cannot
+	// use at all.
 	body := get(t, testServer(t), "/new").Body.String()
 
-	for _, part := range []string{`method="post"`, `name="do"`} {
+	if n := strings.Count(body, "<form"); n != 1 {
+		t.Errorf("the page carries %d forms, want the one: %s", n, body)
+	}
+	for _, part := range []string{`method="post"`, `enctype="multipart/form-data"`,
+		`name="from"`, `name="queries"`, `name="list"`} {
 		if !strings.Contains(body, part) {
-			t.Errorf("the form carries no %s:\n%s", part, body)
+			t.Errorf("the form carries no %s: %s", part, body)
 		}
 	}
-	// Each button is read as a whole tag rather than as the value it carries: a
-	// button carrying the right value and doing nothing at all until a script
-	// picks it up would satisfy a search for the value alone.
-	for _, want := range []string{`value="estimate"`, `value="start"`} {
-		var found bool
-		for _, tag := range strings.Split(body, "<button")[1:] {
-			tag, _, _ = strings.Cut(tag, ">")
-			if !strings.Contains(tag, want) {
-				continue
-			}
-			found = true
-			if !strings.Contains(tag, `type="submit"`) {
-				t.Errorf("the button carrying %s sends nothing on its own: <button%s>", want, tag)
-			}
-		}
-		if !found {
-			t.Errorf("the form carries no button with %s:\n%s", want, body)
+	// The button is read as a whole tag rather than by the words on it: one that
+	// looks like a button and does nothing until a script picks it up would
+	// satisfy a search for the words alone.
+	var sends bool
+	for _, tag := range strings.Split(body, "<button")[1:] {
+		tag, _, _ = strings.Cut(tag, ">")
+		if strings.Contains(tag, `type="submit"`) {
+			sends = true
 		}
 	}
-	// The form itself reaches for nothing. Every screen loads the one script that
-	// puts a fetched screen in place of the one on show, and that script does no
-	// part of this form's work, so the form is read on its own here.
-	if form := oneTag(t, body, "form"); strings.Contains(form, "<script") {
-		t.Error("the form reaches for a script to do what it already does itself")
+	if !sends {
+		t.Errorf("no button on this form sends it on its own: %s", body)
 	}
 }
 
-func TestNewJob_SaysThatTheThreadAndPortBoxesOnlyChangeTheEstimate(t *testing.T) {
-	// The two feed the estimate and nothing else. What runs a job is the one
-	// warm pool the server was started with, and the thread count it was built
-	// with: neither is a property of a job, and the history has nowhere to keep
-	// them. A box that looks like a setting and is not is worse than no box,
-	// because somebody will set it to sixteen, watch the job run at four and
-	// conclude the program ignores what it is told.
-	//
-	// The two are read out of the group they stand in rather than looked for
-	// anywhere on the page, because a sentence at the bottom of a form explains
-	// nothing about the box at the top of it.
+func TestNewJob_KeepsTheJobsOwnPoolInAGroupOfItsOwn(t *testing.T) {
+	// These three used to change a figure and nothing else. They are the job's
+	// now: a pool is raised for it at this size when it starts and taken down
+	// when it lets go, and the sentence under them says where they can be
+	// changed afterwards. A box that looks like a setting and is not is worse
+	// than no box, and so is one that is a setting and reads as an estimate.
 	body := get(t, testServer(t), "/new").Body.String()
 
-	_, opened, ok := strings.Cut(body, "<fieldset")
+	_, opened, ok := strings.Cut(body, "<fieldset>")
 	if !ok {
-		t.Fatalf("the estimate's own boxes stand in no group of their own:\n%s", body)
+		t.Fatalf("the pool's boxes stand in no group of their own: %s", body)
 	}
 	group, _, ok := strings.Cut(opened, "</fieldset>")
 	if !ok {
-		t.Fatalf("the group the estimate's boxes stand in is never closed:\n%s", body)
+		t.Fatalf("the group the pool's boxes stand in is never closed: %s", body)
 	}
-	if !strings.Contains(group, LangEN.T("form.estimateonly")) {
-		t.Errorf("the group does not say what its boxes are for:\n%s", group)
+	// The page escapes what it prints, so the two are compared as text rather
+	// than as markup: an apostrophe reaches the reader as an apostrophe and only
+	// looks different here.
+	if !strings.Contains(html.UnescapeString(group), LangEN.T("form.tries.why")) {
+		t.Errorf("the group does not say what its boxes are: %s", group)
 	}
-	for _, field := range []string{`name="threads"`, `name="ports"`} {
+	for _, field := range []string{`name="threads"`, `name="ports"`, `name="tries"`} {
 		if !strings.Contains(group, field) {
-			t.Errorf("%s is not in the group that says these change only the estimate", field)
+			t.Errorf("%s is not in the group that says these belong to the job", field)
 		}
-	}
-	// The depth is a setting of the job itself: it is written down with the job
-	// and it decides what is searched for. Standing it beside the two that are
-	// not would say the opposite of what this group is for.
-	for _, field := range []string{`name="pages"`, `name="queries"`, `name="name"`} {
-		if strings.Contains(group, field) {
-			t.Errorf("%s was grouped with the boxes that change nothing but the estimate", field)
-		}
-	}
-}
-
-func TestEstimate_AnswersWithoutStartingAnything(t *testing.T) {
-	// The first thing anyone does with ten thousand queries is ask what it will
-	// cost. Answering must not need a pool, a network, or a job in the history.
-	//
-	// What the page says is checked against the same arithmetic named in the
-	// order it takes its arguments, so a page working the cost out on the ports
-	// where the threads belong is caught here rather than believed.
-	s := testServer(t)
-	list := tenQueries()
-	rec := postForm(t, s, "/new?do=estimate", url.Values{
-		"name":    {"nightly"},
-		"queries": {strings.Join(list, "\n")},
-		"pages":   {"2"},
-		"ports":   {"8"},
-		"threads": {"4"},
-	})
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("estimating gave %d, want 200", rec.Code)
-	}
-	want := run.EstimateWith(run.Job{Queries: make([]google.Query, len(list)), Pages: 2},
-		8, 4, blanktrail.DefaultCooldown, run.MeasuredPace)
-	body := rec.Body.String()
-	for what, part := range map[string]string{
-		"the queries it counted":   strconv.Itoa(want.Queries),
-		"the searches they make":   strconv.Itoa(want.Searches),
-		"what will leave at all":   strconv.Itoa(want.Requests),
-		"the worst it can cost":    strconv.Itoa(want.MaxRequests),
-		"how long it will take":    want.Expected.Round(time.Second).String(),
-		"the pacing floor beneath": want.Floor.Round(time.Second).String(),
-	} {
-		if !strings.Contains(body, part) {
-			t.Errorf("the estimate does not say %s (%q):\n%s", what, part, body)
-		}
-	}
-
-	jobs, err := s.store.Jobs(t.Context(), 0)
-	if err != nil {
-		t.Fatalf("Jobs: %v", err)
-	}
-	if len(jobs) != 0 {
-		t.Errorf("estimating created %d jobs", len(jobs))
-	}
-}
-
-func TestEstimate_SaysWhereItsNumbersCameFrom(t *testing.T) {
-	// The costs behind the time were measured on one list, on one day, against
-	// one target, and the range the dominant one was taken from spans a factor
-	// of twenty. A bare number gets believed, so the number never travels alone.
-	s := testServer(t)
-	rec := postForm(t, s, "/new?do=estimate", url.Values{
-		"queries": {"iphone 13"},
-		"pages":   {"1"},
-	})
-
-	body := rec.Body.String()
-	if !strings.Contains(body, LangEN.T("estimate.caveat")) {
-		t.Errorf("the time is quoted with nothing about where it came from:\n%s", body)
-	}
-}
-
-func TestEstimate_AnswersBeforeTheJobIsNamed(t *testing.T) {
-	// Naming a job is a decision; learning what it costs is not. Refusing the
-	// cost until the job has a name puts a form in front of the one question the
-	// reader came with.
-	s := testServer(t)
-	rec := postForm(t, s, "/new?do=estimate", url.Values{
-		"name":    {""},
-		"queries": {strings.Join(tenQueries(), "\n")},
-		"pages":   {"2"},
-		"ports":   {"8"},
-		"threads": {"4"},
-	})
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("estimating gave %d, want 200", rec.Code)
-	}
-	body := rec.Body.String()
-	want := run.EstimateWith(run.Job{Queries: make([]google.Query, 10), Pages: 2},
-		8, 4, blanktrail.DefaultCooldown, run.MeasuredPace)
-	if !strings.Contains(body, strconv.Itoa(want.Requests)) {
-		t.Errorf("an unnamed job was told nothing about its cost:\n%s", body)
-	}
-	if !strings.Contains(body, LangEN.T("form.name.required")) {
-		t.Error("the missing name went unmentioned")
 	}
 }
 

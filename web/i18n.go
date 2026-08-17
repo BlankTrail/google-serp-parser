@@ -183,6 +183,13 @@ var catalogue = map[Lang]map[string]string{
 		// the reader meant is theirs to say. The sentence names the part that
 		// cannot be taken back, because it cannot — a dropped result is never
 		// written, and having it takes another run.
+		"form.from":           "Where the phrases come from",
+		"form.from.box":       "Typed in below",
+		"form.from.file":      "From a file",
+		"form.from.why":       "Both boxes are here whichever is chosen, because a box that appeared and disappeared would need a script and this page has none. The one the switch names is the one that is read; the other is ignored. A file is read as it arrives, so its size is not bounded by this machine's memory.",
+		"form.pool":           "The pool this job runs on",
+		"form.tries":          "Tries per phrase",
+		"form.tries.why":      "How many identities one phrase may be taken to before it is written off. A poor list refuses most requests, and a limit set low loses the job rather than the request. These three are the job's own: a pool is raised for it when it starts and taken down when it lets go, and they can be changed on the job's own page.",
 		"form.unique":         "Dropping duplicates",
 		"form.unique.off":     "Keep every result",
 		"form.unique.url":     "Unique by url",
@@ -363,6 +370,13 @@ var catalogue = map[Lang]map[string]string{
 		"form.target.why":      "Проверке позиций он нужен, остальным двум типам не нужен вовсе. Голый сайт засчитывает любую его страницу, включая поддомены; адрес с путём — только этот адрес. После запуска он не меняется: уже найденные места отмерены по нему.",
 		"form.target.required": "Проверке позиций нужен сайт, о котором она.",
 
+		"form.from":           "Откуда берутся фразы",
+		"form.from.box":       "Из поля ниже",
+		"form.from.file":      "Из файла",
+		"form.from.why":       "Оба поля стоят здесь при любом выборе: поле, которое появляется и исчезает, требует сценария, а этой странице сценарий не нужен. Читается то, которое названо переключателем, второе не читается. Файл читается по мере поступления, поэтому его размер не упирается в память этой машины.",
+		"form.pool":           "Пул, на котором идёт это задание",
+		"form.tries":          "Попыток на фразу",
+		"form.tries.why":      "Сколько личностей пробует одна фраза, прежде чем её спишут. Плохой список отказывает на большей части запросов, и низкий предел теряет не запрос, а задание. Эти три — свойство задания: пул поднимается под него при запуске и закрывается, когда задание его отпустило, а изменить их можно на странице задания.",
 		"form.unique":         "Удаление дублей",
 		"form.unique.off":     "Оставлять все результаты",
 		"form.unique.url":     "Уник по url",
