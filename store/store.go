@@ -22,6 +22,9 @@ var schemaStep1 string
 //go:embed schema_v2.sql
 var schemaStep2 string
 
+//go:embed schema_v3.sql
+var schemaStep3 string
+
 // steps is the upgrade path, one step per version: steps[i] takes a database at
 // version i to version i+1. A database that has never been written is version 0
 // and walks the whole list.
@@ -35,8 +38,8 @@ var schemaStep2 string
 // obvious alternative invites, where a current-shape file and a set of patches
 // drift because someone edited one of them.
 //
-// To add version 3: write the file, embed it, append it here. Nothing else.
-var steps = []string{schemaStep1, schemaStep2}
+// To add version 4: write the file, embed it, append it here. Nothing else.
+var steps = []string{schemaStep1, schemaStep2, schemaStep3}
 
 // schemaVersion is what this build writes and understands. It counts the steps,
 // so a step cannot be added without the version following it.

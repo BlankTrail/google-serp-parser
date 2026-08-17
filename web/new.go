@@ -48,7 +48,11 @@ type jobForm struct {
 	// Kind is what the job asks Google for, in the words the history files it
 	// under. Empty is a search, so a form posted without the field is the job
 	// this program did before there was a choice.
-	Kind     string
+	Kind string
+	// Unique is what the job throws away as a repeat, in the word the history
+	// files it under. Empty keeps everything, so a form posted without the field
+	// is the job this program did before there was a choice.
+	Unique   string
 	Queries  string
 	Country  string
 	Language string
@@ -103,6 +107,56 @@ func kindKey(kind string) (string, bool) {
 	// ugly and it reports itself, which beats a page that quietly calls a job
 	// something it is not.
 	return kind, false
+}
+
+// jobFilter is one way of dropping repeats, with the key of what to call it.
+//
+// It travels the way a kind does, for the same reason: the markup must not
+// offer a choice the handler does not take, or file a job under a word the
+// database refuses.
+type jobFilter struct {
+	Value string
+	Label string
+}
+
+func filters() []jobFilter {
+	return []jobFilter{
+		{Value: string(store.UniqueOff), Label: "form.unique.off"},
+		{Value: string(store.UniqueURL), Label: "form.unique.url"},
+		{Value: string(store.UniqueHost), Label: "form.unique.host"},
+	}
+}
+
+// filterKey is the key of what to call a way of dropping repeats, and whether
+// it is one at all.
+//
+// Keeping everything is among them and carries the empty word, so a form that
+// arrives without the field is a known answer rather than a refusal.
+func filterKey(unique string) (string, bool) {
+	for _, f := range filters() {
+		if f.Value == unique {
+			return f.Label, true
+		}
+	}
+	// The word itself comes back, for the reason an untranslated key does: it
+	// reports itself rather than letting a page describe a filter that is not
+	// there.
+	return unique, false
+}
+
+// filter is what this job drops as a repeat.
+//
+// An index job drops nothing, whatever the box says. Its answer is one verdict
+// per address, worked out from the results filed against that address, and a
+// result dropped for sharing a site with an earlier one would read back as an
+// address Google does not hold — the silent wrong answer this whole check
+// exists to avoid. It is settled here, as the depth is, so that the job filed
+// in the history and the job that runs say one thing.
+func (f jobForm) filter() store.UniqueBy {
+	if f.Kind == store.KindIndex {
+		return store.UniqueOff
+	}
+	return store.UniqueBy(f.Unique)
 }
 
 // runKind turns the word the history files a job under into what the runner
@@ -165,6 +219,12 @@ func (f jobForm) faults() []string {
 	if _, known := kindKey(f.Kind); !known {
 		complaints = append(complaints, "form.kind.unknown")
 	}
+	// A filter nobody here knows is refused rather than read as keeping
+	// everything. Dropping repeats cannot be undone, and a job run under a rule
+	// nobody chose is a run to do again.
+	if _, known := filterKey(f.Unique); !known {
+		complaints = append(complaints, "form.unique.unknown")
+	}
 	if f.depth() < 1 {
 		complaints = append(complaints, "form.pages.positive")
 	}
@@ -195,6 +255,7 @@ func (f jobForm) spec() store.JobSpec {
 	return store.JobSpec{
 		Name:     strings.TrimSpace(f.Name),
 		Kind:     f.Kind,
+		UniqueBy: f.filter(),
 		Pages:    f.depth(),
 		Country:  f.Country,
 		Language: f.Language,
@@ -223,6 +284,7 @@ func formOf(r *http.Request) jobForm {
 	return jobForm{
 		Name:     strings.TrimSpace(r.FormValue("name")),
 		Kind:     strings.TrimSpace(r.FormValue("kind")),
+		Unique:   strings.TrimSpace(r.FormValue("unique")),
 		Queries:  r.FormValue("queries"),
 		Country:  strings.TrimSpace(r.FormValue("country")),
 		Language: strings.TrimSpace(r.FormValue("language")),
@@ -285,6 +347,8 @@ type newPage struct {
 	// Kinds is every kind a job can be, so the choice on the page is the choice
 	// the handler takes and not a second list of it.
 	Kinds []jobKind
+	// Filters is every way of dropping repeats, offered on the same terms.
+	Filters []jobFilter
 }
 
 // showNew draws the new-job page, filling in the parts of it that are the same
@@ -299,6 +363,7 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		Estimate:   est,
 		Do:         buttons(),
 		Kinds:      kinds(),
+		Filters:    filters(),
 	})
 }
 

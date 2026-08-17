@@ -45,7 +45,11 @@ type jobSetup struct {
 	Started time.Time
 	// Kind is the key of what to call what this job asks Google, never the word
 	// itself: every phrase on every page goes through the catalogue.
-	Kind     string
+	Kind string
+	// Filter is the key of what to call what this job drops as a repeat. It is
+	// shown among the settings and not among the counts, because it is a thing
+	// the job was set up with and cannot be changed now.
+	Filter   string
 	Pages    int
 	Country  string
 	Language string
@@ -69,7 +73,12 @@ type jobPage struct {
 	// lists themselves: an index job that has checked nothing yet holds no
 	// verdicts, and drawing it as a search would tell the reader their addresses
 	// captured no results.
-	IsIndex   bool
+	IsIndex bool
+	// Filtering says the job drops repeats, and it is what puts the count of
+	// dropped results on the screen. A job that keeps everything is not given a
+	// figure reading nought: a number on a screen is a thing to wonder about,
+	// and there is nothing here to wonder about.
+	Filtering bool
 	Capped    bool
 	Formats   []string
 	CanStop   bool
@@ -112,6 +121,10 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	// A kind the catalogue has no word for is not drawn as a search. It is a job
 	// nothing here can describe, and naming it wrongly is worse than the key.
 	kind, _ := kindKey(sum.Kind)
+	// A filter the catalogue has no word for is named by its own word, for the
+	// reason a kind is: a page that called it "keep everything" would describe a
+	// run that dropped results as one that dropped none.
+	filter, _ := filterKey(string(sum.UniqueBy))
 
 	s.render(w, r, "job.html", jobPage{
 		page: s.frame(r, lang, "job.title", jobsAt),
@@ -119,18 +132,20 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Name:     sum.Name,
 			Started:  sum.CreatedAt,
 			Kind:     kind,
+			Filter:   filter,
 			Pages:    sum.Pages,
 			Country:  sum.Country,
 			Language: sum.Language,
 			Spec:     sum.SpecName,
 		},
-		Progress: at,
-		State:    stateOf(at, sum.PlanReady),
-		Rows:     rows,
-		Verdicts: verdicts,
-		IsIndex:  sum.Kind == store.KindIndex,
-		Capped:   capped,
-		Formats:  export.Formats(),
+		Progress:  at,
+		State:     stateOf(at, sum.PlanReady),
+		Rows:      rows,
+		Verdicts:  verdicts,
+		IsIndex:   sum.Kind == store.KindIndex,
+		Filtering: sum.UniqueBy != store.UniqueOff,
+		Capped:    capped,
+		Formats:   export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
 		// somebody presses until they conclude the job cannot be stopped at all.

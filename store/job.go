@@ -44,7 +44,13 @@ type JobSpec struct {
 	// Pages is how many result pages each query is taken to. Non-positive
 	// means one, because a job stored as fetching none would resume with
 	// nothing to do.
-	Pages    int
+	Pages int
+	// UniqueBy is what this job drops as a repeat, and UniqueOff — the empty
+	// string — keeps everything. It is settled when the job is created and never
+	// afterwards: dropping happens as results are written and cannot be undone,
+	// so a job whose filter changed part way would hold results gathered under
+	// two rules with nothing to say which was which.
+	UniqueBy UniqueBy
 	SpecName string
 	Country  string
 	Language string
@@ -98,9 +104,9 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// list too large to hold is written by a different path, which sets the flag
 	// after its last batch.
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, pages, spec_name, country, language, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, 1)`,
-		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), pages,
+		`INSERT INTO jobs(name, created_at, kind, unique_by, pages, spec_name, country, language, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), string(spec.UniqueBy), pages,
 		spec.SpecName, spec.Country, spec.Language)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
@@ -199,12 +205,12 @@ type UnfinishedJob struct {
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
 	var j UnfinishedJob
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, pages, spec_name, country, language
+		`SELECT id, name, kind, unique_by, pages, spec_name, country, language
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
-		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Pages,
+		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.UniqueBy, &j.Spec.Pages,
 			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)

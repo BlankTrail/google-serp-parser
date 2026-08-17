@@ -72,6 +72,16 @@
 <input id="spec" name="spec" size="10" value="{{.Form.SpecName}}">
 </div>
 </div>
+{{/* What to do with repeats. It stands with the settings of the run because
+     that is what it is, and the sentence under it says the part that cannot be
+     taken back. */}}
+<div class="field">
+<label for="unique">{{.T "form.unique"}}</label>
+<select id="unique" name="unique">
+{{range .Filters}}<option value="{{.Value}}"{{if eq .Value $.Form.Unique}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
+<p class="empty">{{.T "form.unique.why"}}</p>
 {{/* These two are inputs to the estimate and to nothing else: a job runs on the
      one warm pool this server was started with, and the history has nowhere to
      keep a thread count of its own. They stand apart and say so, because a box
@@ -131,6 +141,13 @@
 <input id="list-spec" name="spec" size="10" value="{{.Form.SpecName}}">
 </div>
 </div>
+<div class="field">
+<label for="list-unique">{{.T "form.unique"}}</label>
+<select id="list-unique" name="unique">
+{{range .Filters}}<option value="{{.Value}}"{{if eq .Value $.Form.Unique}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
+<p class="empty">{{.T "form.unique.why"}}</p>
 {{/* The file stands last on purpose. A browser sends the parts of a form in the
      order they stand here, and the server has to know the name and the depth
      before the first line of the file reaches it. */}}

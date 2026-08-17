@@ -18,6 +18,10 @@
 <div class="metric"><dt class="label">{{.T "jobs.done"}}</dt><dd class="figure" id="count-done">{{.Progress.Done}}</dd></div>
 <div class="metric"><dt class="label">{{.T "jobs.failed"}}</dt><dd class="figure" id="count-failed">{{.Progress.Failed}}</dd></div>
 <div class="metric"><dt class="label">{{.T "jobs.left"}}</dt><dd class="figure" id="count-pending">{{.Progress.Pending}}</dd></div>
+{{/* Drawn only for a job that drops repeats. A figure reading nought on every
+     other job would be a number asking to be explained, and there would be
+     nothing to explain. */}}
+{{if .Filtering}}<div class="metric"><dt class="label">{{.T "jobs.dropped"}}</dt><dd class="figure" id="count-dropped">{{.Progress.Dropped}}</dd></div>{{end}}
 <div class="metric"><dt class="label">{{.T "jobs.state"}}</dt><dd class="state" id="state">{{.T .State}}</dd></div>
 </dl>
 </section>
@@ -49,6 +53,7 @@
      instant, and an instant printed as itself is hours from the wall. */}}
 <dt>{{.T "jobs.started"}}</dt><dd>{{.Job.Started.Local.Format "2006-01-02 15:04"}}</dd>
 <dt>{{.T "form.kind"}}</dt><dd>{{.T .Job.Kind}}</dd>
+<dt>{{.T "form.unique"}}</dt><dd>{{.T .Job.Filter}}</dd>
 <dt>{{.T "form.pages"}}</dt><dd class="count">{{.Job.Pages}}</dd>
 <dt>{{.T "form.country"}}</dt><dd>{{.Job.Country}}</dd>
 <dt>{{.T "form.language"}}</dt><dd>{{.Job.Language}}</dd>

@@ -11,11 +11,12 @@ import (
 )
 
 // windBackToVersionOne turns a database this build has just made into the
-// database an earlier build would have left behind: the columns and tables
-// version 2 brought are gone, and the stamp says 1.
+// database the first build would have left behind: every column and table the
+// steps after it brought is gone, and the stamp says 1.
 func windBackToVersionOne(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		`ALTER TABLE jobs DROP COLUMN dropped`,
 		`DROP TABLE seen`,
 		`DROP TABLE api_keys`,
 		`ALTER TABLE jobs DROP COLUMN kind`,
@@ -100,12 +101,13 @@ func TestOpen_CarriesAnOlderDatabaseAndEverythingInItToThisVersion(t *testing.T)
 	}
 
 	var kind, uniqueBy string
-	if err := again.db.QueryRow(`SELECT kind, unique_by FROM jobs WHERE id = ?`, id).
-		Scan(&kind, &uniqueBy); err != nil {
+	var dropped int
+	if err := again.db.QueryRow(`SELECT kind, unique_by, dropped FROM jobs WHERE id = ?`, id).
+		Scan(&kind, &uniqueBy, &dropped); err != nil {
 		t.Fatalf("reading the new columns: %v", err)
 	}
-	if kind != "search" || uniqueBy != "" {
-		t.Errorf("a job from before the columns existed reads as kind %q, unique_by %q — want a plain search with no filter", kind, uniqueBy)
+	if kind != "search" || uniqueBy != "" || dropped != 0 {
+		t.Errorf("a job from before the columns existed reads as kind %q, unique_by %q, %d dropped — want a plain search that filtered nothing", kind, uniqueBy, dropped)
 	}
 
 	if _, err := again.db.Exec(`INSERT INTO seen(job_id, key) VALUES(?, 'https://one.test/1')`, id); err != nil {

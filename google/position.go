@@ -145,10 +145,17 @@ func hostBelongsTo(host, want string) bool {
 // sameURL compares two addresses ignoring the scheme, a leading www and a
 // trailing slash — differences Google renders freely and a caller never means.
 func sameURL(a, b string) bool {
-	return canonicalURL(a) == canonicalURL(b)
+	return CanonicalURL(a) == CanonicalURL(b)
 }
 
-func canonicalURL(raw string) string {
+// CanonicalURL is an address in the one spelling this program compares
+// addresses by: no scheme, no leading www, no trailing slash, lower case.
+//
+// It is exported because whoever compares two addresses has to compare them the
+// way the engines do. A second spelling of the same rule somewhere else would be
+// a second answer to "are these the same page", and the two would disagree on
+// the day one of them was changed.
+func CanonicalURL(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
 		return strings.ToLower(strings.TrimSpace(raw))
@@ -159,4 +166,17 @@ func canonicalURL(raw string) string {
 		return host + path + "?" + q
 	}
 	return host + path
+}
+
+// CanonicalHost is the site an address belongs to, in the same spelling: no
+// scheme, no path, no leading www, lower case.
+//
+// A bare host is already that answer, so something that carries no address at
+// all is read as the host it looks like rather than refused.
+func CanonicalHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return normaliseSite(raw)
+	}
+	return normaliseSite(u.Hostname())
 }

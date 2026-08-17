@@ -47,7 +47,7 @@ func uploadBody(t *testing.T, boxes map[string]string, list string) (string, *by
 	t.Helper()
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
-	for _, box := range []string{"name", "kind", "pages", "country", "language", "spec"} {
+	for _, box := range []string{"name", "kind", "pages", "country", "language", "spec", "unique"} {
 		value, filled := boxes[box]
 		if !filled {
 			continue
@@ -679,5 +679,23 @@ func TestUpload_RefusesAKindNothingAnswersToBeforeReadingTheFile(t *testing.T) {
 	}
 	if len(jobs) != 0 {
 		t.Errorf("%d jobs written for a kind nothing answers to, want none", len(jobs))
+	}
+}
+
+func TestUpload_CarriesTheFilterFromTheBoxThatStoodBeforeTheFile(t *testing.T) {
+	// The list that runs to ten million results is the one that arrives as a
+	// file, so this is the door the filter is actually asked for at. The boxes
+	// are read as they go by, and a box this one did not know would be read and
+	// thrown away without a word.
+	s := testServerHolding(t)
+	rec := postUpload(t, s, map[string]string{
+		"name": "nightly", "pages": "1", "unique": string(store.UniqueURL),
+	}, "a\nb\n")
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("uploading gave %d, want a redirect:\n%s", rec.Code, rec.Body.String())
+	}
+	if job := theOneJob(t, s); job.UniqueBy != store.UniqueURL {
+		t.Errorf("the uploaded job was filed as filtered by %q, want %q", job.UniqueBy, store.UniqueURL)
 	}
 }

@@ -179,6 +179,9 @@
 				write("count-done", at.done);
 				write("count-failed", at.failed);
 				write("count-pending", at.pending);
+				// The figure for dropped repeats is drawn only for a job that has a
+				// filter, and write leaves alone what is not on the page.
+				write("count-dropped", at.dropped);
 				fill(at.done, at.total);
 				triesLeft = 3;
 				if (at.watch) {

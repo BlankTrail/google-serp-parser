@@ -22,6 +22,10 @@ type progressJSON struct {
 	Done    int   `json:"done"`
 	Failed  int   `json:"failed"`
 	Pending int   `json:"pending"`
+	// Dropped is how many results the job threw away as repeats. It travels with
+	// the counts because it climbs while the job runs, and a reader watching the
+	// results come in has to see the ones that did not.
+	Dropped int `json:"dropped"`
 
 	Finished bool `json:"finished"`
 	Running  bool `json:"running"`
@@ -46,6 +50,7 @@ func (s *Server) progress(sum store.JobSummary) progressJSON {
 		Done:     sum.Done,
 		Failed:   sum.Failed,
 		Pending:  sum.Pending,
+		Dropped:  sum.Dropped,
 		Finished: sum.Finished,
 		Running:  running,
 		Queued:   queued,

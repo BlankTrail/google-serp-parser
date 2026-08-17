@@ -28,9 +28,15 @@ type QueryOutcome struct {
 // reason this package exists: a job of ten thousand queries that dies on the
 // nine thousandth should lose one query, not nine thousand.
 //
+// A job that asked to drop repeats drops them here, as the results are written
+// and never afterwards. This is the funnel everything captured already flows
+// through, and it is the only place where a repeat can be refused before it
+// costs anything to keep.
+//
 // Everything goes in one transaction. A query written half way — the second
 // page present and the first missing — is worse than one not written at all,
-// because it reads as data.
+// because it reads as data. What the job has seen is written in that same
+// transaction, so a mark and the result it stands for are one act.
 func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -38,9 +44,15 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The filter is read once for the whole call, alongside the query it belongs
+	// to, so a job of ten results per query does not ask ten times what it asked
+	// for once — and so the filter that is applied cannot be a different job's.
 	var queryID int64
+	var by UniqueBy
 	err = tx.QueryRowContext(ctx,
-		`SELECT id FROM queries WHERE job_id = ? AND ordinal = ?`, jobID, out.Ordinal).Scan(&queryID)
+		`SELECT q.id, j.unique_by
+		   FROM queries q JOIN jobs j ON j.id = q.job_id
+		  WHERE q.job_id = ? AND q.ordinal = ?`, jobID, out.Ordinal).Scan(&queryID, &by)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("store: job %d has no query at ordinal %d", jobID, out.Ordinal)
 	}
@@ -51,6 +63,10 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 	// The rank runs across the whole walk. A position is what the caller asked
 	// for, and the eleventh result is eleventh whichever page carried it.
 	rank := 0
+	// dropped counts the repeats this query brought, so the job can say how many
+	// results it threw away rather than leaving a reader to wonder why there are
+	// fewer than they expected.
+	dropped := 0
 	for i, serp := range out.Pages {
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO pages(query_id, number, origin) VALUES(?, ?, ?)`,
@@ -63,7 +79,23 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 			return fmt.Errorf("store: reading the page id: %w", err)
 		}
 		for _, r := range serp.Results {
+			// The rank counts what arrived, not what was kept. A repeat dropped from
+			// between two results does not move the one below it: a page held it at
+			// position seven, and seven is where it stood whatever became of the one
+			// above.
 			rank++
+			// A job that asked for no filter never reaches the table of what it has
+			// seen. It pays neither the write nor the room it would take.
+			if key, ok := keyOf(by, r); ok {
+				first, err := s.firstSeen(ctx, tx, jobID, key)
+				if err != nil {
+					return err
+				}
+				if !first {
+					dropped++
+					continue
+				}
+			}
 			_, err := tx.ExecContext(ctx,
 				`INSERT INTO results(page_id, rank, title, url, link, host, snippet)
 				 VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -84,6 +116,16 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE queries SET state = ?, err = ? WHERE id = ?`, state, msg, queryID); err != nil {
 		return fmt.Errorf("store: settling the query: %w", err)
+	}
+	// Written only when there was something to add, so a query that dropped
+	// nothing touches no row it would not have touched before. It goes in this
+	// transaction with the results it is about: a count that survived a write
+	// that failed would say a job dropped results it never saw.
+	if dropped > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE jobs SET dropped = dropped + ? WHERE id = ?`, dropped, jobID); err != nil {
+			return fmt.Errorf("store: counting what job %d dropped: %w", jobID, err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit: %w", err)

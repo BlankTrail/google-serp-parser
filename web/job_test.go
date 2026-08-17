@@ -511,3 +511,77 @@ func TestJobPage_SaysSoRatherThanDrawingAMillionAddresses(t *testing.T) {
 		t.Errorf("the page shows part of the addresses and does not say so:\n%s", body)
 	}
 }
+
+// filteredJob is a job that drops repeats and has already dropped some.
+//
+// Every query brings the same two addresses of one site, so under either filter
+// there is something to drop and something to keep, and the number the page has
+// to show is not the number of anything else on the page.
+func filteredJob(t *testing.T, s *Server, by store.UniqueBy, queries int) int64 {
+	t.Helper()
+	list := make([]string, queries)
+	for i := range list {
+		list[i] = fmt.Sprintf("query %d", i+1)
+	}
+	ctx := t.Context()
+	id, err := s.store.CreateJob(ctx, store.JobSpec{Name: "nightly", Pages: 1, UniqueBy: by}, list)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	for i := range queries {
+		err := s.store.Record(ctx, id, store.QueryOutcome{
+			Ordinal: i,
+			Pages: []google.SERP{{Origin: "https://www.google.com", Results: []google.Result{
+				{Title: "one", URL: "https://example.com/one", Host: "example.com"},
+				{Title: "two", URL: "https://example.com/two", Host: "example.com"},
+			}}},
+		})
+		if err != nil {
+			t.Fatalf("recording query %d: %v", i, err)
+		}
+	}
+	return id
+}
+
+func TestJobPage_SaysHowManyRepeatsWereDroppedAndWhatCountedAsOne(t *testing.T) {
+	// A reader looking at three results where they expected ten has to be told
+	// that seven were repeats. The two go together: a count with no filter named
+	// beside it reads as results lost to something nobody chose.
+	s := testServer(t)
+	id := filteredJob(t, s, store.UniqueHost, 3)
+
+	body := get(t, s, jobPath(id)).Body.String()
+	if got := shown(t, body, "count-dropped"); got != "5" {
+		t.Errorf("the page shows %q dropped, want 5 — one of two results per query, and both of the last two queries", got)
+	}
+	if want := LangEN.T("form.unique.host"); !strings.Contains(body, want) {
+		t.Errorf("the page does not say the job was set up as %q:\n%s", want, body)
+	}
+}
+
+func TestJobPage_ShowsNoCountOfDroppedRepeatsForAJobThatKeepsEverything(t *testing.T) {
+	// A figure reading nought is a number asking to be explained, and on a job
+	// with no filter there is nothing to explain.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 3, 2, 0)
+
+	body := get(t, s, jobPath(id)).Body.String()
+	if strings.Contains(body, `id="count-dropped"`) {
+		t.Errorf("a job that keeps everything is given a count of what it dropped:\n%s", body)
+	}
+	if want := LangEN.T("form.unique.off"); !strings.Contains(body, want) {
+		t.Errorf("the page does not say the job was set up as %q:\n%s", want, body)
+	}
+}
+
+func TestProgress_CarriesWhatWasDroppedToTheScriptThatFollowsTheJob(t *testing.T) {
+	// The count climbs while the job runs, so it has to arrive with the counts
+	// the script already replaces. Left out, it would stand at what it was when
+	// the page was drawn until the reader loaded the page again.
+	s := testServer(t)
+	id := filteredJob(t, s, store.UniqueURL, 4)
+
+	if got := askProgress(t, s, id).Dropped; got != 6 {
+		t.Errorf("the poll answers %d dropped, want 6 — both results of every query after the first", got)
+	}
+}

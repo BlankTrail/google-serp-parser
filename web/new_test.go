@@ -527,3 +527,96 @@ func TestNewJob_OffersEveryKindAJobCanBe(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateJob_FilesTheJobUnderTheFilterTheFormChose(t *testing.T) {
+	// The choice on the form is what the run throws away. A filter that stopped
+	// at the handler would keep every repeat while the page said otherwise, and
+	// nothing about the finished job would say which of the two happened.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name":    {"nightly"},
+		"unique":  {string(store.UniqueHost)},
+		"queries": {"a\nb"},
+		"pages":   {"1"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("starting gave %d, want a redirect: %s", rec.Code, rec.Body)
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("%d jobs, want the one just started", len(jobs))
+	}
+	if jobs[0].UniqueBy != store.UniqueHost {
+		t.Errorf("the job was filed as filtered by %q, want %q", jobs[0].UniqueBy, store.UniqueHost)
+	}
+}
+
+func TestCreateJob_LeavesAnIndexJobUnfilteredHoweverTheBoxIsSet(t *testing.T) {
+	// An index job answers one verdict per address, worked out from the results
+	// filed against that address. A result dropped for sharing a site with an
+	// earlier one would read back as an address Google does not hold — a wrong
+	// answer the reader has no way to disbelieve. It is settled where the job is
+	// written down, so the job in the history and the job that runs agree.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name":    {"addresses"},
+		"kind":    {store.KindIndex},
+		"unique":  {string(store.UniqueHost)},
+		"queries": {"example.com/a\nexample.com/b"},
+		"pages":   {"1"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("starting gave %d, want a redirect: %s", rec.Code, rec.Body)
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if jobs[0].UniqueBy != store.UniqueOff {
+		t.Errorf("an index job was filed as filtered by %q, want no filter", jobs[0].UniqueBy)
+	}
+}
+
+func TestCreateJob_RefusesAWayOfDroppingRepeatsThatIsNotOne(t *testing.T) {
+	// Dropping cannot be undone. A word nobody here knows, read as keeping
+	// everything, would run the job under a rule the reader did not choose, and
+	// nothing on the page would say so.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name":    {"odd"},
+		"unique":  {"domain"},
+		"queries": {"a"},
+		"pages":   {"1"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an unknown filter gave %d, want the form back", rec.Code)
+	}
+	if want := LangEN.T("form.unique.unknown"); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("the page does not say %q:\n%s", want, rec.Body)
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Errorf("%d jobs written under a filter nobody reads, want none", len(jobs))
+	}
+}
+
+func TestNewJob_OffersEveryWayOfDroppingRepeats(t *testing.T) {
+	body := get(t, testServer(t), "/new").Body.String()
+	if !strings.Contains(body, `name="unique"`) {
+		t.Fatalf("the form has no choice of what to do with repeats:\n%s", body)
+	}
+	for _, f := range filters() {
+		if !strings.Contains(body, `value="`+f.Value+`"`) {
+			t.Errorf("the form does not offer %q", f.Value)
+		}
+		if want := LangEN.T(f.Label); !strings.Contains(body, want) {
+			t.Errorf("the form does not name %q as %q", f.Value, want)
+		}
+	}
+}

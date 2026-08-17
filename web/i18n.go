@@ -101,6 +101,7 @@ var catalogue = map[Lang]map[string]string{
 		"jobs.done":            "Done",
 		"jobs.failed":          "Failed",
 		"jobs.left":            "Left",
+		"jobs.dropped":         "Repeats dropped",
 		"jobs.state":           "State",
 		"job.state.finished":   "finished",
 		"job.state.unfinished": "unfinished",
@@ -163,8 +164,19 @@ var catalogue = map[Lang]map[string]string{
 		"form.kind.index":   "Whether addresses are in the index",
 		"form.kind.why":     "An index job reads the list as addresses and asks Google whether it holds each one. It takes a single page per address, whatever the depth says, because the first page settles it.",
 		"form.kind.unknown": "That is not one of the things a job asks.",
-		"form.norunner":     "This server was started to read the history, so it cannot run a job.",
-		"form.notsetup":     "There is nothing to run a job on yet. Open the settings and set the connection up.",
+		// What the job throws away as it writes, and how many it threw. Both say
+		// what happened and neither judges it: whether six repeats in ten is what
+		// the reader meant is theirs to say. The sentence names the part that
+		// cannot be taken back, because it cannot — a dropped result is never
+		// written, and having it takes another run.
+		"form.unique":         "Repeats",
+		"form.unique.off":     "Keep every result",
+		"form.unique.url":     "One result per address",
+		"form.unique.host":    "One result per site",
+		"form.unique.why":     "A repeat is dropped as the results arrive and is never written down, so it is not in the history and not in the export. This holds within this job alone — a site caught last month turns up again tonight — and it cannot be undone once the job has run. How many were dropped is shown on the job's own page.",
+		"form.unique.unknown": "That is not one of the ways of dropping repeats.",
+		"form.norunner":       "This server was started to read the history, so it cannot run a job.",
+		"form.notsetup":       "There is nothing to run a job on yet. Open the settings and set the connection up.",
 		// The file. Every one of these says what happened and what is left behind,
 		// because a list that stopped arriving leaves a job in the history and the
 		// reader has to know it is there.
@@ -267,6 +279,7 @@ var catalogue = map[Lang]map[string]string{
 		"jobs.done":            "Готово",
 		"jobs.failed":          "Ошибок",
 		"jobs.left":            "Осталось",
+		"jobs.dropped":         "Отброшено повторов",
 		"jobs.state":           "Состояние",
 		"job.state.finished":   "завершено",
 		"job.state.unfinished": "не завершено",
@@ -322,8 +335,15 @@ var catalogue = map[Lang]map[string]string{
 		"form.kind.index":   "Есть ли адреса в индексе",
 		"form.kind.why":     "Задание на индекс читает список как адреса и спрашивает Google, держит ли он каждый. На адрес берётся одна страница, какую бы глубину ни выставили: первая страница вопрос закрывает.",
 		"form.kind.unknown": "Такого задания не бывает.",
-		"form.norunner":     "Этот сервер поднят читать историю и выполнять задания не может.",
-		"form.notsetup":     "Выполнять задание пока не на чем. Откройте настройки и настройте связь.",
+
+		"form.unique":         "Повторы",
+		"form.unique.off":     "Оставлять все результаты",
+		"form.unique.url":     "Один результат на адрес",
+		"form.unique.host":    "Один результат на сайт",
+		"form.unique.why":     "Повтор отбрасывается по ходу поступления результатов и не записывается вовсе, поэтому его нет ни в истории, ни в выгрузке. Отбор действует в пределах этого задания — сайт, попавшийся месяц назад, сегодня покажется снова — и отменить его после прогона нельзя. Сколько отброшено, видно на странице задания.",
+		"form.unique.unknown": "Так повторы не отбрасываются.",
+		"form.norunner":       "Этот сервер поднят читать историю и выполнять задания не может.",
+		"form.notsetup":       "Выполнять задание пока не на чем. Откройте настройки и настройте связь.",
 
 		"form.list.title":        "Список файлом",
 		"form.list":              "Файл, по одному запросу в строке",

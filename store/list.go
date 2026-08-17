@@ -31,6 +31,13 @@ type JobSummary struct {
 	// captured result is a position under one kind and a verdict under the other.
 	Kind string
 
+	// UniqueBy is what this job drops as a repeat, and Dropped is how many it
+	// has dropped. They travel together because neither says much alone: a count
+	// with no filter behind it reads as results lost to something unnamed, and a
+	// filter with no count reads as one that found nothing to do.
+	UniqueBy UniqueBy
+	Dropped  int
+
 	Pages    int
 	Country  string
 	Language string
@@ -55,6 +62,7 @@ type JobSummary struct {
 // nothing rather than a count of one.
 const jobSummaryQuery = `
 	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind,
+	       j.unique_by, j.dropped,
 	       j.pages, j.country, j.language, j.spec_name, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
@@ -125,6 +133,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 	var sum JobSummary
 	var created, finished string
 	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind,
+		&sum.UniqueBy, &sum.Dropped,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
