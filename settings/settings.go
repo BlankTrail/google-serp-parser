@@ -50,9 +50,22 @@ type Settings struct {
 	Language    string        `json:"language"`
 }
 
+// DefaultControlURL is where the identities are asked for on a machine where
+// nobody has said otherwise.
+//
+// It is filled in rather than left blank because it is right for nearly
+// everybody: the service runs on the same machine as this program and answers
+// there. A blank box would make every reader look up an address they already
+// have, and one they cannot check without leaving the page.
+const DefaultControlURL = "http://127.0.0.1:8891/"
+
 // Defaults are what a program that has never been configured runs on.
 func Defaults() Settings {
-	return Settings{SearchPorts: 2, Cooldown: 2 * time.Second}
+	return Settings{
+		ControlURL:  DefaultControlURL,
+		SearchPorts: 2,
+		Cooldown:    2 * time.Second,
+	}
 }
 
 // Load reads the settings, or the defaults when there is no file yet.

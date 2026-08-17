@@ -751,3 +751,77 @@ func openingTag(t *testing.T, body, opening string) string {
 	}
 	return opening + rest
 }
+
+func TestSettings_CanBeSentWithoutAScript(t *testing.T) {
+	// The form was left without a press of any kind for several commits and
+	// nothing noticed: every test here posts to the address directly, so the one
+	// thing a reader has to do — save what they typed — was the one thing never
+	// checked. A page of boxes and no button cannot be used at all.
+	s, _ := serverWithSettings(t, settings.Defaults())
+	body := getBody(t, s, settingsAt)
+
+	var saves, checks bool
+	for _, tag := range strings.Split(body, "<button")[1:] {
+		tag, _, _ = strings.Cut(tag, ">")
+		if !strings.Contains(tag, `type="submit"`) {
+			continue
+		}
+		if strings.Contains(tag, "formaction=") {
+			checks = true
+		} else {
+			saves = true
+		}
+	}
+	if !saves {
+		t.Errorf("nothing on this page saves what was typed into it:\n%s", body)
+	}
+	if !checks {
+		t.Errorf("nothing on this page checks the connection without saving it:\n%s", body)
+	}
+}
+
+func TestSettings_KeepsTheChooserOnTheLineWithTheBoxItFills(t *testing.T) {
+	// Boxes standing on one line are lined up by their feet, so a box with
+	// something under it stands a line above the ones beside it. The chooser sat
+	// under its box and pushed that whole line out of true.
+	s, _ := serverWithSettings(t, settings.Defaults())
+	body := getBody(t, s, settingsAt)
+
+	at := strings.Index(body, `name="source_at"`)
+	if at < 0 {
+		t.Fatal("there is no box for where the addresses are read from")
+	}
+	before, after := body[:at], body[at:]
+	chooser := strings.Index(after, "/settings/browse")
+	if chooser < 0 {
+		t.Fatal("nothing after the box offers to look through this machine")
+	}
+	// Both have to be inside the one thing that stands them side by side, which
+	// has to open before the box and still be open at the chooser. Opened and
+	// shut again before either of them would leave both outside it.
+	opens := strings.LastIndex(before, `class="beside"`)
+	if opens < 0 {
+		t.Fatalf("the box is not inside anything that stands things side by side:\n%s", body)
+	}
+	if strings.Contains(before[opens:], "</span>") {
+		t.Error("what stands them side by side closes before the box, so it holds neither")
+	}
+	if strings.Contains(after[:chooser], "</span>") {
+		t.Error("what stands them side by side closes before the chooser, so the chooser is under the box")
+	}
+}
+
+func TestSettings_OffersTheAddressNearlyEverybodyNeeds(t *testing.T) {
+	// The service runs on the same machine as this program and answers on one
+	// address. A blank box asks every reader to look up something they already
+	// have and cannot check from the page they are on.
+	if settings.Defaults().ControlURL == "" {
+		t.Fatal("a machine nobody has configured is offered no address at all")
+	}
+	s, _ := serverWithSettings(t, settings.Defaults())
+	body := getBody(t, s, settingsAt)
+	if !strings.Contains(body, settings.Defaults().ControlURL) {
+		t.Errorf("the page does not offer %q, which is the address it defaults to:\n%s",
+			settings.Defaults().ControlURL, body)
+	}
+}

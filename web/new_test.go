@@ -692,3 +692,24 @@ func TestNewForm_ShapesItselfAgainWhenAScreenArrivesWithoutAReload(t *testing.T)
 			"so a form reached by pressing a tab is never shaped")
 	}
 }
+
+func TestStyle_LeavesHiddenMeaningHidden(t *testing.T) {
+	// The browser's own rule for a hidden element is the weakest rule there is,
+	// and this file hands nearly everything a display of its own. A box put away
+	// by the script and shown anyway is the worst outcome available here: the
+	// markup says it was put away, the script says it was put away, and the
+	// reader is looking straight at it.
+	style := mustAsset(t, "static/app.css")
+	at := strings.Index(style, "[hidden]")
+	if at < 0 {
+		t.Fatal("nothing in the stylesheet keeps a hidden element hidden, " +
+			"so every rule here that gives a display shows it again")
+	}
+	rule := style[at:min(at+120, len(style))]
+	if !strings.Contains(rule, "display: none") {
+		t.Errorf("the rule for a hidden element does not take its display away: %q", rule)
+	}
+	if !strings.Contains(rule, "!important") {
+		t.Errorf("the rule for a hidden element loses to the rules above it: %q", rule)
+	}
+}

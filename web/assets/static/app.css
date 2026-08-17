@@ -348,6 +348,24 @@ legend {
 	gap: 0.25rem;
 }
 
+/* A box with something to press beside it, on the one line. Under it, the box
+   would stand a line higher than every box next to it. */
+.beside {
+	align-items: center;
+	display: flex;
+	gap: 0.5rem;
+}
+
+/* Anything the browser was told to hide stays hidden.
+
+   The browser's own rule for this is the weakest one there is, and every rule
+   in this file that hands an element a display beats it. Without this, a box
+   put away by a script is a box marked away and shown regardless — which is
+   worse than never putting it away, because everything says it worked. */
+[hidden] {
+	display: none !important;
+}
+
 table {
 	border-collapse: collapse;
 	font-size: 0.95rem;

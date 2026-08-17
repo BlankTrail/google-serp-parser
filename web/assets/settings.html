@@ -66,11 +66,16 @@
 </div>
 <div class="field">
 <label for="source_at">{{.T "settings.source.at"}}</label>
+{{/* The chooser stands beside the box and not under it. Boxes on one line are
+     lined up by their feet, so a box with something under it stands a line
+     higher than the ones next to it and the line reads as broken. */}}
+<span class="beside">
 <input id="source_at" name="source_at" size="34" value="{{.Form.Where}}">
 {{/* The chooser is a link rather than a button: it leaves the form to look at
      this machine, and a form that submitted to get there would save settings
      nobody had finished filling in. */}}
 <a href="/settings/browse">{{.T "settings.source.choose"}}</a>
+</span>
 </div>
 <div class="field">
 <label for="source_refresh">{{.T "settings.source.refresh"}}</label>
@@ -115,6 +120,13 @@
 </div>
 </fieldset>
 
+{{/* Two presses: save what is on the screen, and check it without saving it.
+     The check carries the same boxes to a different address rather than living
+     in a form of its own, so what is checked is what is on the screen. */}}
+<div class="actions">
+<button type="submit">{{.T "settings.save"}}</button>
+<button type="submit" formaction="/settings/check">{{.T "settings.check"}}</button>
+</div>
 
 </form>
 {{end}}
