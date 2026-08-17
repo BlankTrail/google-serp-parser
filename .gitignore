@@ -2,6 +2,10 @@
 /bin/
 /dist/
 *.exe
+# What a build leaves behind when it cannot replace a binary that is running:
+# the old one is renamed out of the way rather than removed. It is the same
+# twenty megabytes as the file above and just as much not source.
+*.exe~
 *.syso
 
 # runtime data
@@ -14,6 +18,10 @@
 /config.yaml
 /proxies.txt
 *.local.yaml
+# What the interface writes when somebody saves settings. It holds the key to
+# the service, and it is written next to the program, which on a developer's
+# machine is next to this file.
+gserp-settings.json
 
 # exports
 /out/

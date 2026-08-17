@@ -1,20 +1,24 @@
 {{define "main"}}
 <h1>{{.T "browse.title"}}</h1>
 
-{{/* The directory being shown is the one thing this page is about, so it is
-     said before anything else and in full: a chooser that shows names without
-     saying where they are is one you can get lost in. */}}
+{{/* Where the reader is, counted from the program's own directory. A chooser
+     that shows names without saying where they are is one you can get lost in,
+     and a chooser that shows the machine's own path is telling somebody
+     something they did not ask about and cannot use. */}}
 <p class="where">{{.At}}</p>
 
 {{if .Complaint}}
 <ul class="faults"><li>{{.Complaint}}</li></ul>
 {{end}}
 
+{{/* The listing scrolls within itself rather than running the page down. A
+     directory of five hundred entries is a page nobody can see the bottom of,
+     and the way back to the settings is at that bottom. */}}
 <ul class="browse">
-{{if .Up}}<li><a href="/settings/browse?at={{.Up}}">{{.T "browse.up"}}</a></li>{{end}}
-{{range .Folders}}<li><a href="/settings/browse?at={{.Path}}">{{.Name}}/</a></li>
+{{if .Up}}<li class="folder"><a href="/settings/browse?at={{.Up}}">{{.T "browse.up"}}</a></li>{{end}}
+{{range .Folders}}<li class="folder"><a href="/settings/browse?at={{.Path}}">{{.Name}}</a></li>
 {{end}}
-{{range .Files}}<li><a href="/settings?source_at={{.Path}}">{{.Name}}</a></li>
+{{range .Files}}<li class="list"><a href="/settings?source_at={{.Path}}">{{.Name}}</a></li>
 {{end}}
 </ul>
 

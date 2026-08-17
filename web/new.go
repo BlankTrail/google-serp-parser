@@ -76,6 +76,17 @@ const defaultTries = 30
 // opposite things.
 const choseField = "chose"
 
+// defaultCountry and defaultLanguage are what a new job asks Google for.
+//
+// They are written here rather than left to Google because an unqualified
+// search is answered from what Google works out about the identity making it,
+// and a pool holds identities in many places: the same list would then come
+// back as a different page each run, with nothing on the page saying so.
+const (
+	defaultCountry  = "us"
+	defaultLanguage = "en"
+)
+
 func blankForm() jobForm {
 	return jobForm{
 		Name: time.Now().Format("2006-01-02 15:04"),
@@ -85,7 +96,20 @@ func blankForm() jobForm {
 		Kind: store.KindParse,
 		// Typed in, because that is what somebody opening this page has in hand;
 		// a file is chosen by somebody who already has one.
-		From:    fromBox,
+		From: fromBox,
+		// The English-language results, asked for plainly. Google answers an
+		// unqualified search with whatever it works out about where the request
+		// came from, so the same list run twice through two identities comes back
+		// as two different pages — and nothing on the page says why. Naming the
+		// country and the language makes the answer the same one every time, and
+		// it is the answer nearly everybody opening this page came for.
+		Country:  defaultCountry,
+		Language: defaultLanguage,
+		// SpecName is left out on purpose, and is the one box here with no answer
+		// that is right for everybody: it names a template on the operator's own
+		// service, so any name written in would be one most machines do not have,
+		// and a job asking for a template that is not there fails on every query.
+		// Empty means whatever the pool opened.
 		Pages:   1,
 		Threads: 2,
 		Ports:   6,

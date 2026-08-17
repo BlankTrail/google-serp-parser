@@ -372,6 +372,17 @@ func (s *Server) checkConnection(w http.ResponseWriter, r *http.Request) {
 			Action:   f.Action,
 		})
 	}
+	// A check that found nothing has to say what that means. The check reports a
+	// service that will not answer, a key that was refused and a licence that is
+	// not active, so nothing to report is the connection working — and a page
+	// that says only "nothing to report" reads as a button that did nothing.
+	if len(view.Checked) == 0 {
+		view.Checked = append(view.Checked, findingView{
+			Severity: severityKeys[blanktrail.SeverityOK],
+			Title:    lang.T("settings.check.good"),
+			Detail:   lang.T("settings.check.good.detail"),
+		})
+	}
 	s.showSettings(w, r, lang, view)
 }
 

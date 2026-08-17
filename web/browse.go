@@ -31,12 +31,33 @@ const browseLimit = 500
 // no business helping with.
 var listSuffixes = []string{".txt", ".list", ".csv"}
 
+// programDir is the directory this program is in, which is as far up as the
+// chooser goes.
+//
+// Where a program is, is something only the system can say. When it will not
+// say, the working directory is used: it is where a program started by hand
+// nearly always is, and a chooser that opened nowhere would be a page that does
+// not work rather than one that shows a little less.
+func programDir() string {
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		return filepath.Dir(exe)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
+}
+
 // browseView is one directory, as far as this page is concerned.
 type browseView struct {
 	page
-	// At is the directory being shown, always absolute: everything on the page
-	// is built from it, and a relative one would mean something different to the
-	// program than to the reader.
+	// At is the directory being shown, as it reads from the root — the program's
+	// own directory. The reader is choosing among what was put beside the
+	// program, so the program is where the path starts; the machine's own
+	// arrangement above that is neither theirs to walk nor this page's to show.
 	At string
 	// Up is the directory above, empty at the root. It is a field rather than
 	// something the template works out, because the root is the one place where
@@ -60,7 +81,7 @@ type browseEntry struct {
 	Path string
 }
 
-// browse lists one directory of this machine so a path can be chosen by
+// browse lists one directory beside this program so a path can be chosen by
 // clicking rather than typed.
 //
 // It reads nothing and changes nothing: it lists names. The file it chooses is
@@ -70,11 +91,12 @@ type browseEntry struct {
 func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
 
-	at := startFrom(r.URL.Query().Get("at"), s.savedListPath())
+	root := s.browseRoot
+	at := startFrom(r.URL.Query().Get("at"), s.savedListPath(), root)
 	view := browseView{
 		page: s.frame(r, lang, "browse.title", settingsAt),
-		At:   at,
-		Up:   above(at),
+		At:   shownFrom(root, at),
+		Up:   above(at, root),
 	}
 
 	entries, err := os.ReadDir(at)
@@ -89,39 +111,63 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "browse.html", view)
 }
 
-// startFrom settles which directory to show.
+// startFrom settles which directory to show, and never leaves the root.
 //
 // The asked-for path is made absolute before anything is done with it, and it is
-// the absolute one that is used everywhere after: a check on the path as it
-// arrived would be a check on something other than what is read.
-func startFrom(asked, saved string) string {
+// the absolute one that is checked and used: a check on the path as it arrived
+// would be a check on something other than what is read. Anything outside the
+// root — a path typed into the address bar, a saved file that has since moved —
+// is answered with the root itself rather than with a refusal, because the
+// reader asked to choose a file and the root is where they choose it.
+func startFrom(asked, saved, root string) string {
 	if asked == "" {
-		if saved != "" {
-			asked = filepath.Dir(saved)
-		} else if home, err := os.UserHomeDir(); err == nil {
-			asked = home
-		}
+		asked = filepath.Dir(saved)
 	}
 	abs, err := filepath.Abs(asked)
 	if err != nil {
 		// Abs fails only when the working directory cannot be read, and a chooser
 		// that gave up there would be a page that never opens.
-		return filepath.Clean(asked)
+		abs = filepath.Clean(asked)
+	}
+	if !within(root, abs) {
+		return root
 	}
 	return abs
 }
 
+// within reports whether a path is the root or something under it.
+//
+// It compares whole names rather than text: a directory beside the root whose
+// name merely starts the same way is not inside it, and a prefix test would say
+// it was.
+func within(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel))
+}
+
+// shownFrom is a path as the reader is shown it: from the root, which is where
+// their choosing starts.
+func shownFrom(root, at string) string {
+	rel, err := filepath.Rel(root, at)
+	if err != nil || rel == "." {
+		return string(filepath.Separator)
+	}
+	return string(filepath.Separator) + filepath.ToSlash(rel)
+}
+
 // above is the directory one step up, and empty at the root.
 //
-// The root is where walking up stops, and it is told by asking rather than by
-// counting separators: what a root looks like differs between systems, and a
-// path that has run out answers with itself.
-func above(at string) string {
-	up := filepath.Dir(at)
-	if up == at {
+// Walking up stops at the root rather than at the machine's own: this chooser
+// is for what sits beside the program, and the way out of the top of it is the
+// link back to the settings.
+func above(at, root string) string {
+	if !within(root, filepath.Dir(at)) {
 		return ""
 	}
-	return up
+	return filepath.Dir(at)
 }
 
 // split sorts a directory's entries into the folders to walk into and the files

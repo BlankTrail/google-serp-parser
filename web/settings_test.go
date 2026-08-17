@@ -825,3 +825,40 @@ func TestSettings_OffersTheAddressNearlyEverybodyNeeds(t *testing.T) {
 			settings.Defaults().ControlURL, body)
 	}
 }
+
+func TestCheckConnection_SaysSoWhenThereIsNothingWrong(t *testing.T) {
+	// The check only speaks when something is wrong, so a connection with nothing
+	// wrong with it produced a page saying the check had nothing to report —
+	// which reads as a button that did nothing, on the one page where a reader
+	// most needs to know whether they are set up.
+	fake := fakebt.New(t)
+	fake.SetCA(testCA(t))
+	s, _ := serverWithSettings(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	body := postBody(t, s, checkAt, url.Values{"control_url": {fake.URL()}})
+
+	if !strings.Contains(body, LangEN.T("settings.check.good")) {
+		t.Errorf("a connection with nothing wrong with it is not reported as working:\n%s", body)
+	}
+	// And it is reported as a passing line rather than as one more thing to look
+	// at: a reader tells those apart by that word and by nothing else.
+	if !strings.Contains(body, LangEN.T("settings.finding.ok")) {
+		t.Errorf("the line is not marked as one that passed:\n%s", body)
+	}
+	if strings.Contains(body, LangEN.T("settings.finding.fail")) {
+		t.Errorf("a connection with nothing wrong with it carries a failure:\n%s", body)
+	}
+}
+
+func TestCheckConnection_KeepsSayingWhatIsWrongWhenSomethingIs(t *testing.T) {
+	// The line above must not be added on top of real findings, or every failed
+	// check would also report that the connection works.
+	s, _ := serverWithSettings(t, settings.Defaults())
+	body := postBody(t, s, checkAt, url.Values{"control_url": {"http://127.0.0.1:1"}})
+
+	if strings.Contains(body, LangEN.T("settings.check.good")) {
+		t.Errorf("a connection that answered nothing is reported as working:\n%s", body)
+	}
+	if !strings.Contains(body, LangEN.T("settings.finding.fail")) {
+		t.Errorf("a connection that answered nothing is not reported as a failure:\n%s", body)
+	}
+}

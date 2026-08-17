@@ -713,3 +713,42 @@ func TestStyle_LeavesHiddenMeaningHidden(t *testing.T) {
 		t.Errorf("the rule for a hidden element loses to the rules above it: %q", rule)
 	}
 }
+
+func TestNewForm_AsksGoogleForOneAnswerRatherThanWhicheverTheIdentitySuggests(t *testing.T) {
+	// An unqualified search is answered from what Google works out about the
+	// identity making it, and a pool holds identities in many places. Left blank,
+	// the same list comes back as a different page each run and nothing on the
+	// page says why.
+	form := blankForm()
+	if form.Country == "" || form.Language == "" {
+		t.Fatalf("a new job asks for country %q and language %q, so its results are "+
+			"whatever the identity happened to suggest", form.Country, form.Language)
+	}
+
+	// And they reach the boxes, since a default nothing carries onto the page is
+	// a default nobody has.
+	body := get(t, testServer(t), "/new").Body.String()
+	for _, box := range []struct{ name, want string }{
+		{"country", form.Country},
+		{"language", form.Language},
+	} {
+		tag := openingTag(t, body, `input id="`+box.name+`"`)
+		if !strings.Contains(tag, `value="`+box.want+`"`) {
+			t.Errorf("the %s box does not hold %q: <%s>", box.name, box.want, tag)
+		}
+	}
+}
+
+func TestNewForm_LeavesTheProfileEmptyBecauseNoNameIsRightOnEveryMachine(t *testing.T) {
+	// The profile names a template on the operator's own service. Any name filled
+	// in here would be one most machines do not have, and a job asking for a
+	// template that is not there fails on every query it makes.
+	if form := blankForm(); form.SpecName != "" {
+		t.Errorf("a new job asks for the profile %q, which is a name this machine "+
+			"may not have", form.SpecName)
+	}
+	tag := openingTag(t, get(t, testServer(t), "/new").Body.String(), `input id="spec"`)
+	if !strings.Contains(tag, `value=""`) {
+		t.Errorf("the profile box is not empty: <%s>", tag)
+	}
+}

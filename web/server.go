@@ -88,6 +88,15 @@ type Server struct {
 	// the supervisor takes, so that everything below this line talks about the
 	// same thing whether it came from a pool or from a stand-in.
 	connect Connect
+	// browseRoot is as far up as the file chooser goes. It is the directory this
+	// program is in, so a reader picks a list from what was put beside the
+	// program and nothing else: a chooser that walks the whole machine is a way
+	// of reading what a machine holds through a page that has no business
+	// offering it.
+	//
+	// A field so a test can name a directory of its own, since where a test
+	// binary sits is not something a test can arrange.
+	browseRoot string
 	// now is where this server reads the clock. It is a field so that a test can
 	// hold the clock still: how long a job has been running is a number on the
 	// screen, and a test that could not name the instant could only check that
@@ -119,6 +128,7 @@ func New(cfg Config) (*Server, error) {
 		mux:          http.NewServeMux(),
 		now:          time.Now,
 		settingsPath: cfg.SettingsPath,
+		browseRoot:   programDir(),
 	}
 	if s.log == nil {
 		s.log = slog.Default()

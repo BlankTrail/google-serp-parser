@@ -301,12 +301,31 @@
 		}
 	}
 
+	// The settings offer to look through the folders beside this program for a
+	// list of addresses, which is an offer only worth making when the addresses
+	// are read from a file at all. Left up, it is a link that leads somewhere the
+	// reader has no use for and then back again.
+	function shapeSettings(root) {
+		var source = root.querySelector("[name=source]");
+		var chooser = root.querySelector('a[href="/settings/browse"]');
+		if (!source || !chooser) {
+			return;
+		}
+		var apply = function () {
+			chooser.hidden = source.value !== "file";
+		};
+		source.addEventListener("change", apply);
+		apply();
+	}
+
 	shape(document);
+	shapeSettings(document);
 
 	// A form that arrived with a swapped screen has to be shaped as well, or it
 	// is the one screen where this works only on a reload.
 	window.addEventListener("gserp:screen", function () {
 		shape(document);
+		shapeSettings(document);
 	});
 
 	watch();

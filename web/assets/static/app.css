@@ -348,6 +348,65 @@ legend {
 	gap: 0.25rem;
 }
 
+/* Where the reader is in the chooser, counted from the program's directory.
+   It is set apart from the listing under it because it is the one line saying
+   what the listing is a listing of. */
+.where {
+	color: var(--quiet);
+	font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+	font-size: var(--small);
+	margin: 0 0 0.75rem;
+	overflow-wrap: anywhere;
+}
+
+/* The chooser's listing. It scrolls within itself: a directory of five hundred
+   entries would otherwise run the page down past the way back out of it. */
+.browse {
+	background: var(--sunken);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-card);
+	list-style: none;
+	margin: 0 0 0.75rem;
+	max-height: 24rem;
+	overflow-y: auto;
+	padding: 0;
+}
+
+.browse li {
+	border-bottom: var(--hairline-width) solid var(--hairline);
+}
+
+.browse li:last-child {
+	border-bottom: 0;
+}
+
+/* The whole row answers to a press, not the few characters of the name: a name
+   three letters long is a target nobody can hit. */
+.browse a {
+	display: block;
+	overflow-wrap: anywhere;
+	padding: 0.45rem 0.7rem;
+	text-decoration: none;
+}
+
+.browse a:hover,
+.browse a:focus-visible {
+	background: var(--surface);
+}
+
+/* A folder is walked into and a list is chosen, and those are different acts.
+   The mark is a character rather than a colour, because that is the difference
+   somebody sees when they cannot tell colours apart. */
+.browse .folder a::before {
+	color: var(--quiet);
+	content: "📁\00a0";
+}
+
+.browse .list a::before {
+	color: var(--quiet);
+	content: "📄\00a0";
+}
+
 /* A box with something to press beside it, on the one line. Under it, the box
    would stand a line higher than every box next to it. */
 .beside {
