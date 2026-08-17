@@ -1407,9 +1407,50 @@ func TestLiveSettings_LeavesTheJobInFlightOnThePoolItRaised(t *testing.T) {
 	// starts through what was saved. What is worth measuring is that: the job
 	// goes on, and the one after it comes up on the new connection.
 	//
-	// It is left unwritten until the live run of Task 8 gives it numbers. What
-	// stands here is what it is for, so nobody has to guess later.
-	t.Skip("rewritten for a pool per job in Task 8, where it is measured")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+	defer cancel()
+
+	base, _, sup := liveSettingsServer(ctx, t)
+	cl := browser()
+	control, _, listURL := liveEnv(t)
+
+	started := time.Now()
+	res := submit(t, cl, base+newAt, shortLiveJob("running while the settings change"))
+	if res.StatusCode != http.StatusSeeOther {
+		fatalf(t, "starting the job came back %d: %s", res.StatusCode, body(t, res))
+	}
+	id := jobIDIn(t, res)
+	waitUntilLive(t, ctx, "the job to be running", func() bool {
+		running, ok := sup.Running()
+		return ok && running == id
+	})
+	logf(t, "MEASUREMENT settings: the job was running %v after the form went",
+		time.Since(started).Round(time.Second))
+
+	// One port where the job above came up on eight, so what the next job comes
+	// up on cannot be mistaken for what this one is running on.
+	saved := time.Now()
+	res = submit(t, cl, base+settingsAt, liveSettingsPost(control, listURL, 1))
+	page := body(t, res)
+	if res.StatusCode != http.StatusSeeOther {
+		fatalf(t, "saving the settings came back %d: %s", res.StatusCode, page)
+	}
+	logf(t, "MEASUREMENT settings: the save came back in %v and asked nothing",
+		time.Since(saved).Round(time.Millisecond))
+
+	if running, ok := sup.Running(); !ok || running != id {
+		errorf(t, "running=%d,%v — saving the settings took the job down", running, ok)
+	}
+	if strings.Contains(page, "settings.running") {
+		errorf(t, "the page still asks what to do about the running job")
+	}
+
+	at := base + jobPath(id)
+	waitUntilLive(t, ctx, "the job to finish on the pool it raised", func() bool {
+		return !jobPageAt(t, cl, at).watching
+	})
+	logf(t, "MEASUREMENT settings: the job ran to the end %v after the save: %s",
+		time.Since(saved).Round(time.Second), jobPageAt(t, cl, at))
 }
 
 // liveIndexTargets are ten pages whose answer somebody can check by opening
