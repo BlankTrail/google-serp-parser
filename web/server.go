@@ -64,6 +64,18 @@ type Config struct {
 	// server built without one saves settings and takes none of them into use
 	// until it is started again.
 	Connect Connect
+	// Standing brings the identities this machine keeps warm to the number and
+	// the kind of result page just saved: opening them, growing or shrinking the
+	// set, or closing it when the answer is none.
+	//
+	// It is here rather than done in this package because opening identities is
+	// the command's business — it knows the connection, the list of addresses and
+	// the check that runs before any of it. What this package knows is when
+	// somebody pressed save.
+	//
+	// A server built without one saves the number and keeps whatever it started
+	// with, which is what a history being read on another machine gets.
+	Standing Standing
 }
 
 // Connect opens what jobs are run on, from the settings just saved.
@@ -73,6 +85,13 @@ type Config struct {
 // starts this server. A browser interface with a second opinion about that would
 // give a job set up here a different cost from the same job set up there.
 type Connect func(ctx context.Context, saved settings.Settings, ports, threads int, device string) (*blanktrail.Pool, error)
+
+// Standing brings the set of identities kept warm to what was just saved.
+//
+// It is called after the settings are written and before anything is told they
+// have changed, so a job starting in that moment finds the set it was promised
+// rather than the one before it.
+type Standing func(ctx context.Context, saved settings.Settings) error
 
 // Server is the browser interface.
 type Server struct {
@@ -88,6 +107,9 @@ type Server struct {
 	// the supervisor takes, so that everything below this line talks about the
 	// same thing whether it came from a pool or from a stand-in.
 	connect Connect
+	// standing brings the identities kept warm to what was last saved, and is nil
+	// on a server that keeps none.
+	standing Standing
 	// browseRoot is as far up as the file chooser goes. It is the directory this
 	// program is in, so a reader picks a list from what was put beside the
 	// program and nothing else: a chooser that walks the whole machine is a way
@@ -137,6 +159,7 @@ func New(cfg Config) (*Server, error) {
 	// supervisor, at the size that job asked for — so there is nothing left here
 	// to wrap a pool into.
 	s.connect = cfg.Connect
+	s.standing = cfg.Standing
 	s.routes()
 	return s, nil
 }

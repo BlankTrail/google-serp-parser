@@ -130,8 +130,9 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 
 	// Closed before the history, because a job it ends is written down as it
 	// lets go of it. Close waits for that.
-	sup, pool := opts.jobs(ctx, out, st)
+	sup, warm := opts.jobs(ctx, out, st)
 	defer func() { _ = sup.Close() }()
+	defer func() { _ = warm.Close() }()
 
 	log := opts.logger(os.Stderr)
 	pages, err := web.New(web.Config{
@@ -140,12 +141,17 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 		Supervisor:   sup,
 		SettingsPath: opts.settingsPath(),
 		Connect:      opts.connect,
+		// What a saved number of warm identities does, at the moment it is saved
+		// rather than at the next start.
+		Standing: func(ctx context.Context, saved settings.Settings) error {
+			return warm.bring(ctx, saved.HotPorts, deviceOr(saved.HotDevice))
+		},
 	})
 	if err != nil {
 		_ = ln.Close()
 		return err
 	}
-	programs, err := opts.programmable(st, log, sup, pool)
+	programs, err := opts.programmable(st, log, sup, warm)
 	if err != nil {
 		_ = ln.Close()
 		return err
@@ -168,7 +174,7 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 // a time however that job was asked for. Two of either would be two products in
 // one process, agreeing on nothing but the port.
 func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
-	sup *web.Supervisor, pool *blanktrail.Pool) (*api.Server, error) {
+	sup *web.Supervisor, warm *warmSet) (*api.Server, error) {
 	cfg := api.Config{Store: st, Logger: log}
 	// A supervisor that was never built is left out rather than passed on. The
 	// interface asks whether it has a queue at all, and a pointer that is nil put
@@ -183,10 +189,13 @@ func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
 	// raises its own and takes it down again, and an address that answered only
 	// while a job happened to be running would be an address nobody could build
 	// anything on. How large it is belongs in the settings and is not there yet.
-	if pool != nil {
+	// The identities kept warm are what a search answered inside a request goes
+	// through. A machine keeping none answers that address with a refusal rather
+	// than opening a pool per request, which is what that address was never for.
+	if pool := warm.Pool(); pool != nil {
 		cfg.Search = api.SearchConfig{
 			Searcher: &run.Attempt{Pool: pool},
-			Ports:    o.Threads * o.Ports,
+			Ports:    pool.Stats().Ports,
 		}
 	}
 	return api.New(cfg)
@@ -239,7 +248,7 @@ func mount(pages, programs http.Handler) http.Handler {
 // shell history and in the process list of everyone on the machine. It is also
 // read from the settings, because a connection set up in a browser that had to
 // be set up again after every restart is one nobody would trust.
-func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) (*web.Supervisor, *blanktrail.Pool) {
+func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) (*web.Supervisor, *warmSet) {
 	saved, configured := o.saved(out)
 	threads, ports := o.runOn(saved, configured)
 
@@ -249,68 +258,38 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	// interface would be running on one connection and reporting another.
 	fromEnv := os.Getenv(envAPIKey) != ""
 
-	// What the standing pool is for, and how large it is. A machine that keeps
-	// identities warm holds them here: the search answered inside a request goes
-	// through them, and so does every job of the same kind of result page, which
-	// grows this pool to its own size and gives the growth back when it ends.
-	//
-	// Nought is off, and off is one pool of the size this server was started at,
-	// closed and reopened by every job — which is what this program did until
-	// there was a choice.
-	hotDevice := saved.HotDevice
-	if hotDevice == "" {
-		hotDevice = blanktrail.DeviceDesktop
-	}
-	standing := saved.HotPorts
-
-	var pool *blanktrail.Pool
-	var err error
-	switch {
-	case fromEnv:
-		pool, err = openPool(ctx, out, poolConfig(threads, ports))
-	case saved.APIKey != "":
-		// The pool this server keeps standing is the one a search answered inside a
-		// request goes through, and a search has no job behind it to have chosen a
-		// kind of result page. It is the kind the standing set was asked for, and
-		// a desktop where nobody asked for one.
-		if standing > 0 {
-			pool, err = o.dial(ctx, saved, 1, standing, hotDevice)
-			break
+	warm := &warmSet{log: o.logger(os.Stderr)}
+	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, error) {
+		if fromEnv {
+			cfg := poolConfig(1, want)
+			cfg.Specs = blanktrail.SpecsFor(device)
+			return openPool(ctx, io.Discard, cfg)
 		}
-		pool, err = o.dial(ctx, saved, threads, ports, blanktrail.DeviceDesktop)
-	default:
+		return o.dial(ctx, saved, 1, want, device)
+	}
+
+	if saved.APIKey == "" && !fromEnv {
 		_, _ = fmt.Fprintf(out,
 			"%s is not set and no connection has been saved: this interface shows the history and runs nothing until the connection is set up in it\n",
 			envAPIKey)
-		return web.NewSupervisorWithoutAPool(st), nil
+		return web.NewSupervisorWithoutAPool(st), warm
 	}
-	if err != nil {
+
+	// The identities this machine keeps open and warm. They are what the search
+	// answered inside a request goes through, and what every job of the same kind
+	// of result page runs on, grown to that job's size and shrunk back when it
+	// ends. None is a machine that opens a pool for each job from cold, which is
+	// what this program did until there was a choice.
+	if err := warm.bring(ctx, saved.HotPorts, deviceOr(saved.HotDevice)); err != nil {
 		_, _ = fmt.Fprintf(out,
-			"no ports could be opened, so this interface shows the history and runs nothing until the connection is set up in it: %s\n",
+			"the identities to keep warm could not be opened, so this interface shows the history and runs nothing until the connection is set up in it: %s\n",
 			o.clean(err.Error()))
 		_, _ = fmt.Fprintln(out, "gserp doctor prints the whole report")
-		return web.NewSupervisorWithoutAPool(st), nil
+		return web.NewSupervisorWithoutAPool(st), warm
 	}
-	// The two numbers are what a job that named no size runs at, and this is
-	// where that stands in: they are the sizes this server was started with — the
-	// -threads and -ports flags, or what a settings file the caller left the flags
-	// alone for overrode them with. Every job written down before jobs carried
-	// sizes reads back as nought, and the size this machine was started at is the
-	// only one anybody on it has actually chosen.
-	// Kept warm from here on, if this machine keeps any. The warmer runs for as
-	// long as the server does and stops with it: what it does is one dull search
-	// through a port nothing has used for a quarter of an hour, which is the
-	// least that keeps an identity recognised.
-	if standing > 0 && pool != nil {
-		// Said out loud, because a pool is a pool: this is what makes these ports
-		// the machine's rather than the next job's, and what keeps a job from
-		// closing them on its way out.
-		pool.KeepWarm()
-		go (&run.Warmer{
-			Pool: pool, Log: o.logger(os.Stderr),
-			Country: warmingCountry, Language: warmingLanguage,
-		}).Run(ctx)
-		_, _ = fmt.Fprintf(out, "%d identities are being kept warm for %s results\n", standing, hotDevice)
+	if saved.HotPorts > 0 {
+		_, _ = fmt.Fprintf(out, "%d identities are being kept warm for %s results\n",
+			saved.HotPorts, deviceOr(saved.HotDevice))
 	}
 
 	// The two numbers are what a job that named no size runs at, and this is
@@ -319,14 +298,7 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	// alone for overrode them with. Every job written down before jobs carried
 	// sizes reads back as nought, and the size this machine was started at is the
 	// only one anybody on it has actually chosen.
-	standingPool := pool
-	if standing == 0 {
-		// Without a standing set the pool above belongs to the search address
-		// alone. A job handed it would shrink nothing on the way out and hold
-		// somebody else's identities for the length of the run.
-		standingPool = nil
-	}
-	return web.NewSupervisor(st, o.raise(saved, fromEnv, standingPool, hotDevice), ports, threads), pool
+	return web.NewSupervisor(st, o.raise(saved, fromEnv, warm), ports, threads), warm
 }
 
 // The country and language a warming request asks for. They are the same
@@ -336,6 +308,16 @@ const (
 	warmingCountry  = "us"
 	warmingLanguage = "en"
 )
+
+// deviceOr is the kind of result page asked for, and a desktop where nobody
+// asked. It is one function because the answer to an empty choice has to be the
+// same everywhere it is read.
+func deviceOr(device string) string {
+	if device == "" {
+		return blanktrail.DeviceDesktop
+	}
+	return device
+}
 
 // raise is how one job's own pool is opened.
 //
@@ -357,8 +339,7 @@ const (
 // goroutine writing to a stream this command's caller owns. The refusal comes
 // back as an error, and the queue puts it in the log against the job it belongs
 // to.
-func (o serveOptions) raise(saved settings.Settings, fromEnv bool,
-	standing *blanktrail.Pool, hotDevice string) web.OpenPool {
+func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet) web.OpenPool {
 	return func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
 		// A job of the kind the standing identities were opened for runs on them,
 		// grown to its own size. It gives the growth back when it ends and the
@@ -366,13 +347,10 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool,
 		//
 		// A job of the other kind opens its own from cold: a phone's results are
 		// not a desktop's, and an identity cannot be both.
-		if standing != nil && device == hotDevice {
-			if extra := ports*threads - standing.Stats().Ports; extra > 0 {
-				if err := standing.Grow(ctx, extra); err != nil {
-					return nil, err
-				}
-			}
-			return standing, nil
+		if pool, mine, err := warm.raiseFor(ctx, ports, threads, device); err != nil {
+			return nil, err
+		} else if mine {
+			return pool, nil
 		}
 		if fromEnv {
 			cfg := poolConfig(threads, ports)
@@ -674,4 +652,147 @@ func (o serveOptions) checked(ctx context.Context, client *blanktrail.Client, si
 	lastCheck.at, lastCheck.ca, lastCheck.size = time.Now(), report.CA, size
 	lastCheck.mu.Unlock()
 	return report, nil
+}
+
+// warmSet is the identities this machine keeps open and warm, and the one thing
+// that knows how many there are.
+//
+// It is a value the server holds rather than a pool passed about, because the
+// number can change while the program runs: somebody types ten into the
+// settings and presses save, and what has to happen then is opening ten ports —
+// not writing ten down for the next start.
+//
+// The pool inside it is never replaced, only grown and shrunk. The synchronous
+// search holds it from the moment the server was built, and a pool swapped
+// underneath that would leave the search answering through identities nobody
+// keeps warm.
+type warmSet struct {
+	mu     sync.Mutex
+	pool   *blanktrail.Pool
+	device string
+	// stop ends the warmer that is keeping this set warm, and is nil when none
+	// is running.
+	stop context.CancelFunc
+	// dial opens a pool of a given size and kind, and log is where a warming
+	// that did not get through is reported.
+	dial func(ctx context.Context, ports int, device string) (*blanktrail.Pool, error)
+	log  *slog.Logger
+}
+
+// Pool is what the set holds, for the search that answers inside a request.
+func (w *warmSet) Pool() *blanktrail.Pool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.pool
+}
+
+// raiseFor hands a job the standing pool grown to its size, or nothing when the
+// job asks for the other kind of result page.
+func (w *warmSet) raiseFor(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, bool, error) {
+	w.mu.Lock()
+	pool, kind := w.pool, w.device
+	w.mu.Unlock()
+	if pool == nil || device != kind {
+		return nil, false, nil
+	}
+	if extra := ports*threads - pool.Stats().Ports; extra > 0 {
+		if err := pool.Grow(ctx, extra); err != nil {
+			return nil, false, err
+		}
+	}
+	return pool, true, nil
+}
+
+// bring makes the set what the settings now say: so many identities of such a
+// kind, warmed and kept warm.
+//
+// Every case is one of four, and each is what it sounds like: none wanted and
+// none held does nothing; none wanted and some held gives them back; a kind that
+// has changed is a different set of identities and the old ones go; and a number
+// that has changed grows or shrinks what is there.
+func (w *warmSet) bring(ctx context.Context, want int, device string) error {
+	w.mu.Lock()
+	pool, kind, stop := w.pool, w.device, w.stop
+	w.mu.Unlock()
+
+	if want <= 0 || (pool != nil && device != kind) {
+		if stop != nil {
+			stop()
+		}
+		if pool != nil {
+			// Closed whole, standing marks and all: these are no longer the
+			// identities this machine keeps, and a shrink would leave them open
+			// with nothing warming them.
+			_ = pool.Close()
+		}
+		w.mu.Lock()
+		w.pool, w.device, w.stop = nil, "", nil
+		w.mu.Unlock()
+		if want <= 0 {
+			return nil
+		}
+		pool = nil
+	}
+
+	if pool == nil {
+		opened, err := w.dial(ctx, want, device)
+		if err != nil {
+			return err
+		}
+		opened.KeepWarm()
+		w.start(opened, device)
+		return nil
+	}
+
+	// The same kind, a different number. Grown ports are standing ones too: the
+	// set is what this machine keeps, and half of it kept and half given back to
+	// the next job would be a number nobody could read off the screen.
+	switch have := pool.Stats().Ports; {
+	case want > have:
+		if err := pool.Grow(ctx, want-have); err != nil {
+			return err
+		}
+		// Grown ports are standing ones too: the set is what this machine keeps,
+		// and half of it kept and half given back to the next job would be a
+		// number nobody could read off the screen.
+		pool.KeepWarm()
+	case want < have:
+		if _, err := pool.ReduceTo(ctx, want); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// start puts a pool in place and sets a warmer on it, ending whatever warmer was
+// there before.
+func (w *warmSet) start(pool *blanktrail.Pool, device string) {
+	ctx, stop := context.WithCancel(context.Background())
+	w.mu.Lock()
+	if w.stop != nil {
+		w.stop()
+	}
+	w.pool, w.device, w.stop = pool, device, stop
+	log := w.log
+	w.mu.Unlock()
+
+	go (&run.Warmer{
+		Pool: pool, Log: log,
+		Country: warmingCountry, Language: warmingLanguage,
+	}).Run(ctx)
+}
+
+// Close gives up the identities and stops warming them.
+func (w *warmSet) Close() error {
+	w.mu.Lock()
+	pool, stop := w.pool, w.stop
+	w.pool, w.stop = nil, nil
+	w.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	if pool == nil {
+		return nil
+	}
+	return pool.Close()
 }

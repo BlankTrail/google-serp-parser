@@ -1307,9 +1307,9 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 	at := filepath.Join(t.TempDir(), "gserp-settings.json")
 	if err := settings.Save(at, settings.Settings{
 		ControlURL: control, APIKey: key,
-		SearchPorts: livePorts,
-		Cooldown:    2 * time.Second,
-		Proxy:       settings.ProxySource{Kind: sourceURL, Location: listURL},
+		HotPorts: livePorts,
+		Cooldown: 2 * time.Second,
+		Proxy:    settings.ProxySource{Kind: sourceURL, Location: listURL},
 	}); err != nil {
 		fatalf(t, "writing the settings down: %v", err)
 	}
@@ -1380,7 +1380,7 @@ func liveSettingsPost(control, listURL string, ports int) url.Values {
 	return url.Values{
 		urlField:     {control},
 		keyField:     {""},
-		searchField:  {strconv.Itoa(ports)},
+		hotField:     {strconv.Itoa(ports)},
 		pauseField:   {"2"},
 		sourceField:  {sourceURL},
 		whereField:   {listURL},

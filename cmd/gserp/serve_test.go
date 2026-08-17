@@ -353,10 +353,11 @@ func TestServe_HandsTheSearchInsideARequestAPoolOfThisServersOwn(t *testing.T) {
 	// every request on it with one sentence, and from the outside looks exactly
 	// like one that works.
 	//
-	// The identities are this server's own and not any job's. A job raises its
-	// pool when its turn comes and takes it down when it ends, so an address
-	// borrowing that would answer only while somebody happened to be running
-	// something.
+	// The identities are the ones this machine keeps warm. A job raises its own
+	// and takes them down when it ends, so an address borrowing those would
+	// answer only while somebody happened to be running something — which is why
+	// this address answers through the standing set and is off when none is
+	// kept.
 	//
 	// What stands where the identities go answers the control API and nothing
 	// else, so this search reaches no network and comes back with no results.
@@ -368,6 +369,8 @@ func TestServe_HandsTheSearchInsideARequestAPoolOfThisServersOwn(t *testing.T) {
 	t.Setenv(envProxyList, "")
 
 	secret, db := keyIn(t)
+	// One identity kept warm, which is what this address answers through.
+	saveSettingsBeside(t, db, settings.Settings{HotPorts: 1})
 	at := servedAt(t, serveOptions{DB: db, Threads: 1, Ports: 1})
 
 	// The search is hung up on rather than waited out. Reaching an identity that
@@ -472,7 +475,7 @@ func TestServe_OpensThePortsAConnectionSavedInTheBrowserDescribes(t *testing.T) 
 	t.Setenv(envAPIKey, "")
 	t.Setenv(envProxyList, "")
 	opts := configured(t, settings.Settings{
-		ControlURL: fake.URL(), APIKey: fake.Key(), SearchPorts: 1,
+		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 1,
 	})
 
 	st, err := store.Open(opts.DB)
@@ -507,7 +510,7 @@ func TestServe_OpensItsPortsThroughTheAddressesTheSavedListNames(t *testing.T) {
 		t.Fatalf("writing the list: %v", err)
 	}
 	opts := configured(t, settings.Settings{
-		ControlURL: fake.URL(), APIKey: fake.Key(), SearchPorts: 1,
+		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 1,
 		Proxy: settings.ProxySource{Kind: "file", Location: list},
 	})
 
@@ -571,7 +574,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	opts.Threads, opts.Ports = 3, 5
 	saved, _ := opts.saved(io.Discard)
-	raise := opts.raise(saved, false, nil, blanktrail.DeviceDesktop)
+	raise := opts.raise(saved, false, &warmSet{})
 
 	// A job that named no size reaches here already stood in for, so what this end
 	// is asked for is the pair this server was started with.
@@ -610,7 +613,7 @@ func TestServe_KeepsThePoolTheSearchUsesWhileEveryJobRaisesItsOwn(t *testing.T) 
 	t.Setenv(envAPIKey, "")
 	t.Setenv(envProxyList, "")
 	opts := configured(t, settings.Settings{
-		ControlURL: fake.URL(), APIKey: fake.Key(), SearchPorts: 1,
+		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 1,
 	})
 
 	st, err := store.Open(opts.DB)
@@ -656,7 +659,7 @@ func TestServe_TakesTheSizeOfAJobFromThisCommandAndNotFromTheSavedSettings(t *te
 	// the connection every pool is opened through — has no say in it. A second
 	// machine-wide answer standing behind the job's own is the kind nobody can
 	// tell they are getting.
-	opts := configured(t, settings.Settings{SearchPorts: 3})
+	opts := configured(t, settings.Settings{HotPorts: 3})
 	opts.Threads, opts.Ports = 1, 2
 
 	threads, ports := opts.runOn(opts.saved(io.Discard))
@@ -859,7 +862,8 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 		t.Fatalf("%d identities were declared standing, want ten", got)
 	}
 
-	raise := opts.raise(saved, false, standing, blanktrail.DeviceDesktop)
+	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	raise := opts.raise(saved, false, warm)
 	pool, err := raise(t.Context(), 10, 10, blanktrail.DeviceDesktop)
 	if err != nil {
 		t.Fatalf("raising a job of a hundred on ten standing: %v", err)
@@ -904,7 +908,8 @@ func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.
 	t.Cleanup(func() { _ = standing.Close() })
 	standing.KeepWarm()
 
-	raise := opts.raise(saved, false, standing, blanktrail.DeviceDesktop)
+	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	raise := opts.raise(saved, false, warm)
 	own, err := raise(t.Context(), 2, 1, blanktrail.DeviceMobile)
 	if err != nil {
 		t.Fatalf("raising a phone job beside the standing desktops: %v", err)
@@ -939,7 +944,8 @@ func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *t
 	t.Cleanup(func() { _ = standing.Close() })
 	standing.KeepWarm()
 
-	raise := opts.raise(saved, false, standing, blanktrail.DeviceDesktop)
+	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	raise := opts.raise(saved, false, warm)
 	if _, err := raise(t.Context(), 1, 2, blanktrail.DeviceDesktop); err != nil {
 		t.Fatalf("raising a job of two: %v", err)
 	}
@@ -1038,4 +1044,13 @@ func forgetTheCheck(t *testing.T) {
 	}
 	forget()
 	t.Cleanup(forget)
+}
+
+// saveSettingsBeside writes a settings file where a history's own server will
+// read it, so a test can hand one to a server it starts by hand.
+func saveSettingsBeside(t *testing.T, db string, s settings.Settings) {
+	t.Helper()
+	if err := settings.Save(filepath.Join(filepath.Dir(db), settingsName), s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
 }

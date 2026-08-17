@@ -175,3 +175,59 @@ func TestTake_SpreadsOntoTheColdOnesRatherThanHammeringTheWarm(t *testing.T) {
 		t.Errorf("three leases went to %d ports, want all three: the warm one was hammered", len(seen))
 	}
 }
+
+func TestReduceTo_ClosesTheNewestAndKeepsTheOnesThatHaveBeenWarmLongest(t *testing.T) {
+	// Lowering how many identities a machine keeps warm has to close some, and
+	// which ones matters: the earliest have been warm longest, and warmth is the
+	// whole reason any of them are open.
+	pool, f := standing(t, 2)
+	if err := pool.Grow(context.Background(), 4); err != nil {
+		t.Fatalf("Grow: %v", err)
+	}
+	pool.KeepWarm()
+
+	pool.mu.Lock()
+	oldest := pool.ports[0].num
+	pool.mu.Unlock()
+
+	gone, err := pool.ReduceTo(context.Background(), 3)
+	if err != nil {
+		t.Fatalf("ReduceTo: %v", err)
+	}
+	if gone != 3 {
+		t.Errorf("%d ports were closed, want the three above the number asked for", gone)
+	}
+	if got := len(f.OpenPorts()); got != 3 {
+		t.Errorf("%d ports are open, want the three that were kept", got)
+	}
+	if got := pool.Hot(); got != 3 {
+		t.Errorf("the standing set reads as %d, want the three that are left", got)
+	}
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	if pool.ports[0].num != oldest {
+		t.Errorf("the port kept first is %d, and the one open longest is %d",
+			pool.ports[0].num, oldest)
+	}
+}
+
+func TestReduceTo_LeavesAlonePortsSomebodyIsHolding(t *testing.T) {
+	// A number lowered while a job runs must take effect as the job lets go
+	// rather than by closing a port out from under it: what is on the other end
+	// of a leased port is a request somebody is waiting for.
+	pool, f := standing(t, 3)
+
+	held, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer held.Release()
+
+	if _, err := pool.ReduceTo(context.Background(), 0); err != nil {
+		t.Fatalf("ReduceTo: %v", err)
+	}
+	open := f.OpenPorts()
+	if len(open) != 1 || open[0] != held.Port() {
+		t.Errorf("the ports left open are %v, want only the one being held (%d)", open, held.Port())
+	}
+}

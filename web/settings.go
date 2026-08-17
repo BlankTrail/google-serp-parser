@@ -27,7 +27,6 @@ const (
 const (
 	urlField     = "control_url"
 	keyField     = "api_key"
-	searchField  = "search_ports"
 	pauseField   = "cooldown"
 	hotField     = "hot_ports"
 	hotKindField = "hot_device"
@@ -92,7 +91,6 @@ type settingsForm struct {
 	// APIKey is empty on the way out and usually empty on the way in. The page
 	// cannot show the key, so an empty box means the key that is already saved.
 	APIKey string
-	Search string
 	Pause  string
 	// Hot is how many identities this machine keeps open and warm between jobs,
 	// and HotDevice is which kind of result page they are opened for.
@@ -111,7 +109,6 @@ func settingsFormOf(r *http.Request) settingsForm {
 	return settingsForm{
 		ControlURL: strings.TrimSpace(r.FormValue(urlField)),
 		APIKey:     strings.TrimSpace(r.FormValue(keyField)),
-		Search:     strings.TrimSpace(r.FormValue(searchField)),
 		Pause:      strings.TrimSpace(r.FormValue(pauseField)),
 		Hot:        strings.TrimSpace(r.FormValue(hotField)),
 		HotDevice:  strings.TrimSpace(r.FormValue(hotKindField)),
@@ -130,7 +127,6 @@ func settingsFormOf(r *http.Request) settingsForm {
 func formShowing(saved settings.Settings) settingsForm {
 	return settingsForm{
 		ControlURL: saved.ControlURL,
-		Search:     strconv.Itoa(saved.SearchPorts),
 		Pause:      spellUnits(saved.Cooldown, pauseUnit),
 		Hot:        strconv.Itoa(saved.HotPorts),
 		HotDevice:  saved.HotDevice,
@@ -148,24 +144,6 @@ func spellUnits(d, unit time.Duration) string { return strconv.FormatInt(int64(d
 // stopping at the first: a reader with three mistakes should learn all three
 // now instead of submitting three times.
 type boxes struct{ complaints []string }
-
-// count reads a box holding a number of things, of which there has to be at
-// least one.
-//
-// An empty box is the number that is already saved. A form posted without a
-// field must not quietly set it to nought, and nought ports is a server that
-// looks configured and runs nothing.
-func (b *boxes) count(typed string, saved int, complaint string) int {
-	if typed == "" {
-		return saved
-	}
-	n, err := strconv.Atoi(typed)
-	if err != nil || n < 1 {
-		b.complaints = append(b.complaints, complaint)
-		return saved
-	}
-	return n
-}
 
 // none reads a box holding a number of things where none of them is an answer.
 //
@@ -214,7 +192,6 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	if f.APIKey != "" {
 		next.APIKey = f.APIKey
 	}
-	next.SearchPorts = b.count(f.Search, saved.SearchPorts, "settings.search.count")
 	// Nought is an answer here — it is how keeping identities warm is turned off
 	// — so this is read as a number of things that may be none of them, and only
 	// a negative or a word is a mistake.
@@ -328,10 +305,12 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 
 // saveSettings writes the settings down and takes them into use.
 //
-// The order is the whole of it: complain, ask, save, then open. Nothing is
-// written until there is nothing left to complain about and the question a
-// running job raises has been answered, because settings written before either
-// are settings the reader never agreed to.
+// The order is the whole of it: complain, open, then save. Nothing is written
+// until there is nothing left to complain about, because settings written
+// before that are settings the reader never agreed to — and nothing is written
+// until the identities they ask for are actually open, because a file saying
+// ten on a machine keeping none is a file nobody can trust and a screen nobody
+// can read.
 func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
 	form := settingsFormOf(r)
@@ -347,6 +326,18 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		s.showSettings(w, r, lang, view)
 		return
 	}
+	if err := s.takeIntoUse(next); err != nil {
+		// Nothing was opened, so nothing is written down: the file and the machine
+		// say the same thing, which is the state the reader can act on. The reason
+		// stays in the log — it is an address and a refusal from something on this
+		// machine, and a page quoting either helps the reader not at all.
+		s.log.Error("nothing could be opened with the settings that were just saved", "error", err)
+		view.Form = form
+		view.KeyTail = tailOf(saved)
+		view.Complaints = []string{"settings.opened.nothing"}
+		s.showSettings(w, r, lang, view)
+		return
+	}
 	if err := settings.Save(s.settingsPath, next); err != nil {
 		s.fail(w, r, err)
 		return
@@ -356,17 +347,6 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	// with the switcher would go on overruling the one they just made.
 	if lang, known := langOf(next.Language); known {
 		writeLang(w, lang)
-	}
-	if err := s.takeIntoUse(next); err != nil {
-		// The settings are saved and nothing was opened with them. The reason stays
-		// in the log: it is an address and a refusal from something on this machine,
-		// and a page quoting either helps the reader not at all.
-		s.log.Error("nothing could be opened with the settings that were just saved", "error", err)
-		view.Form = formShowing(next)
-		view.KeyTail = tailOf(next)
-		view.Complaints = []string{"settings.opened.nothing"}
-		s.showSettings(w, r, lang, view)
-		return
 	}
 	// A page rendered into the answer to a form is a page the browser's reload
 	// button sends again, and this form changes where every later job runs.
@@ -400,7 +380,7 @@ func (s *Server) checkConnection(w http.ResponseWriter, r *http.Request) {
 		// is the only one it can size without a job in front of it. A job's own
 		// pool is asked for when the job starts, and what the check reports about
 		// the licence and the domains holds for both.
-		Ports: atLeastOne(trying.SearchPorts),
+		Ports: atLeastOne(trying.HotPorts),
 	})
 	view.Findings = true
 	for _, f := range report.Findings {
@@ -502,6 +482,20 @@ func (s *Server) current() (settings.Settings, []string) {
 // what a history being read on another machine gets, and it is the whole of the
 // difference between the two.
 func (s *Server) takeIntoUse(saved settings.Settings) error {
+	// The identities kept warm are brought to what was just saved, here and now
+	// rather than at the next start. A number typed into a box that does nothing
+	// until somebody restarts the program is a box that lies, and this one is
+	// read by an operator watching to see whether the ports appear.
+	//
+	// It happens before the queue is told anything: a job starting in this moment
+	// finds the set it was promised rather than the one before it.
+	if s.standing != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), standingGrace)
+		defer cancel()
+		if err := s.standing(ctx, saved); err != nil {
+			return err
+		}
+	}
 	if s.sup == nil || s.connect == nil {
 		return nil
 	}
@@ -537,3 +531,11 @@ func (s *Server) tongue() Lang {
 	lang, _ := langOf(saved.Language)
 	return lang
 }
+
+// standingGrace bounds bringing the warm identities to a new number.
+//
+// It is generous because opening a hundred ports through a service that is
+// thinking about it takes what it takes, and it exists at all because the
+// reader is holding a page open waiting for the answer: a save that never comes
+// back is worse than one that says it could not.
+const standingGrace = 2 * time.Minute

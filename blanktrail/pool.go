@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -623,6 +624,56 @@ func (p *Pool) KeepWarm() int {
 		pt.hot = true
 	}
 	return len(p.ports)
+}
+
+// ReduceTo closes ports until the pool holds no more than want of them, and
+// says how many went.
+//
+// It is what lowering the number of identities a machine keeps warm does. The
+// ones opened last go first: the ones opened earliest have been warm longest,
+// and warmth is the whole reason any of them are open.
+//
+// A port somebody is holding is left alone and counted against the total, so a
+// number lowered while a job runs takes effect as the job lets go rather than
+// by closing a port out from under it.
+func (p *Pool) ReduceTo(ctx context.Context, want int) (int, error) {
+	if want < 0 {
+		want = 0
+	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return 0, nil
+	}
+	var keep, drop []*poolPort
+	// Walked from the newest backwards, so what is dropped is what was opened
+	// last. Held ports are kept whatever the count says.
+	for i := len(p.ports) - 1; i >= 0; i-- {
+		pt := p.ports[i]
+		pt.mu.Lock()
+		leased := pt.leased
+		pt.mu.Unlock()
+		if leased || len(p.ports)-len(drop) <= want {
+			keep = append(keep, pt)
+			continue
+		}
+		drop = append(drop, pt)
+		delete(p.byNum, pt.num)
+	}
+	// Put back the way round they were opened, so "the newest" goes on meaning
+	// the same thing next time.
+	slices.Reverse(keep)
+	p.ports = keep
+	p.mu.Unlock()
+
+	var firstErr error
+	for _, pt := range drop {
+		if err := p.cl.ClosePort(ctx, pt.num); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		pt.base.CloseIdleConnections()
+	}
+	return len(drop), firstErr
 }
 
 // Hot is how many ports of the standing set this pool holds.

@@ -33,22 +33,21 @@ type ProxySource struct {
 
 // Settings is everything the interface can set.
 type Settings struct {
-	ControlURL string `json:"control_url"`
-	APIKey     string `json:"api_key"`
-	// SearchPorts is how many identities are held for a search answered inside
-	// a request. It is the one pool this machine keeps standing: a job puts up
-	// its own and gives it back as it ends, so between jobs there would
-	// otherwise be nothing for that address to answer on. Nought turns the
-	// address off, and it says so rather than waiting.
-	//
-	// The fields that used to stand here — how many ports and threads a job runs
-	// on — belong to the job now. A machine-wide answer to that question would be
-	// a second opinion about a number the job already carries.
-	SearchPorts int           `json:"search_ports"`
-	Cooldown    time.Duration `json:"cooldown"`
+	ControlURL string        `json:"control_url"`
+	APIKey     string        `json:"api_key"`
+	Cooldown   time.Duration `json:"cooldown"`
 
 	// HotPorts is how many identities this machine keeps open and warm between
 	// jobs, and HotDevice is which kind of result page they are opened for.
+	//
+	// They are also the one pool this machine keeps standing, so the search
+	// answered inside a request goes through them: a job's pool is gone between
+	// jobs, and that address would otherwise have nothing to answer on. None kept
+	// warm is that address turned off, which it says rather than waiting.
+	//
+	// The field that used to size that pool separately is gone. It sized nothing:
+	// the pool was opened from the flags this server was started with, and two
+	// numbers for one set of identities were two answers to one question.
 	//
 	// Nought is off, and off is what this program did until now: every job opened
 	// its own identities from cold, met a challenge on the first request of each,
@@ -79,9 +78,8 @@ const DefaultControlURL = "http://127.0.0.1:8891/"
 // Defaults are what a program that has never been configured runs on.
 func Defaults() Settings {
 	return Settings{
-		ControlURL:  DefaultControlURL,
-		SearchPorts: 2,
-		Cooldown:    2 * time.Second,
+		ControlURL: DefaultControlURL,
+		Cooldown:   2 * time.Second,
 	}
 }
 

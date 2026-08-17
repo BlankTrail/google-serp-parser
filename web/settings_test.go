@@ -111,7 +111,7 @@ func serverWithRunningJob(t *testing.T) (*Server, string, *stubConnect) {
 	t.Cleanup(func() { _ = v.Close() })
 
 	path := settingsFile(t, settings.Settings{
-		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me", SearchPorts: 3,
+		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me", HotPorts: 3,
 	})
 	opener := &stubConnect{}
 	s, err := New(Config{Store: st, Supervisor: v, Logger: quiet(), SettingsPath: path})
@@ -189,15 +189,15 @@ func TestSaveSettings_AnEmptyKeyFieldKeepsTheKeyThatWasThere(t *testing.T) {
 	// The field cannot show the key, so somebody opening the settings to change
 	// the port count and pressing save would otherwise lose their connection.
 	// This is the first thing anybody will do.
-	s, path := serverWithSettings(t, settings.Settings{APIKey: "keep-me", SearchPorts: 3})
-	postForm(t, s, settingsAt, url.Values{"api_key": {""}, "search_ports": {"12"}})
+	s, path := serverWithSettings(t, settings.Settings{APIKey: "keep-me", HotPorts: 3})
+	postForm(t, s, settingsAt, url.Values{"api_key": {""}, "hot_ports": {"12"}})
 
 	got := loaded(t, path)
 	if got.APIKey != "keep-me" {
 		t.Errorf("the key is now %q — an empty field erased it", got.APIKey)
 	}
-	if got.SearchPorts != 12 {
-		t.Errorf("Ports=%d, want the 12 that was asked for", got.SearchPorts)
+	if got.HotPorts != 12 {
+		t.Errorf("Ports=%d, want the 12 that was asked for", got.HotPorts)
 	}
 }
 
@@ -216,19 +216,19 @@ func TestSaveSettings_WritesNothingDownWhenItRefuses(t *testing.T) {
 	// A form checked after it has been written is a form that has already taken
 	// effect. Nought ports is not the fault here — it is how the search address
 	// is turned off — so the fault this posts is a count that is not one.
-	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1", SearchPorts: 3})
+	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1", HotPorts: 3})
 	rec := postForm(t, s, settingsAt, url.Values{
-		"control_url": {"http://127.0.0.1:2"}, "search_ports": {"a handful"},
+		"control_url": {"http://127.0.0.1:2"}, "hot_ports": {"a handful"},
 	})
 
 	if rec.Code == http.StatusSeeOther {
 		t.Fatal("a port count that is not a number was accepted")
 	}
 	got := loaded(t, path)
-	if got.SearchPorts != 3 || got.ControlURL != "http://127.0.0.1:1" {
+	if got.HotPorts != 3 || got.ControlURL != "http://127.0.0.1:1" {
 		t.Errorf("the refused form was written down anyway: %+v", got)
 	}
-	if !strings.Contains(rec.Body.String(), LangEN.T("settings.search.count")) {
+	if !strings.Contains(rec.Body.String(), LangEN.T("settings.hot.count")) {
 		t.Errorf("the page does not say what is wrong:\n%s", rec.Body.String())
 	}
 }
@@ -238,7 +238,7 @@ func TestSaveSettings_KeepsWhatWasTypedWhenItRefuses(t *testing.T) {
 	// box beside it is a form filled in twice.
 	s, _ := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 	body := postBody(t, s, settingsAt, url.Values{
-		"control_url": {"http://127.0.0.1:9"}, "search_ports": {"nought"},
+		"control_url": {"http://127.0.0.1:9"}, "hot_ports": {"nought"},
 	})
 
 	if !strings.Contains(body, "http://127.0.0.1:9") {
@@ -252,7 +252,7 @@ func TestSaveSettings_HandsTheJobsAfterThisOneTheConnectionItJustWrote(t *testin
 	// therefore about the next job, not about the moment of saving — a raiser
 	// recorded but never reached would look identical from the settings page.
 	s, path := serverWithSettings(t, settings.Settings{
-		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me", SearchPorts: 3,
+		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me", HotPorts: 3,
 	})
 	st := testStore(t)
 	v := newSupervisor(st, nil)
@@ -262,7 +262,7 @@ func TestSaveSettings_HandsTheJobsAfterThisOneTheConnectionItJustWrote(t *testin
 	s.connect = opener.open
 
 	postForm(t, s, settingsAt, url.Values{
-		"control_url": {"http://127.0.0.1:2"}, "api_key": {""}, "search_ports": {"12"},
+		"control_url": {"http://127.0.0.1:2"}, "api_key": {""}, "hot_ports": {"12"},
 	})
 	enqueueSized(t, v, "after the save", 9, 4, "a")
 
@@ -401,8 +401,8 @@ func TestSettings_DrawThemselvesOverAFileTheyCannotRead(t *testing.T) {
 	if body := getBody(t, s, settingsAt); !strings.Contains(body, LangEN.T("settings.unreadable")) {
 		t.Errorf("the page says nothing about a file it could not read:\n%s", body)
 	}
-	postForm(t, s, settingsAt, url.Values{"control_url": {"http://127.0.0.1:2"}, "search_ports": {"6"}})
-	if got := loaded(t, path); got.ControlURL != "http://127.0.0.1:2" || got.SearchPorts != 6 {
+	postForm(t, s, settingsAt, url.Values{"control_url": {"http://127.0.0.1:2"}, "hot_ports": {"6"}})
+	if got := loaded(t, path); got.ControlURL != "http://127.0.0.1:2" || got.HotPorts != 6 {
 		t.Errorf("saving over the damaged file left %+v", got)
 	}
 }
@@ -461,7 +461,7 @@ func TestCheckConnection_ShowsWhatToDoAboutEveryOneOfThem(t *testing.T) {
 	s, _ := serverWithSettings(t, settings.Settings{})
 	body := postBody(t, s, checkAt, url.Values{
 		"control_url": {fake.URL()}, "api_key": {fake.Key()},
-		"search_ports": {"4"},
+		"hot_ports": {"4"},
 	})
 
 	client, err := blanktrail.NewClient(fake.URL(), fake.Key())
@@ -561,7 +561,7 @@ func TestSaveSettings_DoesNotDisturbTheJobThatIsRunning(t *testing.T) {
 		t.Fatal("the fixture has no job in flight, so this test asks nothing")
 	}
 
-	rec := postForm(t, s, settingsAt, url.Values{"search_ports": {"12"}})
+	rec := postForm(t, s, settingsAt, url.Values{"hot_ports": {"12"}})
 	if rec.Code >= 400 {
 		t.Fatalf("saving while a job ran gave %d", rec.Code)
 	}
@@ -571,8 +571,8 @@ func TestSaveSettings_DoesNotDisturbTheJobThatIsRunning(t *testing.T) {
 	if body := rec.Body.String(); strings.Contains(body, "settings.running") {
 		t.Errorf("the page still asks about the running job: %s", body)
 	}
-	if got := loaded(t, path); got.SearchPorts != 12 {
-		t.Errorf("SearchPorts=%d — the settings were not saved", got.SearchPorts)
+	if got := loaded(t, path); got.HotPorts != 12 {
+		t.Errorf("SearchPorts=%d — the settings were not saved", got.HotPorts)
 	}
 }
 
@@ -637,9 +637,9 @@ func TestSettings_ShowNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 		lang := "?lang=" + string(l)
 		bodies := []string{
 			getBody(t, s, settingsAt+lang),
-			postBody(t, s, settingsAt+lang, url.Values{"search_ports": {"nought"}, "source": {"nowhere"}}),
+			postBody(t, s, settingsAt+lang, url.Values{"hot_ports": {"nought"}, "source": {"nowhere"}}),
 			postBody(t, s, checkAt+lang, url.Values{"control_url": {"http://127.0.0.1:1"}}),
-			postBody(t, running, settingsAt+lang, url.Values{"search_ports": {"12"}}),
+			postBody(t, running, settingsAt+lang, url.Values{"hot_ports": {"12"}}),
 		}
 		for _, body := range bodies {
 			for key := range catalogue[l] {
@@ -861,5 +861,55 @@ func TestCheckConnection_KeepsSayingWhatIsWrongWhenSomethingIs(t *testing.T) {
 	}
 	if !strings.Contains(body, LangEN.T("settings.finding.fail")) {
 		t.Errorf("a connection that answered nothing is not reported as a failure:\n%s", body)
+	}
+}
+
+func TestSaveSettings_BringsTheWarmIdentitiesToWhatWasJustSaved(t *testing.T) {
+	// The fault this fixes: ten was typed into the box, save was pressed, and
+	// nothing opened. The number was read at the next start and nowhere else, so
+	// the box did nothing until somebody restarted the program — and an operator
+	// watching for the ports to appear has no way to tell that from a setting
+	// that does not work at all.
+	var asked []int
+	var kinds []string
+	s, _ := serverWithSettings(t, settings.Defaults())
+	s.standing = func(_ context.Context, saved settings.Settings) error {
+		asked = append(asked, saved.HotPorts)
+		kinds = append(kinds, saved.HotDevice)
+		return nil
+	}
+
+	rec := postForm(t, s, settingsAt, url.Values{
+		"hot_ports": {"10"}, "hot_device": {blanktrail.DeviceMobile},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving came back %d:\n%s", rec.Code, rec.Body.String())
+	}
+	if len(asked) != 1 {
+		t.Fatalf("the warm identities were brought to a new number %d times, want once", len(asked))
+	}
+	if asked[0] != 10 || kinds[0] != blanktrail.DeviceMobile {
+		t.Errorf("they were brought to %d of %q, and the form asked for 10 mobile",
+			asked[0], kinds[0])
+	}
+}
+
+func TestSaveSettings_SaysSoWhenTheWarmIdentitiesCannotBeOpened(t *testing.T) {
+	// Ten identities that cannot be opened is a saved number the machine is not
+	// keeping, and a page that said nothing would leave the operator watching for
+	// ports that are never going to appear.
+	s, path := serverWithSettings(t, settings.Defaults())
+	s.standing = func(context.Context, settings.Settings) error {
+		return errors.New("the control service refused this connection")
+	}
+
+	rec := postForm(t, s, settingsAt, url.Values{"hot_ports": {"10"}})
+	if rec.Code == http.StatusSeeOther {
+		t.Error("a number that could not be opened was accepted without a word")
+	}
+	// And what could not be taken into use was not written down either: a file
+	// saying ten on a machine keeping none is a file nobody can trust.
+	if got := loaded(t, path); got.HotPorts != 0 {
+		t.Errorf("the settings say %d identities are kept warm, and none could be opened", got.HotPorts)
 	}
 }
