@@ -97,30 +97,57 @@ func TestEstimate_TimesTheFloorByThePortsAndNotByTheThreads(t *testing.T) {
 	}
 }
 
-func TestEstimate_TheFloorDoesNotGrowWithTheDepthOfAWalk(t *testing.T) {
-	// A walk of any depth is one query on one identity, so taking every query
-	// five pages deep buys pages rather than time. An estimate that multiplied
-	// the floor by the depth would quote five hours for one hour of work.
-	f := poolFacing(t, answeringOrigin(t).addr(), 4, tenSecondGap)
+func TestEstimate_ThePacingHalfOfTheFloorDoesNotGrowWithTheDepthOfAWalk(t *testing.T) {
+	// A walk of any depth is one query on one identity, so the waiting a job is
+	// held to is the same however deep it goes. An estimate that multiplied the
+	// pacing by the depth would quote five hours of waiting for one hour of it.
+	//
+	// The pace here is measured only in the middle, so the floor is the pacing
+	// and nothing else — which is the half this test is about. The other half,
+	// the requests themselves, does grow with the depth, because a deeper walk
+	// really is more requests.
+	p := typicalPace(60*time.Second, 10*time.Second, 2*time.Second)
+	shallow := EstimateWith(Job{Queries: make([]google.Query, 40), Pages: 1}, 4, 4, 10*time.Second, p)
+	deep := EstimateWith(Job{Queries: make([]google.Query, 40), Pages: 5}, 4, 4, 10*time.Second, p)
 
-	r := &Runner{Pool: f.Pool, Threads: 4}
-	est := r.Estimate(Job{Queries: make([]google.Query, 40), Pages: 5})
-
-	if want := 90 * time.Second; est.Floor != want {
-		t.Errorf("Floor=%v, want %v", est.Floor, want)
+	if want := 90 * time.Second; shallow.Floor != want || deep.Floor != want {
+		t.Errorf("Floor=%v one page deep and %v five pages deep, want %v either way",
+			shallow.Floor, deep.Floor, want)
+	}
+	// The deeper walk is more work, so it is not the same estimate — without this
+	// the test above would pass on an estimate that ignored the depth entirely.
+	if deep.Expected <= shallow.Expected {
+		t.Errorf("Expected=%v five pages deep against %v one page deep, so the depth cost nothing",
+			deep.Expected, shallow.Expected)
 	}
 }
 
-func TestEstimate_AJobSmallerThanThePoolWaitsOnNothing(t *testing.T) {
+func TestEstimate_AJobSmallerThanThePoolWaitsOnNothingAndIsFlooredByTheWorkInstead(t *testing.T) {
 	// Three queries over four ports never ask any port twice, so nothing in the
-	// pacing holds them up and the whole cost is the network.
-	f := poolFacing(t, answeringOrigin(t).addr(), 4, tenSecondGap)
+	// pacing holds them up. The floor is then the work itself at its quickest —
+	// which is the whole point of counting it: a job that waits on nothing is not
+	// a job that takes no time.
+	p := typicalPace(60*time.Second, 10*time.Second, 2*time.Second)
+	waiting := EstimateWith(Job{Queries: make([]google.Query, 3), Pages: 2}, 4, 2, 10*time.Second, p)
+	if waiting.Floor != 0 {
+		t.Errorf("Floor=%v with nothing measured at its quick end, want the pacing, which is none here",
+			waiting.Floor)
+	}
 
+	f := poolFacing(t, answeringOrigin(t).addr(), 4, tenSecondGap)
 	r := &Runner{Pool: f.Pool, Threads: 2}
 	est := r.Estimate(Job{Queries: make([]google.Query, 3), Pages: 2})
 
-	if est.Floor != 0 {
-		t.Errorf("Floor=%v, want none", est.Floor)
+	// Three ports reached, three first answers and three later ones, at the
+	// quickest each was measured at, over the two threads that have work.
+	want := (3*MeasuredPace.ReachPort.Fast + 3*MeasuredPace.FirstRequest.Fast +
+		3*MeasuredPace.LaterRequest.Fast) / 2
+	if est.Floor != want {
+		t.Errorf("Floor=%v, want %v — the work at its quickest, since no port is asked twice",
+			est.Floor, want)
+	}
+	if est.Expected < est.Floor {
+		t.Errorf("Expected=%v is under its own floor of %v", est.Expected, est.Floor)
 	}
 }
 
@@ -249,10 +276,21 @@ func TestEstimateFor_AssumesEnoughThreadsToKeepEveryPortBusy(t *testing.T) {
 	}
 }
 
+// typicalPace is a pace whose costs were only ever measured in the middle, so a
+// test can pin the expectation without also pinning the floor. A pace with no
+// quick end leaves the floor to the pacing, which is what these tests are about.
+func typicalPace(reach, first, later time.Duration) Pace {
+	return Pace{
+		ReachPort:    Cost{Typical: reach},
+		FirstRequest: Cost{Typical: first},
+		LaterRequest: Cost{Typical: later},
+	}
+}
+
 func TestEstimateWith_CountsGettingToEachPortOnceAndEveryAnswerAfterThat(t *testing.T) {
 	// Twenty queries two pages deep over eight ports: eight ports to reach,
 	// twenty first answers, twenty later ones, over four threads.
-	p := Pace{ReachPort: 60 * time.Second, FirstRequest: 10 * time.Second, LaterRequest: 2 * time.Second}
+	p := typicalPace(60*time.Second, 10*time.Second, 2*time.Second)
 	est := EstimateWith(Job{Queries: make([]google.Query, 20), Pages: 2}, 8, 4, 0, p)
 
 	if want := 180 * time.Second; est.Expected != want {
@@ -264,7 +302,7 @@ func TestEstimateWith_PaysToReachOnlyThePortsTheWorkActuallyUses(t *testing.T) {
 	// Three queries never reach the other five ports. Charging for those quotes
 	// a cost against work nobody does — the same reason the warm-ups are counted
 	// per port reached rather than per port held.
-	p := Pace{ReachPort: 60 * time.Second, FirstRequest: 10 * time.Second, LaterRequest: 2 * time.Second}
+	p := typicalPace(60*time.Second, 10*time.Second, 2*time.Second)
 	est := EstimateWith(Job{Queries: make([]google.Query, 3), Pages: 1}, 8, 4, 0, p)
 
 	if want := 70 * time.Second; est.Expected != want {
@@ -276,7 +314,7 @@ func TestEstimateWith_AddingThreadsPastThePortCountBuysNothingAndTooFewCostsTime
 	// A port answers one thread at a time, so threads beyond the ports wait. But
 	// a job given fewer threads than ports leaves ports idle, and an estimate
 	// blind to that quotes a run the caller has not asked for.
-	p := Pace{ReachPort: 20 * time.Second, FirstRequest: 10 * time.Second, LaterRequest: 5 * time.Second}
+	p := typicalPace(20*time.Second, 10*time.Second, 5*time.Second)
 	j := Job{Queries: make([]google.Query, 8), Pages: 1}
 
 	crowded := EstimateWith(j, 4, 100, 0, p)
@@ -320,17 +358,27 @@ func TestMeasuredPace_StaysWithinAFactorOfTwoOfTheRunsItWasCheckedAgainst(t *tes
 	// rather than claiming any more than that.
 	est := EstimateWith(Job{Queries: make([]google.Query, 20), Pages: 2}, 8, 4, 7*time.Second, MeasuredPace)
 
-	if want := 14 * time.Second; est.Floor != want {
-		t.Errorf("Floor=%v, want the %v those runs were quoted", est.Floor, want)
-	}
-	for _, took := range []time.Duration{
+	runs := []time.Duration{
 		6*time.Minute + 44*time.Second,
 		8*time.Minute + 23*time.Second,
 		11*time.Minute + 22*time.Second,
-	} {
+	}
+	for _, took := range runs {
 		if est.Expected < took/2 || est.Expected > 2*took {
 			t.Errorf("Expected=%v against a run of %v, which is more than a factor of two out", est.Expected, took)
 		}
+		// A floor above a run that happened is not a floor. This is the fault the
+		// figure was rebuilt for: counting the pauses alone it quoted 14s for these
+		// same runs, which is true, useless, and read as an estimate beside one.
+		if est.Floor > took {
+			t.Errorf("Floor=%v against a run of %v, so the floor is above a run that happened", est.Floor, took)
+		}
+	}
+	// And it has to be worth reading. A floor two orders of magnitude under the
+	// runs it stands beside says nothing a reader can plan with.
+	if fastest := runs[0]; est.Floor < fastest/10 {
+		t.Errorf("Floor=%v against runs from %v, which is far enough under them to say nothing",
+			est.Floor, fastest)
 	}
 }
 

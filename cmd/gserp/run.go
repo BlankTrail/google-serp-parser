@@ -501,10 +501,12 @@ func printEstimate(out io.Writer, name string, est run.Estimate) {
 	// be. The caveat is a clause because a paragraph gets skipped.
 	_, _ = fmt.Fprintf(out, "expected ≈ %v — from per-request costs measured elsewhere, "+
 		"whose own spread is a factor of twenty\n", est.Expected.Round(time.Second))
-	// The floor counts pauses and nothing else — no network time, no retries,
-	// no walk that ends early — so it is printed as a floor and said to be one.
-	// A live run printed a floor of nought seconds and then took six minutes.
-	_, _ = fmt.Fprintf(out, "floor %v over %d ports, %v apart, counting the pauses alone\n",
+	// The floor is the later of two bounds: waiting out the pauses, and doing the
+	// work at the quickest each request was ever measured at. It counts no
+	// retries and no challenge that has to be solved, so a run lands above it —
+	// but it is a figure worth reading, which the pacing alone was not. A live
+	// run was once quoted a floor of two seconds and then took 6m15s.
+	_, _ = fmt.Fprintf(out, "not sooner than %v over %d ports, %v apart\n",
 		est.Floor.Round(time.Second), est.Ports, est.Cooldown.Round(time.Second))
 }
 

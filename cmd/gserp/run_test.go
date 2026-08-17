@@ -153,14 +153,14 @@ func TestRunCommand_QuotesTheTimeOverTheThreadsItWasGivenAndNotOverThePorts(t *t
 }
 
 func TestRunCommand_SaysWhichOfTheTimesItQuotesIsABoundAndWhereTheOtherCameFrom(t *testing.T) {
-	// A floor counts the pauses and nothing else: a live run printed a floor of
-	// nought seconds and then took six minutes. The expected time is the one to
-	// plan around and it rests on costs measured on one list on one day, so a
-	// number printed bare gets believed and should not be.
+	// The two lengths answer different questions and are printed as such: one is
+	// a bound no run of this shape has come in under, the other is what to plan
+	// around and rests on costs measured on one list on one day — so a number
+	// printed bare gets believed and should not be.
 	got := estimated(t, "4", "2")
 
-	if !strings.Contains(got, "floor") {
-		t.Errorf("the estimate no longer states the bound the pacing gives:\n%s", got)
+	if !strings.Contains(got, "not sooner than") {
+		t.Errorf("the estimate no longer states the bound below which no run has gone:\n%s", got)
 	}
 	var expected string
 	for _, line := range strings.Split(got, "\n") {

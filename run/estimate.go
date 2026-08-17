@@ -4,11 +4,28 @@ package run
 
 import "time"
 
+// Cost is one measured per-request cost: the quickest it was ever seen to be,
+// and the middle of the range it was seen in.
+//
+// Both are kept because they answer different questions. The middle is what a
+// job is likely to cost; the quickest is what no run of this shape has ever
+// beaten, which is the only honest way to say "not sooner than". A single
+// number cannot be both, and an estimate built on the middle alone has no floor
+// to offer but the pacing — which counts none of the network and is wrong by
+// two orders of magnitude for it.
+//
+// Fast left at nought means the cost was never measured at its quick end, and
+// the floor built on it simply does not count that term.
+type Cost struct {
+	Fast    time.Duration
+	Typical time.Duration
+}
+
 // Pace is what a request costs, measured rather than assumed.
 type Pace struct {
-	ReachPort    time.Duration // getting to a port that answers
-	FirstRequest time.Duration // that port's first answer
-	LaterRequest time.Duration // an answer from a port that has already answered
+	ReachPort    Cost // getting to a port that answers
+	FirstRequest Cost // that port's first answer
+	LaterRequest Cost // an answer from a port that has already answered
 }
 
 // MeasuredPace is the pace of one live run: one list of addresses, one country,
@@ -29,10 +46,23 @@ type Pace struct {
 // measured their own should pass their own Pace to EstimateWith. The arithmetic
 // built on this was checked against three runs of the same job and landed within
 // a factor of two of each; three points do not make it right anywhere else.
+// Each Fast below is the quick end of the range named above it, not a separate
+// measurement: the fastest a port was reached, the fastest a first answer came
+// back, the fastest a later one did. Nothing has been rounded down to make a
+// floor look better.
 var MeasuredPace = Pace{
-	ReachPort:    (27*time.Second + 9*time.Minute + 10*time.Second) / 2,
-	FirstRequest: (4700*time.Millisecond + 6700*time.Millisecond) / 2,
-	LaterRequest: (1400*time.Millisecond + 2700*time.Millisecond) / 2,
+	ReachPort: Cost{
+		Fast:    27 * time.Second,
+		Typical: (27*time.Second + 9*time.Minute + 10*time.Second) / 2,
+	},
+	FirstRequest: Cost{
+		Fast:    4700 * time.Millisecond,
+		Typical: (4700*time.Millisecond + 6700*time.Millisecond) / 2,
+	},
+	LaterRequest: Cost{
+		Fast:    1400 * time.Millisecond,
+		Typical: (1400*time.Millisecond + 2700*time.Millisecond) / 2,
+	},
 }
 
 // Estimate is what a job will cost, worked out before it is started.
@@ -62,13 +92,24 @@ type Estimate struct {
 	Ports int
 	// Cooldown is the gap the pool keeps between two requests on one port.
 	Cooldown time.Duration
-	// Floor is the shortest this can take. One query holds one identity however
-	// deep it is taken, so a port carries one query per gap, and the busiest port
-	// waits out one gap between each query and the next.
+	// Floor is the shortest this run could go: the later of two bounds, since
+	// both hold at once.
 	//
-	// It is a floor and nothing more. It counts no network time, no retries and
-	// no walk that ends early, so the real run is longer. It is stated as the
-	// minimum precisely so it cannot be read as a promise.
+	// The first is the pacing. One query holds one identity however deep it is
+	// taken, so a port carries one query per gap, and the busiest port waits out
+	// one gap between each query and the next.
+	//
+	// The second is the work itself at the quickest each request was ever
+	// measured at. This is the half that used to be missing, and its absence was
+	// not a rounding error: a live run of ten queries over eight ports was quoted
+	// a floor of two seconds and took 6m15s — out by a factor of 187, sitting on
+	// the same screen as an expectation that was out by 1.6. The pacing alone is
+	// a true bound and a useless one, because nothing in it counts the network.
+	//
+	// It is still a floor and still not a promise: it counts no retries, no
+	// challenge that has to be solved and no walk that ends early, and the quick
+	// ends behind it are the quickest **seen**, not a speed the world guarantees.
+	// A run that comes in under it means the pace should be measured again.
 	Floor time.Duration
 	// Expected is how long the job is likely to take, and it is the number to
 	// read. The floor is bound by the pacing; a real run is bound by getting to
@@ -173,15 +214,7 @@ func estimate(queries, wanted, wantedTries, ports, threads int, cooldown time.Du
 	// each of them and the next. The last query is not followed by a wait, so the
 	// job is one gap shorter than it has queries to place on that port.
 	perPort := (est.Queries + est.Ports - 1) / est.Ports
-	est.Floor = time.Duration(perPort-1) * est.Cooldown
-
-	// What the job costs, laid out as the work is shaped. Every query is taken on
-	// one identity, so it pays one first answer and then a later answer for each
-	// page after the first. Getting to a port that answers is paid once per port
-	// the work reaches, which is the count the warm-ups already stand for.
-	work := time.Duration(est.Warmups)*p.ReachPort +
-		time.Duration(est.Queries)*p.FirstRequest +
-		time.Duration(est.Queries*(pages-1))*p.LaterRequest
+	paced := time.Duration(perPort-1) * est.Cooldown
 
 	// That work is shared between the threads, but a thread with no port to run
 	// on is not a lane, and neither is one with no query left to take.
@@ -189,13 +222,42 @@ func estimate(queries, wanted, wantedTries, ports, threads int, cooldown time.Du
 	if lanes < 1 {
 		lanes = 1 // a job is taken by at least one thread, whatever it was told
 	}
-	est.Expected = work / time.Duration(lanes)
 
-	// Both numbers bound the same run, so the larger is the honest one. It also
-	// means a caller who passes no pace at all is answered with the pacing bound
-	// rather than with nothing.
+	est.Expected = shaped(est.Warmups, est.Queries, pages,
+		p.ReachPort.Typical, p.FirstRequest.Typical, p.LaterRequest.Typical) / time.Duration(lanes)
+
+	// The same shape at the quickest each request was ever measured at. A pace
+	// with no quick end leaves this at nought and the floor is the pacing alone,
+	// which is what it always was.
+	quickest := shaped(est.Warmups, est.Queries, pages,
+		p.ReachPort.Fast, p.FirstRequest.Fast, p.LaterRequest.Fast) / time.Duration(lanes)
+
+	// Both bound the same run, so the later of the two is the floor: waiting out
+	// the pauses and doing the work are not alternatives.
+	est.Floor = max(paced, quickest)
+
+	// And the expectation cannot sit under its own floor. It also means a caller
+	// who passes no pace at all is answered with the pacing bound rather than
+	// with nothing.
 	if est.Expected < est.Floor {
 		est.Expected = est.Floor
 	}
 	return est
+}
+
+// shaped is what a job of this shape costs at the three per-request costs given.
+//
+// Every query is taken on one identity, so it pays one first answer and then a
+// later answer for each page after the first. Getting to a port that answers is
+// paid once per port the work reaches, which is the count the warm-ups already
+// stand for.
+//
+// It is one function rather than two because the expectation and the floor
+// differ only in which end of each measured range they are handed. Written
+// twice, they would drift, and the two numbers on the screen would stop being
+// the same arithmetic over the same job.
+func shaped(warmups, queries, pages int, reach, first, later time.Duration) time.Duration {
+	return time.Duration(warmups)*reach +
+		time.Duration(queries)*first +
+		time.Duration(queries*(pages-1))*later
 }

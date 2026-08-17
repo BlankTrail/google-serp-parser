@@ -277,8 +277,12 @@ func TestCreatingAJob_AnswersWithWhatTheJobWillCost(t *testing.T) {
 		// passed where the ports go quotes a job nobody asked for.
 		{"ports", 6},
 		// Thirteen queries over six ports puts three on the busiest one, which
-		// waits out two gaps of the two seconds the pool keeps between requests.
-		{"floor_seconds", 4},
+		// waits out two gaps of the two seconds the pool keeps between requests —
+		// four seconds of waiting, and far less than the work itself takes at the
+		// quickest it was ever measured. The floor is the later of the two, so it
+		// is that work: six ports reached, thirteen first answers and thirteen
+		// later ones, over the six lanes the ports allow.
+		{"floor_seconds", (6*27 + 13*4.7 + 13*1.4) / 2},
 	} {
 		if got.Estimate[want.field] != want.value {
 			t.Errorf("the estimate says %s=%v, want %v", want.field, got.Estimate[want.field], want.value)

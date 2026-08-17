@@ -194,7 +194,7 @@ var catalogue = map[Lang]map[string]string{
 		"estimate.worst":         "At worst",
 		"estimate.expected":      "Expected time",
 		"estimate.caveat":        "from per-request costs measured on one list, on one day, whose own spread is a factor of twenty",
-		"estimate.floor":         "Floor, counting the pauses alone",
+		"estimate.floor":         "Not sooner than",
 
 		// The screen an operator watches. Every phrase here names a number or a
 		// thing, and not one of them says whether the number is good. See
@@ -359,7 +359,7 @@ var catalogue = map[Lang]map[string]string{
 		"estimate.worst":         "В худшем случае",
 		"estimate.expected":      "Ожидаемое время",
 		"estimate.caveat":        "по стоимости запроса, измеренной на одном списке за один день, с разбросом в двадцать раз",
-		"estimate.floor":         "Нижняя граница, считая одни паузы",
+		"estimate.floor":         "Не раньше чем",
 
 		"state.title":            "Состояние",
 		"state.running":          "Идёт сейчас",
