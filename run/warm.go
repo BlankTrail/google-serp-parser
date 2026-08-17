@@ -31,15 +31,46 @@ const IdleBeforeWarming = 15 * time.Minute
 // in between.
 const warmingRound = time.Minute
 
-// warmingPhrases are what a warming request asks for.
+// warmingSubjects and warmingAsks are the two halves a warming phrase is built
+// from, and warmingPhrase puts them together.
 //
-// They are ordinary and dull on purpose, and there are several so that a port
-// warmed all afternoon is not a port asking the same question every fifteen
-// minutes. Nothing is done with what comes back: the request exists to be made,
-// not to be read.
-var warmingPhrases = []string{
+// A fixed list stood here, of ten. At one warming per identity per quarter of an
+// hour that is four an hour, so an identity warmed through an afternoon asked
+// the same handful of questions over and over — and every identity on the
+// machine asked from the same handful. Built from two lists instead, the same
+// amount of writing gives a few hundred phrases, and a repeat on one identity
+// stops being something that happens by lunchtime.
+//
+// Every word is ordinary and dull on purpose, and every pairing has to read like
+// something a person would type. Nothing is done with what comes back: the
+// request exists to be made, not to be read.
+var warmingSubjects = []string{
 	"weather", "train times", "recipes", "dictionary", "news",
 	"maps", "calculator", "translate", "opening hours", "football results",
+	"bus timetable", "post office", "pharmacy", "hardware store", "library",
+	"cinema", "swimming pool", "car park", "dentist", "bakery",
+	"pizza", "coffee", "haircut", "laundry", "petrol station",
+}
+
+// warmingAsks are what a person adds to a subject when a bare word is not the
+// whole question.
+var warmingAsks = []string{
+	"near me", "open now", "prices", "reviews", "phone number",
+	"today", "this weekend", "for beginners", "how much", "best",
+	"delivery", "booking",
+}
+
+// warmingPhrase is one thing to search for.
+//
+// A third of them are the bare subject, because that is how a good deal of real
+// searching is done, and a machine whose every request carried a tail would be
+// as recognisable as one that asked the same ten questions.
+func warmingPhrase() string {
+	subject := warmingSubjects[rand.IntN(len(warmingSubjects))]
+	if rand.IntN(3) == 0 {
+		return subject
+	}
+	return subject + " " + warmingAsks[rand.IntN(len(warmingAsks))]
 }
 
 // Warmer keeps a pool's standing ports warm.
@@ -56,10 +87,6 @@ type Warmer struct {
 	// round will try another — but a machine where every one of them fails is a
 	// machine whose identities are all dead, and that has to be readable.
 	Log *slog.Logger
-	// Country and Language are what a warming request asks for, so a warmed port
-	// has been through the same conversation the work will have with it.
-	Country, Language string
-
 	// idle and round are the two spans, overridable so a test does not have to
 	// wait a quarter of an hour to watch this work.
 	idle  time.Duration
@@ -167,11 +194,13 @@ func (w *Warmer) warmOne(ctx context.Context, lease *blanktrail.Lease) {
 	}
 	sess := google.NewSession(lease.Client().Transport)
 	sess.Client.Timeout = lease.Client().Timeout
-	q := google.Query{
-		Text:     warmingPhrases[rand.IntN(len(warmingPhrases))],
-		Country:  w.Country,
-		Language: w.Language,
-	}
+	// No country and no language. A warming request is not the work: what it is
+	// for is that this identity has been to Google once, and the locale of the
+	// results is a parameter of each request rather than a property of the
+	// identity — a job asks for whatever locale it wants afterwards and the
+	// identity stays warm. Asking for none lets Google answer as it would answer
+	// whoever is behind this address, which is what an ordinary visitor gets.
+	q := google.Query{Text: warmingPhrase()}
 	if _, err := sess.Search(ctx, q); err != nil {
 		if ctx.Err() == nil && w.Log != nil {
 			w.Log.Info("keeping an identity warm did not get through, which is what the next round is for",

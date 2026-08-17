@@ -5,6 +5,9 @@ package run
 import (
 	"context"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,18 +143,89 @@ func TestWarmer_StopsWhenItIsToldTo(t *testing.T) {
 	}
 }
 
-func TestWarmer_AsksForOrdinaryThingsAndNotTheSameOneEveryTime(t *testing.T) {
-	// A port warmed all afternoon must not be a port asking the same question
-	// every fifteen minutes: that is a pattern, and a pattern is the one thing
-	// keeping an identity quiet is meant to avoid.
-	if len(warmingPhrases) < 5 {
-		t.Errorf("there are %d phrases to warm with, which is a pattern", len(warmingPhrases))
-	}
-	seen := map[string]bool{}
-	for _, phrase := range warmingPhrases {
-		if seen[phrase] {
-			t.Errorf("%q is in the list twice", phrase)
+func TestWarmer_AsksForOrdinaryThingsAndNoWordTwice(t *testing.T) {
+	// The two lists a phrase is built from. A word in one of them twice is a word
+	// that comes up twice as often as the rest, which is the beginning of the
+	// pattern this arrangement exists to avoid.
+	for _, list := range []struct {
+		what  string
+		words []string
+	}{
+		{"subjects", warmingSubjects},
+		{"tails", warmingAsks},
+	} {
+		if len(list.words) < 5 {
+			t.Errorf("there are %d %s to build a phrase from, which is a pattern",
+				len(list.words), list.what)
 		}
-		seen[phrase] = true
+		seen := map[string]bool{}
+		for _, word := range list.words {
+			if seen[word] {
+				t.Errorf("%q is in the %s twice", word, list.what)
+			}
+			seen[word] = true
+		}
+	}
+}
+
+func TestWarmer_AsksForNoLocaleSoTheAddressItselfDecidesIt(t *testing.T) {
+	// A warming request is not the work. What it is for is that this identity has
+	// been to Google once; the locale of the results is a parameter of each
+	// request rather than a property of the identity, so a job asks for whatever
+	// locale it wants afterwards and the identity stays warm. Asking for none
+	// lets Google answer as it would answer whoever is behind this address, which
+	// is what an ordinary visitor gets — and a machine whose every identity, on
+	// addresses all over the world, warmed itself with the same country in the
+	// query is a machine describing itself.
+	var mu sync.Mutex
+	var asked []url.Values
+	o := newOrigin(t, func(r *http.Request, _ int) string {
+		mu.Lock()
+		asked = append(asked, r.URL.Query())
+		mu.Unlock()
+		return serpBody("example.com")
+	})
+	pool := poolFacing(t, o.addr(), 1).Pool
+	pool.KeepWarm()
+
+	w := &Warmer{Pool: pool, idle: time.Hour, round: time.Millisecond, warmed: func() {}}
+	w.oneRound(t.Context(), time.Hour)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) == 0 {
+		t.Fatal("nothing was asked, so this test measures nothing")
+	}
+	for _, q := range asked {
+		if got := q.Get("gl"); got != "" {
+			t.Errorf("a warming request named the country %q, and it should name none", got)
+		}
+		if got := q.Get("hl"); got != "" {
+			t.Errorf("a warming request named the language %q, and it should name none", got)
+		}
+		if q.Get("q") == "" {
+			t.Error("a warming request asked for nothing at all")
+		}
+	}
+}
+
+func TestWarmingPhrase_IsNotTheSameHandfulOfQuestionsAllDay(t *testing.T) {
+	// One warming per identity per quarter of an hour is four an hour, so a fixed
+	// handful is a handful an identity works through by lunchtime and then starts
+	// again — and every identity on the machine works through the same one. Built
+	// from two lists, the same amount of writing gives a few hundred phrases.
+	seen := map[string]int{}
+	for range 400 {
+		phrase := warmingPhrase()
+		if strings.TrimSpace(phrase) != phrase || phrase == "" {
+			t.Fatalf("a warming phrase is %q, which is not something anybody types", phrase)
+		}
+		seen[phrase]++
+	}
+	// Four hundred draws from a few hundred phrases; anything near the ten this
+	// replaced is the old list under a new name.
+	if len(seen) < 100 {
+		t.Errorf("four hundred warmings produced %d different phrases, and a machine "+
+			"asking that few different questions is a machine with a habit", len(seen))
 	}
 }

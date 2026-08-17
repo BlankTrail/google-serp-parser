@@ -301,14 +301,6 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	return web.NewSupervisor(st, o.raise(saved, fromEnv, warm), ports, threads), warm
 }
 
-// The country and language a warming request asks for. They are the same
-// defaults a new job is offered, so a warmed identity has been through the
-// conversation the work will have with it rather than a different one.
-const (
-	warmingCountry  = "us"
-	warmingLanguage = "en"
-)
-
 // deviceOr is the kind of result page asked for, and a desktop where nobody
 // asked. It is one function because the answer to an empty choice has to be the
 // same everywhere it is read.
@@ -780,10 +772,7 @@ func (w *warmSet) start(pool *blanktrail.Pool, device string) {
 	log := w.log
 	w.mu.Unlock()
 
-	go (&run.Warmer{
-		Pool: pool, Log: log,
-		Country: warmingCountry, Language: warmingLanguage,
-	}).Run(ctx)
+	go (&run.Warmer{Pool: pool, Log: log}).Run(ctx)
 }
 
 // Close gives up the identities and stops warming them.
