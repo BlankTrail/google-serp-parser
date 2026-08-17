@@ -447,3 +447,111 @@ func TestHistory_ShowsNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 		}
 	}
 }
+
+func TestDownload_CarriesTheAddressesAnIndexJobFoundNothingFor(t *testing.T) {
+	// This is the half of the answer the job was run for. Exporting only what was
+	// found leaves an address Google does not hold indistinguishable from one
+	// that was never in the list, and the file looks complete either way.
+	s := testServer(t)
+	id := seedIndexJob(t, s, "is it indexed",
+		[]string{"held.test/a", "missing.test/b", "held.test/c"},
+		map[string]bool{"held.test/a": true, "held.test/c": true})
+
+	rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export gave %d, want 200", rec.Code)
+	}
+	records, err := csv.NewReader(bytes.NewReader(rec.Body.Bytes())).ReadAll()
+	if err != nil {
+		t.Fatalf("what came back does not read as CSV: %v", err)
+	}
+	if len(records)-1 != 3 {
+		t.Fatalf("the file carries %d lines, want one for each of the 3 addresses checked: %v",
+			len(records)-1, records)
+	}
+	if got := records[0]; got[1] != "address" || got[2] != "held" {
+		t.Errorf("the header is %v, which is not a file of verdicts", got)
+	}
+	want := [][]string{
+		{"0", "held.test/a", "true"},
+		{"1", "missing.test/b", "false"},
+		{"2", "held.test/c", "true"},
+	}
+	for i, line := range records[1:] {
+		if !slices.Equal(line, want[i]) {
+			t.Errorf("line %d came back as %v, want %v", i, line, want[i])
+		}
+	}
+}
+
+func TestDownload_LeavesOutAnAddressTheIndexJobNeverReached(t *testing.T) {
+	// An address still waiting has no answer. Writing it as not held reports a
+	// check that never happened, and a reader has no way to disbelieve it.
+	s := testServer(t)
+	ctx := t.Context()
+	id, err := s.store.CreateJob(ctx,
+		store.JobSpec{Name: "half run", Kind: store.KindIndex, Pages: 1},
+		[]string{"held.test/a", "waiting.test/b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.store.Record(ctx, id, store.QueryOutcome{Ordinal: 0,
+		Pages: []google.SERP{{Origin: "https://www.google.com", Results: []google.Result{
+			{Title: "held", URL: "https://held.test/a", Host: "held.test"},
+		}}}}); err != nil {
+		t.Fatalf("recording the address that was checked: %v", err)
+	}
+
+	rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=jsonl")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export gave %d, want 200", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "waiting.test/b") {
+		t.Errorf("the export answered for an address nobody checked: %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "held.test/a") {
+		t.Errorf("the export left out the address that was checked: %q", rec.Body.String())
+	}
+}
+
+func TestDownload_WritesAnIndexJobAsVerdictsInEveryFormatTheExportKnows(t *testing.T) {
+	// An operator picks a format, not a format and a kind of job.
+	s := testServer(t)
+	id := seedIndexJob(t, s, "both formats",
+		[]string{"held.test/a", "missing.test/b"}, map[string]bool{"held.test/a": true})
+
+	for _, format := range export.Formats() {
+		rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format="+format)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s gave %d, want 200", format, rec.Code)
+			continue
+		}
+		if !strings.Contains(rec.Body.String(), "missing.test/b") {
+			t.Errorf("%s left out the address nothing was found for: %q", format, rec.Body.String())
+		}
+	}
+}
+
+func TestDownload_LeavesASearchJobsExportExactlyAsItWas(t *testing.T) {
+	// The verdict shape answers a question a search job was never asked. A search
+	// export that came back in it would break every reader already parsing one.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 2, 2, 0)
+
+	rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=csv")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export gave %d, want 200", rec.Code)
+	}
+	records, err := csv.NewReader(bytes.NewReader(rec.Body.Bytes())).ReadAll()
+	if err != nil {
+		t.Fatalf("what came back does not read as CSV: %v", err)
+	}
+	want := []string{"ordinal", "query", "page", "rank", "title", "url", "host", "snippet"}
+	if !slices.Equal(records[0], want) {
+		t.Errorf("a search export's header is %v, want %v", records[0], want)
+	}
+	// Four rows: two queries, each holding the two results seedJob files.
+	if len(records)-1 != 4 {
+		t.Errorf("a search export carries %d rows, want the 4 the history holds", len(records)-1)
+	}
+}

@@ -20,6 +20,8 @@ import (
 	"path"
 	"time"
 
+	"github.com/blanktrail/google-serp-parser/blanktrail"
+	"github.com/blanktrail/google-serp-parser/settings"
 	"github.com/blanktrail/google-serp-parser/store"
 )
 
@@ -54,7 +56,23 @@ type Config struct {
 	// and refuses to start anything, which is what a reader of a history on
 	// another machine gets.
 	Supervisor *Supervisor
+	// SettingsPath is the file the connection is kept in. A server built without
+	// one offers no settings at all, rather than a page whose save button writes
+	// nowhere.
+	SettingsPath string
+	// Connect opens what jobs run on, from settings that have just been saved. A
+	// server built without one saves settings and takes none of them into use
+	// until it is started again.
+	Connect Connect
 }
+
+// Connect opens what jobs are run on, from the settings just saved.
+//
+// It is handed in rather than built here because how many ports a run opens,
+// how long they rest and what they are opened as is decided by the command that
+// starts this server. A browser interface with a second opinion about that would
+// give a job set up here a different cost from the same job set up there.
+type Connect func(ctx context.Context, saved settings.Settings) (*blanktrail.Pool, error)
 
 // Server is the browser interface.
 type Server struct {
@@ -63,6 +81,18 @@ type Server struct {
 	sup   *Supervisor
 	pages map[string]*template.Template
 	mux   *http.ServeMux
+	// settingsPath is the file the connection is kept in, and empty on a server
+	// that keeps none.
+	settingsPath string
+	// connect opens what jobs run on. It is the caller's Connect, wrapped in what
+	// the supervisor takes, so that everything below this line talks about the
+	// same thing whether it came from a pool or from a stand-in.
+	connect func(ctx context.Context, saved settings.Settings) (engine, error)
+	// now is where this server reads the clock. It is a field so that a test can
+	// hold the clock still: how long a job has been running is a number on the
+	// screen, and a test that could not name the instant could only check that
+	// something was printed.
+	now func() time.Time
 }
 
 // New builds the server and parses its pages once.
@@ -82,14 +112,25 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		store: cfg.Store,
-		log:   cfg.Logger,
-		sup:   cfg.Supervisor,
-		pages: pages,
-		mux:   http.NewServeMux(),
+		store:        cfg.Store,
+		log:          cfg.Logger,
+		sup:          cfg.Supervisor,
+		pages:        pages,
+		mux:          http.NewServeMux(),
+		now:          time.Now,
+		settingsPath: cfg.SettingsPath,
 	}
 	if s.log == nil {
 		s.log = slog.Default()
+	}
+	if open := cfg.Connect; open != nil {
+		s.connect = func(ctx context.Context, saved settings.Settings) (engine, error) {
+			pool, err := open(ctx, saved)
+			if err != nil {
+				return nil, err
+			}
+			return &poolEngine{pool: pool, threads: atLeastOne(saved.Threads)}, nil
+		}
 	}
 	s.routes()
 	return s, nil
@@ -126,11 +167,20 @@ func parsePages() (map[string]*template.Template, error) {
 }
 
 func (s *Server) routes() {
-	s.mux.HandleFunc("GET /{$}", s.index)
-	s.mux.HandleFunc("GET /new", s.newJob)
-	s.mux.HandleFunc("POST /new", s.createJob)
+	// What is happening right now is what the bare address answers with, because
+	// whoever keeps this open all day is following a run rather than reading a
+	// list. Every other screen has an address of its own for the same reason this
+	// one does: it can be opened cold, bookmarked, and sent to whoever is on the
+	// next shift.
+	s.mux.HandleFunc("GET "+stateAt+"{$}", s.state)
+	s.mux.HandleFunc("GET "+jobsAt, s.jobs)
+	s.mux.HandleFunc("GET "+newAt, s.newJob)
+	s.mux.HandleFunc("POST "+newAt, s.createJob)
+	// A list too large for the box has an address of its own, because it is read
+	// as it arrives and a form the server reads whole cannot be.
+	s.mux.HandleFunc("POST "+uploadAt, s.uploadList)
 	s.mux.HandleFunc("GET /job/{id}", s.job)
-	s.mux.HandleFunc("GET /history", s.history)
+	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)
 	// What the job page polls, and what its two buttons send. Both buttons are
 	// registered for post alone, so a browser prefetching a link, or anything
@@ -139,6 +189,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/progress", s.apiProgress)
 	s.mux.HandleFunc("POST /api/stop", s.apiStop)
 	s.mux.HandleFunc("POST /api/resume", s.apiResume)
+	// The settings are offered only by a server that has somewhere to write them.
+	// A page that took a connection and dropped it is worse than no page: the
+	// reader has no way of telling the two apart until the next restart.
+	if s.settingsPath != "" {
+		s.mux.HandleFunc("GET "+settingsAt, s.settingsPage)
+		s.mux.HandleFunc("POST "+settingsAt, s.saveSettings)
+		s.mux.HandleFunc("POST "+checkAt, s.checkConnection)
+	}
 	// One path element, so a name can never walk out of the directory it is
 	// looked up in.
 	s.mux.HandleFunc("GET /assets/{file}", s.asset)
@@ -196,7 +254,8 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 // page is what every template is handed, whatever else the page carries. The
-// layout can then count on the language and the switcher being there.
+// layout can then count on the language, the switcher and the header being
+// there.
 type page struct {
 	// Lang is the language the page is written in.
 	Lang Lang
@@ -205,6 +264,18 @@ type page struct {
 	Title string
 	// Langs is the switcher, offering this same address in each language.
 	Langs []langLink
+	// Tabs is the header, with the screen being read already marked.
+	Tabs []tabLink
+	// Settings is the way to the settings, or nil on a server that keeps none.
+	// They stand beside the screens rather than among them: a tab is a place the
+	// work is watched from, and this is where the machine is set up.
+	Settings *tabLink
+	// Refresh is how often this screen asks the server to draw it again, in the
+	// milliseconds a browser counts in, and nought when nothing on it is going to
+	// come back different. Whether a screen is worth watching is a decision, so
+	// it is made here and carried in the markup rather than guessed at in the
+	// browser.
+	Refresh int64
 }
 
 // T is how a template asks for a phrase. Templates name a key and never a
@@ -212,24 +283,33 @@ type page struct {
 func (p page) T(key string) string { return p.Lang.T(key) }
 
 // frame builds the part of a page that does not depend on what is on it.
-func frame(r *http.Request, lang Lang, title string) page {
-	return page{Lang: lang, Title: title, Langs: switcher(r, lang)}
+//
+// The tab is named separately from the title because they are not the same
+// thing: a job's own page is titled after that job and stands under the list of
+// jobs, and a screen that lit no tab would tell the reader they had left the
+// program.
+func (s *Server) frame(r *http.Request, lang Lang, title, under string) page {
+	p := page{Lang: lang, Title: title, Langs: switcher(r, lang), Tabs: tabsFor(under)}
+	if s.settingsPath != "" {
+		p.Settings = &tabLink{Key: "settings.title", URL: settingsAt, Current: under == settingsAt}
+	}
+	return p
 }
 
-// indexPage is the job list.
-type indexPage struct {
+// jobsPage is the list of everything that has been run.
+type jobsPage struct {
 	page
 	Jobs []store.JobSummary
 }
 
-func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	lang := rememberLang(w, r)
+func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
+	lang := s.rememberLang(w, r)
 	jobs, err := s.store.Jobs(r.Context(), 0)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.render(w, r, "index.html", indexPage{page: frame(r, lang, "jobs.title"), Jobs: jobs})
+	s.render(w, r, "jobs.html", jobsPage{page: s.frame(r, lang, "jobs.title", jobsAt), Jobs: jobs})
 }
 
 // render writes a page, and says so plainly when it cannot.

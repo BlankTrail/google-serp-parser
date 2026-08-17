@@ -58,6 +58,7 @@ var validSchemes = map[string]bool{
 //	user:pass@host:port
 //	host:port
 //	host:port:user:pass
+//	user:pass:host:port
 //	[ipv6]:port (optionally with a scheme and/or user:pass@)
 //
 // Blank lines and comments (# // ;) are skipped.
@@ -113,12 +114,74 @@ func parseLine(line, defaultScheme string) (Upstream, error) {
 		return newUpstream(scheme, host, port, "", "")
 	}
 
-	// host:port:user:pass (bare colon form, IPv4/hostname only)
+	// The bare four-field form, written in either order and marked as neither.
 	if parts := strings.Split(rest, ":"); len(parts) == 4 {
-		return newUpstream(scheme, parts[0], parts[1], parts[2], parts[3])
+		return parseFour(scheme, parts)
 	}
 
 	return Upstream{}, fmt.Errorf("cannot parse %q", line)
+}
+
+// parseFour reads a:b:c:d as host:port:user:pass or as user:pass:host:port,
+// deciding from the fields themselves.
+//
+// The port is what tells the two apart. A port is a number between 1 and 65535
+// and a password rarely is, so a line whose second field is a port number is
+// written address first and one whose fourth field is a port number is written
+// credentials first.
+//
+// A line answering to both — a numeric password, as in user:1234:1.1.1.1:8080 —
+// is settled by which of the two candidate hosts is written like an address:
+// hosts in a list are IP addresses or full names, and both carry dots where a
+// user name usually carries none.
+//
+// A line still answering to both after that, such as 1.1.1.1:8080:2.2.2.2:9090,
+// is read address first. One reading has to win outright and be stated: on a
+// list of fifteen thousand lines, deciding each line on its own merits means
+// part of the list is read one way and part the other with nothing to notice it
+// by. Address first wins because it is the order this program has always read,
+// so no list that worked yesterday is read differently today.
+func parseFour(scheme string, parts []string) (Upstream, error) {
+	addressFirst, credentialsFirst := looksLikePort(parts[1]), looksLikePort(parts[3])
+	if addressFirst && credentialsFirst {
+		addressFirst = looksLikeAddress(parts[0]) || !looksLikeAddress(parts[2])
+	}
+	switch {
+	case addressFirst:
+		return newUpstream(scheme, parts[0], parts[1], parts[2], parts[3])
+	case credentialsFirst:
+		return newUpstream(scheme, parts[2], parts[3], parts[0], parts[1])
+	}
+	return Upstream{}, fmt.Errorf("no field of %q is a port number", strings.Join(parts, ":"))
+}
+
+// looksLikePort reports whether a field is written as a port number. Only
+// digits count: a signed or spaced number reaches here from a line that is
+// something other than an address, and reading it as a port would put that line
+// in the rotation instead of in front of the reader.
+func looksLikePort(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	return err == nil && n >= 1 && n <= 65535
+}
+
+// looksLikeAddress reports whether a field is written the way hosts in a proxy
+// list are written: an IP address, or a name carrying a dot. It is asked only
+// to break a tie between two readings that both parse, so a plain single-label
+// host answering no here costs nothing — the port has already decided that
+// line.
+func looksLikeAddress(s string) bool {
+	if net.ParseIP(s) != nil {
+		return true
+	}
+	return strings.Contains(s, ".") && !strings.HasPrefix(s, ".") && !strings.HasSuffix(s, ".")
 }
 
 // splitHostPort accepts host:port and [ipv6]:port; it rejects anything with

@@ -26,10 +26,27 @@ type JobSummary struct {
 	FinishedAt time.Time
 	Finished   bool
 
+	// Kind is what the job asks Google for — KindSearch or KindIndex. A reader
+	// that does not know it cannot say what a row of this job means: the same
+	// captured result is a position under one kind and a verdict under the other.
+	Kind string
+
+	// UniqueBy is what this job drops as a repeat, and Dropped is how many it
+	// has dropped. They travel together because neither says much alone: a count
+	// with no filter behind it reads as results lost to something unnamed, and a
+	// filter with no count reads as one that found nothing to do.
+	UniqueBy UniqueBy
+	Dropped  int
+
 	Pages    int
 	Country  string
 	Language string
 	SpecName string
+
+	// PlanReady says the job's list of queries finished arriving. A job without
+	// it is one whose upload broke off part way: it is here, it holds whatever
+	// reached the database, and nothing will run it.
+	PlanReady bool
 
 	Total   int
 	Done    int
@@ -44,8 +61,9 @@ type JobSummary struct {
 // what keeps a job nothing was recorded against in the answer, with a count of
 // nothing rather than a count of one.
 const jobSummaryQuery = `
-	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''),
-	       j.pages, j.country, j.language, j.spec_name,
+	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind,
+	       j.unique_by, j.dropped,
+	       j.pages, j.country, j.language, j.spec_name, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
 	       sum(CASE WHEN q.state = 'failed'  THEN 1 ELSE 0 END),
@@ -114,8 +132,9 @@ type scanner interface {
 func scanSummary(row scanner) (JobSummary, error) {
 	var sum JobSummary
 	var created, finished string
-	err := row.Scan(&sum.ID, &sum.Name, &created, &finished,
-		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName,
+	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind,
+		&sum.UniqueBy, &sum.Dropped,
+		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobSummary{}, err

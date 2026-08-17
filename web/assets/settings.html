@@ -1,0 +1,132 @@
+{{define "main"}}
+<h1>{{.T "settings.title"}}</h1>
+
+{{/* A complaint is neutral, like every other word on every other page. Colour
+     belongs to the bar on a running job, and a form that shouts is a form
+     nobody reads twice. What tells the reader these are faults is that they
+     stand above the boxes they are about. */}}
+{{if .Complaints}}
+<ul class="faults">
+{{range .Complaints}}<li>{{$.T .}}</li>
+{{end}}</ul>
+{{end}}
+
+{{/* Everything the check found, in the order it found it, each with what is
+     wrong and what to do about it. Reduced to whether it passed, this list
+     would throw away the only part that helps anybody. */}}
+{{if .Findings}}
+<section class="card">
+<h2>{{.T "settings.check.title"}}</h2>
+{{if .Checked}}
+<ul class="findings">
+{{range .Checked}}<li>
+<p class="lead">{{$.T .Severity}} — {{.Title}}</p>
+{{if .Detail}}<p class="empty">{{.Detail}}</p>{{end}}
+{{if .Action}}<p class="empty">{{.Action}}</p>{{end}}
+</li>
+{{end}}</ul>
+{{else}}
+<p class="empty">{{.T "settings.check.nothing"}}</p>
+{{end}}
+</section>
+{{end}}
+
+{{/* One form, three presses: save, check, and — while a job is running — the
+     two answers to what should happen to that job. The check carries the same
+     boxes to a different address rather than living in a form of its own, so
+     what is checked is what is on the screen. Nothing here needs a script. */}}
+<form class="card fields" method="post" action="/settings">
+
+<fieldset>
+<legend>{{.T "settings.connection"}}</legend>
+<div class="field">
+<label for="control_url">{{.T "settings.address"}}</label>
+<input id="control_url" name="control_url" value="{{.Form.ControlURL}}">
+</div>
+<div class="field">
+<label for="api_key">{{.T "settings.key"}}</label>
+{{/* The box is empty and stays empty. The key is shown by its last few
+     characters, which name it and cannot be used as it, and they are shown
+     beside the box rather than in it: a value in the box is a value the next
+     save would write back as the key itself. */}}
+<input id="api_key" name="api_key" type="password" value="" autocomplete="off">
+</div>
+{{if .KeyTail}}<p class="empty">{{.T "settings.key.saved"}} {{.KeyTail}}</p>{{end}}
+<p class="empty">{{.T "settings.key.keep"}}</p>
+</fieldset>
+
+<fieldset>
+<legend>{{.T "settings.source"}}</legend>
+<div class="row">
+<div class="field">
+<label for="source">{{.T "settings.source.where"}}</label>
+<select id="source" name="source">
+{{range .Sources}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{$.T .Key}}</option>
+{{end}}</select>
+</div>
+<div class="field">
+<label for="source_at">{{.T "settings.source.at"}}</label>
+<input id="source_at" name="source_at" size="34" value="{{.Form.Where}}">
+</div>
+<div class="field">
+<label for="source_refresh">{{.T "settings.source.refresh"}}</label>
+<input id="source_refresh" name="source_refresh" type="number" min="0" value="{{.Form.Refresh}}">
+</div>
+</div>
+{{/* What a list may look like, said here rather than found out by writing one:
+     a file read and understood line by line reports nothing on this page, so a
+     list in a form this program does not read is a list that is simply
+     smaller than it looks. */}}
+<p class="empty">{{.T "settings.source.forms"}}</p>
+</fieldset>
+
+<fieldset>
+<legend>{{.T "settings.pool"}}</legend>
+<div class="row">
+<div class="field">
+<label for="threads">{{.T "form.threads"}}</label>
+<input id="threads" name="threads" type="number" min="1" value="{{.Form.Threads}}">
+</div>
+<div class="field">
+<label for="ports">{{.T "form.ports"}}</label>
+<input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}">
+</div>
+<div class="field">
+<label for="cooldown">{{.T "settings.pause"}}</label>
+<input id="cooldown" name="cooldown" type="number" min="0" value="{{.Form.Pause}}">
+</div>
+</div>
+</fieldset>
+
+<fieldset>
+<legend>{{.T "settings.language"}}</legend>
+<div class="field">
+<label for="language">{{.T "settings.language"}}</label>
+{{/* Each language is offered by the name it calls itself, exactly as the
+     switcher in the header offers it: whoever is choosing may not be able to
+     read the page they are choosing on. */}}
+<select id="language" name="language">
+{{range .Tongues}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{if .Name}}{{.Name}}{{else}}{{$.T .Key}}{{end}}</option>
+{{end}}</select>
+</div>
+</fieldset>
+
+{{if .Asking}}
+{{/* A job is running, and the two answers cost different things. Which price to
+     pay is the reader's to decide, so the save button is replaced by the two
+     answers until one of them is pressed. */}}
+<p>{{.T "settings.running.asks"}}</p>
+<p class="empty">{{.T "settings.running.cost"}}</p>
+<div class="actions">
+<button type="submit" name="{{.When.Field}}" value="{{.When.Now}}">{{.T "settings.running.now"}}</button>
+<button type="submit" name="{{.When.Field}}" value="{{.When.After}}">{{.T "settings.running.after"}}</button>
+<button type="submit" formaction="/settings/check">{{.T "settings.check"}}</button>
+</div>
+{{else}}
+<div class="actions">
+<button type="submit">{{.T "settings.save"}}</button>
+<button type="submit" formaction="/settings/check">{{.T "settings.check"}}</button>
+</div>
+{{end}}
+</form>
+{{end}}

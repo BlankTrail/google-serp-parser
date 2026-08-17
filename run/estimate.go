@@ -118,19 +118,41 @@ func EstimateFor(j Job, ports int, cooldown time.Duration) Estimate {
 // day. Anyone who has timed their own run has better numbers than that, and this
 // is where they put them.
 func EstimateWith(j Job, ports, threads int, cooldown time.Duration, p Pace) Estimate {
-	pages := j.Pages
+	return estimate(len(j.Queries), j.Pages, j.Tries, ports, threads, cooldown, p)
+}
+
+// EstimateSize works out the same cost for a job named by how big it is rather
+// than by what it holds.
+//
+// The screen that follows a running job knows how many queries the job has and
+// not what any of them says. Going through EstimateWith would mean building a
+// list of that many empty queries to be counted and thrown away, every time the
+// screen is drawn, which on a job of a million queries is tens of megabytes of
+// nothing per reader.
+//
+// The number of identities one query may be taken to is left at the default,
+// because a job read back out of a history carries no other answer.
+func EstimateSize(queries, pages, ports, threads int, cooldown time.Duration, p Pace) Estimate {
+	return estimate(queries, pages, 0, ports, threads, cooldown, p)
+}
+
+// estimate is the arithmetic both doors lead to. Keeping it in one place is what
+// makes the number a reader is quoted before a job starts the same number they
+// are held to while it runs.
+func estimate(queries, wanted, wantedTries, ports, threads int, cooldown time.Duration, p Pace) Estimate {
+	pages := wanted
 	if pages < 1 {
 		pages = 1
 	}
-	tries := j.Tries
+	tries := wantedTries
 	if tries < 1 {
 		tries = defaultTries
 	}
 
 	est := Estimate{
-		Queries:  len(j.Queries),
+		Queries:  queries,
 		Pages:    pages,
-		Searches: len(j.Queries) * pages,
+		Searches: queries * pages,
 		Ports:    ports,
 		Cooldown: cooldown,
 	}

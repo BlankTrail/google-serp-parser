@@ -26,6 +26,11 @@ import (
 // one line. Two queues would each run a job at a time and the machine would run
 // two, which is neither what was measured nor what was asked for.
 type Supervisor interface {
+	// CanRun reports whether there is anything for a job to run on. A queue that
+	// answers no still takes jobs — it holds them rather than losing them — so
+	// asking before writing one down is the difference between a caller being
+	// told what is missing and a caller watching a job that never starts.
+	CanRun() bool
 	// Enqueue writes a job down and puts it at the back of the queue.
 	Enqueue(spec store.JobSpec, queries []string) (int64, error)
 	// Resume puts a job that was left part way back in the queue.
@@ -159,6 +164,16 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 	if s.sup == nil {
 		writeError(w, http.StatusServiceUnavailable,
 			"this server was started without a queue and can set nothing running")
+		return
+	}
+	// A queue with nothing to run on takes a job and never starts it. The browser
+	// refuses one in that state and says why; a program asking the same machine
+	// for the same thing has to get the same answer, or the two ways in disagree
+	// about what this server can do and the caller is left watching a job that
+	// will not move.
+	if !s.sup.CanRun() {
+		writeError(w, http.StatusServiceUnavailable,
+			"this server has nothing to run a job on yet: set the connection up in the browser first")
 		return
 	}
 

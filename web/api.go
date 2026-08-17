@@ -22,6 +22,10 @@ type progressJSON struct {
 	Done    int   `json:"done"`
 	Failed  int   `json:"failed"`
 	Pending int   `json:"pending"`
+	// Dropped is how many results the job threw away as repeats. It travels with
+	// the counts because it climbs while the job runs, and a reader watching the
+	// results come in has to see the ones that did not.
+	Dropped int `json:"dropped"`
 
 	Finished bool `json:"finished"`
 	Running  bool `json:"running"`
@@ -46,6 +50,7 @@ func (s *Server) progress(sum store.JobSummary) progressJSON {
 		Done:     sum.Done,
 		Failed:   sum.Failed,
 		Pending:  sum.Pending,
+		Dropped:  sum.Dropped,
 		Finished: sum.Finished,
 		Running:  running,
 		Queued:   queued,
@@ -89,6 +94,30 @@ func (s *Server) apiProgress(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// backField is how a button carries the address of the screen it was pressed
+// on. It travels in the form because the screen knows where it is and the
+// handler does not: the same stop stands on a job's own page and on the screen
+// an operator watches.
+const backField = "back"
+
+// backTo is the screen a press comes back to: the one it was pressed on when it
+// said which that was, and the job's own page otherwise.
+//
+// Only a screen this program draws is honoured, and it is looked up in the list
+// of them rather than checked for a leading slash. A form is filled in by
+// whoever posts it, and a program that sent a reader wherever a posted field
+// asked would be a way of pointing at a machine of somebody else's choosing
+// from an address the reader trusts.
+func backTo(r *http.Request, jobID int64) string {
+	asked := r.FormValue(backField)
+	for _, t := range tabs {
+		if asked == t.At {
+			return asked
+		}
+	}
+	return jobPath(jobID)
+}
+
 // apiStop ends the job that is running.
 func (s *Server) apiStop(w http.ResponseWriter, r *http.Request) {
 	s.pressed(w, r, func(v *Supervisor, jobID int64) error { return v.Stop(jobID) })
@@ -118,14 +147,23 @@ func (s *Server) pressed(w http.ResponseWriter, r *http.Request, do func(*Superv
 		http.Error(w, pickLang(r).T("form.norunner"), http.StatusServiceUnavailable)
 		return
 	}
+	if !s.sup.canRun() {
+		// Nothing can be started here until the connection is set up, and a job
+		// taken up would wait in the queue with nothing to say why.
+		http.Error(w, pickLang(r).T("form.notsetup"), http.StatusServiceUnavailable)
+		return
+	}
 	err := do(s.sup, sum.ID)
 	switch {
 	case err == nil,
-		errors.Is(err, ErrNotRunning), errors.Is(err, ErrBusy), errors.Is(err, ErrNothingLeft):
+		errors.Is(err, ErrNotRunning), errors.Is(err, ErrBusy), errors.Is(err, ErrNothingLeft),
+		errors.Is(err, store.ErrPlanUnfinished):
 		// A button pressed twice, or pressed in the second a job ended in, is a
 		// race and not a fault. The page the reader lands on says what is true
-		// now, which is the answer they were after.
-		http.Redirect(w, r, jobPath(sum.ID), http.StatusSeeOther)
+		// now, which is the answer they were after. A job whose list never
+		// finished arriving is the same shape of thing: its page never offered
+		// this button, and the page says why.
+		http.Redirect(w, r, backTo(r, sum.ID), http.StatusSeeOther)
 	default:
 		s.fail(w, r, err)
 	}

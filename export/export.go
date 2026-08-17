@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 )
 
 // Row is one captured result, flat, because that is the shape both a
@@ -53,6 +54,14 @@ var ErrClosed = errors.New("export: the export is already finished")
 
 // Formats lists what New accepts, for help text and for a menu.
 func Formats() []string { return []string{"csv", "jsonl"} }
+
+// Writes reports whether this package can write a named format.
+//
+// It exists so a caller can refuse a format before it has decided which shape
+// of file it is writing. A refusal has to happen before a byte of the response
+// has gone out, and by then the caller may not yet know whether it is writing
+// rows or verdicts.
+func Writes(format string) bool { return slices.Contains(Formats(), format) }
 
 // New builds the writer for a named format.
 func New(format string, w io.Writer) (Writer, error) {

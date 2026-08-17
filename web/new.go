@@ -44,7 +44,15 @@ func buttons() actions {
 // It holds strings where the form holds strings, so a refusal can show exactly
 // what was typed rather than a number that failed to parse and became zero.
 type jobForm struct {
-	Name     string
+	Name string
+	// Kind is what the job asks Google for, in the words the history files it
+	// under. Empty is a search, so a form posted without the field is the job
+	// this program did before there was a choice.
+	Kind string
+	// Unique is what the job throws away as a repeat, in the word the history
+	// files it under. Empty keeps everything, so a form posted without the field
+	// is the job this program did before there was a choice.
+	Unique   string
 	Queries  string
 	Country  string
 	Language string
@@ -60,7 +68,167 @@ type jobForm struct {
 // the same job set up there cost the same, and neither has to be talked out of
 // a default the other does not have.
 func blankForm() jobForm {
-	return jobForm{Pages: 1, Threads: 2, Ports: 6}
+	return jobForm{Kind: store.KindSearch, Pages: 1, Threads: 2, Ports: 6}
+}
+
+// kinds is what a job can be, in the order the form offers them, each with the
+// key of what to call it.
+//
+// The two travel together so the markup cannot offer a choice the handler does
+// not take, or file a job under a word the database refuses.
+type jobKind struct {
+	Value string
+	Label string
+}
+
+func kinds() []jobKind {
+	return []jobKind{
+		{Value: store.KindSearch, Label: "form.kind.search"},
+		{Value: store.KindIndex, Label: "form.kind.index"},
+	}
+}
+
+// kindKey is the key of what to call a job of this kind, and whether it is a
+// kind at all.
+//
+// A form arriving with something else is refused rather than run as a search.
+// The two kinds ask Google different questions and the answers mean different
+// things, so quietly picking one would file a run under a question nobody asked.
+func kindKey(kind string) (string, bool) {
+	if kind == "" {
+		return "form.kind.search", true
+	}
+	for _, k := range kinds() {
+		if k.Value == kind {
+			return k.Label, true
+		}
+	}
+	// The word itself comes back, for the reason an untranslated key does: it is
+	// ugly and it reports itself, which beats a page that quietly calls a job
+	// something it is not.
+	return kind, false
+}
+
+// jobFilter is one way of dropping repeats, with the key of what to call it.
+//
+// It travels the way a kind does, for the same reason: the markup must not
+// offer a choice the handler does not take, or file a job under a word the
+// database refuses.
+type jobFilter struct {
+	Value string
+	Label string
+}
+
+func filters() []jobFilter {
+	return []jobFilter{
+		{Value: string(store.UniqueOff), Label: "form.unique.off"},
+		{Value: string(store.UniqueURL), Label: "form.unique.url"},
+		{Value: string(store.UniqueHost), Label: "form.unique.host"},
+	}
+}
+
+// filterKey is the key of what to call a way of dropping repeats, and whether
+// it is one at all.
+//
+// Keeping everything is among them and carries the empty word, so a form that
+// arrives without the field is a known answer rather than a refusal.
+func filterKey(unique string) (string, bool) {
+	for _, f := range filters() {
+		if f.Value == unique {
+			return f.Label, true
+		}
+	}
+	// The word itself comes back, for the reason an untranslated key does: it
+	// reports itself rather than letting a page describe a filter that is not
+	// there.
+	return unique, false
+}
+
+// filter is what this job drops as a repeat.
+//
+// An index job drops nothing, whatever the box says. Its answer is one verdict
+// per address, worked out from the results filed against that address, and a
+// result dropped for sharing a site with an earlier one would read back as an
+// address Google does not hold — the silent wrong answer this whole check
+// exists to avoid. It is settled here, as the depth is, so that the job filed
+// in the history and the job that runs say one thing.
+func (f jobForm) filter() store.UniqueBy {
+	if f.Kind == store.KindIndex {
+		return store.UniqueOff
+	}
+	return store.UniqueBy(f.Unique)
+}
+
+// runKind turns the word the history files a job under into what the runner
+// does with it.
+//
+// This is the one place the two vocabularies meet. The runner holds no words
+// the database would accept and the database holds no behaviour, so a kind
+// nobody has taught this function is run as a search — which is why nothing
+// reaches here without going through kindKey first.
+func runKind(kind string) run.Kind {
+	if kind == store.KindIndex {
+		return run.Index
+	}
+	return run.Search
+}
+
+// depth is how many result pages this job takes per line.
+//
+// An index check takes one however deep the box is set: presence is settled by
+// the first page. It is settled here rather than in the runner so that the job
+// filed in the history, the estimate quoted for it and the work actually done
+// all name one number.
+func (f jobForm) depth() int {
+	if f.Kind == store.KindIndex {
+		return 1
+	}
+	return f.Pages
+}
+
+// queryOf reads one line of a list and says whether there is a query on it.
+//
+// This is the one rule this program reads a list by, wherever the list came
+// from: the box on the form and a file of a million lines both come through
+// here. Two rules would be two answers to "how many queries have I got", and
+// the reader would have no way of telling which of them their job ran.
+//
+// The line is trimmed rather than split on: a box in a browser ends its lines
+// the way the web ends them, and a query carrying a stray return is a query
+// searched for with one. A blank line is nothing, and a line opening with a
+// hash is a note somebody left themselves.
+func queryOf(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	return line, true
+}
+
+// faults is everything wrong with a job apart from its list.
+//
+// It stands apart because a list arriving as a file is not there to be looked
+// at when these are decided: the boxes reach the server first and the file
+// follows them, and a name that is missing has to be found out before a million
+// lines are written into a job nobody asked for.
+func (f jobForm) faults() []string {
+	var complaints []string
+	if strings.TrimSpace(f.Name) == "" {
+		complaints = append(complaints, "form.name.required")
+	}
+	if _, known := kindKey(f.Kind); !known {
+		complaints = append(complaints, "form.kind.unknown")
+	}
+	// A filter nobody here knows is refused rather than read as keeping
+	// everything. Dropping repeats cannot be undone, and a job run under a rule
+	// nobody chose is a run to do again.
+	if _, known := filterKey(f.Unique); !known {
+		complaints = append(complaints, "form.unique.unknown")
+	}
+	if f.depth() < 1 {
+		complaints = append(complaints, "form.pages.positive")
+	}
+	return complaints
 }
 
 // parse pulls the queries out of the box and lists everything wrong at once.
@@ -68,27 +236,16 @@ func blankForm() jobForm {
 // Every fault is reported together rather than the first one alone: a reader
 // with three mistakes should learn all three now, not submit three times.
 func (f jobForm) parse() ([]string, []string) {
-	var complaints []string
-	if strings.TrimSpace(f.Name) == "" {
-		complaints = append(complaints, "form.name.required")
-	}
+	complaints := f.faults()
 
 	var queries []string
 	for _, line := range strings.Split(f.Queries, "\n") {
-		// Trimmed rather than split on: a box in a browser ends its lines the
-		// way the web ends them, and a query carrying a stray return is a query
-		// searched for with one.
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+		if text, ok := queryOf(line); ok {
+			queries = append(queries, text)
 		}
-		queries = append(queries, line)
 	}
 	if len(queries) == 0 {
 		complaints = append(complaints, "form.queries.required")
-	}
-	if f.Pages < 1 {
-		complaints = append(complaints, "form.pages.positive")
 	}
 	return queries, complaints
 }
@@ -97,7 +254,9 @@ func (f jobForm) parse() ([]string, []string) {
 func (f jobForm) spec() store.JobSpec {
 	return store.JobSpec{
 		Name:     strings.TrimSpace(f.Name),
-		Pages:    f.Pages,
+		Kind:     f.Kind,
+		UniqueBy: f.filter(),
+		Pages:    f.depth(),
 		Country:  f.Country,
 		Language: f.Language,
 		SpecName: f.SpecName,
@@ -107,7 +266,7 @@ func (f jobForm) spec() store.JobSpec {
 // work is the job the estimate is of: the queries as they would be searched
 // for, at the depth they would be taken to.
 func (f jobForm) work(queries []string) run.Job {
-	j := run.Job{Pages: f.Pages, SpecName: f.SpecName}
+	j := run.Job{Kind: runKind(f.Kind), Pages: f.depth(), SpecName: f.SpecName}
 	for _, text := range queries {
 		j.Queries = append(j.Queries,
 			google.Query{Text: text, Country: f.Country, Language: f.Language})
@@ -124,6 +283,8 @@ func formOf(r *http.Request) jobForm {
 	}
 	return jobForm{
 		Name:     strings.TrimSpace(r.FormValue("name")),
+		Kind:     strings.TrimSpace(r.FormValue("kind")),
+		Unique:   strings.TrimSpace(r.FormValue("unique")),
 		Queries:  r.FormValue("queries"),
 		Country:  strings.TrimSpace(r.FormValue("country")),
 		Language: strings.TrimSpace(r.FormValue("language")),
@@ -183,16 +344,33 @@ type newPage struct {
 	Complaints []string
 	Estimate   *estimateView
 	Do         actions
+	// Kinds is every kind a job can be, so the choice on the page is the choice
+	// the handler takes and not a second list of it.
+	Kinds []jobKind
+	// Filters is every way of dropping repeats, offered on the same terms.
+	Filters []jobFilter
+}
+
+// showNew draws the new-job page, filling in the parts of it that are the same
+// however the reader got here. Every way onto this page goes through it, so the
+// page a refused upload lands on is the page a refused form lands on.
+func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
+	form jobForm, complaints []string, est *estimateView) {
+	s.render(w, r, "new.html", newPage{
+		page:       s.frame(r, lang, "new.title", newAt),
+		Form:       form,
+		Complaints: complaints,
+		Estimate:   est,
+		Do:         buttons(),
+		Kinds:      kinds(),
+		Filters:    filters(),
+	})
 }
 
 // newJob shows an empty form.
 func (s *Server) newJob(w http.ResponseWriter, r *http.Request) {
-	lang := rememberLang(w, r)
-	s.render(w, r, "new.html", newPage{
-		page: frame(r, lang, "new.title"),
-		Form: blankForm(),
-		Do:   buttons(),
-	})
+	lang := s.rememberLang(w, r)
+	s.showNew(w, r, lang, blankForm(), nil, nil)
 }
 
 // createJob answers the form: it costs the job, or starts it.
@@ -202,26 +380,27 @@ func (s *Server) newJob(w http.ResponseWriter, r *http.Request) {
 // ten thousand queries come to has asked one question, and answering it with a
 // demand for a name answers a different one.
 func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
-	lang := rememberLang(w, r)
+	lang := s.rememberLang(w, r)
 	form := formOf(r)
 	queries, complaints := form.parse()
 
 	if r.FormValue(actionField) == doStart {
-		if s.sup == nil {
+		switch {
+		case s.sup == nil:
 			complaints = append(complaints, "form.norunner")
+		case !s.sup.canRun():
+			// The connection has not been set up yet. The job could be written down
+			// and held until it is, but a job held for a setting nobody has made sits
+			// in the queue looking started while nothing runs, and the one place that
+			// can say why is this page.
+			complaints = append(complaints, "form.notsetup")
 		}
 		if len(complaints) == 0 {
 			s.start(w, r, form, queries)
 			return
 		}
 	}
-	s.render(w, r, "new.html", newPage{
-		page:       frame(r, lang, "new.title"),
-		Form:       form,
-		Complaints: complaints,
-		Estimate:   estimateOf(form, queries),
-		Do:         buttons(),
-	})
+	s.showNew(w, r, lang, form, complaints, estimateOf(form, queries))
 }
 
 // start writes the job down, queues it and sends the browser to its page.

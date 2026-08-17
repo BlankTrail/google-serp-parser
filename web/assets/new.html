@@ -1,6 +1,10 @@
 {{define "main"}}
 <h1>{{.T "new.title"}}</h1>
 
+{{/* A complaint is neutral like everything else on the page. Colour on this
+     screen belongs to the bar on a running job, and a form that shouts is a
+     form nobody reads twice. What tells the reader these are faults is that
+     they stand above the form, naming the boxes below. */}}
 {{if .Complaints}}
 <ul class="faults">
 {{range .Complaints}}<li>{{$.T .}}</li>
@@ -31,44 +35,129 @@
 
 {{/* Both buttons submit this form. Nothing on this page needs a script, so
      nothing on it stops working when there is none. */}}
-<form method="post" action="/new">
-<p>
-<label for="name">{{.T "form.name"}}</label><br>
+<form class="card fields" method="post" action="/new">
+<div class="field">
+<label for="name">{{.T "form.name"}}</label>
 <input id="name" name="name" value="{{.Form.Name}}">
-</p>
-<p>
-<label for="queries">{{.T "form.queries"}}</label><br>
-<textarea id="queries" name="queries" rows="12" cols="60">{{.Form.Queries}}</textarea>
-</p>
-<p>
+</div>
+{{/* The kind stands above the list because it says what the lines in it are.
+     A reader who chooses it afterwards has already typed a list meaning
+     something else. */}}
+<div class="field">
+<label for="kind">{{.T "form.kind"}}</label>
+<select id="kind" name="kind">
+{{range .Kinds}}<option value="{{.Value}}"{{if eq .Value $.Form.Kind}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
+<p class="empty">{{.T "form.kind.why"}}</p>
+<div class="field">
+<label for="queries">{{.T "form.queries"}}</label>
+<textarea id="queries" name="queries" rows="12">{{.Form.Queries}}</textarea>
+</div>
+<div class="row">
+<div class="field">
 <label for="pages">{{.T "form.pages"}}</label>
 <input id="pages" name="pages" type="number" min="1" value="{{.Form.Pages}}">
-</p>
-<p>
+</div>
+<div class="field">
 <label for="country">{{.T "form.country"}}</label>
 <input id="country" name="country" size="4" value="{{.Form.Country}}">
+</div>
+<div class="field">
 <label for="language">{{.T "form.language"}}</label>
 <input id="language" name="language" size="4" value="{{.Form.Language}}">
+</div>
+<div class="field">
 <label for="spec">{{.T "form.spec"}}</label>
 <input id="spec" name="spec" size="10" value="{{.Form.SpecName}}">
-</p>
+</div>
+</div>
+{{/* What to do with repeats. It stands with the settings of the run because
+     that is what it is, and the sentence under it says the part that cannot be
+     taken back. */}}
+<div class="field">
+<label for="unique">{{.T "form.unique"}}</label>
+<select id="unique" name="unique">
+{{range .Filters}}<option value="{{.Value}}"{{if eq .Value $.Form.Unique}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
+<p class="empty">{{.T "form.unique.why"}}</p>
 {{/* These two are inputs to the estimate and to nothing else: a job runs on the
      one warm pool this server was started with, and the history has nowhere to
      keep a thread count of its own. They stand apart and say so, because a box
      that looks like a setting and is not is worse than no box. */}}
 <fieldset>
 <legend>{{.T "estimate.title"}}</legend>
-<p>
+<div class="row">
+<div class="field">
 <label for="threads">{{.T "form.threads"}}</label>
 <input id="threads" name="threads" type="number" min="1" value="{{.Form.Threads}}">
+</div>
+<div class="field">
 <label for="ports">{{.T "form.ports"}}</label>
 <input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}">
-</p>
+</div>
+</div>
 <p class="empty">{{.T "form.estimateonly"}}</p>
 </fieldset>
-<p>
+<div class="actions">
 <button type="submit" name="{{.Do.Field}}" value="{{.Do.Estimate}}">{{.T "form.estimate"}}</button>
 <button type="submit" name="{{.Do.Field}}" value="{{.Do.Start}}">{{.T "form.start"}}</button>
-</p>
+</div>
+</form>
+
+<h2>{{.T "form.list.title"}}</h2>
+{{/* A second form and not a second button, because this one is read as it
+     arrives. The server reads a form whole before a handler sees a field of it,
+     which is the only way two buttons could be told apart, and a form read
+     whole is a file of a million lines held before a line of it is looked at.
+     Nothing here needs a script either. */}}
+<form class="card fields" method="post" action="/new/upload" enctype="multipart/form-data">
+<div class="field">
+<label for="list-name">{{.T "form.name"}}</label>
+<input id="list-name" name="name" value="{{.Form.Name}}">
+</div>
+<div class="field">
+<label for="list-kind">{{.T "form.kind"}}</label>
+<select id="list-kind" name="kind">
+{{range .Kinds}}<option value="{{.Value}}"{{if eq .Value $.Form.Kind}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
+<div class="row">
+<div class="field">
+<label for="list-pages">{{.T "form.pages"}}</label>
+<input id="list-pages" name="pages" type="number" min="1" value="{{.Form.Pages}}">
+</div>
+<div class="field">
+<label for="list-country">{{.T "form.country"}}</label>
+<input id="list-country" name="country" size="4" value="{{.Form.Country}}">
+</div>
+<div class="field">
+<label for="list-language">{{.T "form.language"}}</label>
+<input id="list-language" name="language" size="4" value="{{.Form.Language}}">
+</div>
+<div class="field">
+<label for="list-spec">{{.T "form.spec"}}</label>
+<input id="list-spec" name="spec" size="10" value="{{.Form.SpecName}}">
+</div>
+</div>
+<div class="field">
+<label for="list-unique">{{.T "form.unique"}}</label>
+<select id="list-unique" name="unique">
+{{range .Filters}}<option value="{{.Value}}"{{if eq .Value $.Form.Unique}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
+<p class="empty">{{.T "form.unique.why"}}</p>
+{{/* The file stands last on purpose. A browser sends the parts of a form in the
+     order they stand here, and the server has to know the name and the depth
+     before the first line of the file reaches it. */}}
+<div class="field">
+<label for="list">{{.T "form.list"}}</label>
+<input id="list" name="list" type="file">
+</div>
+<p class="empty">{{.T "form.list.why"}}</p>
+<div class="actions">
+<button type="submit">{{.T "form.upload"}}</button>
+</div>
 </form>
 {{end}}

@@ -43,12 +43,43 @@ rather than announced.
 `start.sh` opens it and your browser with it. A job is set up in a form, which
 says what it will cost before you start it; it then runs in front of you, stops
 on a button, carries on from exactly where it stopped on another, and downloads
-as CSV or JSON Lines from a link. Every page is in English and Russian, nothing
-is loaded from anywhere, and the whole interface is inside the binary. Jobs
-queue: one runs at a time, on ports that stay open between them, because
-opening a fresh set per job costs minutes before the first answer. With no key
-in the environment the same interface still reads the history; it says so
-rather than offering a button that cannot work.
+as CSV or JSON Lines from a link. Jobs queue: one runs at a time, on ports that
+stay open between them, because opening a fresh set per job costs minutes
+before the first answer.
+
+**One screen shows what is happening now**: the job in flight with the time it
+has taken standing beside the time that was estimated for it, how much of what
+has been settled was refused and what came back instead, how many ports are
+held and how many have been set aside, and what is waiting its turn. It shows
+numbers and draws no conclusions from them — it never calls a run slow, because
+it does not know what you know.
+
+**The connection is set up in the browser** rather than on a command line: the
+proxy address and key, how many queries run at once and how many ports each
+gets, the pause between two requests, where the list of addresses comes from
+and how often to read it again, and the language the interface answers in. A
+button tries what is in the boxes and writes nothing. Saving while a job is
+running asks which of the two prices to pay — stop that job now and take the
+settings into use at once, or let it finish on what it started on — and neither
+answer restarts the program.
+
+**A list of any size arrives as a file.** It is read as it arrives and written
+in batches, so nothing ever holds the whole list; a list that stopped arriving
+part way leaves a job that can be seen and cannot be run, rather than one
+quietly short. A job can drop repeats as they land — the same address twice, or
+a second result from a site already seen — and says how many it dropped.
+Besides searching, a job can ask whether Google holds a page, and that verdict
+counts only results that are the page asked about, so a site's other pages
+never stand in for it.
+
+Every page is in English and Russian, and a further language can be added with
+a file beside the program without rebuilding it — what such a file is missing
+is printed when the program starts, not shown in the browser. Tabs switch
+without reloading, and every screen is also a whole page the server draws, so
+it can be opened cold and bookmarked. Nothing is loaded from anywhere and the
+whole interface is inside the binary. With no key in the environment and no
+connection saved, the same interface still reads the history; it says so rather
+than offering a button that cannot work.
 
 `gserp run` works end to end: it takes a list of queries, spreads them over
 threads, writes each result to a database as it lands, and exports what it

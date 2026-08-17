@@ -333,3 +333,40 @@ func TestMeasuredPace_StaysWithinAFactorOfTwoOfTheRunsItWasCheckedAgainst(t *tes
 		}
 	}
 }
+
+func TestEstimateSize_CostsAJobKnownOnlyByItsSizeExactlyAsOneKnownByItsQueries(t *testing.T) {
+	// A screen following a running job knows how many queries the job holds and
+	// not what they say. Costing it through EstimateWith would mean building a
+	// list of that many empty queries every time the screen is drawn, so the same
+	// arithmetic has a door that takes the count — and the two doors have to lead
+	// to the same room, or a reader is quoted one number before the job and
+	// another during it.
+	//
+	// The four numbers are all different, so an estimate that took the depth for
+	// the thread count, or the ports for either, cannot answer the same as one
+	// that did not.
+	const (
+		queries  = 40
+		pages    = 3
+		ports    = 7
+		threads  = 2
+		cooldown = 9 * time.Second
+	)
+	whole := EstimateWith(Job{Queries: make([]google.Query, queries), Pages: pages},
+		ports, threads, cooldown, MeasuredPace)
+	sized := EstimateSize(queries, pages, ports, threads, cooldown, MeasuredPace)
+
+	if sized != whole {
+		t.Errorf("a job of %d queries costs %+v by its size and %+v by its queries",
+			queries, sized, whole)
+	}
+	if sized.Expected == 0 {
+		t.Fatal("the estimate came to nothing at all, so nothing here was compared")
+	}
+	// The lanes and the ports enter the arithmetic differently, so an estimate
+	// that had them the wrong way round would answer differently. Without this
+	// the test above passes on a pair of functions that agree and are both wrong.
+	if swapped := EstimateSize(queries, pages, threads, ports, cooldown, MeasuredPace); swapped == sized {
+		t.Error("the ports and the threads are interchangeable in this estimate, so neither is being read")
+	}
+}

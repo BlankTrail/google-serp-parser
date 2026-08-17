@@ -4,6 +4,9 @@ package blanktrail
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -46,6 +49,61 @@ u2:p2@4.4.4.4:4444
 		if got := ups[i].URL(); got != w {
 			t.Errorf("upstream %d URL=%q, want %q", i, got, w)
 		}
+	}
+}
+
+func TestParse_ReadsTheFourFieldFormWrittenInEitherOrder(t *testing.T) {
+	// Lists are sold in both orders and neither marks which it is. A parser that
+	// knows one of them turns every line of the other into an address named after
+	// somebody's user name, which resolves nowhere and is reported as a proxy
+	// that would not connect.
+	for _, c := range []struct {
+		line string
+		want string
+	}{
+		{"1.1.1.1:8080:bob:secret", "socks5://bob:secret@1.1.1.1:8080"},
+		{"bob:secret:1.1.1.1:8080", "socks5://bob:secret@1.1.1.1:8080"},
+		{"http://proxy.example.test:3128:bob:secret", "http://bob:secret@proxy.example.test:3128"},
+		{"http://bob:secret:proxy.example.test:3128", "http://bob:secret@proxy.example.test:3128"},
+		// A password of digits alone fits both readings on the port test. The
+		// field written like an address settles it.
+		{"bob:1234:1.1.1.1:8080", "socks5://bob:1234@1.1.1.1:8080"},
+	} {
+		ups, bad := Parse(c.line, "socks5")
+		if len(bad) != 0 {
+			t.Errorf("%q was reported unusable", c.line)
+			continue
+		}
+		if got := ups[0].URL(); got != c.want {
+			t.Errorf("%q read as %q, want %q", c.line, got, c.want)
+		}
+	}
+}
+
+func TestParse_ReadsALineFittingBothOrdersAsAddressFirst(t *testing.T) {
+	// Two addresses and two port numbers answer to both readings and nothing in
+	// the line says which was meant. What matters is that the whole list is read
+	// the same way: a rule decided line by line would read part of a list one way
+	// and part the other, and nothing on any screen could tell them apart.
+	ups, bad := Parse("1.1.1.1:8080:2.2.2.2:9090", "socks5")
+	if len(bad) != 0 {
+		t.Fatalf("the line was reported unusable: %v", bad)
+	}
+	if got, want := ups[0].URL(), "socks5://2.2.2.2:9090@1.1.1.1:8080"; got != want {
+		t.Errorf("read as %q, want %q: the address comes first", got, want)
+	}
+}
+
+func TestParse_ReportsAFourFieldLineWithNoPortInIt(t *testing.T) {
+	// Four fields and not a port among them is not a proxy at all. Read as one,
+	// it would sit in the rotation as an address nothing can connect to, and the
+	// run would blame the failures on the proxy rather than on the line.
+	ups, bad := Parse("one:two:three:four", "socks5")
+	if len(ups) != 0 {
+		t.Errorf("got %d upstreams, want none: %+v", len(ups), ups)
+	}
+	if len(bad) != 1 {
+		t.Errorf("bad=%v, want the line reported", bad)
 	}
 }
 
@@ -105,6 +163,32 @@ func TestSource_LoadFromFile(t *testing.T) {
 	}
 	if len(ups) != 2 {
 		t.Errorf("got %d upstreams, want 2", len(ups))
+	}
+}
+
+func TestSource_LoadFromAnAddressAsksTheAddress(t *testing.T) {
+	// The kind says how the location is read, and the two ways are not
+	// interchangeable. A location read the wrong way answers with a refusal from
+	// a file system or from a socket, and either one arrives as "no addresses" —
+	// which is what an empty list looks like too.
+	served := "1.1.1.1:1080\n2.2.2.2:1080\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, served)
+	}))
+	defer srv.Close()
+
+	ups, bad, err := Source{Kind: "url", Location: srv.URL}.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(bad) != 0 {
+		t.Errorf("bad=%v, want none", bad)
+	}
+	if len(ups) != 2 {
+		t.Fatalf("got %d upstreams, want the 2 the address served", len(ups))
+	}
+	if got := ups[0].URL(); got != "socks5://1.1.1.1:1080" {
+		t.Errorf("first upstream=%q, want the first line of what was served", got)
 	}
 }
 

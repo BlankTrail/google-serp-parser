@@ -6,19 +6,31 @@
      so a reader with no script reads the job as it stood when the page was
      drawn. data-poll is what tells the script to ask again, and it is absent
      whenever nothing is going to answer differently. */}}
-<section id="progress" data-job="{{.Progress.ID}}"{{if .Progress.Watch}} data-poll="{{.RefreshMS}}"{{end}}>
-<dl class="progress">
-<div><dt>{{.T "jobs.queries"}}</dt><dd class="count" id="count-total">{{.Progress.Total}}</dd></div>
-<div><dt>{{.T "jobs.done"}}</dt><dd class="count" id="count-done">{{.Progress.Done}}</dd></div>
-<div><dt>{{.T "jobs.failed"}}</dt><dd class="count" id="count-failed">{{.Progress.Failed}}</dd></div>
-<div><dt>{{.T "jobs.left"}}</dt><dd class="count" id="count-pending">{{.Progress.Pending}}</dd></div>
-<div><dt>{{.T "jobs.state"}}</dt><dd id="state">{{.T .State}}</dd></div>
+<section class="card" data-job="{{.Progress.ID}}"{{if .Progress.Watch}} data-poll="{{.RefreshMS}}"{{end}} id="progress">
+{{/* The one thing on this screen filled with colour. It is drawn only for a job
+     that has queries to get through: a bar with nothing behind it is a bar that
+     says the job is at the beginning of nothing. */}}
+{{if .Progress.Total}}
+<progress class="progress-bar" max="{{.Progress.Total}}" value="{{.Progress.Done}}" aria-label="{{.T "job.progress"}}" id="bar"></progress>
+{{end}}
+<dl class="metrics">
+<div class="metric"><dt class="label">{{.T "jobs.queries"}}</dt><dd class="figure" id="count-total">{{.Progress.Total}}</dd></div>
+<div class="metric"><dt class="label">{{.T "jobs.done"}}</dt><dd class="figure" id="count-done">{{.Progress.Done}}</dd></div>
+<div class="metric"><dt class="label">{{.T "jobs.failed"}}</dt><dd class="figure" id="count-failed">{{.Progress.Failed}}</dd></div>
+<div class="metric"><dt class="label">{{.T "jobs.left"}}</dt><dd class="figure" id="count-pending">{{.Progress.Pending}}</dd></div>
+{{/* Drawn only for a job that drops repeats. A figure reading nought on every
+     other job would be a number asking to be explained, and there would be
+     nothing to explain. */}}
+{{if .Filtering}}<div class="metric"><dt class="label">{{.T "jobs.dropped"}}</dt><dd class="figure" id="count-dropped">{{.Progress.Dropped}}</dd></div>{{end}}
+<div class="metric"><dt class="label">{{.T "jobs.state"}}</dt><dd class="state" id="state">{{.T .State}}</dd></div>
 </dl>
 </section>
 
 {{/* Each button is a form that sends itself, by post. Nothing here needs a
      script, and a stop behind a link is a stop anything walking the pages can
      carry out on somebody else's run. */}}
+{{if or .CanStop .CanResume}}
+<div class="actions">
 {{if .CanStop}}
 <form method="post" action="/api/stop">
 <input type="hidden" name="job" value="{{.Progress.ID}}">
@@ -31,13 +43,17 @@
 <button type="submit">{{.T "job.resume"}}</button>
 </form>
 {{end}}
+</div>
+{{end}}
 
-<section class="settings">
+<section class="settings card">
 <h2>{{.T "job.settings"}}</h2>
 <dl>
 {{/* Shown on the clock the reader started the run by. The history keeps the
      instant, and an instant printed as itself is hours from the wall. */}}
 <dt>{{.T "jobs.started"}}</dt><dd>{{.Job.Started.Local.Format "2006-01-02 15:04"}}</dd>
+<dt>{{.T "form.kind"}}</dt><dd>{{.T .Job.Kind}}</dd>
+<dt>{{.T "form.unique"}}</dt><dd>{{.T .Job.Filter}}</dd>
 <dt>{{.T "form.pages"}}</dt><dd class="count">{{.Job.Pages}}</dd>
 <dt>{{.T "form.country"}}</dt><dd>{{.Job.Country}}</dd>
 <dt>{{.T "form.language"}}</dt><dd>{{.Job.Language}}</dd>
@@ -45,13 +61,46 @@
 </dl>
 </section>
 
-<p class="export">{{.T "job.export"}}:
+<section class="card">
+<h2>{{.T "job.export"}}</h2>
+<p class="export">
 {{range .Formats}}<a href="/export?job={{$.Progress.ID}}&format={{.}}">{{.}}</a>
 {{end}}</p>
+</section>
 
+{{/* What an index job established, one line per address. The answer is the word
+     for what was found and nothing more: a colour or an icon on "not held"
+     would be this program calling a fact a problem. */}}
+{{if .IsIndex}}
+<h2>{{.T "job.verdicts"}}</h2>
+{{if .Verdicts}}
+{{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
+<section class="card">
+<table>
+<thead>
+<tr>
+<th>{{.T "history.address"}}</th>
+<th>{{.T "job.verdict"}}</th>
+</tr>
+</thead>
+<tbody>
+{{range .Verdicts}}
+<tr>
+<td>{{.Target}}</td>
+<td>{{if .Held}}{{$.T "job.verdict.held"}}{{else}}{{$.T "job.verdict.absent"}}{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</section>
+{{else}}
+<p class="empty">{{.T "job.verdicts.none"}}</p>
+{{end}}
+{{else}}
 <h2>{{.T "job.results"}}</h2>
 {{if .Rows}}
 {{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
+<section class="card">
 <table>
 <thead>
 <tr>
@@ -72,9 +121,9 @@
 {{end}}
 </tbody>
 </table>
+</section>
 {{else}}
 <p class="empty">{{.T "job.results.none"}}</p>
 {{end}}
-
-<script src="/assets/app.js" defer></script>
+{{end}}
 {{end}}

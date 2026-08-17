@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -1408,5 +1410,103 @@ func TestPool_APortWhoseEgressCannotBeReplacedStaysQuarantined(t *testing.T) {
 	}
 	if st.Revivals != 0 {
 		t.Errorf("Stats().Revivals=%d, want 0: the port never came back", st.Revivals)
+	}
+}
+
+func TestPool_KeepsAPortsAddressWhenTheListNoLongerHasIt(t *testing.T) {
+	// The rotor hands addresses out; the pool remembers what it got. A refresh
+	// replaces what is handed out and must not reach into what was.
+	//
+	// A port that lost its address when the list changed would move to another
+	// egress in the middle of the work it is doing, taking its cookies and its
+	// solved challenges to an IP they were not issued for — and a list is
+	// reloaded on a timer, so it would happen to every port at once, on a
+	// schedule nobody watching the run had any reason to connect it to.
+	//
+	// Both halves are checked here. Without the second, this test would also
+	// pass on a rotor that never reloads at all, which is the same green for the
+	// opposite reason.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	list := filepath.Join(t.TempDir(), "list.txt")
+	writeList(t, list, "1.1.1.1:1080\n")
+
+	const held = "socks5://1.1.1.1:1080"
+	const fresh = "socks5://9.9.9.9:9090"
+
+	rotor, err := NewRotor(context.Background(), Source{
+		Kind: "file", Location: list, Refresh: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewRotor: %v", err)
+	}
+	ch := NewListChannel("list", rotor)
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{ch}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close() // closes the channel, and with it the reloader
+
+	port := fake.OpenPorts()[0]
+	if got := fake.UpstreamOf(port); got != held {
+		t.Fatalf("the port opened on %q, want %q", got, held)
+	}
+
+	writeList(t, list, "9.9.9.9:9090\n")
+
+	// The reload is on a timer, so it is waited for by asking what the list
+	// hands out now. The wait has a limit of its own: a list that never reloads
+	// has to fail here, and say so, rather than run this test out of time.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		eg, ok := ch.Next()
+		if !ok {
+			t.Fatal("the list had nothing to hand out")
+		}
+		if eg.Upstream == fresh {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the list is still handing out %q long after the file changed, so it was never read again", eg.Upstream)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	if got := fake.UpstreamOf(port); got != held {
+		t.Errorf("the open port moved to %q when the list stopped naming %q", got, held)
+	}
+
+	lease, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if got := lease.Egress().Upstream; got != held {
+		t.Errorf("the lease came back on %q, want the address the port was opened on", got)
+	}
+	if got := fake.UpstreamOf(port); got != held {
+		t.Errorf("acquiring the port moved it to %q, want %q", got, held)
+	}
+	lease.Release()
+
+	// And the list that was read is the list the next address comes from. A
+	// rotation is where a port is given another one, so it is where the fresh
+	// list has to show up.
+	if err := p.rotateEgress(context.Background(), port); err != nil {
+		t.Fatalf("rotateEgress: %v", err)
+	}
+	if got := fake.UpstreamOf(port); got != fresh {
+		t.Errorf("the port rotated onto %q, want %q from the list as it now stands", got, fresh)
+	}
+}
+
+// writeList puts a proxy list where a source can read it, and replaces one that
+// is already there.
+func writeList(t *testing.T, path, raw string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("writing the list: %v", err)
 	}
 }

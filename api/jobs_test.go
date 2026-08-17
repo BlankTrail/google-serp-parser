@@ -49,7 +49,11 @@ type queueStub struct {
 	resumeErr  error
 	running    int64
 	waiting    []int64
+	// idle is a queue with nothing to run on: it takes jobs and starts none.
+	idle bool
 }
+
+func (q *queueStub) CanRun() bool { return !q.idle }
 
 func (q *queueStub) Enqueue(spec store.JobSpec, queries []string) (int64, error) {
 	q.specs = append(q.specs, spec)
@@ -605,5 +609,27 @@ func TestCarryingOnAJob_PutsItBackInTheQueue(t *testing.T) {
 	}
 	if len(q.resumed) != 1 || q.resumed[0] != id {
 		t.Errorf("the queue was told to carry on %v, want job %d", q.resumed, id)
+	}
+}
+
+func TestCreateJob_RefusesUntilThereIsSomethingToRunItOn(t *testing.T) {
+	// The browser refuses a job on a machine whose connection is not set up and
+	// says what to do about it. A program asking the same machine for the same
+	// thing has to be told the same, or it is handed an id and left watching a
+	// job that never moves.
+	s, _, queue, secret := jobServer(t)
+	queue.idle = true
+
+	rec := call(t, s, secret, http.MethodPost, "/api/v1/jobs",
+		createBody(t, "a job", []string{"one"}, 1))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("a job on a server with nothing to run it came back %d, want 503: %s",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(refusalOf(t, rec), "nothing to run a job on") {
+		t.Errorf("the refusal does not say what is missing: %q", refusalOf(t, rec))
+	}
+	if len(queue.specs) != 0 {
+		t.Errorf("the job was written down anyway: %v", queue.specs)
 	}
 }

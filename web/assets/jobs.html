@@ -1,6 +1,7 @@
 {{define "main"}}
 <h1>{{.T "jobs.title"}}</h1>
 {{if .Jobs}}
+<section class="card">
 <table>
 <thead>
 <tr>
@@ -24,11 +25,18 @@
 <td class="count">{{.Done}}</td>
 <td class="count">{{.Failed}}</td>
 <td class="count">{{.Pending}}</td>
-<td>{{if .Finished}}{{$.T "job.state.finished"}}{{else}}{{$.T "job.state.unfinished"}}{{end}}</td>
+{{/* A list that never finished arriving is said before anything else. Such a
+     job has queries waiting and no stamp on it, which is what an unfinished run
+     looks like too, and one word for both would have the reader carrying on
+     with a job that cannot be carried on. It is said in words and left the
+     colour of everything around it: nothing has gone wrong on this machine, a
+     file stopped arriving. */}}
+<td>{{if not .PlanReady}}{{$.T "job.state.listunfinished"}}{{else if .Finished}}{{$.T "job.state.finished"}}{{else}}{{$.T "job.state.unfinished"}}{{end}}</td>
 </tr>
 {{end}}
 </tbody>
 </table>
+</section>
 {{else}}
 <p class="empty">{{.T "jobs.none"}}</p>
 {{end}}

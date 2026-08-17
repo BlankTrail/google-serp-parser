@@ -1,37 +1,99 @@
 /* SPDX-License-Identifier: MIT */
 
-/* The stack is named by role rather than by family: this ships inside a binary
-   and must not fetch a font from anywhere. */
+/* Every colour and every distance this interface uses is named here and taken
+   from here. A page that names its own colours has drifted from the rest within
+   a month and nothing says so; a colour written where it is used is a colour the
+   dark block below cannot reach, and it is the one that glares at midnight.
+
+   The type stack is named by role rather than by family: this ships inside a
+   binary and must not fetch a font from anywhere. */
 :root {
+	--paper: #f5f5f3;
+	--surface: #fdfdfc;
+	--sunken: #eeeeea;
 	--ink: #1b1b1b;
-	--paper: #fbfbf9;
-	--rule: #d8d6cf;
 	--quiet: #6a6a66;
+	--hairline: #d8d6cf;
+	--track: #e3e1da;
+	--accent: #2f6fed;
+
+	--radius-card: 12px;
+	--radius-metric: 8px;
+	--radius-control: 8px;
+	--hairline-width: 0.5px;
+	--gap: 12px;
+	--pad-card: 1rem 1.25rem;
+	--pad-metric: 1rem;
+	--column: 190px;
+	--group: 250px;
+	--figure: 24px;
+	--small: 13px;
 }
 
-* {
+/* The dark theme redefines the colours and nothing else. Every rule below this
+   block is written once and reads correctly in both, which is the whole reason
+   the colours are named rather than written where they are used. */
+@media (prefers-color-scheme: dark) {
+	:root {
+		--paper: #17181b;
+		--surface: #1e2024;
+		--sunken: #26282d;
+		--ink: #e8e8e4;
+		--quiet: #97978f;
+		--hairline: #34373d;
+		--track: #2d3036;
+		--accent: #4d86f7;
+	}
+}
+
+*,
+*::before,
+*::after {
 	box-sizing: border-box;
 }
 
 body {
-	margin: 0;
 	background: var(--paper);
 	color: var(--ink);
-	font: 16px/1.5 system-ui, sans-serif;
+	font: 16px/1.55 system-ui, sans-serif;
+	margin: 0;
 }
 
+/* The header is separated from the page by a hairline and by distance, which is
+   what holds the structure here instead of a rule or a box. */
 header {
 	align-items: baseline;
-	border-bottom: 1px solid var(--rule);
+	border-bottom: var(--hairline-width) solid var(--hairline);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 1rem;
+	padding: 0.85rem 1.5rem;
+}
+
+.brand {
+	color: var(--ink);
+	font-size: 0.95rem;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.pages {
 	display: flex;
 	gap: 1rem;
-	justify-content: space-between;
-	padding: 0.75rem 1.5rem;
+	margin-right: auto;
+}
+
+/* The screen being read is marked by the line under it going from a hairline to
+   the weight of the text. Colour is not spent on this: the one filled thing on
+   a screen is the bar, and a reader who cannot tell two half-tones apart can
+   still see a line. */
+.pages a[aria-current] {
+	text-decoration-color: var(--ink);
 }
 
 .langs {
 	display: flex;
-	font-size: 0.9rem;
+	font-size: var(--small);
 	gap: 0.75rem;
 }
 
@@ -41,42 +103,274 @@ header {
 	color: var(--quiet);
 }
 
-.brand {
-	color: var(--ink);
-	font-weight: 700;
-	letter-spacing: 0.04em;
-	text-decoration: none;
+/* Setting the machine up is not one of the screens, so it is set at the size of
+   the switcher beside it rather than at the size of the tabs. */
+.tools {
+	display: flex;
+	font-size: var(--small);
 }
 
+/* Links are neutral. The one place on a screen filled with colour is the bar,
+   and a page of coloured links spends that budget before the bar is drawn. */
+a {
+	color: var(--ink);
+	text-decoration-color: var(--hairline);
+	text-underline-offset: 0.2em;
+}
+
+/* The ring is neutral for the same reason, and it is never removed: whoever is
+   moving through the form by keyboard has nothing else telling them where they
+   are. */
+:focus-visible {
+	outline: 2px solid var(--ink);
+	outline-offset: 2px;
+}
+
+/* The gap between the blocks of a page is the page's structure. Nothing below
+   draws a line to do the same work twice. */
 main {
+	display: flex;
+	flex-direction: column;
+	gap: 1.25rem;
 	margin: 0 auto;
-	max-width: 60rem;
+	max-width: 62rem;
 	padding: 1.5rem;
 }
 
 h1 {
-	font-size: 1.4rem;
-	margin: 0 0 1rem;
+	font-size: 1.35rem;
+	font-weight: 600;
+	margin: 0;
+}
+
+h2 {
+	color: var(--quiet);
+	font-size: var(--small);
+	font-weight: 500;
+	margin: 0 0 0.75rem;
+}
+
+.card,
+.estimate,
+.faults {
+	background: var(--surface);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-card);
+	padding: var(--pad-card);
+}
+
+.faults {
+	list-style: none;
+	margin: 0;
+	padding-left: var(--pad-metric);
+}
+
+/* One figure per card, and as many cards as the width takes. They reflow rather
+   than wrap at a breakpoint somebody has to maintain. */
+.metrics {
+	display: grid;
+	gap: var(--gap);
+	grid-template-columns: repeat(auto-fit, minmax(var(--column), 1fr));
+	margin: 0;
+}
+
+.metric {
+	background: var(--sunken);
+	border-radius: var(--radius-metric);
+	padding: var(--pad-metric);
+}
+
+/* Number large, label small. The figure is what the card is looked at for and
+   has to be readable across a desk; the label names it and stays out of the
+   way. Digits are tabular so a column of them lines up on its last one. */
+.figure {
+	font-size: var(--figure);
+	font-variant-numeric: tabular-nums;
+	font-weight: 500;
+	margin: 0;
+}
+
+.label {
+	color: var(--quiet);
+	font-size: var(--small);
+	margin: 0 0 0.2rem;
+}
+
+/* A state is a word rather than a figure, so it is set at reading size. Blown
+   up to the size of a number it would claim the attention the numbers want. */
+.state {
+	font-size: 1rem;
+	margin: 0;
+}
+
+/* What a card is about, where that is a name and not a number. Same reasoning
+   as the state above: set at reading size so the figures keep the attention. */
+.lead {
+	font-size: 1rem;
+	margin: 0 0 0.75rem;
+}
+
+/* The three things that make an operator step in, side by side, reflowing as
+   the window narrows rather than wrapping at a width somebody has to maintain.
+   They are wider than the metric cards because each carries its breakdown. */
+.groups {
+	display: grid;
+	gap: var(--gap);
+	grid-template-columns: repeat(auto-fit, minmax(var(--group), 1fr));
+}
+
+/* What one figure is made of, living under it and not competing with it: the
+   whole point of the card is the number at the top. */
+.detail {
+	display: grid;
+	gap: 0.3rem 1rem;
+	grid-template-columns: 1fr max-content;
+	margin: 0.75rem 0 0;
+}
+
+.detail dt {
+	color: var(--quiet);
+	font-size: var(--small);
+}
+
+.detail dd {
+	font-variant-numeric: tabular-nums;
+	margin: 0;
+	text-align: right;
+}
+
+/* The one thing on any screen that is filled with colour. Everything else —
+   buttons, borders, headings, labels — stays neutral, because two accents mean
+   the eye is told nothing by either.
+
+   The fill is written three times because the three engines expose the filled
+   part of a bar under three names, and a bar left to its own devices is drawn
+   in whatever the operating system thinks a highlight is. */
+.progress-bar {
+	appearance: none;
+	background: var(--track);
+	border: 0;
+	border-radius: 3px;
+	display: block;
+	height: 6px;
+	margin: 0 0 1.25rem;
+	overflow: hidden;
+	width: 100%;
+}
+
+.progress-bar::-webkit-progress-bar {
+	background: var(--track);
+}
+
+.progress-bar::-webkit-progress-value {
+	background: var(--accent);
+}
+
+.progress-bar::-moz-progress-bar {
+	background: var(--accent);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+button {
+	background: var(--surface);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-control);
+	color: var(--ink);
+	cursor: pointer;
+	font: inherit;
+	font-size: 0.9rem;
+	padding: 0.45rem 0.95rem;
+}
+
+button:hover {
+	background: var(--sunken);
+}
+
+input,
+select,
+textarea {
+	background: var(--surface);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-control);
+	color: var(--ink);
+	font: inherit;
+	font-size: 0.95rem;
+	padding: 0.4rem 0.6rem;
+}
+
+textarea {
+	width: 100%;
+}
+
+label {
+	color: var(--quiet);
+	font-size: var(--small);
+}
+
+fieldset {
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-metric);
+	display: flex;
+	flex-direction: column;
+	gap: 0.85rem;
+	margin: 0;
+	padding: 0.75rem 1rem 1rem;
+}
+
+legend {
+	color: var(--quiet);
+	font-size: var(--small);
+	padding: 0 0.4rem;
+}
+
+.fields {
+	display: flex;
+	flex-direction: column;
+	gap: 0.85rem;
+}
+
+/* Boxes that belong together stand together and wrap as one line runs out. */
+.row {
+	align-items: end;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
 }
 
 table {
 	border-collapse: collapse;
+	font-size: 0.95rem;
 	width: 100%;
 }
 
 th,
 td {
-	border-bottom: 1px solid var(--rule);
-	padding: 0.4rem 0.6rem;
+	border-bottom: var(--hairline-width) solid var(--hairline);
+	padding: 0.5rem 0.6rem;
 	text-align: left;
 }
 
 th {
 	color: var(--quiet);
-	font-size: 0.8rem;
-	font-weight: 600;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
+	font-size: var(--small);
+	font-weight: 500;
+}
+
+/* The last line of a table sits against the card's own edge, and a second line
+   drawn a few pixels inside it reads as a mistake. */
+tbody tr:last-child td {
+	border-bottom: 0;
 }
 
 /* Counts read down the column, so they are aligned on their last digit. */
@@ -87,48 +381,56 @@ th {
 
 .empty {
 	color: var(--quiet);
-}
-
-.pages {
-	display: flex;
-	gap: 1rem;
-	margin-right: auto;
-}
-
-/* The counts of a running job read across in one line, so a glance takes in
-   the whole of where it has got to. */
-.progress {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 1.5rem;
-	margin: 0 0 1.5rem;
-}
-
-.progress dt {
-	color: var(--quiet);
-	font-size: 0.8rem;
-	font-weight: 600;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-}
-
-.progress dd {
-	font-size: 1.2rem;
 	margin: 0;
-	text-align: left;
 }
 
 .settings dl {
 	display: grid;
-	gap: 0 1rem;
-	grid-template-columns: max-content max-content;
+	gap: 0.4rem 1.5rem;
+	grid-template-columns: max-content 1fr;
 	margin: 0;
 }
 
 .settings dt {
 	color: var(--quiet);
+	font-size: var(--small);
 }
 
 .settings dd {
 	margin: 0;
+}
+
+.estimate dl {
+	display: grid;
+	gap: 0.4rem 1.5rem;
+	grid-template-columns: max-content 1fr;
+	margin: 0;
+}
+
+.estimate dt {
+	color: var(--quiet);
+	font-size: var(--small);
+}
+
+.estimate dd {
+	margin: 0;
+}
+
+.export {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+	margin: 0;
+}
+
+/* What a check found, one finding under the next, separated by air rather than
+   by a rule. Nothing here is coloured by how serious it is: the word says that,
+   and a page that paints its own verdict is a page arguing with the reader. */
+.findings {
+	display: flex;
+	flex-direction: column;
+	gap: 0.9rem;
+	list-style: none;
+	margin: 0;
+	padding: 0;
 }

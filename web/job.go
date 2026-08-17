@@ -34,15 +34,22 @@ var errEnough = errors.New("web: the page holds every row it draws")
 // button sends the reader back to it, so the address is written once.
 func jobPath(id int64) string { return "/job/" + strconv.FormatInt(id, 10) }
 
-// settings is a job as it was set up: everything about it that will not change
+// jobSetup is a job as it was set up: everything about it that will not change
 // while it runs.
 //
 // The counts are deliberately absent. They live in progressJSON, which is both
 // what the page renders and what its script polls, so a number about this job
 // has one place to come from.
-type settings struct {
-	Name     string
-	Started  time.Time
+type jobSetup struct {
+	Name    string
+	Started time.Time
+	// Kind is the key of what to call what this job asks Google, never the word
+	// itself: every phrase on every page goes through the catalogue.
+	Kind string
+	// Filter is the key of what to call what this job drops as a repeat. It is
+	// shown among the settings and not among the counts, because it is a thing
+	// the job was set up with and cannot be changed now.
+	Filter   string
 	Pages    int
 	Country  string
 	Language string
@@ -53,11 +60,25 @@ type settings struct {
 // captured, and what may be pressed.
 type jobPage struct {
 	page
-	Job      settings
+	Job      jobSetup
 	Progress progressJSON
 	// State is the key of what to call the job's state, not the word itself.
-	State     string
-	Rows      []store.Row
+	State string
+	// Rows is what a search job captured and Verdicts is what an index job
+	// established. A job is one kind or the other, so exactly one of them is
+	// ever filled, and the page draws whichever it was handed.
+	Rows     []store.Row
+	Verdicts []store.Verdict
+	// IsIndex says which of the two the page is drawing. It is not read off the
+	// lists themselves: an index job that has checked nothing yet holds no
+	// verdicts, and drawing it as a search would tell the reader their addresses
+	// captured no results.
+	IsIndex bool
+	// Filtering says the job drops repeats, and it is what puts the count of
+	// dropped results on the screen. A job that keeps everything is not given a
+	// figure reading nought: a number on a screen is a thing to wonder about,
+	// and there is nothing here to wonder about.
+	Filtering bool
 	Capped    bool
 	Formats   []string
 	CanStop   bool
@@ -75,38 +96,64 @@ type jobPage struct {
 // there, so a reader with no script sees the job as it stood when the page was
 // drawn rather than a page of empty boxes.
 func (s *Server) job(w http.ResponseWriter, r *http.Request) {
-	lang := rememberLang(w, r)
+	lang := s.rememberLang(w, r)
 	sum, ok := s.jobAsked(w, r, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	rows, capped, err := s.someRows(r.Context(), sum.ID)
+	// One kind is read or the other, never both. A job of a million addresses
+	// holds no positions to draw, and walking its results to find that out is
+	// the million-row read this page is written not to do.
+	var rows []store.Row
+	var verdicts []store.Verdict
+	var capped bool
+	var err error
+	if sum.Kind == store.KindIndex {
+		verdicts, capped, err = s.someVerdicts(r.Context(), sum.ID)
+	} else {
+		rows, capped, err = s.someRows(r.Context(), sum.ID)
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	at := s.progress(sum)
+	// A kind the catalogue has no word for is not drawn as a search. It is a job
+	// nothing here can describe, and naming it wrongly is worse than the key.
+	kind, _ := kindKey(sum.Kind)
+	// A filter the catalogue has no word for is named by its own word, for the
+	// reason a kind is: a page that called it "keep everything" would describe a
+	// run that dropped results as one that dropped none.
+	filter, _ := filterKey(string(sum.UniqueBy))
 
 	s.render(w, r, "job.html", jobPage{
-		page: frame(r, lang, "job.title"),
-		Job: settings{
+		page: s.frame(r, lang, "job.title", jobsAt),
+		Job: jobSetup{
 			Name:     sum.Name,
 			Started:  sum.CreatedAt,
+			Kind:     kind,
+			Filter:   filter,
 			Pages:    sum.Pages,
 			Country:  sum.Country,
 			Language: sum.Language,
 			Spec:     sum.SpecName,
 		},
-		Progress: at,
-		State:    stateOf(at),
-		Rows:     rows,
-		Capped:   capped,
-		Formats:  export.Formats(),
+		Progress:  at,
+		State:     stateOf(at, sum.PlanReady),
+		Rows:      rows,
+		Verdicts:  verdicts,
+		IsIndex:   sum.Kind == store.KindIndex,
+		Filtering: sum.UniqueBy != store.UniqueOff,
+		Capped:    capped,
+		Formats:   export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
 		// somebody presses until they conclude the job cannot be stopped at all.
-		CanStop:   s.sup != nil && at.Running,
-		CanResume: s.sup != nil && !at.Running && !at.Queued && !at.Finished && at.Pending > 0,
+		CanStop: s.sup != nil && at.Running,
+		// A job whose list never finished arriving is not offered either. The
+		// queries it holds are a fraction of a list, and nothing will run them.
+		CanResume: s.sup != nil && sum.PlanReady &&
+			!at.Running && !at.Queued && !at.Finished && at.Pending > 0,
 		RefreshMS: refreshEvery.Milliseconds(),
 	})
 }
@@ -159,13 +206,44 @@ func (s *Server) someRows(ctx context.Context, jobID int64) ([]store.Row, bool, 
 	return rows, false, nil
 }
 
+// someVerdicts reads as many of an index job's answers as the page draws, and
+// says whether there were more.
+//
+// The walk is stopped for the reason someRows is stopped: a list of addresses is
+// as long as somebody's file, and reading a million of them to draw two hundred
+// is a million rows read to be thrown away.
+func (s *Server) someVerdicts(ctx context.Context, jobID int64) ([]store.Verdict, bool, error) {
+	out := make([]store.Verdict, 0, rowsShown)
+	err := s.store.Verdicts(ctx, jobID, func(v store.Verdict) error {
+		if len(out) == rowsShown {
+			return errEnough
+		}
+		out = append(out, v)
+		return nil
+	})
+	if errors.Is(err, errEnough) {
+		return out, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return out, false, nil
+}
+
 // stateOf is the key of what to call a job's state.
 //
 // It answers with a key and never a sentence, because every phrase on every
 // page goes through the catalogue, and a state named in English here would be
 // the one English word on a Russian page.
-func stateOf(p progressJSON) string {
+//
+// A list that never finished arriving is said first and over everything else.
+// Such a job has queries waiting and no stamp on it, which is exactly what an
+// unfinished run looks like, and calling the two by one name would tell the
+// reader to carry on with a job that cannot be carried on.
+func stateOf(p progressJSON, listReady bool) string {
 	switch {
+	case !listReady:
+		return "job.state.listunfinished"
 	case p.Finished:
 		return "job.state.finished"
 	case p.Running:

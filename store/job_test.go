@@ -320,6 +320,11 @@ func TestLastUnfinished_CarriesTheSettingsTheJobWasCreatedWith(t *testing.T) {
 	// A job picked up part way has to run as the job it is. Taking today's
 	// depth or today's country would put results of one shape into a run made
 	// of another, and nothing in the history would say which rows were which.
+	// The kind comes back named even though it was created unnamed. What was
+	// stored is a search — a job created before there was a choice is the thing
+	// this program has always done — and a resume that read the blank back as a
+	// blank would have to decide all over again what the run it is carrying on
+	// was asking.
 	s := testStore(t)
 	if _, err := s.CreateJob(context.Background(),
 		JobSpec{Name: "nightly", Pages: 3, SpecName: "desktop", Country: "de", Language: "de"},
@@ -331,7 +336,8 @@ func TestLastUnfinished_CarriesTheSettingsTheJobWasCreatedWith(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LastUnfinished: %v", err)
 	}
-	want := JobSpec{Name: "nightly", Pages: 3, SpecName: "desktop", Country: "de", Language: "de"}
+	want := JobSpec{Name: "nightly", Kind: KindSearch, Pages: 3,
+		SpecName: "desktop", Country: "de", Language: "de"}
 	if got.Spec != want {
 		t.Errorf("LastUnfinished returned %+v, want %+v", got.Spec, want)
 	}
@@ -341,5 +347,44 @@ func TestLastUnfinished_SaysSoWhenThereIsNothingToTakeUp(t *testing.T) {
 	s := testStore(t)
 	if _, err := s.LastUnfinished(context.Background(), "never-ran"); !errors.Is(err, ErrNoUnfinishedJob) {
 		t.Errorf("LastUnfinished returned %v, want ErrNoUnfinishedJob", err)
+	}
+}
+
+func TestCreateJob_FilesTheJobUnderTheKindItWasAskedFor(t *testing.T) {
+	// The kind decides what the run asks Google and what a captured row means
+	// afterwards, so it is stored with the job rather than supplied again by
+	// whoever happens to pick the job up.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "addresses", Kind: KindIndex, Pages: 1}, []string{"example.com/a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	sum, err := s.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Kind != KindIndex {
+		t.Errorf("the job reads as kind %q, want %q", sum.Kind, KindIndex)
+	}
+}
+
+func TestCreateJob_NamesTheKindOfAJobThatNamedNone(t *testing.T) {
+	// A caller who says nothing means a search: that is what this program did
+	// before there was a choice. It is written into the column rather than left
+	// to the column's own default, so a job read straight back says what it is
+	// instead of leaving every reader to work it out again.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "plain", Pages: 1}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	var stored string
+	if err := s.db.QueryRow(`SELECT kind FROM jobs WHERE id = ?`, id).Scan(&stored); err != nil {
+		t.Fatalf("reading the kind back: %v", err)
+	}
+	if stored != KindSearch {
+		t.Errorf("stored kind %q, want %q", stored, KindSearch)
 	}
 }

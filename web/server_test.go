@@ -54,10 +54,10 @@ func get(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
 func TestServer_ShowsAPageWhereThereAreNoJobsYet(t *testing.T) {
 	// The first thing anyone sees is an empty install. A blank page reads as a
 	// broken one; a page that says there is nothing yet reads as working.
-	rec := get(t, testServer(t), "/")
+	rec := get(t, testServer(t), jobsAt)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET / gave %d, want 200", rec.Code)
+		t.Fatalf("GET %s gave %d, want 200", jobsAt, rec.Code)
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "<html") {
@@ -86,7 +86,7 @@ func TestServer_ListsEveryJobTheHistoryHolds(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	body := get(t, s, "/").Body.String()
+	body := get(t, s, jobsAt).Body.String()
 	for _, name := range []string{"morning list", "evening list"} {
 		if !strings.Contains(body, name) {
 			t.Errorf("the page does not list %q:\n%s", name, body)
@@ -102,7 +102,7 @@ func TestServer_RendersThePageInTheLanguageAsked(t *testing.T) {
 	// letter: one is Latin and the other Cyrillic, so a page carrying both is
 	// unmistakable, and the test cannot pass on a server that renders one
 	// language and calls it the other.
-	rec := get(t, testServer(t), "/?lang=ru")
+	rec := get(t, testServer(t), jobsAt+"?lang=ru")
 
 	body := rec.Body.String()
 	if !strings.Contains(body, LangRU.T("jobs.none")) {
@@ -133,7 +133,7 @@ func TestServer_ShowsNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 
 	for _, s := range []*Server{testServer(t), listing} {
 		for _, l := range Languages() {
-			body := get(t, s, "/?lang="+string(l)).Body.String()
+			body := get(t, s, jobsAt+"?lang="+string(l)).Body.String()
 			for key := range catalogue[l] {
 				if strings.Contains(body, key) {
 					t.Errorf("the %s page shows the key %q where its text belongs", l, key)
@@ -230,7 +230,7 @@ func TestServer_KeepsTheTemplatesItRendersFromOffTheWire(t *testing.T) {
 	// The templates sit in the same embedded directory as the stylesheet. Handed
 	// out as files they are a second, unrendered copy of every page, and each
 	// later page adds to what that copy gives away.
-	for _, path := range []string{"/assets/index.html", "/assets/layout.html"} {
+	for _, path := range []string{"/assets/jobs.html", "/assets/layout.html"} {
 		if code := get(t, testServer(t), path).Code; code != http.StatusNotFound {
 			t.Errorf("GET %s gave %d, want 404", path, code)
 		}
@@ -255,9 +255,9 @@ func TestServer_TellsTheReaderNothingAboutTheDatabaseWhenItCannotRead(t *testing
 		t.Fatalf("Close: %v", err)
 	}
 
-	rec := get(t, s, "/")
+	rec := get(t, s, jobsAt)
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("GET / on an unreadable history gave %d, want 500", rec.Code)
+		t.Fatalf("GET %s on an unreadable history gave %d, want 500", jobsAt, rec.Code)
 	}
 	body := rec.Body.String()
 	for _, leak := range []string{"sql", "SELECT", "sqlite", ".db"} {
@@ -304,7 +304,7 @@ func TestNew_ParsesEveryPageBeforeTheFirstRequestArrives(t *testing.T) {
 	if len(s.pages) == 0 {
 		t.Fatal("no page was parsed when the server was built")
 	}
-	if s.pages["index.html"] == nil {
+	if s.pages["jobs.html"] == nil {
 		t.Error("the job list was not parsed when the server was built")
 	}
 }

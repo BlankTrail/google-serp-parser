@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -174,6 +175,76 @@ func TestClassOf_SaysNothingForAnErrorThatCarriesNoClass(t *testing.T) {
 	// measured.
 	if got, ok := ClassOf(errors.New("dial tcp: connection refused")); ok {
 		t.Errorf("ClassOf reported %q for an error that carries no class", got)
+	}
+}
+
+func TestClass_SurvivesBeingWrittenDownAsTextAndReadBack(t *testing.T) {
+	// A history keeps text, not values. Whatever wrote the class into the
+	// message and whatever reads it back are one pair, and they are both in this
+	// package so that rewording one without the other fails here rather than in
+	// a caller that never knew the wording was load-bearing.
+	//
+	// Every class is put through, because a marker that survives one wording and
+	// not another is a screen that quietly loses a whole kind of answer.
+	for _, class := range []Class{ClassSERP, ClassEmpty, ClassShell, ClassWall, ClassBanned, ClassHTTP} {
+		written := (&ResponseError{
+			Class: class,
+			Query: "iphone 13",
+			op:    "search",
+			err:   fmt.Errorf("%w: something", ErrNotSERP),
+		}).Error()
+
+		got, ok := ClassInText(written)
+		if !ok {
+			t.Errorf("the class did not survive being written down: %q", written)
+			continue
+		}
+		if got != class {
+			t.Errorf("%q reads back as class %q, want %q", written, got, class)
+		}
+	}
+}
+
+func TestClass_IsReadFromWhereItWasWrittenAndNotFromTheQuery(t *testing.T) {
+	// The query is a reader's own text and may say anything at all, including
+	// the very words this marker is written in. A reader that took the first one
+	// it found would report the class somebody typed into a search box.
+	// The query carries the marker whole, spacing included. A decoy that differs
+	// from the real marker by so much as the space in front of it is one a reader
+	// walking from the left would step over, and the test would pass on a reader
+	// that reads the wrong end of the message.
+	written := (&ResponseError{
+		Class: ClassWall,
+		Query: "what does" + classMark + "serp) mean",
+		op:    "search",
+		err:   fmt.Errorf("%w: something", ErrNotSERP),
+	}).Error()
+	if strings.Index(written, classMark) == strings.LastIndex(written, classMark) {
+		t.Fatalf("the decoy is not in %q, so nothing here has two places to read from", written)
+	}
+
+	got, ok := ClassInText(written)
+	if !ok {
+		t.Fatalf("no class was read out of %q", written)
+	}
+	if got != ClassWall {
+		t.Errorf("%q reads back as class %q, want %q — the query was read as the class", written, got, ClassWall)
+	}
+}
+
+func TestClass_IsNotInventedForTextThatCarriesNone(t *testing.T) {
+	// Nothing arrived, so nothing was classified. A reader that answered with an
+	// empty class would file a request that never completed under a kind of
+	// response, and a word nobody measured would be reported as one that was.
+	for _, message := range []string{
+		"run: recording \"iphone 13\": dial tcp: connection refused",
+		"google: search \"x\": (class ",
+		"google: search \"x\": (class nonsense)",
+		"",
+	} {
+		if got, ok := ClassInText(message); ok {
+			t.Errorf("%q was read as class %q, and it carries none", message, got)
+		}
 	}
 }
 

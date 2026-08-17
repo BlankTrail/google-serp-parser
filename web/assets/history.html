@@ -1,11 +1,14 @@
 {{define "main"}}
 <h1>{{.T "history.title"}}</h1>
-<form method="get" action="/history">
+<form class="card row" method="get" action="/history">
+<div class="field">
 <label for="host">{{.T "history.host"}}</label>
 <input id="host" name="host" value="{{.Host}}">
+</div>
 <button type="submit">{{.T "history.look"}}</button>
 </form>
 {{if .Positions}}
+<section class="card">
 <table>
 <thead>
 <tr>
@@ -30,6 +33,7 @@
 {{end}}
 </tbody>
 </table>
+</section>
 {{else if .Host}}
 <p class="empty">{{.T "history.none"}}</p>
 {{end}}
