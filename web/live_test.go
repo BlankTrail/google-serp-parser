@@ -406,7 +406,7 @@ func pendingPlaces(ctx context.Context, t *testing.T, st *store.Store, jobID int
 }
 
 // livePool opens the identities the supervisor will run every job on.
-func livePool(ctx context.Context, t *testing.T) *blanktrail.Pool {
+func livePool(ctx context.Context, t *testing.T, ports, threads int) *blanktrail.Pool {
 	t.Helper()
 	control, key, listURL := liveEnv(t)
 
@@ -416,7 +416,7 @@ func livePool(ctx context.Context, t *testing.T) *blanktrail.Pool {
 	}
 	pre := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
 		Domains: []string{"www.google.com", "google.com"},
-		Ports:   livePorts,
+		Ports:   ports,
 	})
 	for _, f := range pre.Findings {
 		logf(t, "[%s] %s — %s → %s", f.Severity, f.Title, f.Detail, f.Action)
@@ -435,7 +435,7 @@ func livePool(ctx context.Context, t *testing.T) *blanktrail.Pool {
 
 	started := time.Now()
 	pool, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
-		Client: client, Threads: liveThreads, PortsPerThread: livePorts / liveThreads,
+		Client: client, Threads: threads, PortsPerThread: max(ports/threads, 1),
 		Spec: blanktrail.DefaultPortSpec(), CA: pre.CA,
 		Channels:    []blanktrail.Channel{blanktrail.NewListChannel("list", blanktrail.NewStaticRotor(ups))},
 		DelayMin:    2 * time.Second,
@@ -450,6 +450,18 @@ func livePool(ctx context.Context, t *testing.T) *blanktrail.Pool {
 	return pool
 }
 
+// liveRaise is how the supervisor puts up the pool a job asked for.
+//
+// A fresh pool per job is what the product does now, so a live run that handed
+// one standing pool to every job would be measuring something the product no
+// longer is. It costs a warm-up per job, and that cost is one of the things
+// this file exists to report.
+func liveRaise(t *testing.T) OpenPool {
+	return func(ctx context.Context, ports, threads int) (*blanktrail.Pool, error) {
+		return livePool(ctx, t, ports, threads), nil
+	}
+}
+
 // liveServer is the whole interface over a real socket: a history, the
 // identities every job runs on, and the pages in front of both.
 //
@@ -459,7 +471,7 @@ func livePool(ctx context.Context, t *testing.T) *blanktrail.Pool {
 func liveServer(ctx context.Context, t *testing.T) (base string, st *store.Store) {
 	t.Helper()
 	st = testStore(t)
-	v := NewSupervisor(st, livePool(ctx, t), liveThreads)
+	v := NewSupervisor(st, liveRaise(t), livePorts, liveThreads)
 	// Registered after the history's own cleanup and so run before it: a job
 	// this ends is written down as it lets go of it.
 	t.Cleanup(func() { _ = v.Close() })
@@ -1348,7 +1360,7 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 	}
 
 	st := testStore(t)
-	v := NewSupervisor(st, livePool(ctx, t), liveThreads)
+	v := NewSupervisor(st, liveRaise(t), livePorts, liveThreads)
 	t.Cleanup(func() { _ = v.Close() })
 
 	s, err := New(Config{Store: st, Supervisor: v, SettingsPath: at,
