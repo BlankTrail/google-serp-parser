@@ -402,3 +402,37 @@ func TestUsage_ListsEveryFlagTheServeCommandTakes(t *testing.T) {
 		}
 	})
 }
+
+func TestTranslate_SaysWhichLanguageArrivedAndWhatItIsShortOf(t *testing.T) {
+	// A translation is read at startup and never mentioned again. Whoever put
+	// the file there learns from these lines that it was read at all, and which
+	// phrases are still going out in English — neither of which the browser can
+	// show them, since a missing phrase renders as a finished one.
+	dir := filepath.Join(t.TempDir(), "gserp-translations")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("making the translations directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "de.json"),
+		[]byte(`{"lang.name": "Deutsch", "jobs.title": "Aufträge"}`), 0o600); err != nil {
+		t.Fatalf("writing the translation: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fr.json"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("writing the damaged translation: %v", err)
+	}
+	// Everything else in this binary answers in the languages the program was
+	// built with, so the added one is put away again.
+	t.Cleanup(func() { _, _, _ = web.LoadTranslations(t.TempDir()) })
+
+	var out bytes.Buffer
+	serveOptions{DB: "gserp.db"}.translate(&out, dir)
+
+	said := out.String()
+	for _, want := range []string{"answers in de", "fr.json", "the de translation is short of", "jobs.none"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the report does not say %q:\n%s", want, said)
+		}
+	}
+	if strings.Contains(said, "jobs.title") {
+		t.Errorf("a phrase the file does say is reported missing:\n%s", said)
+	}
+}

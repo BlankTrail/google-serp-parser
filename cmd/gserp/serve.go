@@ -9,10 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/settings"
@@ -37,6 +40,12 @@ const (
 // It sits beside the history rather than inside it, so a history that is
 // copied, handed over or backed up does not carry the connection with it.
 const settingsName = "gserp-settings.json"
+
+// translationsName is the directory a language is added in, beside the program
+// rather than beside the history: it is part of what this copy of the program
+// says, and a history carried to another machine should not bring somebody's
+// half-finished translation along with it.
+const translationsName = "gserp-translations"
 
 // serveOptions is everything the command was asked to do.
 type serveOptions struct {
@@ -98,6 +107,14 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {
 		return opts.scrubbed(err)
+	}
+
+	// Read before the server is built, because the languages it finds are the
+	// ones the switcher offers on the first page that goes out. Where this
+	// program is, is something only the system can say; without that there is
+	// no directory to look in, and both built-in languages are there already.
+	if exe, err := os.Executable(); err == nil {
+		opts.translate(out, filepath.Join(filepath.Dir(exe), translationsName))
 	}
 
 	// Closed before the history, because a job it ends is written down as it
@@ -277,6 +294,33 @@ func (o serveOptions) saved(out io.Writer) (settings.Settings, bool) {
 // carry the connection with it.
 func (o serveOptions) settingsPath() string {
 	return filepath.Join(filepath.Dir(o.DB), settingsName)
+}
+
+// translate reads the languages kept beside this program and says what came of
+// it.
+//
+// Every line here is a report about somebody else's files, so none of them
+// stops the command: a translation that could not be read leaves the interface
+// speaking what it was built to speak, which is what it does on the machines
+// that have no such directory at all — nearly all of them.
+//
+// A language short of phrases is named out loud with the count. It is the one
+// thing about a translation that is invisible from inside the browser: the page
+// renders, in English, and the reader who asked for the other language has no
+// way of telling a missing phrase from a decision.
+func (o serveOptions) translate(out io.Writer, dir string) {
+	added, incomplete, err := web.LoadTranslations(dir)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "a translation beside this program could not be read, and the rest are in use: %s\n",
+			o.clean(err.Error()))
+	}
+	for _, lang := range added {
+		_, _ = fmt.Fprintf(out, "this interface also answers in %s, from a file beside the program\n", lang)
+	}
+	for _, lang := range slices.Sorted(maps.Keys(incomplete)) {
+		_, _ = fmt.Fprintf(out, "the %s translation is short of %d phrases, which are shown in English: %s\n",
+			lang, len(incomplete[lang]), strings.Join(incomplete[lang], " "))
+	}
 }
 
 // runOn is how many queries this interface takes at once and how many ports

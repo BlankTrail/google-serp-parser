@@ -3,11 +3,18 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,7 +22,8 @@ import (
 // two-letter code because that is what a browser and a link both carry.
 type Lang string
 
-// The languages this program says everything in.
+// The languages this program is built to say everything in. A bare binary with
+// no file beside it answers in both.
 const (
 	LangEN Lang = "en"
 	LangRU Lang = "ru"
@@ -39,22 +47,26 @@ const langMemory = 365 * 24 * time.Hour
 var ErrMissingText = errors.New("web: a language is missing text the other has")
 
 // Languages is every language the interface is written in, in the order the
-// switcher offers them.
+// switcher offers them: the ones built in first, then whatever was read from
+// files, in the order the directory named them.
 //
 // Each caller gets its own slice, so one that sorts what it was handed cannot
 // reorder the switcher for everybody after it.
-func Languages() []Lang { return []Lang{LangEN, LangRU} }
+func Languages() []Lang { return slices.Clone(spoken.Load().langs) }
 
 // Name is what a language calls itself.
 //
-// It is not translated, and it is not in the catalogue: the switcher is read by
-// someone who cannot read the page they are looking at, and a label they cannot
-// read tells them nothing.
+// It is not translated: the switcher is read by someone who cannot read the
+// page they are looking at, and a label they cannot read tells them nothing.
+//
+// A language read from a file gives its own name under langNameKey. One that
+// does not is offered by its code, which is at least what its reader would have
+// typed to ask for it.
 func (l Lang) Name() string {
-	if l == LangRU {
-		return "Русский"
+	if name := spoken.Load().names[l]; name != "" {
+		return name
 	}
-	return "English"
+	return string(l)
 }
 
 // T is the text of one key in this language, or the key itself when there is
@@ -64,13 +76,15 @@ func (l Lang) Name() string {
 // page is invisible, and a key is ugly and reports itself, which is what an
 // unfinished translation should do.
 func (l Lang) T(key string) string {
-	if text, ok := catalogue[l][key]; ok {
+	if text, ok := spoken.Load().say[l][key]; ok {
 		return text
 	}
 	return key
 }
 
-// catalogue is everything the interface says, in every language it says it in.
+// catalogue is everything the interface says, in every language built into this
+// program. It is what a file beside the program adds to and overrides, and it is
+// never written to: a file is merged into a copy.
 //
 // Keys name the place the words appear rather than the words themselves. A key
 // named after its wording outlives that wording by exactly one edit, and then
@@ -400,10 +414,16 @@ var catalogue = map[Lang]map[string]string{
 // It runs before the first request rather than at the moment of rendering,
 // because a phrase missing from one language shows up as a bare key on one page
 // in one language, and only a reader of that language would ever see it.
+//
+// It reads the languages the catalogue itself holds rather than the ones the
+// switcher offers, and the difference is the whole of the rule: this is a check
+// on text that ships in this binary, where a missing phrase is a mistake in this
+// repository. A language read from a directory beside the program is somebody
+// else's, and being short of phrases there is not a reason to refuse to start.
 func checkCatalogue(c map[Lang]map[string]string) error {
-	for _, spoken := range Languages() {
-		for _, other := range Languages() {
-			for key := range c[spoken] {
+	for written := range c {
+		for other := range c {
+			for key := range c[written] {
 				if _, ok := c[other][key]; !ok {
 					return fmt.Errorf("%w: %s has no %q", ErrMissingText, other, key)
 				}
@@ -534,4 +554,243 @@ func switcher(r *http.Request, now Lang) []langLink {
 		links = append(links, langLink{Name: l.Name(), URL: at.String(), Current: l == now})
 	}
 	return links
+}
+
+// texts is everything the interface can say right now, and in which languages.
+//
+// It is one value rather than three variables because it is replaced whole: a
+// language, its name and its phrases arrive together, and a page drawn while
+// they were being put in one at a time would show a switcher offering a
+// language whose words were not there yet.
+type texts struct {
+	langs []Lang
+	names map[Lang]string
+	say   map[Lang]map[string]string
+}
+
+// spoken is what the interface says. It is read on every phrase of every page,
+// from as many goroutines as there are readers, and replaced when a directory
+// of translations is read — so it is swapped as a pointer rather than edited in
+// place.
+var spoken atomic.Pointer[texts]
+
+// builtInNames is what each language built into this program calls itself.
+var builtInNames = map[Lang]string{LangEN: "English", LangRU: "Русский"}
+
+// langNameKey is where a file says what its language calls itself. It is the
+// one key whose text is read by this program rather than shown as a phrase, and
+// a file that leaves it out is offered by its code.
+const langNameKey = "lang.name"
+
+func init() { spoken.Store(builtIn()) }
+
+// builtIn is what this program says with nothing beside it.
+//
+// The phrase maps are shared with the catalogue rather than copied, and nothing
+// below writes to a map it did not make: the catalogue is this repository's own
+// text and a file must not be able to edit it for the rest of the process.
+func builtIn() *texts {
+	t := &texts{
+		langs: []Lang{LangEN, LangRU},
+		names: make(map[Lang]string, len(builtInNames)),
+		say:   make(map[Lang]map[string]string, len(catalogue)),
+	}
+	for l, name := range builtInNames {
+		t.names[l] = name
+	}
+	for l, phrases := range catalogue {
+		t.say[l] = phrases
+	}
+	return t
+}
+
+// ErrUnreadableTranslation reports a file in the translations directory that
+// this program could not read a language out of.
+var ErrUnreadableTranslation = errors.New("web: a translation file could not be read")
+
+// translationExt is the extension a translation is written with. The format is
+// JSON because a translation is a list of phrases against their keys and
+// nothing else, and JSON is the one shape in the standard library that says
+// exactly that, in any alphabet, with a reader that rejects a damaged file
+// rather than guessing at it.
+const translationExt = ".json"
+
+// maxTranslationFile is how much of a file is read before it is called
+// something other than a translation. Everything this program says fits in a
+// small fraction of it; the limit is there because the directory is somebody
+// else's and a program that reads whatever it is pointed at can be pointed at a
+// disk.
+const maxTranslationFile = 1 << 20
+
+// LoadTranslations reads a directory of translations and puts what it finds
+// into use, adding languages this program was not built with and overriding the
+// ones it was.
+//
+// Nothing here is a reason to stop. The directory is the operator's, not this
+// repository's, and the rule the built-in languages are held to — every key in
+// every language or the server does not start — is a rule about text this
+// program ships. A file short of keys says what it says and the rest is shown
+// in English, and which keys those were comes back in incomplete so somebody
+// can be told. The error is the same kind of report: it names the files that
+// could not be read at all, and the ones that could are already in use.
+//
+// A directory that is not there is the ordinary case and not an error: the
+// program that ships with two languages and no files beside it is the one
+// almost everyone runs.
+//
+// Reading twice gives what the directory says the second time, not what it said
+// the first time with the second laid over it. A language whose file was
+// deleted between the two goes away.
+func LoadTranslations(dir string) (added []Lang, incomplete map[Lang][]string, err error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrUnreadableTranslation, err)
+	}
+
+	t := builtIn()
+	var complaints []error
+	var fromFiles []Lang
+	for _, entry := range entries {
+		// A directory named like a translation is not one, and neither is
+		// anything else the filesystem can hold that is not a plain file.
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		code, isTranslation := translationName(name)
+		if !isTranslation {
+			continue
+		}
+		phrases, readErr := readTranslation(filepath.Join(dir, name))
+		if readErr != nil {
+			complaints = append(complaints, fmt.Errorf("%w: %s: %v", ErrUnreadableTranslation, name, readErr))
+			continue
+		}
+		lang := Lang(code)
+		if _, built := t.say[lang]; !built {
+			t.langs = append(t.langs, lang)
+			added = append(added, lang)
+		}
+		t.say[lang] = merge(t.say[lang], phrases)
+		fromFiles = append(fromFiles, lang)
+		if self := strings.TrimSpace(t.say[lang][langNameKey]); self != "" {
+			t.names[lang] = self
+		}
+	}
+
+	// English is filled in from last, after every file has had its say, so a
+	// language falls back on the English this machine shows rather than on the
+	// English this program was built with.
+	for _, lang := range fromFiles {
+		if missing := fillFromEnglish(t.say[lang], t.say[LangEN]); len(missing) > 0 {
+			if incomplete == nil {
+				incomplete = make(map[Lang][]string)
+			}
+			incomplete[lang] = missing
+		}
+	}
+
+	spoken.Store(t)
+	return added, incomplete, errors.Join(complaints...)
+}
+
+// translationName reads a language code off a file name, and says whether the
+// name is one this program will read at all.
+//
+// Only two or three lowercase letters and the extension are a translation.
+// Everything else in the directory is somebody else's business — notes, a
+// readme, a half-finished file renamed out of the way. The narrowness is also
+// what keeps the name from being a path: every way of naming a file outside
+// this directory needs a character this rejects.
+func translationName(file string) (code string, ok bool) {
+	code = strings.TrimSuffix(file, translationExt)
+	if code == file {
+		return "", false
+	}
+	if len(code) < 2 || len(code) > 3 {
+		return "", false
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < 'a' || code[i] > 'z' {
+			return "", false
+		}
+	}
+	return code, true
+}
+
+// readTranslation reads one file as a list of phrases against their keys.
+//
+// A phrase that is there and blank is not a phrase, and it is left out so the
+// key falls back to something a reader can read. An empty string on a page is
+// invisible, which is the one outcome worse than the wrong language.
+func readTranslation(path string) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(f, maxTranslationFile+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxTranslationFile {
+		return nil, errors.New("it is larger than everything this program says")
+	}
+	var phrases map[string]string
+	if err := json.Unmarshal(body, &phrases); err != nil {
+		return nil, err
+	}
+	if phrases == nil {
+		return nil, errors.New("it holds no phrases against their keys")
+	}
+	for key, text := range phrases {
+		if strings.TrimSpace(text) == "" {
+			delete(phrases, key)
+		}
+	}
+	return phrases, nil
+}
+
+// merge lays a file over a language, phrase by phrase.
+//
+// A file that names one key changes one phrase. It is merged rather than put in
+// place because a translator correcting a single line would otherwise delete
+// every other line of that language, and the page would answer in a language
+// nobody chose.
+//
+// The result is a new map. The one underneath may be the catalogue's own, and
+// this program's built-in text has to still be there the next time a directory
+// is read.
+func merge(under, over map[string]string) map[string]string {
+	merged := make(map[string]string, len(under)+len(over))
+	for key, text := range under {
+		merged[key] = text
+	}
+	for key, text := range over {
+		merged[key] = text
+	}
+	return merged
+}
+
+// fillFromEnglish gives a language the English of everything it does not say,
+// and reports what those were.
+//
+// English rather than the key, because the key is this repository's shorthand
+// and means nothing to a reader; and a phrase rather than nothing, because a
+// button with no words on it cannot be pressed by anybody.
+func fillFromEnglish(phrases, english map[string]string) []string {
+	var missing []string
+	for key, text := range english {
+		if _, said := phrases[key]; said {
+			continue
+		}
+		phrases[key] = text
+		missing = append(missing, key)
+	}
+	slices.Sort(missing)
+	return missing
 }
