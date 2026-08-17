@@ -553,3 +553,117 @@ func TestVerdicts_HandsBackWhatTheCallerStoppedOn(t *testing.T) {
 		t.Errorf("walked %d addresses after being stopped on the first", seen)
 	}
 }
+
+// checkedPosition writes what a position check established about one phrase: the
+// one result that was the site, at the rank it stood at, or a page holding
+// nothing when the site was not in what was taken.
+//
+// It writes what the runner writes, which is the point: the answer is read back
+// off these rows, and a helper that filed them some other way would prove the
+// reading against nothing anybody records.
+func checkedPosition(t *testing.T, s *Store, jobID int64, ordinal, rank int) {
+	t.Helper()
+	var rs []google.Result
+	if rank > 0 {
+		rs = []google.Result{{
+			Position: rank,
+			Title:    "the site",
+			URL:      "https://example.com/wanted",
+			Host:     "example.com",
+		}}
+	}
+	if err := s.Record(context.Background(), jobID, QueryOutcome{
+		Ordinal: ordinal,
+		Pages:   []google.SERP{{Origin: "https://www.google.com", Results: rs}},
+	}); err != nil {
+		t.Fatalf("Record(ordinal %d): %v", ordinal, err)
+	}
+}
+
+func positionJob(t *testing.T, s *Store, phrases ...string) int64 {
+	t.Helper()
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "places", Kind: KindPosition, Target: "example.com", Pages: 3}, phrases)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	return id
+}
+
+func collectStandings(t *testing.T, s *Store, jobID int64) []Standing {
+	t.Helper()
+	var got []Standing
+	if err := s.Standings(context.Background(), jobID, func(st Standing) error {
+		got = append(got, st)
+		return nil
+	}); err != nil {
+		t.Fatalf("Standings: %v", err)
+	}
+	return got
+}
+
+func TestStandings_ReadTheAnswerOffWhatWasCaptured(t *testing.T) {
+	// The place is not a column. A phrase the site ranked for has the result
+	// filed against it and carries the rank it stood at; a phrase it did not rank
+	// for has none. A second copy of that would be a second thing to keep right.
+	//
+	// None of the ranks here is one, so a reading that reported the first row it
+	// found rather than the rank on it would be wrong in every line.
+	s := testStore(t)
+	id := positionJob(t, s, "one", "two", "three")
+	checkedPosition(t, s, id, 0, 7)
+	checkedPosition(t, s, id, 1, 0)
+	checkedPosition(t, s, id, 2, 23)
+
+	want := []Standing{
+		{Ordinal: 0, Query: "one", Rank: 7, Found: true},
+		{Ordinal: 1, Query: "two", Rank: 0, Found: false},
+		{Ordinal: 2, Query: "three", Rank: 23, Found: true},
+	}
+	if got := collectStandings(t, s, id); !reflect.DeepEqual(got, want) {
+		t.Errorf("Standings gave %+v, want %+v", got, want)
+	}
+}
+
+func TestStandings_LeaveOutAPhraseNothingWasEstablishedAbout(t *testing.T) {
+	// Not found is an answer; not checked is the absence of one. A phrase nobody
+	// reached and a phrase whose request was refused carry no answer, and
+	// reporting either as a site that did not rank says the site is absent from a
+	// page this program never read.
+	s := testStore(t)
+	id := positionJob(t, s, "checked", "refused", "untouched")
+	checkedPosition(t, s, id, 0, 0)
+	if err := s.Record(context.Background(), id, QueryOutcome{
+		Ordinal: 1, Err: errors.New("blocked")}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	got := collectStandings(t, s, id)
+	want := []Standing{{Ordinal: 0, Query: "checked", Rank: 0, Found: false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Standings gave %+v, want only the phrase that was checked: %+v", got, want)
+	}
+}
+
+func TestStandings_HandBackWhatTheCallerStoppedOn(t *testing.T) {
+	// The walk streams, so the screen that draws two hundred of a million phrases
+	// stops it with its own error rather than reading the rest to throw them
+	// away.
+	s := testStore(t)
+	id := positionJob(t, s, "a", "b", "c")
+	for i := range 3 {
+		checkedPosition(t, s, id, i, i+2)
+	}
+
+	stop := errors.New("enough")
+	seen := 0
+	if err := s.Standings(context.Background(), id, func(Standing) error {
+		seen++
+		return stop
+	}); !errors.Is(err, stop) {
+		t.Fatalf("Standings returned %v, want the caller's own error", err)
+	}
+	if seen != 1 {
+		t.Errorf("walked %d phrases after being stopped on the first", seen)
+	}
+}

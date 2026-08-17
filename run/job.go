@@ -37,18 +37,28 @@ var ErrOrdinalsMismatch = errors.New("run: Ordinals must be empty or as long as 
 type Kind int
 
 const (
-	// Search takes each query to the depth the job asks for and reports the
-	// pages that came back.
-	Search Kind = iota
+	// Parse takes each query to the depth the job asks for and reports the pages
+	// that came back, whole. It is the zero value because it is the ordinary
+	// thing this program does and always was.
+	Parse Kind = iota
 	// Index reads each line as an address and reports whether Google holds it.
 	Index
+	// Position takes each query to the depth the job asks for and reports the one
+	// result that was the job's target, or none. It is a walk that stops at the
+	// answer, so a site found on the first page costs one page and not the depth.
+	Position
 )
 
 // Job is a list of queries and how deep to take each one.
 type Job struct {
-	// Kind is what to ask about each line. The zero value is Search, which is
+	// Kind is what to ask about each line. The zero value is Parse, which is
 	// what a job that names nothing has always been.
 	Kind Kind
+	// Target is the site a Position job is about. It is meaningless under the
+	// other kinds and required under that one: a position job carrying no target
+	// has no question, and every query of it is refused rather than answered
+	// "not found" — see google.ErrNoSite.
+	Target string
 	// Queries are taken in this order and reported in it.
 	Queries []google.Query
 	// Ordinals gives each query its place in the list the job originally had,
@@ -199,7 +209,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 				first = false
 
 				results[i].Attempted = true
-				results[i].Pages, results[i].Err = take(ctx, attempt, j.Kind, j.Queries[i], pages)
+				results[i].Pages, results[i].Err = take(ctx, attempt, j, j.Queries[i], pages)
 				if r.Sink != nil {
 					// The failures go to the sink as well as the successes.
 					// A query whose failure was never written down is one a
@@ -251,22 +261,55 @@ sending:
 
 // take runs one line the way the job asked for it.
 //
-// The two kinds come back in the same shape, which is what lets everything
-// downstream — the sink, the history, the export — stay one path. What an index
-// check found is dressed as a page of results because that is what it is: the
-// results that were the address asked about.
+// The three kinds come back in the same shape, which is what lets everything
+// downstream — the sink, the history, the export — stay one path. What a check
+// found is dressed as a page of results because that is what it is: the results
+// that were the thing asked about. The difference between the kinds is the
+// question, not the shape of the answer.
 //
-// A page holding nothing is how "Google does not hold this" is written down,
-// and it is written down rather than skipped. A query left with no page at all
-// is a query the next resume takes up again, so an address genuinely absent
-// would be checked on every run for as long as it stayed absent.
-func take(ctx context.Context, a *Attempt, kind Kind, q google.Query, pages int) ([]google.SERP, error) {
-	if kind != Index {
+// A page holding nothing is how "the answer is no" is written down, and it is
+// written down rather than skipped. A query left with no page at all is a query
+// the next resume takes up again, so an address genuinely absent, or a site
+// genuinely outside the depth, would be checked on every run for as long as that
+// stayed true.
+//
+// Neither check re-asks the question the engines answer. The rule for what
+// counts as the site — a bare host is any page of it, an address with a path is
+// that address and nothing else — lives in the engines and is applied there, so
+// there is one answer to "is this the site we were looking for" rather than one
+// per caller.
+func take(ctx context.Context, a *Attempt, j Job, q google.Query, pages int) ([]google.SERP, error) {
+	switch j.Kind {
+	case Index:
+		st, err := google.CheckIndexed(ctx, a, q, q.Text)
+		if err != nil {
+			return nil, err
+		}
+		return []google.SERP{{Query: q.Text, Results: st.Sample}}, nil
+	case Position:
+		pos, err := google.FindPosition(ctx, a, q, j.Target, pages)
+		if err != nil {
+			return nil, err
+		}
+		return []google.SERP{{Query: q.Text, Results: found(pos)}}, nil
+	default:
 		return a.Walk(ctx, q, pages)
 	}
-	st, err := google.CheckIndexed(ctx, a, q, q.Text)
-	if err != nil {
-		return nil, err
+}
+
+// found is the one result a position check produced, carrying the place it
+// stood, or nothing at all.
+//
+// The place is written into the result because the result is all that is kept,
+// and a single result filed by its position among what was kept would say first
+// about a site that stood seventh. The walk counted across its pages; the page
+// the result came from numbered it within itself; only the first of those is the
+// answer, and it is the one that travels.
+func found(pos google.Position) []google.Result {
+	if !pos.Found {
+		return nil
 	}
-	return []google.SERP{{Query: q.Text, Results: st.Sample}}, nil
+	r := pos.Result
+	r.Position = pos.Rank
+	return []google.Result{r}
 }

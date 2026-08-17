@@ -47,7 +47,7 @@ func uploadBody(t *testing.T, boxes map[string]string, list string) (string, *by
 	t.Helper()
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
-	for _, box := range []string{"name", "kind", "pages", "country", "language", "spec", "unique"} {
+	for _, box := range []string{"name", "kind", "target", "pages", "country", "language", "spec", "unique"} {
 		value, filled := boxes[box]
 		if !filled {
 			continue
@@ -697,5 +697,41 @@ func TestUpload_CarriesTheFilterFromTheBoxThatStoodBeforeTheFile(t *testing.T) {
 	}
 	if job := theOneJob(t, s); job.UniqueBy != store.UniqueURL {
 		t.Errorf("the uploaded job was filed as filtered by %q, want %q", job.UniqueBy, store.UniqueURL)
+	}
+}
+
+func TestUpload_FilesTheSiteAPositionCheckWasGivenAndRefusesOneWithout(t *testing.T) {
+	// The door a list of any size arrives by has to refuse what the other door
+	// refuses. A check whose site was dropped here would be written down with
+	// minutes of file behind it and nothing to look for, and it would answer "not
+	// found" about every line of it.
+	s := testServerHolding(t)
+	ok := postUpload(t, s, map[string]string{
+		"name": "places", "kind": store.KindPosition,
+		"target": "example.com", "pages": "1",
+	}, "iphone 13\npixel 8\n")
+	if ok.Code != http.StatusSeeOther {
+		t.Fatalf("the upload gave %d, want a redirect:\n%s", ok.Code, ok.Body.String())
+	}
+	if job := theOneJob(t, s); job.Kind != store.KindPosition || job.Target != "example.com" {
+		t.Errorf("the uploaded job was filed as kind %q about %q, want %q about example.com",
+			job.Kind, job.Target, store.KindPosition)
+	}
+
+	missing := postUpload(t, s, map[string]string{
+		"name": "places", "kind": store.KindPosition, "pages": "1",
+	}, "iphone 13\n")
+	if missing.Code != http.StatusOK {
+		t.Fatalf("a check with no site gave %d, want the form back", missing.Code)
+	}
+	if want := LangEN.T("form.target.required"); !strings.Contains(missing.Body.String(), want) {
+		t.Errorf("the page does not say %q:\n%s", want, missing.Body.String())
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Errorf("%d jobs were written down, want only the one that was taken", len(jobs))
 	}
 }

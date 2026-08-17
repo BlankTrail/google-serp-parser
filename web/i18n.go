@@ -141,6 +141,13 @@ var catalogue = map[Lang]map[string]string{
 		"job.verdict.held":   "found",
 		"job.verdict.absent": "not found",
 
+		// Where a position check found its site. A phrase the site was not found
+		// for says so, and a phrase nobody has reached yet is not on the list: the
+		// two are different answers and neither is dressed as news.
+		"job.standings":      "Positions",
+		"job.standings.none": "No phrase has been checked yet.",
+		"job.rank.none":      "not found",
+
 		"new.title":             "New job",
 		"form.name":             "Name",
 		"form.queries":          "Queries, one per line",
@@ -159,11 +166,18 @@ var catalogue = map[Lang]map[string]string{
 		// What the job asks Google. The lines of the list mean different things
 		// under the two, which is why the choice stands above the list rather
 		// than beside the depth.
-		"form.kind":         "Kind of job",
-		"form.kind.search":  "Position check",
-		"form.kind.index":   "Index check",
-		"form.kind.why":     "An index job reads the list as addresses and asks Google whether it holds each one. It takes a single page per address, whatever the depth says, because the first page settles it.",
-		"form.kind.unknown": "That is not one of the things a job asks.",
+		"form.kind":          "Kind of job",
+		"form.kind.parse":    "Parsing",
+		"form.kind.position": "Position check",
+		"form.kind.index":    "Index check",
+		"form.kind.why":      "Parsing reads the list as phrases and writes down everything each one came back with. A position check reads the same list and reports where one site stood for each phrase, or that it was not in the pages taken. An index check reads the list as addresses and asks Google whether it holds each one; it takes a single page per address, whatever the depth says, because the first page settles it.",
+		"form.kind.unknown":  "That is not one of the things a job asks.",
+		// The site a position check is about. The sentence says what cannot be
+		// changed later and why, because a reader who finds that out afterwards
+		// has a run to do again.
+		"form.target":          "Site to look for",
+		"form.target.why":      "A position check needs this and the other two kinds ignore it. A bare site counts any page of it, including its subdomains; an address with a path counts that address alone. It is fixed when the job starts: the positions already found were measured against it.",
+		"form.target.required": "A position check needs the site it is about.",
 		// What the job throws away as it writes, and how many it threw. Both say
 		// what happened and neither judges it: whether six repeats in ten is what
 		// the reader meant is theirs to say. The sentence names the part that
@@ -322,6 +336,10 @@ var catalogue = map[Lang]map[string]string{
 		"job.verdict.held":   "найден",
 		"job.verdict.absent": "не найден",
 
+		"job.standings":      "Позиции",
+		"job.standings.none": "Ни одной фразы ещё не проверено.",
+		"job.rank.none":      "не найден",
+
 		"new.title":             "Новое задание",
 		"form.name":             "Название",
 		"form.queries":          "Запросы, по одному в строке",
@@ -338,11 +356,16 @@ var catalogue = map[Lang]map[string]string{
 		"form.queries.required": "В списке нет ни одного запроса.",
 		"form.pages.positive":   "Запрос берётся хотя бы на одну страницу.",
 
-		"form.kind":         "Тип задания",
-		"form.kind.search":  "Проверка позиций",
-		"form.kind.index":   "Проверка индексации",
-		"form.kind.why":     "Задание на индекс читает список как адреса и спрашивает Google, держит ли он каждый. На адрес берётся одна страница, какую бы глубину ни выставили: первая страница вопрос закрывает.",
-		"form.kind.unknown": "Такого задания не бывает.",
+		"form.kind":          "Тип задания",
+		"form.kind.parse":    "Парсинг",
+		"form.kind.position": "Проверка позиций",
+		"form.kind.index":    "Проверка индексации",
+		"form.kind.why":      "Парсинг читает список как фразы и записывает всё, что вернулось по каждой. Проверка позиций читает тот же список и сообщает, на каком месте по каждой фразе стоит один сайт — или что на взятых страницах его нет. Проверка индексации читает список как адреса и спрашивает Google, держит ли он каждый; на адрес берётся одна страница, какую бы глубину ни выставили: первая страница вопрос закрывает.",
+		"form.kind.unknown":  "Такого задания не бывает.",
+
+		"form.target":          "Искомый сайт",
+		"form.target.why":      "Проверке позиций он нужен, остальным двум типам не нужен вовсе. Голый сайт засчитывает любую его страницу, включая поддомены; адрес с путём — только этот адрес. После запуска он не меняется: уже найденные места отмерены по нему.",
+		"form.target.required": "Проверке позиций нужен сайт, о котором она.",
 
 		"form.unique":         "Удаление дублей",
 		"form.unique.off":     "Оставлять все результаты",

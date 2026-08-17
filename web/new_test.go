@@ -634,3 +634,114 @@ func TestNewJob_ComesWithANameAlreadyInIt(t *testing.T) {
 		t.Errorf("the name box does not open with %q in it:\n%s", stamp, body)
 	}
 }
+
+func TestNewJob_OffersParsingAsTheJobToStartFrom(t *testing.T) {
+	// Parsing is what this program does and what somebody arriving at the form
+	// came for. A page opening on one of the checks would put the narrow question
+	// in front of a reader who came for the whole page of results, and the box
+	// below it would then mean something they did not intend.
+	s := testServer(t)
+	body := get(t, s, newAt).Body.String()
+
+	chosen := `<option value="` + store.KindParse + `" selected>`
+	if !strings.Contains(body, chosen) {
+		t.Errorf("the form does not open on a parse:\n%s", body)
+	}
+	for _, kind := range []string{store.KindPosition, store.KindIndex} {
+		if strings.Contains(body, `<option value="`+kind+`" selected>`) {
+			t.Errorf("the form opens on %q, and a parse is the ordinary job:\n%s", kind, body)
+		}
+	}
+	// Every kind is on offer, or the choice is not one.
+	for _, kind := range []string{store.KindParse, store.KindPosition, store.KindIndex} {
+		if !strings.Contains(body, `<option value="`+kind+`"`) {
+			t.Errorf("the form does not offer %q:\n%s", kind, body)
+		}
+	}
+}
+
+func TestCreateJob_FilesAJobThatNamedNoKindAsAParse(t *testing.T) {
+	// A form posted without the field is the job this program did before there
+	// was a choice, and that is the parse. Reading it as either check would run
+	// somebody's phrases as a question about one site.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name":    {"phrases"},
+		"queries": {"iphone 13"},
+		"pages":   {"1"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("starting gave %d, want a redirect: %s", rec.Code, rec.Body)
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if jobs[0].Kind != store.KindParse {
+		t.Errorf("the job was filed as kind %q, want %q", jobs[0].Kind, store.KindParse)
+	}
+}
+
+func TestCreateJob_RefusesAPositionCheckWithNoSiteToLookFor(t *testing.T) {
+	// Started, it would answer "not found" about every phrase in the list, and
+	// that reads exactly like a site nobody ranks for. The complaint names the
+	// box that is empty and judges nothing about it.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name":    {"places"},
+		"kind":    {store.KindPosition},
+		"queries": {"iphone 13"},
+		"pages":   {"1"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a check with no site gave %d, want the form back", rec.Code)
+	}
+	if want := LangEN.T("form.target.required"); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("the page does not say %q:\n%s", want, rec.Body)
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Errorf("%d jobs were written down although the form was refused", len(jobs))
+	}
+}
+
+func TestCreateJob_FilesTheSiteAPositionCheckWasGiven(t *testing.T) {
+	// The site is what the whole job is about. A box that stopped at the handler
+	// would leave the history holding a check about nothing, and the run would
+	// have nothing to recognise.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name":    {"places"},
+		"kind":    {store.KindPosition},
+		"target":  {"example.com/wanted"},
+		"unique":  {string(store.UniqueHost)},
+		"queries": {"iphone 13"},
+		"pages":   {"3"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("starting gave %d, want a redirect: %s", rec.Code, rec.Body)
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if jobs[0].Kind != store.KindPosition || jobs[0].Target != "example.com/wanted" {
+		t.Errorf("the job was filed as kind %q about %q, want %q about example.com/wanted",
+			jobs[0].Kind, jobs[0].Target, store.KindPosition)
+	}
+	// The depth is the reader's, unlike an index check: how deep to look before
+	// calling a site absent is the question being asked.
+	if jobs[0].Pages != 3 {
+		t.Errorf("the check takes %d pages, want the 3 that were asked for", jobs[0].Pages)
+	}
+	// A position check drops nothing, whatever the box says. The one result it
+	// keeps per phrase is the site itself, and a filter on hosts would drop it
+	// from the second phrase onwards — every one of which would read back as a
+	// phrase the site does not rank for.
+	if jobs[0].UniqueBy != store.UniqueOff {
+		t.Errorf("a position check was filed as filtered by %q, want no filter", jobs[0].UniqueBy)
+	}
+}

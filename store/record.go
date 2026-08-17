@@ -84,6 +84,16 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 			// position seven, and seven is where it stood whatever became of the one
 			// above.
 			rank++
+			// A result that already knows where it stood is filed there. A check
+			// looking for one site hands over that site and nothing else, and the
+			// place it stood is the only thing the check produced: counting the rows
+			// handed over would file a site that ranked seventh as first. A walk
+			// cannot be moved by this, because a page numbers its results from one
+			// again on every page, so what a walk carries is never further down than
+			// the count already is.
+			if r.Position > rank {
+				rank = r.Position
+			}
 			// A job that asked for no filter never reaches the table of what it has
 			// seen. It pays neither the write nor the room it would take.
 			if key, ok := keyOf(by, r); ok {

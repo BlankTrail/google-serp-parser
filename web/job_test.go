@@ -5,6 +5,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -455,13 +456,19 @@ func TestJobPage_AnswersForEveryAddressAnIndexJobChecked(t *testing.T) {
 }
 
 func TestJobPage_SaysWhatKindOfJobItIs(t *testing.T) {
-	// The same page draws two jobs that ask Google different questions, and a
-	// reader who cannot tell which they are looking at cannot read either.
+	// The same page draws three jobs that ask Google different questions, and a
+	// reader who cannot tell which they are looking at cannot read any of them.
 	s := testServer(t)
 	search := seedJob(t, s, "phrases", 2, 1, 0)
 	index := seedIndexJob(t, s, "addresses", []string{"example.com/a"}, nil)
 
-	for kind, id := range map[string]int64{"form.kind.search": search, "form.kind.index": index} {
+	position := seedPositionJob(t, s, "places", "example.com", map[string]int{"iphone 13": 4})
+
+	for kind, id := range map[string]int64{
+		"form.kind.parse":    search,
+		"form.kind.position": position,
+		"form.kind.index":    index,
+	} {
 		body := get(t, s, jobPath(id)).Body.String()
 		if want := LangEN.T(kind); !strings.Contains(body, want) {
 			t.Errorf("the page of job %d does not say it is %q:\n%s", id, want, body)
@@ -584,4 +591,162 @@ func TestProgress_CarriesWhatWasDroppedToTheScriptThatFollowsTheJob(t *testing.T
 	if got := askProgress(t, s, id).Dropped; got != 6 {
 		t.Errorf("the poll answers %d dropped, want 6 — both results of every query after the first", got)
 	}
+}
+
+// seedPositionJob writes a position check and what it settled: for each phrase,
+// the rank the site stood at, or nought for a phrase the site was not found for.
+//
+// A phrase left out of the map entirely is one nobody has reached, which is the
+// state the page has to keep apart from the other two.
+func seedPositionJob(t *testing.T, s *Server, name, target string, at map[string]int) int64 {
+	t.Helper()
+	ctx := t.Context()
+	phrases := make([]string, 0, len(at))
+	for phrase := range at {
+		phrases = append(phrases, phrase)
+	}
+	sort.Strings(phrases)
+	id, err := s.store.CreateJob(ctx,
+		store.JobSpec{Name: name, Kind: store.KindPosition, Target: target, Pages: 3}, phrases)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	for i, phrase := range phrases {
+		var found []google.Result
+		if rank := at[phrase]; rank > 0 {
+			found = []google.Result{{
+				Position: rank, Title: target, URL: "https://" + target + "/page", Host: target}}
+		}
+		if err := s.store.Record(ctx, id, store.QueryOutcome{
+			Ordinal: i,
+			Pages:   []google.SERP{{Origin: "https://www.google.com", Results: found}},
+		}); err != nil {
+			t.Fatalf("recording the check of %q: %v", phrase, err)
+		}
+	}
+	return id
+}
+
+func TestJobPage_AnswersForEveryPhraseAPositionCheckSettled(t *testing.T) {
+	// The whole point of the job is one answer per phrase: the place, or the
+	// words for not there. A page that drew the captured results instead would
+	// show the phrases the site ranked for and simply leave out the ones it did
+	// not, which is half the answer the check was run for.
+	//
+	// No rank here is one, so a page that drew the row it found rather than the
+	// rank on it would be wrong on every line.
+	s := testServer(t)
+	id := seedPositionJob(t, s, "places", "example.com", map[string]int{
+		"iphone 13":     4,
+		"iphone 13 pro": 0,
+		"pixel 8":       17,
+	})
+
+	body := get(t, s, jobPath(id)).Body.String()
+	for _, want := range []string{"iphone 13", "iphone 13 pro", "pixel 8",
+		">4<", ">17<", LangEN.T("job.rank.none")} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page does not show %q:\n%s", want, body)
+		}
+	}
+	// The site the check is about is named once, among the settings: a column of
+	// numbers with no question above it is not an answer.
+	if !strings.Contains(body, "example.com") {
+		t.Errorf("the page does not say which site the places are of:\n%s", body)
+	}
+	// It is not drawn as what a parse captures: there is one row per phrase, and
+	// the address and the title of the one result are not the answer.
+	if strings.Contains(body, LangEN.T("job.result.title")) {
+		t.Errorf("a position check was drawn as a table of captured results:\n%s", body)
+	}
+}
+
+func TestJobPage_KeepsAPhraseNobodyReachedOffAPositionCheck(t *testing.T) {
+	// Not found is an answer and not checked is the absence of one. A phrase
+	// waiting its turn, drawn as a phrase the site does not rank for, tells the
+	// reader something this program never established, and the two look identical
+	// on the page.
+	s := testServer(t)
+	id, err := s.store.CreateJob(t.Context(),
+		store.JobSpec{Name: "places", Kind: store.KindPosition, Target: "example.com", Pages: 1},
+		[]string{"checked", "waiting"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{
+		Ordinal: 0,
+		Pages:   []google.SERP{{Origin: "https://www.google.com"}},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	rows := rowsUnder(get(t, s, jobPath(id)).Body.String())
+	if !strings.Contains(rows, "checked") {
+		t.Errorf("the page leaves out the phrase that was checked:\n%s", rows)
+	}
+	if strings.Contains(rows, "waiting") {
+		t.Errorf("a phrase nobody has reached is drawn as one the site does not rank for:\n%s", rows)
+	}
+}
+
+func TestJobPage_SaysSoWhenAPositionCheckHasCheckedNothingYet(t *testing.T) {
+	// A check with nothing settled has no places, which is not the same as a
+	// parse with nothing captured: the sentence has to name phrases, or the
+	// reader is told their phrases produced no results.
+	s := testServer(t)
+	id, err := s.store.CreateJob(t.Context(),
+		store.JobSpec{Name: "places", Kind: store.KindPosition, Target: "example.com", Pages: 1},
+		[]string{"iphone 13"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	body := get(t, s, jobPath(id)).Body.String()
+	if strings.Contains(body, "<table") {
+		t.Error("a check that has settled nothing was shown an empty table")
+	}
+	if !strings.Contains(body, LangEN.T("job.standings.none")) {
+		t.Errorf("the page does not say that nothing has been checked:\n%s", body)
+	}
+	if strings.Contains(body, LangEN.T("job.results.none")) {
+		t.Errorf("a position check was told its results are empty:\n%s", body)
+	}
+}
+
+func TestJobPage_DrawsAParseJobAsEverythingItCaptured(t *testing.T) {
+	// A parse is the whole of what came back, and its page says so: every result
+	// of every phrase, with the title and the address on it. Narrowed to a column
+	// of places it would be a position check nobody asked for, and the reader
+	// would have no way to see what was thrown away.
+	s := testServer(t)
+	id := seedJob(t, s, "phrases", 1, 1, 0)
+
+	body := get(t, s, jobPath(id)).Body.String()
+	for _, want := range []string{
+		LangEN.T("job.result.title"), LangEN.T("history.address"), LangEN.T("history.rank"),
+		"first.test", "second.test",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page of a parse does not show %q:\n%s", want, body)
+		}
+	}
+	// Both results of the one phrase are drawn, so a page narrowed to one row per
+	// phrase fails here rather than looking merely shorter.
+	if got := strings.Count(rowsUnder(body), "<tr"); got != 2 {
+		t.Errorf("the page drew %d rows for a phrase that captured two results", got)
+	}
+	if strings.Contains(body, LangEN.T("job.rank.none")) {
+		t.Errorf("a parse was drawn as a check that found nothing:\n%s", body)
+	}
+}
+
+// rowsUnder is the body of the one table on the page, so a test about the rows
+// is not answered by a phrase that appears among the settings above them.
+func rowsUnder(body string) string {
+	from := strings.Index(body, "<tbody>")
+	to := strings.Index(body, "</tbody>")
+	if from < 0 || to < from {
+		return ""
+	}
+	return body[from:to]
 }

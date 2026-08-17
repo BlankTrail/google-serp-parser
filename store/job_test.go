@@ -343,7 +343,7 @@ func TestLastUnfinished_CarriesTheSettingsTheJobWasCreatedWith(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LastUnfinished: %v", err)
 	}
-	want := JobSpec{Name: "nightly", Kind: KindSearch, Pages: 3,
+	want := JobSpec{Name: "nightly", Kind: KindParse, Pages: 3,
 		SpecName: "desktop", Country: "de", Language: "de", Ports: 4, Threads: 7}
 	if got.Spec != want {
 		t.Errorf("LastUnfinished returned %+v, want %+v", got.Spec, want)
@@ -562,10 +562,14 @@ func TestCreateJob_FilesTheJobUnderTheKindItWasAskedFor(t *testing.T) {
 }
 
 func TestCreateJob_NamesTheKindOfAJobThatNamedNone(t *testing.T) {
-	// A caller who says nothing means a search: that is what this program did
+	// A caller who says nothing means a parse: that is what this program did
 	// before there was a choice. It is written into the column rather than left
 	// to the column's own default, so a job read straight back says what it is
 	// instead of leaving every reader to work it out again.
+	//
+	// The word in the column is "search" and stays "search". Every job this
+	// program ever wrote down was this kind, and renaming the value would file
+	// that whole history under a question none of those runs asked.
 	s := testStore(t)
 	id, err := s.CreateJob(context.Background(),
 		JobSpec{Name: "plain", Pages: 1}, []string{"a"})
@@ -576,7 +580,85 @@ func TestCreateJob_NamesTheKindOfAJobThatNamedNone(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT kind FROM jobs WHERE id = ?`, id).Scan(&stored); err != nil {
 		t.Fatalf("reading the kind back: %v", err)
 	}
-	if stored != KindSearch {
-		t.Errorf("stored kind %q, want %q", stored, KindSearch)
+	if stored != "search" {
+		t.Errorf("stored kind %q, want %q", stored, "search")
+	}
+	if KindParse != "search" {
+		t.Errorf("the ordinary kind is written down as %q, and every job already in "+
+			"the history says \"search\"", KindParse)
+	}
+}
+
+func TestCreateJob_RefusesAPositionCheckWithNothingToLookFor(t *testing.T) {
+	// The refusal is the whole of what makes "not found" mean anything. A check
+	// with no site recognises nothing and settles every phrase in the list as one
+	// the site does not rank for, and that answer is indistinguishable from a
+	// real one once it is in the history.
+	//
+	// A site of nothing but spaces is nothing: a browser sends what was typed,
+	// and a box somebody tabbed through is not a site.
+	s := testStore(t)
+	for _, target := range []string{"", "   "} {
+		if _, err := s.CreateJob(context.Background(),
+			JobSpec{Name: "places", Kind: KindPosition, Target: target, Pages: 1},
+			[]string{"a"}); !errors.Is(err, ErrNoTarget) {
+			t.Errorf("CreateJob with %q to look for gave %v, want ErrNoTarget", target, err)
+		}
+	}
+	var jobs int
+	if err := s.db.QueryRow(`SELECT count(*) FROM jobs`).Scan(&jobs); err != nil {
+		t.Fatalf("counting jobs: %v", err)
+	}
+	if jobs != 0 {
+		t.Errorf("%d jobs were written down although they were refused", jobs)
+	}
+}
+
+func TestCreateJob_TakesTheOtherKindsWithNoSiteNamed(t *testing.T) {
+	// The site belongs to one kind. A parse is about every site the page carried
+	// and an index check is about the address on the line, so demanding one of
+	// them would refuse the two jobs this program spent a year doing.
+	s := testStore(t)
+	for _, kind := range []string{KindParse, KindIndex, ""} {
+		if _, err := s.CreateJob(context.Background(),
+			JobSpec{Name: "j", Kind: kind, Pages: 1}, []string{"a"}); err != nil {
+			t.Errorf("CreateJob of kind %q with no site named: %v", kind, err)
+		}
+	}
+}
+
+func TestCreateJob_FilesTheSiteAPositionCheckIsAboutAndHandsItToAResume(t *testing.T) {
+	// A check taken up part way has to go on being about the same site. Carried
+	// on against another one, the column of positions it leaves stands for two
+	// questions and nothing in the history says where the change fell.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "places", Kind: KindPosition, Target: "  example.com/wanted  ", Pages: 1},
+		[]string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	var stored string
+	if err := s.db.QueryRow(`SELECT target FROM jobs WHERE id = ?`, id).Scan(&stored); err != nil {
+		t.Fatalf("reading the site back: %v", err)
+	}
+	if stored != "example.com/wanted" {
+		t.Errorf("stored %q, want the site with the spaces a browser sent around it taken off", stored)
+	}
+
+	sum, err := s.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Target != "example.com/wanted" {
+		t.Errorf("the job reads back as being about %q, want example.com/wanted", sum.Target)
+	}
+	taken, err := s.LastUnfinished(context.Background(), "places")
+	if err != nil {
+		t.Fatalf("LastUnfinished: %v", err)
+	}
+	if taken.Spec.Target != "example.com/wanted" {
+		t.Errorf("the resumed check is about %q, want example.com/wanted", taken.Spec.Target)
 	}
 }

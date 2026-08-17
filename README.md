@@ -68,9 +68,17 @@ in batches, so nothing ever holds the whole list; a list that stopped arriving
 part way leaves a job that can be seen and cannot be run, rather than one
 quietly short. A job can drop repeats as they land — the same address twice, or
 a second result from a site already seen — and says how many it dropped.
-Besides searching, a job can ask whether Google holds a page, and that verdict
-counts only results that are the page asked about, so a site's other pages
-never stand in for it.
+**A job is one of three things, and they differ by what is asked rather than by
+what is written down.** Parsing is the ordinary one and the one the form starts
+on: a list of phrases in, and everything each of them came back with written
+down. A position check takes the same list and one site, and answers with the
+place that site stood at for each phrase, or that it was not in the pages taken
+— it stops walking at the page that answers, so a site on the first page costs
+one page and not the depth. An index check takes a list of addresses and answers
+whether Google holds each one. Both checks count only results that are the site
+or the page asked about, so a site's other pages never stand in for it, and
+neither of them can tell you "not found" about a line nobody reached: a line that
+was never checked is absent from the answers rather than reported as an absence.
 
 Every page is in English and Russian, and a further language can be added with
 a file beside the program without rebuilding it — what such a file is missing

@@ -10,6 +10,63 @@ import (
 	"testing"
 )
 
+// windBackToVersionFour turns a database this build has just made into the one
+// the build before the third kind of job would have left behind: no target
+// column, and a kind column that takes two words rather than three.
+//
+// It rebuilds the table rather than dropping the column, because the narrow
+// CHECK is the half of version four that matters here. A wind-back that left the
+// wider one behind would hand the upgrade a table it did not have to widen, and
+// the test resting on it would pass with the widening taken out.
+//
+// It winds back the way the step goes forward, and on one connection with the
+// foreign keys held off, for the same reason: dropping a table other tables
+// point at takes their rows with it, and a wind-back that quietly emptied the
+// database would leave every test after it proving that nothing survives
+// nothing.
+func windBackToVersionFour(t *testing.T, s *Store) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("taking a connection to wind back on: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	for _, stmt := range []string{
+		`PRAGMA foreign_keys = OFF`,
+		`CREATE TABLE jobs_v4 (
+		    id          INTEGER PRIMARY KEY,
+		    name        TEXT    NOT NULL,
+		    created_at  TEXT    NOT NULL,
+		    finished_at TEXT,
+		    pages       INTEGER NOT NULL,
+		    spec_name   TEXT    NOT NULL DEFAULT '',
+		    country     TEXT    NOT NULL DEFAULT '',
+		    language    TEXT    NOT NULL DEFAULT '',
+		    kind        TEXT    NOT NULL DEFAULT 'search' CHECK (kind IN ('search', 'index')),
+		    unique_by   TEXT    NOT NULL DEFAULT '' CHECK (unique_by IN ('', 'url', 'host')),
+		    plan_ready  INTEGER NOT NULL DEFAULT 0,
+		    dropped     INTEGER NOT NULL DEFAULT 0,
+		    ports       INTEGER NOT NULL DEFAULT 0 CHECK (ports   >= 0),
+		    threads     INTEGER NOT NULL DEFAULT 0 CHECK (threads >= 0)
+		)`,
+		`INSERT INTO jobs_v4(id, name, created_at, finished_at, pages, spec_name, country,
+		                     language, kind, unique_by, plan_ready, dropped, ports, threads)
+		      SELECT id, name, created_at, finished_at, pages, spec_name, country,
+		             language, kind, unique_by, plan_ready, dropped, ports, threads
+		        FROM jobs`,
+		`DROP TABLE jobs`,
+		`ALTER TABLE jobs_v4 RENAME TO jobs`,
+		`PRAGMA foreign_keys = ON`,
+		`PRAGMA user_version = 4`,
+	} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("winding back with %q: %v", stmt, err)
+		}
+	}
+}
+
 // windBackToVersionThree turns a database this build has just made into the one
 // the build before the pool columns would have left behind.
 func windBackToVersionThree(t *testing.T, s *Store) {
@@ -34,6 +91,7 @@ func windBackToVersionThree(t *testing.T, s *Store) {
 // fails rather than a step the upgrade path is never asked to run.
 func windBackToVersionOne(t *testing.T, s *Store) {
 	t.Helper()
+	windBackToVersionFour(t, s)
 	windBackToVersionThree(t, s)
 	for _, stmt := range []string{
 		`ALTER TABLE jobs DROP COLUMN dropped`,
@@ -236,6 +294,104 @@ func TestOpen_CarriesAJobWrittenBeforeThePoolColumnsAndLeavesItRunnable(t *testi
 	}
 }
 
+func TestOpen_CarriesAFilledDatabaseThroughTheTableBeingRebuiltForTheThirdKind(t *testing.T) {
+	// The one upgrade this version makes, and the only one so far that builds a
+	// table again instead of adding to it. Everything captured hangs off the jobs
+	// table by id and cascades when a job is deleted, so the step is one wrong
+	// statement away from taking every query, page and result in the database
+	// with it — and against an empty database that step would look perfect.
+	path := filepath.Join(t.TempDir(), "gserp.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "nightly", Kind: KindIndex, Pages: 2, UniqueBy: UniqueHost,
+			SpecName: "mobile", Country: "de", Language: "de", Ports: 5, Threads: 3},
+		[]string{"a", "b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	// Two results of two hosts, under a filter that drops repeats, so the job
+	// leaves a row in every table that hangs off it — including what it has seen,
+	// which is the one whose rows nothing would ever miss.
+	mustRecord(t, s, id, 0, "one.test", "two.test")
+	windBackToVersionFour(t, s)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a version-4 database: %v", err)
+	}
+	defer func() { _ = again.Close() }()
+
+	var version int
+	if err := again.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("reading the version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Errorf("the upgraded database says version %d, want %d", version, schemaVersion)
+	}
+
+	// What hangs off the job. Counted rather than read back through a summary,
+	// because the failure being guarded against deletes rows rather than
+	// changing them, and a summary of nothing reads as a job that captured
+	// nothing.
+	for _, c := range []struct {
+		what string
+		want int
+	}{{"queries", 2}, {"pages", 1}, {"results", 2}, {"seen", 2}} {
+		var got int
+		if err := again.db.QueryRow(`SELECT count(*) FROM ` + c.what).Scan(&got); err != nil {
+			t.Fatalf("counting %s: %v", c.what, err)
+		}
+		if got != c.want {
+			t.Errorf("%d rows left in %s after the upgrade, want %d", got, c.what, c.want)
+		}
+	}
+
+	sum, err := again.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	// Every column the old table carried, read back off the new one. A rebuild
+	// that copied the columns in the wrong order compiles and runs, and files the
+	// country under the language.
+	switch {
+	case sum.Name != "nightly":
+		t.Errorf("the upgraded job is named %q, want nightly", sum.Name)
+	case sum.Kind != KindIndex:
+		t.Errorf("the upgraded job reads as kind %q, want %q", sum.Kind, KindIndex)
+	case sum.UniqueBy != UniqueHost:
+		t.Errorf("the upgraded job drops repeats by %q, want %q", sum.UniqueBy, UniqueHost)
+	case sum.Pages != 2 || sum.Ports != 5 || sum.Threads != 3:
+		t.Errorf("the upgraded job reads as %d pages, %d ports, %d threads — want 2, 5 and 3",
+			sum.Pages, sum.Ports, sum.Threads)
+	case sum.Country != "de" || sum.Language != "de" || sum.SpecName != "mobile":
+		t.Errorf("the upgraded job reads as country %q, language %q, profile %q — want de, de and mobile",
+			sum.Country, sum.Language, sum.SpecName)
+	case sum.Total != 2 || sum.Done != 1 || sum.Pending != 1:
+		t.Errorf("the upgraded job reads as %d queries, %d done, %d pending — want 2, 1, 1",
+			sum.Total, sum.Done, sum.Pending)
+	}
+	// A job written before there were three kinds is about no site, and that is
+	// not the same as a site nobody could find.
+	if sum.Target != "" {
+		t.Errorf("a job from before the column reads as being about %q, want no site named", sum.Target)
+	}
+
+	if _, err := again.LastUnfinished(context.Background(), "nightly"); err != nil {
+		t.Errorf("a job that came through the upgrade cannot be taken up: %v", err)
+	}
+	if _, err := again.CreateJob(context.Background(),
+		JobSpec{Name: "after", Kind: KindPosition, Target: "example.com", Pages: 1},
+		[]string{"a"}); err != nil {
+		t.Errorf("the upgraded database will not take the kind the step was for: %v", err)
+	}
+}
+
 func TestOpen_LeavesTheVersionAloneWhenAStepCannotFinish(t *testing.T) {
 	// A step that runs half way and still records its version leaves a database
 	// no version describes, and the next open would skip the rest of the step
@@ -376,6 +532,7 @@ func TestJobs_TakeOnlyTheKindsAndFiltersThatMeanSomething(t *testing.T) {
 		{"kind", "index", true},
 		{"kind", "", false},
 		{"kind", "images", false},
+		{"kind", "parse", false},
 		{"unique_by", "", true},
 		{"unique_by", "url", true},
 		{"unique_by", "host", true},
@@ -387,6 +544,38 @@ func TestJobs_TakeOnlyTheKindsAndFiltersThatMeanSomething(t *testing.T) {
 		if got := err == nil; got != c.want {
 			t.Errorf("%s = %q was %s (%v), want it %s",
 				c.column, c.value,
+				map[bool]string{true: "taken", false: "refused"}[got], err,
+				map[bool]string{true: "taken", false: "refused"}[c.want])
+		}
+	}
+}
+
+func TestJobs_RefuseAPositionCheckWithNothingToLookFor(t *testing.T) {
+	// The store refuses this before the insert and the form refuses it before
+	// that, so nothing in this program can get here. It is the guard against a
+	// writer that went around both: a position check with no site would run, find
+	// nothing to recognise, and answer "not found" for every phrase in the list —
+	// a wrong answer with nothing left in the database to disbelieve it by.
+	//
+	// The other two kinds take the empty site, because for them there is nothing
+	// to name: a parse is about every site the page carried, and an index check
+	// is about the address on the line.
+	s := testStore(t)
+	for _, c := range []struct {
+		kind, target string
+		want         bool
+	}{
+		{"position", "example.com", true},
+		{"position", "", false},
+		{"search", "", true},
+		{"index", "", true},
+	} {
+		_, err := s.db.Exec(
+			`INSERT INTO jobs(name, created_at, pages, kind, target)
+			 VALUES('j', '2026-08-17T10:00:00Z', 1, ?, ?)`, c.kind, c.target)
+		if got := err == nil; got != c.want {
+			t.Errorf("kind %q about %q was %s (%v), want it %s",
+				c.kind, c.target,
 				map[bool]string{true: "taken", false: "refused"}[got], err,
 				map[bool]string{true: "taken", false: "refused"}[c.want])
 		}

@@ -567,14 +567,14 @@ func TestRunner_AnIndexJobRecordsAnAddressNobodyHeldAsAnAnswer(t *testing.T) {
 	}
 }
 
-func TestRunner_ASearchJobIsUnchangedByTheIndexKindExisting(t *testing.T) {
-	// The kind a job names is the kind it runs. A search asked for by name and a
-	// search asked for by naming nothing are the same job, and neither of them
-	// goes near the index check.
-	for _, kind := range []Kind{Search, Kind(0)} {
+func TestRunner_AParseJobIsUnchangedByTheChecksExisting(t *testing.T) {
+	// The kind a job names is the kind it runs. A parse asked for by name and a
+	// parse asked for by naming nothing are the same job, and neither of them
+	// goes near either check.
+	for _, kind := range []Kind{Parse, Kind(0)} {
 		o := newOrigin(t, func(r *http.Request, _ int) string {
 			if strings.HasPrefix(r.URL.Query().Get("q"), "site:") {
-				t.Error("a search job asked the index operator")
+				t.Error("a parse job asked the index operator")
 			}
 			return serpBody("example.com")
 		})
@@ -586,7 +586,7 @@ func TestRunner_ASearchJobIsUnchangedByTheIndexKindExisting(t *testing.T) {
 			t.Fatalf("Done=%d, want 1 (%v)", rep.Done, rep.Results[0].Err)
 		}
 		if n := len(rep.Results[0].Pages[0].Results); n != 1 {
-			t.Errorf("a search job recorded %d results, want the 1 the page carried", n)
+			t.Errorf("a parse job recorded %d results, want the 1 the page carried", n)
 		}
 	}
 }

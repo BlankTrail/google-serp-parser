@@ -210,6 +210,8 @@ func (f jobForm) carrying(box, value string) jobForm {
 		f.Name = value
 	case "kind":
 		f.Kind = value
+	case "target":
+		f.Target = value
 	case "unique":
 		f.Unique = value
 	case "country":

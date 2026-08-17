@@ -46,6 +46,10 @@ type jobSetup struct {
 	// Kind is the key of what to call what this job asks Google, never the word
 	// itself: every phrase on every page goes through the catalogue.
 	Kind string
+	// Target is the site a position check is about, and it is the reader's own
+	// word rather than a key: it is an address they typed. It is empty under the
+	// other kinds, and the page shows the line only when there is one.
+	Target string
 	// Filter is the key of what to call what this job drops as a repeat. It is
 	// shown among the settings and not among the counts, because it is a thing
 	// the job was set up with and cannot be changed now.
@@ -64,16 +68,19 @@ type jobPage struct {
 	Progress progressJSON
 	// State is the key of what to call the job's state, not the word itself.
 	State string
-	// Rows is what a search job captured and Verdicts is what an index job
-	// established. A job is one kind or the other, so exactly one of them is
-	// ever filled, and the page draws whichever it was handed.
-	Rows     []store.Row
-	Verdicts []store.Verdict
-	// IsIndex says which of the two the page is drawing. It is not read off the
-	// lists themselves: an index job that has checked nothing yet holds no
-	// verdicts, and drawing it as a search would tell the reader their addresses
-	// captured no results.
-	IsIndex bool
+	// Rows is what a parse job captured, Standings is where a position check
+	// found its site, and Verdicts is what an index check established. A job is
+	// one kind, so exactly one of the three is ever filled, and the page draws
+	// whichever it was handed.
+	Rows      []store.Row
+	Standings []store.Standing
+	Verdicts  []store.Verdict
+	// IsIndex and IsPosition say which of the three the page is drawing. They are
+	// not read off the lists themselves: a check that has reached nothing yet
+	// holds no answers, and drawing it as a parse would tell the reader their
+	// list captured no results.
+	IsIndex    bool
+	IsPosition bool
 	// Filtering says the job drops repeats, and it is what puts the count of
 	// dropped results on the screen. A job that keeps everything is not given a
 	// figure reading nought: a number on a screen is a thing to wonder about,
@@ -101,16 +108,20 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// One kind is read or the other, never both. A job of a million addresses
-	// holds no positions to draw, and walking its results to find that out is
-	// the million-row read this page is written not to do.
+	// One kind is read and never two. A job of a million addresses holds no
+	// captured page to draw, and walking its results to find that out is the
+	// million-row read this page is written not to do.
 	var rows []store.Row
+	var standings []store.Standing
 	var verdicts []store.Verdict
 	var capped bool
 	var err error
-	if sum.Kind == store.KindIndex {
+	switch sum.Kind {
+	case store.KindIndex:
 		verdicts, capped, err = s.someVerdicts(r.Context(), sum.ID)
-	} else {
+	case store.KindPosition:
+		standings, capped, err = s.someStandings(r.Context(), sum.ID)
+	default:
 		rows, capped, err = s.someRows(r.Context(), sum.ID)
 	}
 	if err != nil {
@@ -132,20 +143,23 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Name:     sum.Name,
 			Started:  sum.CreatedAt,
 			Kind:     kind,
+			Target:   sum.Target,
 			Filter:   filter,
 			Pages:    sum.Pages,
 			Country:  sum.Country,
 			Language: sum.Language,
 			Spec:     sum.SpecName,
 		},
-		Progress:  at,
-		State:     stateOf(at, sum.PlanReady),
-		Rows:      rows,
-		Verdicts:  verdicts,
-		IsIndex:   sum.Kind == store.KindIndex,
-		Filtering: sum.UniqueBy != store.UniqueOff,
-		Capped:    capped,
-		Formats:   export.Formats(),
+		Progress:   at,
+		State:      stateOf(at, sum.PlanReady),
+		Rows:       rows,
+		Standings:  standings,
+		Verdicts:   verdicts,
+		IsIndex:    sum.Kind == store.KindIndex,
+		IsPosition: sum.Kind == store.KindPosition,
+		Filtering:  sum.UniqueBy != store.UniqueOff,
+		Capped:     capped,
+		Formats:    export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
 		// somebody presses until they conclude the job cannot be stopped at all.
@@ -219,6 +233,30 @@ func (s *Server) someVerdicts(ctx context.Context, jobID int64) ([]store.Verdict
 			return errEnough
 		}
 		out = append(out, v)
+		return nil
+	})
+	if errors.Is(err, errEnough) {
+		return out, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return out, false, nil
+}
+
+// someStandings reads as many of a position check's answers as the page draws,
+// and says whether there were more.
+//
+// The walk is stopped for the reason someVerdicts is stopped: a list of phrases
+// is as long as somebody's file, and reading a million of them to draw two
+// hundred is a million rows read to be thrown away.
+func (s *Server) someStandings(ctx context.Context, jobID int64) ([]store.Standing, bool, error) {
+	out := make([]store.Standing, 0, rowsShown)
+	err := s.store.Standings(ctx, jobID, func(st store.Standing) error {
+		if len(out) == rowsShown {
+			return errEnough
+		}
+		out = append(out, st)
 		return nil
 	})
 	if errors.Is(err, errEnough) {

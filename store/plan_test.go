@@ -447,3 +447,49 @@ func TestOpenPlan_KeepsThePoolTheJobAskedFor(t *testing.T) {
 		t.Errorf("an uploaded job runs on %d ports and %d threads, want 4 and 7", sum.Ports, sum.Threads)
 	}
 }
+
+func TestOpenPlan_RefusesAPositionCheckWithNothingToLookFor(t *testing.T) {
+	// The two doors a job is written by have to refuse the same job. This one
+	// takes a list of any size, so it refuses before the file rather than after
+	// it: minutes of upload spent to arrive at a sentence that could have been
+	// said first is minutes, and the job left behind would be one nothing can run.
+	s := testStore(t)
+	if _, err := s.OpenPlan(context.Background(),
+		JobSpec{Name: "places", Kind: KindPosition, Pages: 1}); !errors.Is(err, ErrNoTarget) {
+		t.Errorf("OpenPlan gave %v, want ErrNoTarget", err)
+	}
+	var jobs int
+	if err := s.db.QueryRow(`SELECT count(*) FROM jobs`).Scan(&jobs); err != nil {
+		t.Fatalf("counting jobs: %v", err)
+	}
+	if jobs != 0 {
+		t.Errorf("%d jobs were written down although the plan was refused", jobs)
+	}
+}
+
+func TestOpenPlan_FilesTheSiteAChecklistUploadedAsAFileIsAbout(t *testing.T) {
+	// A check set up by typing the phrases and a check set up by sending them as
+	// a file are the same check. A site kept by one door and dropped by the other
+	// is a job that runs differently depending on how its list arrived.
+	s := testStore(t)
+	p, err := s.OpenPlan(context.Background(),
+		JobSpec{Name: "places", Kind: KindPosition, Target: "example.com", Pages: 1})
+	if err != nil {
+		t.Fatalf("OpenPlan: %v", err)
+	}
+	if err := p.Add(context.Background(), "a"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := p.Ready(context.Background()); err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+
+	sum, err := s.Progress(context.Background(), p.JobID())
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Kind != KindPosition || sum.Target != "example.com" {
+		t.Errorf("the uploaded job reads as kind %q about %q, want %q about example.com",
+			sum.Kind, sum.Target, KindPosition)
+	}
+}

@@ -50,6 +50,15 @@
 {{end}}</select>
 </div>
 <p class="empty">{{.T "form.kind.why"}}</p>
+{{/* The site a position check is about. It stands with the kind that asks for
+     it and is drawn whatever the kind is chosen, because there is no script on
+     this page to show it when one is: a box that appeared and disappeared would
+     need one, and a box that is simply there is read by everyone. */}}
+<div class="field">
+<label for="target">{{.T "form.target"}}</label>
+<input id="target" name="target" value="{{.Form.Target}}">
+</div>
+<p class="empty">{{.T "form.target.why"}}</p>
 <div class="field">
 <label for="queries">{{.T "form.queries"}}</label>
 <textarea id="queries" name="queries" rows="12">{{.Form.Queries}}</textarea>
@@ -122,6 +131,14 @@
 <select id="list-kind" name="kind">
 {{range .Kinds}}<option value="{{.Value}}"{{if eq .Value $.Form.Kind}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
+</div>
+{{/* The site, on the same terms as the form above, and standing before the file
+     like every other box: the job is written down before the first line of the
+     list arrives, and a site that came after it would arrive too late to be
+     part of the job it belongs to. */}}
+<div class="field">
+<label for="list-target">{{.T "form.target"}}</label>
+<input id="list-target" name="target" value="{{.Form.Target}}">
 </div>
 <div class="row">
 <div class="field">

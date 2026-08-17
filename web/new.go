@@ -46,9 +46,13 @@ func buttons() actions {
 type jobForm struct {
 	Name string
 	// Kind is what the job asks Google for, in the words the history files it
-	// under. Empty is a search, so a form posted without the field is the job
+	// under. Empty is a parse, so a form posted without the field is the job
 	// this program did before there was a choice.
 	Kind string
+	// Target is the site a position check is about. It is asked for only by that
+	// kind and kept whatever the kind, so a reader who chose the wrong one and
+	// went back does not type the site again.
+	Target string
 	// Unique is what the job throws away as a repeat, in the word the history
 	// files it under. Empty keeps everything, so a form posted without the field
 	// is the job this program did before there was a choice.
@@ -75,8 +79,11 @@ type jobForm struct {
 // it, and it is a default and not a stamp: whatever is typed over it wins.
 func blankForm() jobForm {
 	return jobForm{
-		Name:    time.Now().Format("2006-01-02 15:04"),
-		Kind:    store.KindSearch,
+		Name: time.Now().Format("2006-01-02 15:04"),
+		// The ordinary job, and the one somebody who has not read this page yet
+		// almost certainly came for: phrases in, everything Google answered with
+		// out. The other two ask narrower questions and are chosen deliberately.
+		Kind:    store.KindParse,
 		Pages:   1,
 		Threads: 2,
 		Ports:   6,
@@ -93,9 +100,12 @@ type jobKind struct {
 	Label string
 }
 
+// The parse stands first because it is what the form starts on: the choice a
+// reader is offered first is the one they are being told is ordinary.
 func kinds() []jobKind {
 	return []jobKind{
-		{Value: store.KindSearch, Label: "form.kind.search"},
+		{Value: store.KindParse, Label: "form.kind.parse"},
+		{Value: store.KindPosition, Label: "form.kind.position"},
 		{Value: store.KindIndex, Label: "form.kind.index"},
 	}
 }
@@ -103,12 +113,12 @@ func kinds() []jobKind {
 // kindKey is the key of what to call a job of this kind, and whether it is a
 // kind at all.
 //
-// A form arriving with something else is refused rather than run as a search.
-// The two kinds ask Google different questions and the answers mean different
+// A form arriving with something else is refused rather than run as a parse.
+// The three kinds ask Google different questions and the answers mean different
 // things, so quietly picking one would file a run under a question nobody asked.
 func kindKey(kind string) (string, bool) {
 	if kind == "" {
-		return "form.kind.search", true
+		return "form.kind.parse", true
 	}
 	for _, k := range kinds() {
 		if k.Value == kind {
@@ -158,14 +168,17 @@ func filterKey(unique string) (string, bool) {
 
 // filter is what this job drops as a repeat.
 //
-// An index job drops nothing, whatever the box says. Its answer is one verdict
-// per address, worked out from the results filed against that address, and a
-// result dropped for sharing a site with an earlier one would read back as an
-// address Google does not hold — the silent wrong answer this whole check
-// exists to avoid. It is settled here, as the depth is, so that the job filed
-// in the history and the job that runs say one thing.
+// Neither check drops anything, whatever the box says. Their answers are worked
+// out from the results filed against each line, and both of those answers turn
+// on one result from one site: an index check keeps the address it asked about,
+// a position check keeps the site it was looking for. A filter dropping a second
+// result from a site already seen would take exactly those away, and the line
+// would read back as an address Google does not hold, or a site that ranked
+// nowhere — the silent wrong answers both checks exist to avoid. It is settled
+// here, as the depth is, so that the job filed in the history and the job that
+// runs say one thing.
 func (f jobForm) filter() store.UniqueBy {
-	if f.Kind == store.KindIndex {
+	if f.Kind == store.KindIndex || f.Kind == store.KindPosition {
 		return store.UniqueOff
 	}
 	return store.UniqueBy(f.Unique)
@@ -176,13 +189,16 @@ func (f jobForm) filter() store.UniqueBy {
 //
 // This is the one place the two vocabularies meet. The runner holds no words
 // the database would accept and the database holds no behaviour, so a kind
-// nobody has taught this function is run as a search — which is why nothing
+// nobody has taught this function is run as a parse — which is why nothing
 // reaches here without going through kindKey first.
 func runKind(kind string) run.Kind {
-	if kind == store.KindIndex {
+	switch kind {
+	case store.KindIndex:
 		return run.Index
+	case store.KindPosition:
+		return run.Position
 	}
-	return run.Search
+	return run.Parse
 }
 
 // depth is how many result pages this job takes per line.
@@ -237,6 +253,14 @@ func (f jobForm) faults() []string {
 	if _, known := filterKey(f.Unique); !known {
 		complaints = append(complaints, "form.unique.unknown")
 	}
+	// A position check with nothing to look for is refused here and would be
+	// refused by the history underneath. It is said here because this is the only
+	// place that can name the empty box: run, it would answer "not found" about
+	// every phrase in the list, and that answer reads exactly like a site that
+	// ranks nowhere.
+	if f.Kind == store.KindPosition && strings.TrimSpace(f.Target) == "" {
+		complaints = append(complaints, "form.target.required")
+	}
 	if f.depth() < 1 {
 		complaints = append(complaints, "form.pages.positive")
 	}
@@ -267,6 +291,7 @@ func (f jobForm) spec() store.JobSpec {
 	return store.JobSpec{
 		Name:     strings.TrimSpace(f.Name),
 		Kind:     f.Kind,
+		Target:   strings.TrimSpace(f.Target),
 		UniqueBy: f.filter(),
 		Pages:    f.depth(),
 		Country:  f.Country,
@@ -278,7 +303,8 @@ func (f jobForm) spec() store.JobSpec {
 // work is the job the estimate is of: the queries as they would be searched
 // for, at the depth they would be taken to.
 func (f jobForm) work(queries []string) run.Job {
-	j := run.Job{Kind: runKind(f.Kind), Pages: f.depth(), SpecName: f.SpecName}
+	j := run.Job{Kind: runKind(f.Kind), Target: strings.TrimSpace(f.Target),
+		Pages: f.depth(), SpecName: f.SpecName}
 	for _, text := range queries {
 		j.Queries = append(j.Queries,
 			google.Query{Text: text, Country: f.Country, Language: f.Language})
@@ -296,6 +322,7 @@ func formOf(r *http.Request) jobForm {
 	return jobForm{
 		Name:     strings.TrimSpace(r.FormValue("name")),
 		Kind:     strings.TrimSpace(r.FormValue("kind")),
+		Target:   strings.TrimSpace(r.FormValue("target")),
 		Unique:   strings.TrimSpace(r.FormValue("unique")),
 		Queries:  r.FormValue("queries"),
 		Country:  strings.TrimSpace(r.FormValue("country")),

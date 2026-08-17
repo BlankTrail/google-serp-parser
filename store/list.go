@@ -26,10 +26,17 @@ type JobSummary struct {
 	FinishedAt time.Time
 	Finished   bool
 
-	// Kind is what the job asks Google for — KindSearch or KindIndex. A reader
-	// that does not know it cannot say what a row of this job means: the same
-	// captured result is a position under one kind and a verdict under the other.
+	// Kind is what the job asks Google for — KindParse, KindPosition or
+	// KindIndex. A reader that does not know it cannot say what a row of this job
+	// means: the same captured result is one of a page's worth of findings under
+	// the first, a position under the second and a verdict under the third.
 	Kind string
+
+	// Target is the site a position check is about, and empty under the other
+	// kinds. It travels with the job because both the run and the page that
+	// reports it are about that site and nothing else: a check read without it is
+	// a column of numbers with no question above them.
+	Target string
 
 	// UniqueBy is what this job drops as a repeat, and Dropped is how many it
 	// has dropped. They travel together because neither says much alone: a count
@@ -68,7 +75,7 @@ type JobSummary struct {
 // what keeps a job nothing was recorded against in the answer, with a count of
 // nothing rather than a count of one.
 const jobSummaryQuery = `
-	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind,
+	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind, j.target,
 	       j.unique_by, j.dropped,
 	       j.pages, j.country, j.language, j.spec_name,
 	       j.ports, j.threads, j.plan_ready,
@@ -140,7 +147,7 @@ type scanner interface {
 func scanSummary(row scanner) (JobSummary, error) {
 	var sum JobSummary
 	var created, finished string
-	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind,
+	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind, &sum.Target,
 		&sum.UniqueBy, &sum.Dropped,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName,
 		&sum.Ports, &sum.Threads, &sum.PlanReady,

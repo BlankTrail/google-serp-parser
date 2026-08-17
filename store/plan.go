@@ -76,16 +76,23 @@ type Plan struct {
 // with its first batch would be minutes in which the operator who started the
 // upload has nothing to look at. It is written without the flag, so for those
 // minutes it is a job that can be seen and cannot be run.
+// A job this cannot run is refused here rather than at the end of the file. The
+// list arriving behind it is minutes long, and the two doors a job is written by
+// have to refuse the same job: a check with no site to look for is not a thing
+// this door takes and the other one does not.
 func (s *Store) OpenPlan(ctx context.Context, spec JobSpec) (*Plan, error) {
+	if err := spec.refusal(); err != nil {
+		return nil, err
+	}
 	pages := spec.Pages
 	if pages < 1 {
 		pages = 1
 	}
 	ports, threads := spec.pool()
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, unique_by, pages, spec_name, country, language, ports, threads, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), string(spec.UniqueBy), pages,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, spec_name, country, language, ports, threads, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
 		spec.SpecName, spec.Country, spec.Language, ports, threads)
 	if err != nil {
 		return nil, fmt.Errorf("store: recording the job: %w", err)

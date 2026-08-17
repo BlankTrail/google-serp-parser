@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -347,5 +348,74 @@ func TestRecord_SurvivesSeveralThreadsWritingAtOnce(t *testing.T) {
 	}
 	if results != len(queries) {
 		t.Errorf("%d results written for %d queries recorded at once", results, len(queries))
+	}
+}
+
+func TestRecord_FilesAResultAtThePlaceTheWalkSaidItStood(t *testing.T) {
+	// A check that went looking for one site hands over that site and nothing
+	// else, and where it stood is the only thing the check produced. Numbering
+	// what arrives would file a site that ranked seventh as first — the one
+	// number the job was run for, wrong, with the rest of the row right.
+	s := testStore(t)
+	id := jobWith(t, s, "a")
+
+	if err := s.Record(context.Background(), id, QueryOutcome{
+		Ordinal: 0,
+		Pages: []google.SERP{{Origin: "https://www.google.com", Results: []google.Result{
+			{Position: 7, Title: "the site", URL: "https://example.com/wanted", Host: "example.com"},
+		}}},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	var rank int
+	if err := s.db.QueryRow(`SELECT rank FROM results`).Scan(&rank); err != nil {
+		t.Fatalf("reading the result back: %v", err)
+	}
+	if rank != 7 {
+		t.Errorf("the site was filed at %d, and the walk said it stood at 7", rank)
+	}
+}
+
+func TestRecord_NumbersAnOrdinaryWalkByWhatArrivedRatherThanByThePage(t *testing.T) {
+	// A page numbers its results from one again, page after page. The rank runs
+	// across the whole walk, so the first result of page two is third here and
+	// not first, and a version that believed the page would restart the numbering
+	// on every page of every job.
+	s := testStore(t)
+	id := jobWith(t, s, "a")
+
+	page := func(hosts ...string) google.SERP {
+		rs := make([]google.Result, 0, len(hosts))
+		for i, h := range hosts {
+			rs = append(rs, google.Result{
+				Position: i + 1, Title: h, URL: "https://" + h + "/x", Host: h})
+		}
+		return google.SERP{Origin: "https://www.google.com", Results: rs}
+	}
+	if err := s.Record(context.Background(), id, QueryOutcome{
+		Ordinal: 0,
+		Pages:   []google.SERP{page("one.test", "two.test"), page("three.test", "four.test")},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	rows, err := s.db.Query(`SELECT host, rank FROM results ORDER BY rank`)
+	if err != nil {
+		t.Fatalf("reading the results back: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	got := map[string]int{}
+	for rows.Next() {
+		var host string
+		var rank int
+		if err := rows.Scan(&host, &rank); err != nil {
+			t.Fatalf("reading a result: %v", err)
+		}
+		got[host] = rank
+	}
+	want := map[string]int{"one.test": 1, "two.test": 2, "three.test": 3, "four.test": 4}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the walk was filed as %v, want %v", got, want)
 	}
 }

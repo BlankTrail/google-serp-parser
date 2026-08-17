@@ -1351,21 +1351,28 @@ func TestSupervisor_TakesAJobThroughTheEngineAsTheKindItWasFiledUnder(t *testing
 	// the history, the page and the estimate would all go on saying the right
 	// thing about a run that asked the wrong question.
 	//
-	// Both kinds are asked for, because a version that always says index is
-	// wrong in the other direction and looks identical from the index side.
+	// Every kind is asked for, because a version that always says index is wrong
+	// in the other direction and looks identical from the index side.
+	//
+	// The site a position check is about travels with it. Handed on without one,
+	// the check has nothing to recognise and reports every phrase in the list as
+	// one the site does not rank for — and the page, the history and the estimate
+	// would all go on saying the right thing about it.
 	cases := []struct {
-		kind string
-		want run.Kind
+		kind, target string
+		want         run.Kind
 	}{
-		{store.KindIndex, run.Index},
-		{store.KindSearch, run.Search},
-		{"", run.Search},
+		{kind: store.KindIndex, want: run.Index},
+		{kind: store.KindParse, want: run.Parse},
+		{kind: store.KindPosition, target: "example.com", want: run.Position},
+		{kind: "", want: run.Parse},
 	}
 	for _, tc := range cases {
 		t.Run("filed as "+tc.kind, func(t *testing.T) {
 			v, _, eng := heldSupervisor(t)
 			if _, err := v.Enqueue(
-				store.JobSpec{Name: "j", Kind: tc.kind, Pages: 1}, []string{"example.com/a"}); err != nil {
+				store.JobSpec{Name: "j", Kind: tc.kind, Target: tc.target, Pages: 1},
+				[]string{"example.com/a"}); err != nil {
 				t.Fatalf("Enqueue: %v", err)
 			}
 			waitUntil(t, "a job has reached the engine", func() bool {
@@ -1375,6 +1382,9 @@ func TestSupervisor_TakesAJobThroughTheEngineAsTheKindItWasFiledUnder(t *testing
 			got, _ := eng.ran(0)
 			if got.Kind != tc.want {
 				t.Errorf("the engine was handed kind %v, want %v", got.Kind, tc.want)
+			}
+			if got.Target != tc.target {
+				t.Errorf("the engine was handed %q to look for, want %q", got.Target, tc.target)
 			}
 		})
 	}

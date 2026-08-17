@@ -53,6 +53,10 @@
      instant, and an instant printed as itself is hours from the wall. */}}
 <dt>{{.T "jobs.started"}}</dt><dd>{{.Job.Started.Local.Format "2006-01-02 15:04"}}</dd>
 <dt>{{.T "form.kind"}}</dt><dd>{{.T .Job.Kind}}</dd>
+{{/* The site the positions are about. It is drawn only where there is one: the
+     other two kinds are about every site the page carried, and an empty line
+     labelled "site" would be a setting asking to be explained. */}}
+{{if .Job.Target}}<dt>{{.T "form.target"}}</dt><dd>{{.Job.Target}}</dd>{{end}}
 <dt>{{.T "form.unique"}}</dt><dd>{{.T .Job.Filter}}</dd>
 <dt>{{.T "form.pages"}}</dt><dd class="count">{{.Job.Pages}}</dd>
 <dt>{{.T "form.country"}}</dt><dd>{{.Job.Country}}</dd>
@@ -95,6 +99,36 @@
 </section>
 {{else}}
 <p class="empty">{{.T "job.verdicts.none"}}</p>
+{{end}}
+{{else if .IsPosition}}
+{{/* Where the site stood, one line per phrase. A phrase it did not stand for
+     says so in words, and a phrase nobody has reached yet is not on this list at
+     all: the two are different answers, and a blank cell would read as either.
+     Nothing is coloured, for the reason a verdict is not: whether being outside
+     the depth is bad is the reader's to say. */}}
+<h2>{{.T "job.standings"}}</h2>
+{{if .Standings}}
+{{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
+<section class="card">
+<table>
+<thead>
+<tr>
+<th>{{.T "history.query"}}</th>
+<th>{{.T "history.rank"}}</th>
+</tr>
+</thead>
+<tbody>
+{{range .Standings}}
+<tr>
+<td>{{.Query}}</td>
+<td class="count">{{if .Found}}{{.Rank}}{{else}}{{$.T "job.rank.none"}}{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</section>
+{{else}}
+<p class="empty">{{.T "job.standings.none"}}</p>
 {{end}}
 {{else}}
 <h2>{{.T "job.results"}}</h2>

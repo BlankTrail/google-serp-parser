@@ -788,7 +788,11 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSumm
 	if err != nil {
 		return run.Job{}, store.JobSummary{}, err
 	}
-	j := run.Job{Kind: runKind(sum.Kind), Pages: sum.Pages, SpecName: sum.SpecName}
+	// The target travels with the kind that needs it. A position check handed on
+	// without the site it is about recognises nothing and reports every phrase as
+	// one the site does not rank for.
+	j := run.Job{Kind: runKind(sum.Kind), Target: sum.Target,
+		Pages: sum.Pages, SpecName: sum.SpecName}
 	for _, q := range left {
 		j.Queries = append(j.Queries,
 			google.Query{Text: q.Text, Country: sum.Country, Language: sum.Language})

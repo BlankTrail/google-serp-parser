@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -21,26 +22,59 @@ var ErrNoUnfinishedJob = errors.New("store: no unfinished job of this name")
 // finished being written.
 var ErrPlanUnfinished = errors.New("store: the job's plan was never finished")
 
-// KindSearch and KindIndex are the two things a job can be: one hands Google
-// phrases and reads back positions, the other hands it addresses and reads back
-// whether they are held at all.
+// KindParse, KindPosition and KindIndex are the three things a job can be, and
+// they differ by what is asked rather than by what is written down: one hands
+// Google phrases and writes down the whole of what comes back, one hands it the
+// same phrases and reports where a named site stood in the answer, and one hands
+// it addresses and reports whether they are held at all.
 //
-// They are the two words the column will hold, and the database refuses a
-// third. A job filed under a kind no engine answers to would be picked up, found
+// They are the three words the column will hold, and the database refuses a
+// fourth. A job filed under a kind no engine answers to would be picked up, found
 // to be nothing anyone runs, and left in the queue.
 const (
-	KindSearch = "search"
-	KindIndex  = "index"
+	// KindParse is the ordinary job: phrases in, the results they came back with
+	// out.
+	//
+	// Its value is "search" and will stay "search". Every job this program has
+	// ever recorded was this one — it took phrases and wrote down the whole
+	// page, whatever the screen called it — and a rename in the database would
+	// go back over that history and file it under a question none of those runs
+	// asked. The word in the column is a fact about what was run; the name in Go
+	// is what this program calls it now, and only the second was wrong.
+	KindParse = "search"
+	// KindPosition asks where one site stands for each phrase. It is the kind
+	// that needs a target, and the only one that does.
+	KindPosition = "position"
+	// KindIndex asks whether Google holds each address in the list.
+	KindIndex = "index"
 )
+
+// ErrNoTarget is returned when a position check is written down without the
+// site it is supposed to be about.
+//
+// It is refused at the door rather than run: a position check with nothing to
+// look for would answer "not found" for every phrase in the list, and that is a
+// wrong answer nothing left in the database gives a reader any way to doubt.
+var ErrNoTarget = errors.New("store: a position check needs the site it is about")
 
 // JobSpec is what a job was asked to do, kept so a later reader can tell one
 // night's numbers from another's without guessing at the settings behind them.
 type JobSpec struct {
 	Name string
-	// Kind is what the job asks Google for. Empty means KindSearch: every job
-	// written before this field existed was a search, and one whose kind went
-	// missing has to run as the ordinary thing rather than not at all.
+	// Kind is what the job asks Google for. Empty means KindParse: every job
+	// written before this field existed took phrases and wrote down what came
+	// back, and one whose kind went missing has to run as the ordinary thing
+	// rather than not at all.
 	Kind string
+	// Target is the site a position check is about, and it is meaningless under
+	// the other two kinds. A check without one is refused rather than written
+	// down; see ErrNoTarget.
+	//
+	// It is settled when the job is created and never afterwards, for the reason
+	// UniqueBy is: a run half of whose phrases were measured against one site
+	// and half against another is a run whose numbers stand for nothing, and
+	// nothing in the history would say where the change fell.
+	Target string
 	// Pages is how many result pages each query is taken to. Non-positive
 	// means one, because a job stored as fetching none would resume with
 	// nothing to do.
@@ -91,9 +125,29 @@ type JobSpec struct {
 // judged by instead of a blank that every reader has to interpret again.
 func (s JobSpec) kind() string {
 	if s.Kind == "" {
-		return KindSearch
+		return KindParse
 	}
 	return s.Kind
+}
+
+// target is what to write in the target column: the site with the spaces a
+// browser sends around it taken off, and nothing else changed. What counts as
+// the same address is settled where addresses are compared, and a store that
+// tidied one on the way in would be a second opinion about it.
+func (s JobSpec) target() string { return strings.TrimSpace(s.Target) }
+
+// refusal is what makes this job impossible to run, or nil.
+//
+// It is one function because a job is written down by two doors — the whole
+// list in one transaction, or a list too large for that, arriving line by line —
+// and a rule enforced at one of them is a rule the other lets past. The database
+// refuses the same thing underneath, and this is here so that a caller is told
+// which field is missing rather than handed a constraint.
+func (s JobSpec) refusal() error {
+	if s.kind() == KindPosition && s.target() == "" {
+		return ErrNoTarget
+	}
+	return nil
 }
 
 // pool is what to write in the two pool columns.
@@ -134,6 +188,9 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	if len(queries) == 0 {
 		return 0, ErrNoQueries
 	}
+	if err := spec.refusal(); err != nil {
+		return 0, err
+	}
 	pages := spec.Pages
 	if pages < 1 {
 		pages = 1
@@ -152,9 +209,9 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, unique_by, pages, spec_name, country, language, ports, threads, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), string(spec.UniqueBy), pages,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, spec_name, country, language, ports, threads, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
 		spec.SpecName, spec.Country, spec.Language, ports, threads)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
@@ -243,7 +300,8 @@ type UnfinishedJob struct {
 // job it is: taking today's depth or today's country instead would mix results
 // of two shapes into one run, and nothing in the history would say which rows
 // were which. The pool travels with them, because the run being taken up is the
-// one that raises it.
+// one that raises it, and so does the target: a check carried on against another
+// site would be one column of positions standing for two questions.
 //
 // A job whose plan was never finished is passed over rather than chosen. It is
 // the newest job of its name and it is not work, and choosing it would refuse
@@ -254,12 +312,12 @@ type UnfinishedJob struct {
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
 	var j UnfinishedJob
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, unique_by, pages, spec_name, country, language, ports, threads
+		`SELECT id, name, kind, target, unique_by, pages, spec_name, country, language, ports, threads
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
-		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.UniqueBy, &j.Spec.Pages,
+		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
 			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
