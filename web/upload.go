@@ -244,6 +244,12 @@ func (f jobForm) carrying(box, value string) jobForm {
 		f.SpecName = value
 	case fromField:
 		f.From = value
+	case choseField:
+		f.Chose = value != ""
+	case "keep":
+		// A tick arrives as its own part, so they are gathered rather than
+		// replaced: a form with six ticked sends six of these.
+		f.Keep = append(f.Keep, value)
 	case "tries":
 		f.Tries, _ = strconv.Atoi(value)
 	case "threads":

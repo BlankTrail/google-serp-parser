@@ -49,10 +49,11 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 	// for once — and so the filter that is applied cannot be a different job's.
 	var queryID int64
 	var by UniqueBy
+	var keep Fields
 	err = tx.QueryRowContext(ctx,
-		`SELECT q.id, j.unique_by
+		`SELECT q.id, j.unique_by, j.fields
 		   FROM queries q JOIN jobs j ON j.id = q.job_id
-		  WHERE q.job_id = ? AND q.ordinal = ?`, jobID, out.Ordinal).Scan(&queryID, &by)
+		  WHERE q.job_id = ? AND q.ordinal = ?`, jobID, out.Ordinal).Scan(&queryID, &by, &keep)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("store: job %d has no query at ordinal %d", jobID, out.Ordinal)
 	}
@@ -106,10 +107,16 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 					continue
 				}
 			}
+			// Only what the job asked to keep is written. A part left out is left
+			// out of the row rather than written empty: the room is the whole point,
+			// and on a job of ten million results the snippet alone is most of it.
 			_, err := tx.ExecContext(ctx,
-				`INSERT INTO results(page_id, rank, title, url, link, host, snippet)
-				 VALUES(?, ?, ?, ?, ?, ?, ?)`,
-				pageID, rank, r.Title, r.URL, r.Link, r.Host, r.Snippet)
+				`INSERT INTO results(page_id, rank, title, url, link, host, snippet, display_path)
+				 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+				pageID, rank,
+				kept(keep, FieldTitle, r.Title), kept(keep, FieldURL, r.URL),
+				kept(keep, FieldLink, r.Link), kept(keep, FieldHost, r.Host),
+				kept(keep, FieldSnippet, r.Snippet), kept(keep, FieldPath, r.DisplayPath))
 			if err != nil {
 				return fmt.Errorf("store: recording result %d: %w", rank, err)
 			}
@@ -141,4 +148,13 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 		return fmt.Errorf("store: commit: %w", err)
 	}
 	return nil
+}
+
+// kept is the value when the job keeps that part of a result, and nothing when
+// it does not.
+func kept(fields Fields, name, value string) string {
+	if fields.Keeps(name) {
+		return value
+	}
+	return ""
 }

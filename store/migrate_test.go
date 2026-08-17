@@ -26,6 +26,7 @@ import (
 // nothing.
 func windBackToVersionFour(t *testing.T, s *Store) {
 	t.Helper()
+	windBackToVersionSix(t, s)
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -69,7 +70,17 @@ func windBackToVersionFour(t *testing.T, s *Store) {
 
 // windBackToVersionThree turns a database this build has just made into the one
 // the build before the pool columns would have left behind.
+// windBackToVersionThree takes a database all the way back to three. It is an
+// entry point, so it starts by undoing the steps above it; the part that undoes
+// the fourth step alone is separate, because a caller that has already come
+// down through it must not do it twice.
 func windBackToVersionThree(t *testing.T, s *Store) {
+	t.Helper()
+	windBackToVersionSix(t, s)
+	windBackToVersionThreeOnly(t, s)
+}
+
+func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
 		`ALTER TABLE jobs DROP COLUMN ports`,
@@ -89,10 +100,29 @@ func windBackToVersionThree(t *testing.T, s *Store) {
 // It goes through the wind-back for each version rather than listing every
 // column itself, so that a step added without a wind-back for it is a test that
 // fails rather than a step the upgrade path is never asked to run.
+// windBackToVersionSix undoes the seventh step, so a database can be taken back
+// past the choice of what a result keeps.
+//
+// Every step needs one of these, and a step added without it silently stops
+// being covered by the tests that walk the whole path — which is why the wind
+// backs are chained rather than written out at each caller.
+func windBackToVersionSix(t *testing.T, s *Store) {
+	t.Helper()
+	for _, stmt := range []string{
+		`ALTER TABLE jobs DROP COLUMN fields`,
+		`ALTER TABLE results DROP COLUMN display_path`,
+		`PRAGMA user_version = 6`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("winding back with %q: %v", stmt, err)
+		}
+	}
+}
+
 func windBackToVersionOne(t *testing.T, s *Store) {
 	t.Helper()
 	windBackToVersionFour(t, s)
-	windBackToVersionThree(t, s)
+	windBackToVersionThreeOnly(t, s)
 	for _, stmt := range []string{
 		`ALTER TABLE jobs DROP COLUMN dropped`,
 		`DROP TABLE seen`,

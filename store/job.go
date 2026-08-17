@@ -125,6 +125,10 @@ type JobSpec struct {
 	// list, and the list is somebody's: one operator's addresses are fresh this
 	// morning and another's have been hammered for a week.
 	Tries int
+	// Fields is what each result of this job keeps. Empty is everything, which
+	// is what a job that never chose means and what every job written before the
+	// choice existed carries.
+	Fields Fields
 }
 
 // kind is what to write in the column, which is never the empty string.
@@ -218,10 +222,10 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, spec_name, country, language, ports, threads, tries, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, spec_name, country, language, ports, threads, tries, fields, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
-		spec.SpecName, spec.Country, spec.Language, ports, threads, tries)
+		spec.SpecName, spec.Country, spec.Language, ports, threads, tries, string(spec.Fields))
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -321,13 +325,13 @@ type UnfinishedJob struct {
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
 	var j UnfinishedJob
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, spec_name, country, language, ports, threads, tries
+		`SELECT id, name, kind, target, unique_by, pages, spec_name, country, language, ports, threads, tries, fields
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
-			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads, &j.Spec.Tries)
+			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads, &j.Spec.Tries, &j.Spec.Fields)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}

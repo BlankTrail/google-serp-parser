@@ -52,11 +52,14 @@ func TestCSV_QuotesAValueThatWouldOtherwiseBreakTheColumns(t *testing.T) {
 	if recs[0][0] != "ordinal" {
 		t.Errorf("first column is %q, want a header", recs[0][0])
 	}
-	if recs[2][4] != `He said "hi", then left` {
-		t.Errorf("the title came back as %q", recs[2][4])
+	// The columns are found by their heading rather than by counting: a file that
+	// grew a column would otherwise fail this test for the wrong reason, and one
+	// that lost a column would pass it for the wrong reason.
+	if got := column(t, recs, 2, "title"); got != `He said "hi", then left` {
+		t.Errorf("the title came back as %q", got)
 	}
-	if recs[2][7] != "line one\nline two" {
-		t.Errorf("the snippet came back as %q", recs[2][7])
+	if got := column(t, recs, 2, "snippet"); got != "line one\nline two" {
+		t.Errorf("the snippet came back as %q", got)
 	}
 }
 
@@ -207,4 +210,16 @@ func TestExport_ReportsAFileThatCouldNotBeWritten(t *testing.T) {
 			t.Errorf("%s: a file that could not be written reported success", f)
 		}
 	}
+}
+
+// column is one field of one record, found by what the header calls it.
+func column(t *testing.T, recs [][]string, row int, name string) string {
+	t.Helper()
+	for i, head := range recs[0] {
+		if head == name {
+			return recs[row][i]
+		}
+	}
+	t.Fatalf("the file has no %q column: %v", name, recs[0])
+	return ""
 }

@@ -93,11 +93,7 @@ func (s *Server) writeExport(ctx context.Context, w io.Writer, format string, jo
 		}
 		return s.streamVerdicts(ctx, out, job.ID)
 	}
-	out, err := export.New(format, w)
-	if err != nil {
-		return err
-	}
-	return s.stream(ctx, out, job.ID)
+	return s.stream(ctx, w, format, job)
 }
 
 // stream hands every row of a job to the file being written, and stops at
@@ -106,17 +102,34 @@ func (s *Server) writeExport(ctx context.Context, w io.Writer, format string, jo
 // The refusal is passed back rather than swallowed, and that is what ends the
 // walk: a reader who closed the tab leaves every write failing, and an export
 // that reads on regardless spends the whole job on a socket nobody is holding.
-func (s *Server) stream(ctx context.Context, out export.Writer, jobID int64) error {
+func (s *Server) stream(ctx context.Context, w io.Writer, format string, job store.JobSummary) error {
+	// Only the columns this job kept. A column it never kept would stand in the
+	// file empty, which reads as a result that had none of that rather than as
+	// one nobody asked to keep — and on a job of ten million results it is also
+	// several hundred megabytes of separators.
+	out, err := export.NewWith(format, w, columnsOf(job.Fields))
+	if err != nil {
+		return err
+	}
+	return s.streamTo(ctx, out, job.ID)
+}
+
+// streamTo is the walk itself, taking the file to write into. It is separate so
+// a test can hand one that refuses a row part way, which is the only way to ask
+// what an export does when the reader has walked away.
+func (s *Server) streamTo(ctx context.Context, out export.Writer, jobID int64) error {
 	err := s.store.Rows(ctx, jobID, func(row store.Row) error {
 		return out.Write(export.Row{
-			Ordinal: row.Ordinal,
-			Query:   row.Query,
-			Page:    row.Page,
-			Rank:    row.Rank,
-			Title:   row.Title,
-			URL:     row.URL,
-			Host:    row.Host,
-			Snippet: row.Snippet,
+			Ordinal:     row.Ordinal,
+			Query:       row.Query,
+			Page:        row.Page,
+			Rank:        row.Rank,
+			Title:       row.Title,
+			URL:         row.URL,
+			Host:        row.Host,
+			Snippet:     row.Snippet,
+			Link:        row.Link,
+			DisplayPath: row.DisplayPath,
 		})
 	})
 	if err != nil {
@@ -226,4 +239,27 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		Host:      host,
 		Positions: positions,
 	})
+}
+
+// columnsOf is the columns a job's file carries: what says which result this is,
+// then whatever the job was asked to keep.
+func columnsOf(fields store.Fields) []string {
+	cols := []string{export.ColOrdinal, export.ColQuery, export.ColPage, export.ColRank}
+	for _, part := range fields.Kept() {
+		switch part {
+		case store.FieldTitle:
+			cols = append(cols, export.ColTitle)
+		case store.FieldURL:
+			cols = append(cols, export.ColURL)
+		case store.FieldLink:
+			cols = append(cols, export.ColLink)
+		case store.FieldHost:
+			cols = append(cols, export.ColHost)
+		case store.FieldSnippet:
+			cols = append(cols, export.ColSnippet)
+		case store.FieldPath:
+			cols = append(cols, export.ColPath)
+		}
+	}
+	return cols
 }

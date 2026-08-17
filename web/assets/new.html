@@ -78,6 +78,23 @@
 {{end}}</select>
 </div>
 <p class="empty">{{.T "form.unique.why"}}</p>
+{{/* What each result keeps. Everything is ticked to begin with, because that
+     is what somebody who has not thought about room means; unticking is a
+     decision about room, and the sentence under it names the two things that
+     decision reaches. */}}
+<fieldset>
+<legend>{{.T "form.keep"}}</legend>
+{{/* An unticked box sends nothing, so this says the choice was on the form at
+     all. Without it a form with every box unticked and a request that never
+     carried the choice arrive identical, and they mean opposite things. */}}
+<input type="hidden" name="{{.Chose}}" value="1">
+<div class="row">
+{{range .Keeps}}
+<div class="field"><label><input type="checkbox" name="keep" value="{{.Value}}"{{if .Ticked}} checked{{end}}> {{$.T .Label}}</label></div>
+{{end}}
+</div>
+<p class="empty">{{.T "form.keep.why"}}</p>
+</fieldset>
 {{/* The pool this job runs on. It is the job's own: a pool is raised for it
      when it starts and taken down when it lets go, so these are not a machine
      setting and there is nothing to agree with another job about. They can be

@@ -42,6 +42,15 @@ type jobForm struct {
 	// written off, and From says which of the two ways the phrases arrived by.
 	Tries int
 	From  string
+	// Keep is what each result of this job keeps, as the names the boxes carry,
+	// and Chose says the choice was on the form at all.
+	//
+	// The two are needed because an unticked box sends nothing: without Chose, a
+	// form with every box unticked and a request that never carried the choice
+	// look identical, and they mean opposite things — the first is a job asked to
+	// keep no part of a result, the second is a job that keeps every part.
+	Keep  []string
+	Chose bool
 }
 
 // blankForm is the form a reader is handed before they have typed anything.
@@ -60,6 +69,13 @@ type jobForm struct {
 // number a job runs at cannot drift apart.
 const defaultTries = 30
 
+// choseField is how a form says the choice of what to keep was on it at all.
+//
+// An unticked box sends nothing, so without this a form with every box unticked
+// and a request that never carried the choice arrive identical — and they mean
+// opposite things.
+const choseField = "chose"
+
 func blankForm() jobForm {
 	return jobForm{
 		Name: time.Now().Format("2006-01-02 15:04"),
@@ -74,6 +90,10 @@ func blankForm() jobForm {
 		Threads: 2,
 		Ports:   6,
 		Tries:   defaultTries,
+		// Everything the parser reads, because that is what somebody who has not
+		// thought about it means. Turning a part off is a decision about room, and
+		// a decision about room is one nobody makes before they have a list.
+		Keep: store.EveryField(),
 	}
 }
 
@@ -251,6 +271,38 @@ func (f jobForm) faults() []string {
 	if f.depth() < 1 {
 		complaints = append(complaints, "form.pages.positive")
 	}
+	complaints = append(complaints, f.keepFaults()...)
+	return complaints
+}
+
+// keepFaults is everything wrong with what the job was asked to keep.
+//
+// The choice is about room, and two things depend on it that a reader thinking
+// about room would not connect to it. Both are said here rather than left to be
+// discovered afterwards: a job written down under either of them has run before
+// anybody can tell.
+func (f jobForm) keepFaults() []string {
+	keep := store.FieldsOf(f.Keep)
+	var complaints []string
+	if f.Chose && len(f.Keep) == 0 {
+		// Not "everything": that is what a job which never chose means, and this
+		// is a reader who unticked every box. A job filed that way writes a row
+		// per result holding nothing but its place.
+		complaints = append(complaints, "form.keep.none")
+	}
+	// Dropping repeats needs the thing repeats are told apart by. Without it the
+	// filter would keep everything and the job would report nothing dropped,
+	// which reads as a list that happened to hold no repeats.
+	switch f.filter() {
+	case store.UniqueURL:
+		if !keep.Keeps(store.FieldURL) {
+			complaints = append(complaints, "form.keep.needsurl")
+		}
+	case store.UniqueHost:
+		if !keep.Keeps(store.FieldHost) {
+			complaints = append(complaints, "form.keep.needshost")
+		}
+	}
 	return complaints
 }
 
@@ -284,6 +336,10 @@ func (f jobForm) spec() store.JobSpec {
 		Country:  f.Country,
 		Language: f.Language,
 		SpecName: f.SpecName,
+		Ports:    f.Ports,
+		Threads:  f.Threads,
+		Tries:    f.Tries,
+		Fields:   store.FieldsOf(f.Keep),
 	}
 }
 
@@ -306,6 +362,10 @@ func formOf(r *http.Request) jobForm {
 		Pages:    atoi("pages"),
 		Threads:  atoi("threads"),
 		Ports:    atoi("ports"),
+		Tries:    atoi("tries"),
+		From:     strings.TrimSpace(r.FormValue(fromField)),
+		Keep:     r.Form["keep"],
+		Chose:    r.FormValue(choseField) != "",
 	}
 }
 
@@ -321,6 +381,34 @@ type newPage struct {
 	Filters []jobFilter
 	// Sources is the two ways the phrases can arrive, on the same terms again.
 	Sources []jobSource
+	// Keeps is every part of a result that can be kept, each with whether this
+	// form has it ticked, and Chose is the name of the box that says the choice
+	// was on the form.
+	Keeps []jobField
+	Chose string
+}
+
+// jobField is one part of a result, as the form offers it.
+type jobField struct {
+	Value  string
+	Label  string
+	Ticked bool
+}
+
+// keeps is what a result is made of, in the order a file writes it, each saying
+// whether this form has it ticked.
+//
+// The list is built from the store's own, so the boxes on the page are the
+// parts the store knows how to keep rather than a second list of them.
+func keeps(f jobForm) []jobField {
+	chosen := store.FieldsOf(f.Keep)
+	var out []jobField
+	for _, name := range store.EveryField() {
+		out = append(out, jobField{
+			Value: name, Label: "field." + name, Ticked: chosen.Keeps(name),
+		})
+	}
+	return out
 }
 
 // jobSource is one way the phrases can arrive.
@@ -353,6 +441,8 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		Kinds:      kinds(),
 		Filters:    filters(),
 		Sources:    sources(),
+		Keeps:      keeps(form),
+		Chose:      choseField,
 	})
 }
 

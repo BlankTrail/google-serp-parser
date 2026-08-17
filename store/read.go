@@ -19,6 +19,12 @@ type Row struct {
 	URL     string
 	Host    string
 	Snippet string
+	// Link is the address exactly as the page carried it, which is not always a
+	// URL, and DisplayPath is the path as the page drew it. Both are empty on a
+	// job that was not asked to keep them, and on every row written before the
+	// choice existed.
+	Link        string
+	DisplayPath string
 }
 
 // Rows hands every result of a job to fn, in the order the job had.
@@ -29,7 +35,7 @@ type Row struct {
 // back unchanged, so a caller can stop it with its own sentinel.
 func (s *Store) Rows(ctx context.Context, jobID int64, fn func(Row) error) error {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT q.ordinal, q.text, p.number, r.rank, r.title, r.url, r.host, r.snippet
+		`SELECT q.ordinal, q.text, p.number, r.rank, r.title, r.url, r.host, r.snippet, r.link, r.display_path
 		   FROM results r
 		   JOIN pages   p ON p.id = r.page_id
 		   JOIN queries q ON q.id = p.query_id
@@ -43,7 +49,7 @@ func (s *Store) Rows(ctx context.Context, jobID int64, fn func(Row) error) error
 	for rows.Next() {
 		var r Row
 		if err := rows.Scan(&r.Ordinal, &r.Query, &r.Page, &r.Rank,
-			&r.Title, &r.URL, &r.Host, &r.Snippet); err != nil {
+			&r.Title, &r.URL, &r.Host, &r.Snippet, &r.Link, &r.DisplayPath); err != nil {
 			return fmt.Errorf("store: reading a result: %w", err)
 		}
 		if err := fn(r); err != nil {

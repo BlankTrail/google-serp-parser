@@ -121,8 +121,11 @@ func TestRows_CarryEnoughOfTheirQueryToStandAloneInAFile(t *testing.T) {
 		t.Fatalf("Rows: %v", err)
 	}
 	want := []Row{
+		// The link the page carried comes back too: a row is what the job kept of
+		// a result, and this job kept everything.
 		{Ordinal: 0, Query: "iphone 13", Page: 1, Rank: 1, Title: "The first title",
-			URL: "https://one.test/a", Host: "one.test", Snippet: "what the page said about the first"},
+			URL: "https://one.test/a", Host: "one.test", Snippet: "what the page said about the first",
+			Link: "/goto?url=opaque"},
 		{Ordinal: 0, Query: "iphone 13", Page: 2, Rank: 2, Title: "The second title",
 			URL: "https://two.test/b", Host: "two.test", Snippet: "what the page said about the second"},
 	}

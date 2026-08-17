@@ -6,11 +6,11 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"strconv"
 )
 
 type csvWriter struct {
 	w      *csv.Writer
+	cols   []string
 	header bool
 	closed bool
 }
@@ -21,14 +21,22 @@ type csvWriter struct {
 // comma, a quote or a newline is ordinary, and a file written without quoting
 // still opens — with every column after it shifted, which is the kind of wrong
 // nobody notices until the numbers have been used.
-func NewCSV(w io.Writer) Writer { return &csvWriter{w: csv.NewWriter(w)} }
+func NewCSV(w io.Writer) Writer { return newCSVWith(w, nil) }
+
+// newCSVWith writes only the columns named, and every column when none are.
+func newCSVWith(w io.Writer, cols []string) Writer {
+	if cols == nil {
+		cols = everyColumn()
+	}
+	return &csvWriter{w: csv.NewWriter(w), cols: cols}
+}
 
 func (c *csvWriter) writeHeader() error {
 	if c.header {
 		return nil
 	}
 	c.header = true
-	return c.w.Write([]string{"ordinal", "query", "page", "rank", "title", "url", "host", "snippet"})
+	return c.w.Write(c.cols)
 }
 
 func (c *csvWriter) Write(r Row) error {
@@ -38,10 +46,11 @@ func (c *csvWriter) Write(r Row) error {
 	if err := c.writeHeader(); err != nil {
 		return fmt.Errorf("export: writing the header: %w", err)
 	}
-	err := c.w.Write([]string{
-		strconv.Itoa(r.Ordinal), r.Query, strconv.Itoa(r.Page), strconv.Itoa(r.Rank),
-		r.Title, r.URL, r.Host, r.Snippet,
-	})
+	line := make([]string, len(c.cols))
+	for i, col := range c.cols {
+		line[i] = valueOf(r, col)
+	}
+	err := c.w.Write(line)
 	if err != nil {
 		return fmt.Errorf("export: writing a row: %w", err)
 	}

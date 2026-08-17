@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/blanktrail/google-serp-parser/google"
 	"github.com/blanktrail/google-serp-parser/store"
 )
 
@@ -47,7 +49,12 @@ func uploadBody(t *testing.T, boxes map[string]string, list string) (string, *by
 	t.Helper()
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
-	for _, box := range []string{"name", "kind", "target", "from", "pages", "country", "language", "spec", "unique", "threads", "ports", "tries", "queries"} {
+	// The order is the page's own: every box, then the typed list, then the file.
+	// The handler takes the first list source it meets, so a helper that sent the
+	// typed box early would hide every box after it — which is exactly the fault
+	// the page's own ordering exists to avoid.
+	for _, box := range []string{"name", "kind", "target", "from", "pages", "country",
+		"language", "spec", "unique", "threads", "ports", "tries", "keep", "chose", "queries"} {
 		value, filled := boxes[box]
 		if !filled {
 			continue
@@ -829,5 +836,101 @@ func TestNewJob_ObeysTheSwitchWhateverOrderThePartsArriveIn(t *testing.T) {
 	}
 	if len(left) != 1 || left[0].Text != "typed one" {
 		t.Errorf("the job holds %+v, want the typed phrase the switch named", left)
+	}
+}
+
+func TestNewJob_KeepsOnlyWhatItWasAskedToKeep(t *testing.T) {
+	// The whole point is room: a job that wants a list of addresses writes a
+	// fraction of what it would otherwise. A part left out is left out of the
+	// row rather than written empty, and the file it comes back in has no column
+	// for it either — an empty column reads as a result that had none of that.
+	s := testServerHolding(t)
+	rec := postUpload(t, s, map[string]string{
+		"name": "addresses only", "kind": store.KindParse, "pages": "1",
+		"from": fromBox, "queries": "phrase", "chose": "1", "keep": store.FieldURL,
+	}, "")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the job came back %d: %s", rec.Code, rec.Body.String())
+	}
+
+	job := theOneJob(t, s)
+	if got := job.Fields; got != store.Fields(store.FieldURL) {
+		t.Fatalf("the job keeps %q, want the url alone", got)
+	}
+	if err := s.store.Record(t.Context(), job.ID, store.QueryOutcome{
+		Ordinal: 0,
+		Pages: []google.SERP{{Origin: "https://www.google.com", Results: []google.Result{{
+			Title: "a title", URL: "https://one.test/a", Host: "one.test",
+			Snippet: "a snippet", Link: "/goto?url=x", DisplayPath: "one.test › a",
+		}}}},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	var rows []store.Row
+	if err := s.store.Rows(t.Context(), job.ID, func(r store.Row) error {
+		rows = append(rows, r)
+		return nil
+	}); err != nil {
+		t.Fatalf("Rows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want the one that was recorded", len(rows))
+	}
+	// Every part is different from every other, so a store that wrote one column
+	// into another cannot pass this.
+	got := rows[0]
+	if got.URL != "https://one.test/a" {
+		t.Errorf("the url was not kept: %+v", got)
+	}
+	if got.Title != "" || got.Snippet != "" || got.Host != "" ||
+		got.Link != "" || got.DisplayPath != "" {
+		t.Errorf("the job kept parts it was not asked for: %+v", got)
+	}
+	// The place is kept whatever else is not: without it a file is a bag rather
+	// than a result page.
+	if got.Rank != 1 {
+		t.Errorf("rank=%d, want the place the result stood in", got.Rank)
+	}
+
+	body := get(t, s, "/export?job="+strconv.FormatInt(job.ID, 10)+"&format=csv").Body.String()
+	head, _, _ := strings.Cut(body, "\n")
+	if want := "ordinal,query,page,rank,url"; strings.TrimRight(head, "\r") != want {
+		t.Errorf("the file's header is %q, want %q", head, want)
+	}
+}
+
+func TestNewJob_RefusesAChoiceThatWouldLeaveTheFilterNothingToTellRepeatsApartBy(t *testing.T) {
+	// Dropping repeats by url needs the url. Without it the filter would keep
+	// everything and the job would report nothing dropped, which reads as a list
+	// that happened to hold no repeats.
+	s := testServerHolding(t)
+	rec := postUpload(t, s, map[string]string{
+		"name": "no url, unique by url", "kind": store.KindParse, "pages": "1",
+		"from": fromBox, "queries": "phrase", "unique": string(store.UniqueURL),
+		"chose": "1", "keep": store.FieldTitle,
+	}, "")
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("a job that cannot tell its repeats apart was accepted")
+	}
+	if !strings.Contains(rec.Body.String(), LangEN.T("form.keep.needsurl")) {
+		t.Errorf("the page does not say what is missing:\n%s", rec.Body.String())
+	}
+}
+
+func TestNewJob_RefusesAJobAskedToKeepNothingAtAll(t *testing.T) {
+	// Not "everything": that is what a job which never chose means. This is a
+	// reader who unticked every box, and the job would write a row per result
+	// holding nothing but its place.
+	s := testServerHolding(t)
+	rec := postUpload(t, s, map[string]string{
+		"name": "nothing at all", "kind": store.KindParse, "pages": "1",
+		"from": fromBox, "queries": "phrase", "chose": "1",
+	}, "")
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("a job that keeps nothing of a result was accepted")
+	}
+	if !strings.Contains(rec.Body.String(), LangEN.T("form.keep.none")) {
+		t.Errorf("the page does not say a job has to keep something:\n%s", rec.Body.String())
 	}
 }

@@ -95,17 +95,10 @@ func TestNewJob_KeepsTheJobsOwnPoolInAGroupOfItsOwn(t *testing.T) {
 	// than no box, and so is one that is a setting and reads as an estimate.
 	body := get(t, testServer(t), "/new").Body.String()
 
-	_, opened, ok := strings.Cut(body, "<fieldset>")
-	if !ok {
-		t.Fatalf("the pool's boxes stand in no group of their own: %s", body)
-	}
-	group, _, ok := strings.Cut(opened, "</fieldset>")
-	if !ok {
-		t.Fatalf("the group the pool's boxes stand in is never closed: %s", body)
-	}
-	// The page escapes what it prints, so the two are compared as text rather
-	// than as markup: an apostrophe reaches the reader as an apostrophe and only
-	// looks different here.
+	// The group is found by its heading rather than by being first on the page:
+	// a page that grows another group would otherwise move this test onto it and
+	// go on passing.
+	group := groupUnder(t, body, LangEN.T("form.pool"))
 	if !strings.Contains(html.UnescapeString(group), LangEN.T("form.tries.why")) {
 		t.Errorf("the group does not say what its boxes are: %s", group)
 	}
@@ -625,4 +618,20 @@ func TestCreateJob_FilesTheSiteAPositionCheckWasGiven(t *testing.T) {
 	if jobs[0].UniqueBy != store.UniqueOff {
 		t.Errorf("a position check was filed as filtered by %q, want no filter", jobs[0].UniqueBy)
 	}
+}
+
+// groupUnder is the one group on the page whose legend says this, as markup.
+func groupUnder(t *testing.T, body, legend string) string {
+	t.Helper()
+	for _, after := range strings.Split(body, "<fieldset>")[1:] {
+		group, _, ok := strings.Cut(after, "</fieldset>")
+		if !ok {
+			t.Fatalf("a group on this page is never closed: %s", body)
+		}
+		if strings.Contains(group, legend) {
+			return group
+		}
+	}
+	t.Fatalf("no group on this page is headed %q: %s", legend, body)
+	return ""
 }

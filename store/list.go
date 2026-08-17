@@ -60,6 +60,8 @@ type JobSummary struct {
 	// written off, and zero is a job that named none — the same reading as the
 	// two above.
 	Tries int
+	// Fields is what each result of this job keeps, and empty is everything.
+	Fields Fields
 
 	// PlanReady says the job's list of queries finished arriving. A job without
 	// it is one whose upload broke off part way: it is here, it holds whatever
@@ -82,7 +84,7 @@ const jobSummaryQuery = `
 	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind, j.target,
 	       j.unique_by, j.dropped,
 	       j.pages, j.country, j.language, j.spec_name,
-	       j.ports, j.threads, j.tries, j.plan_ready,
+	       j.ports, j.threads, j.tries, j.fields, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
 	       sum(CASE WHEN q.state = 'failed'  THEN 1 ELSE 0 END),
@@ -154,7 +156,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind, &sum.Target,
 		&sum.UniqueBy, &sum.Dropped,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName,
-		&sum.Ports, &sum.Threads, &sum.Tries, &sum.PlanReady,
+		&sum.Ports, &sum.Threads, &sum.Tries, &sum.Fields, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobSummary{}, err

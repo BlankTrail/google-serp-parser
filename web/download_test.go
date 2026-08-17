@@ -255,7 +255,7 @@ func TestDownload_StopsReadingTheHistoryOnceTheFileWillTakeNoMore(t *testing.T) 
 	id := seedJob(t, s, "nightly", 5, 5, 0)
 	out := &refusingWriter{takes: 1}
 
-	err := s.stream(t.Context(), out, id)
+	err := s.streamTo(t.Context(), out, id)
 	if err == nil {
 		t.Fatal("the walk ended quietly though the file refused a row")
 	}
@@ -546,9 +546,11 @@ func TestDownload_LeavesASearchJobsExportExactlyAsItWas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("what came back does not read as CSV: %v", err)
 	}
-	want := []string{"ordinal", "query", "page", "rank", "title", "url", "host", "snippet"}
-	if !slices.Equal(records[0], want) {
-		t.Errorf("a search export's header is %v, want %v", records[0], want)
+	// A job that kept everything carries every column. The list is read from the
+	// export rather than written out here: what this test is about is that a
+	// parse job's file is a file of results and not the shape a verdict comes in.
+	if want := export.Columns(); !slices.Equal(records[0], want) {
+		t.Errorf("a parse export's header is %v, want %v", records[0], want)
 	}
 	// Four rows: two queries, each holding the two results seedJob files.
 	if len(records)-1 != 4 {
