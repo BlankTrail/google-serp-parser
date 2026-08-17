@@ -46,8 +46,25 @@ type Settings struct {
 	// a second opinion about a number the job already carries.
 	SearchPorts int           `json:"search_ports"`
 	Cooldown    time.Duration `json:"cooldown"`
-	Proxy       ProxySource   `json:"proxy"`
-	Language    string        `json:"language"`
+
+	// HotPorts is how many identities this machine keeps open and warm between
+	// jobs, and HotDevice is which kind of result page they are opened for.
+	//
+	// Nought is off, and off is what this program did until now: every job opened
+	// its own identities from cold, met a challenge on the first request of each,
+	// and produced nothing for the minutes that took. Kept warm, they answer at
+	// once — measured at seconds against minutes — at the price of a few ports
+	// standing open all day and one dull request through each every quarter of an
+	// hour.
+	//
+	// A job of the same kind of page grows this set to its own size and gives the
+	// growth back when it ends; a job of the other kind opens its own from cold,
+	// because a phone's results are not a desktop's and an identity cannot be
+	// both.
+	HotPorts  int         `json:"hot_ports"`
+	HotDevice string      `json:"hot_device"`
+	Proxy     ProxySource `json:"proxy"`
+	Language  string      `json:"language"`
 }
 
 // DefaultControlURL is where the identities are asked for on a machine where

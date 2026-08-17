@@ -18,7 +18,11 @@ import (
 func warmingPool(t *testing.T, hot int) *blanktrail.Pool {
 	t.Helper()
 	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
-	return poolFacing(t, o.addr(), hot).Pool
+	pool := poolFacing(t, o.addr(), hot).Pool
+	// A standing set is one somebody declared: without this every port is a
+	// job's own, and the warmer would find nothing of its own to warm.
+	pool.KeepWarm()
+	return pool
 }
 
 func TestWarmer_WarmsEveryStandingPortAndThenLeavesThemAlone(t *testing.T) {

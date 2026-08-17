@@ -429,7 +429,7 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		byNum: map[int]*poolPort{},
 	}
 
-	if err := p.openBatch(ctx, cfg.Size(), true); err != nil {
+	if err := p.openBatch(ctx, cfg.Size(), false); err != nil {
 		_ = p.Close()
 		return nil, err
 	}
@@ -604,6 +604,25 @@ func (p *Pool) AcquireIdleHot(idle time.Duration) (*Lease, bool) {
 		}
 	}
 	return nil, false
+}
+
+// KeepWarm declares every port this pool now holds to be a standing one, and
+// says how many that is.
+//
+// It is said rather than assumed, because a pool opened for one job and a pool
+// a machine keeps open all day are the same object and only the caller knows
+// which it is building. Assumed, the mark would be on every pool ever opened,
+// and a job's own identities would be shrunk instead of closed — held open for
+// nothing, for as long as the program runs.
+//
+// Ports opened afterwards are the growth, and Shrink is what gives them back.
+func (p *Pool) KeepWarm() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pt := range p.ports {
+		pt.hot = true
+	}
+	return len(p.ports)
 }
 
 // Hot is how many ports of the standing set this pool holds.

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/api"
 	"github.com/blanktrail/google-serp-parser/blanktrail"
@@ -246,6 +249,20 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	// interface would be running on one connection and reporting another.
 	fromEnv := os.Getenv(envAPIKey) != ""
 
+	// What the standing pool is for, and how large it is. A machine that keeps
+	// identities warm holds them here: the search answered inside a request goes
+	// through them, and so does every job of the same kind of result page, which
+	// grows this pool to its own size and gives the growth back when it ends.
+	//
+	// Nought is off, and off is one pool of the size this server was started at,
+	// closed and reopened by every job — which is what this program did until
+	// there was a choice.
+	hotDevice := saved.HotDevice
+	if hotDevice == "" {
+		hotDevice = blanktrail.DeviceDesktop
+	}
+	standing := saved.HotPorts
+
 	var pool *blanktrail.Pool
 	var err error
 	switch {
@@ -254,8 +271,12 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	case saved.APIKey != "":
 		// The pool this server keeps standing is the one a search answered inside a
 		// request goes through, and a search has no job behind it to have chosen a
-		// kind of result page. It is a desktop, which is what that address has
-		// always answered as.
+		// kind of result page. It is the kind the standing set was asked for, and
+		// a desktop where nobody asked for one.
+		if standing > 0 {
+			pool, err = o.dial(ctx, saved, 1, standing, hotDevice)
+			break
+		}
 		pool, err = o.dial(ctx, saved, threads, ports, blanktrail.DeviceDesktop)
 	default:
 		_, _ = fmt.Fprintf(out,
@@ -276,8 +297,45 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	// alone for overrode them with. Every job written down before jobs carried
 	// sizes reads back as nought, and the size this machine was started at is the
 	// only one anybody on it has actually chosen.
-	return web.NewSupervisor(st, o.raise(saved, fromEnv), ports, threads), pool
+	// Kept warm from here on, if this machine keeps any. The warmer runs for as
+	// long as the server does and stops with it: what it does is one dull search
+	// through a port nothing has used for a quarter of an hour, which is the
+	// least that keeps an identity recognised.
+	if standing > 0 && pool != nil {
+		// Said out loud, because a pool is a pool: this is what makes these ports
+		// the machine's rather than the next job's, and what keeps a job from
+		// closing them on its way out.
+		pool.KeepWarm()
+		go (&run.Warmer{
+			Pool: pool, Log: o.logger(os.Stderr),
+			Country: warmingCountry, Language: warmingLanguage,
+		}).Run(ctx)
+		_, _ = fmt.Fprintf(out, "%d identities are being kept warm for %s results\n", standing, hotDevice)
+	}
+
+	// The two numbers are what a job that named no size runs at, and this is
+	// where that stands in: they are the sizes this server was started with — the
+	// -threads and -ports flags, or what a settings file the caller left the flags
+	// alone for overrode them with. Every job written down before jobs carried
+	// sizes reads back as nought, and the size this machine was started at is the
+	// only one anybody on it has actually chosen.
+	standingPool := pool
+	if standing == 0 {
+		// Without a standing set the pool above belongs to the search address
+		// alone. A job handed it would shrink nothing on the way out and hold
+		// somebody else's identities for the length of the run.
+		standingPool = nil
+	}
+	return web.NewSupervisor(st, o.raise(saved, fromEnv, standingPool, hotDevice), ports, threads), pool
 }
+
+// The country and language a warming request asks for. They are the same
+// defaults a new job is offered, so a warmed identity has been through the
+// conversation the work will have with it rather than a different one.
+const (
+	warmingCountry  = "us"
+	warmingLanguage = "en"
+)
 
 // raise is how one job's own pool is opened.
 //
@@ -299,8 +357,23 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 // goroutine writing to a stream this command's caller owns. The refusal comes
 // back as an error, and the queue puts it in the log against the job it belongs
 // to.
-func (o serveOptions) raise(saved settings.Settings, fromEnv bool) web.OpenPool {
+func (o serveOptions) raise(saved settings.Settings, fromEnv bool,
+	standing *blanktrail.Pool, hotDevice string) web.OpenPool {
 	return func(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, error) {
+		// A job of the kind the standing identities were opened for runs on them,
+		// grown to its own size. It gives the growth back when it ends and the
+		// standing ones stay warm for the next.
+		//
+		// A job of the other kind opens its own from cold: a phone's results are
+		// not a desktop's, and an identity cannot be both.
+		if standing != nil && device == hotDevice {
+			if extra := ports*threads - standing.Stats().Ports; extra > 0 {
+				if err := standing.Grow(ctx, extra); err != nil {
+					return nil, err
+				}
+			}
+			return standing, nil
+		}
 		if fromEnv {
 			cfg := poolConfig(threads, ports)
 			cfg.Specs = blanktrail.SpecsFor(device)
@@ -357,12 +430,9 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 		cfg.Cooldown = saved.Cooldown
 	}
 
-	report := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
-		Domains: checkedDomains,
-		Ports:   cfg.Size(),
-	})
-	if !report.OK() {
-		return nil, errors.New("this connection would not get through; the settings page says what the check found")
+	report, err := o.checked(ctx, client, cfg.Size())
+	if err != nil {
+		return nil, err
 	}
 	cfg.Client = client
 	cfg.CA = report.CA
@@ -545,4 +615,63 @@ func (h *scrubbing) cleanAttr(a slog.Attr) slog.Attr {
 	default:
 		return a
 	}
+}
+
+// checkRemembered is how long the connection check is believed.
+//
+// It is three seconds of asking the service the same four questions, and it
+// runs before every pool goes up. A machine running ten jobs one after another
+// spent half a minute of somebody's waiting on answers that had not changed. A
+// minute is short enough that a connection which breaks is noticed by the job
+// after next rather than the one after that, and long enough that a queue of
+// jobs pays for it once.
+const checkRemembered = time.Minute
+
+// lastCheck is the last check that passed, and when.
+//
+// It is one value for the process rather than one per caller, because there is
+// one service being asked about: two callers checking it a second apart are
+// asking the same question, and the second of them is waiting for an answer the
+// first already has.
+var lastCheck struct {
+	mu   sync.Mutex
+	at   time.Time
+	ca   *x509.CertPool
+	size int
+}
+
+// checked is the connection check, remembered for a minute.
+//
+// A check that failed is never remembered: a machine whose connection is broken
+// has to be able to fix it and try again at once, and a refusal held for a
+// minute would be a minute of a page that says the same wrong thing however
+// many times it is pressed.
+//
+// The size is part of what is remembered because it is part of what was asked:
+// the check reports what a pool of that many ports would run into, and a larger
+// pool asked against a smaller answer would be told nothing about the ports it
+// added.
+func (o serveOptions) checked(ctx context.Context, client *blanktrail.Client, size int) (blanktrail.Report, error) {
+	lastCheck.mu.Lock()
+	fresh := lastCheck.ca != nil &&
+		time.Since(lastCheck.at) < checkRemembered &&
+		size <= lastCheck.size
+	ca := lastCheck.ca
+	lastCheck.mu.Unlock()
+	if fresh {
+		return blanktrail.Report{CA: ca}, nil
+	}
+
+	report := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
+		Domains: checkedDomains,
+		Ports:   size,
+	})
+	if !report.OK() {
+		return blanktrail.Report{}, errors.New(
+			"this connection would not get through; the settings page says what the check found")
+	}
+	lastCheck.mu.Lock()
+	lastCheck.at, lastCheck.ca, lastCheck.size = time.Now(), report.CA, size
+	lastCheck.mu.Unlock()
+	return report, nil
 }

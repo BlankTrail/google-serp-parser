@@ -1243,3 +1243,49 @@ func TestRunsOnPhones_IsWhatDecidesTheOneHeaderThatDiffers(t *testing.T) {
 		}
 	}
 }
+
+func TestPoolEngine_ShrinksAPoolWithStandingIdentitiesAndClosesOneWithout(t *testing.T) {
+	// The rule the whole arrangement rests on, in the one place a job's end
+	// reaches it. Closed instead of shrunk, a machine that keeps identities warm
+	// would lose them to the first job that ran; shrunk instead of closed, a job
+	// that opened its own would hold them open for as long as the program runs.
+	fake := fakebt.New(t)
+	client, err := blanktrail.NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	open := func(ports int) *blanktrail.Pool {
+		t.Helper()
+		pool, err := blanktrail.NewPool(t.Context(), blanktrail.PoolConfig{
+			Client: client, Threads: ports, PortsPerThread: 1,
+			Spec: blanktrail.DefaultPortSpec(),
+		})
+		if err != nil {
+			t.Fatalf("opening %d ports: %v", ports, err)
+		}
+		return pool
+	}
+
+	// A job's own pool: nothing standing, so its end closes the lot.
+	own := open(2)
+	if err := (&poolEngine{pool: own}).Close(); err != nil {
+		t.Fatalf("closing a job's own identities: %v", err)
+	}
+	if got := len(fake.OpenPorts()); got != 0 {
+		t.Errorf("%d ports survived a job that owned them", got)
+	}
+
+	// A standing pool a job grew: its end gives back the growth and no more.
+	standing := open(3)
+	t.Cleanup(func() { _ = standing.Close() })
+	standing.KeepWarm()
+	if err := standing.Grow(t.Context(), 5); err != nil {
+		t.Fatalf("Grow: %v", err)
+	}
+	if err := (&poolEngine{pool: standing}).Close(); err != nil {
+		t.Fatalf("letting go of a grown standing pool: %v", err)
+	}
+	if got := len(fake.OpenPorts()); got != 3 {
+		t.Errorf("%d ports are open after the job, want the three kept warm", got)
+	}
+}

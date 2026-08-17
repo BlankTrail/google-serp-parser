@@ -818,3 +818,34 @@ func theJob(t *testing.T, s *Server, id int64) store.JobSummary {
 	}
 	return sum
 }
+
+func TestJobState_SaysItIsReachingTheIdentitiesBeforeTheFirstAnswer(t *testing.T) {
+	// Measured on a real machine: the first query goes out three and a half
+	// seconds after the press, and the answer arrives a minute or more later
+	// because a cold identity meets a challenge first. A screen of noughts
+	// through all of that reads as a job that never started, and the operator
+	// reaches for the stop button.
+	starting := progressJSON{Running: true, Total: 10, Pending: 10}
+	if got := stateOf(starting, true); got != "job.state.starting" {
+		t.Errorf("a running job with nothing settled reads as %q, want the one that says why", got)
+	}
+	// And the moment anything settles, it is an ordinary running job: the wait
+	// this describes is over, and a screen that went on saying it would be
+	// describing something that had stopped being true.
+	settled := starting
+	settled.Done = 1
+	if got := stateOf(settled, true); got != "job.state.running" {
+		t.Errorf("a job that has settled one query reads as %q, want running", got)
+	}
+	failed := starting
+	failed.Failed = 1
+	if got := stateOf(failed, true); got != "job.state.running" {
+		t.Errorf("a job whose first query was refused reads as %q, want running", got)
+	}
+
+	// A job nothing is running says nothing about reaching anybody.
+	waiting := progressJSON{Queued: true, Total: 10, Pending: 10}
+	if got := stateOf(waiting, true); got != "job.state.waiting" {
+		t.Errorf("a queued job reads as %q, want waiting", got)
+	}
+}

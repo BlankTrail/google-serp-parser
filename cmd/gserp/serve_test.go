@@ -571,7 +571,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	opts.Threads, opts.Ports = 3, 5
 	saved, _ := opts.saved(io.Discard)
-	raise := opts.raise(saved, false)
+	raise := opts.raise(saved, false, nil, blanktrail.DeviceDesktop)
 
 	// A job that named no size reaches here already stood in for, so what this end
 	// is asked for is the pair this server was started with.
@@ -835,4 +835,207 @@ func TestServe_TellsTheCallerWhereItIsListeningOnceItIsBound(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *testing.T) {
+	// The whole arrangement, end to end and in the one place it is assembled. Ten
+	// identities are kept warm; a job of a hundred opens ninety more, runs on all
+	// of them, and gives back the ninety — because giving back the ten would mean
+	// the next job pays for warming them all over again, which is what keeping
+	// them was for.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 10,
+	})
+	saved, _ := opts.saved(io.Discard)
+
+	standing, err := opts.dial(t.Context(), saved, 1, 10, blanktrail.DeviceDesktop)
+	if err != nil {
+		t.Fatalf("opening the standing identities: %v", err)
+	}
+	t.Cleanup(func() { _ = standing.Close() })
+	if got := standing.KeepWarm(); got != 10 {
+		t.Fatalf("%d identities were declared standing, want ten", got)
+	}
+
+	raise := opts.raise(saved, false, standing, blanktrail.DeviceDesktop)
+	pool, err := raise(t.Context(), 10, 10, blanktrail.DeviceDesktop)
+	if err != nil {
+		t.Fatalf("raising a job of a hundred on ten standing: %v", err)
+	}
+	if pool != standing {
+		t.Error("the job was handed a second pool rather than the standing one grown")
+	}
+	if got := len(fake.OpenPorts()); got != 100 {
+		t.Errorf("%d ports are open, want the hundred the job asked for", got)
+	}
+
+	// What the job's end does. The queue reaches this through the engine it
+	// wraps the pool in, and that engine's own rule — shrink a pool that has a
+	// standing set, close one that has not — is checked where it lives.
+	gone, err := pool.Shrink(t.Context())
+	if err != nil {
+		t.Fatalf("letting go of the job's identities: %v", err)
+	}
+	if gone != 90 {
+		t.Errorf("the job gave back %d identities, want the ninety it opened", gone)
+	}
+	if got := len(fake.OpenPorts()); got != 10 {
+		t.Errorf("%d ports are open after the job, want the ten that are kept warm", got)
+	}
+}
+
+func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.T) {
+	// A phone's results are not a desktop's and an identity cannot be both, so a
+	// job of the other kind opens its own from cold. Growing the standing set for
+	// it would run the job on the wrong pages and file them under the right name.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 4,
+	})
+	saved, _ := opts.saved(io.Discard)
+
+	standing, err := opts.dial(t.Context(), saved, 1, 4, blanktrail.DeviceDesktop)
+	if err != nil {
+		t.Fatalf("opening the standing identities: %v", err)
+	}
+	t.Cleanup(func() { _ = standing.Close() })
+	standing.KeepWarm()
+
+	raise := opts.raise(saved, false, standing, blanktrail.DeviceDesktop)
+	own, err := raise(t.Context(), 2, 1, blanktrail.DeviceMobile)
+	if err != nil {
+		t.Fatalf("raising a phone job beside the standing desktops: %v", err)
+	}
+	t.Cleanup(func() { _ = own.Close() })
+
+	if own == standing {
+		t.Fatal("a phone job was handed the desktop identities")
+	}
+	if got := standing.Stats().Ports; got != 4 {
+		t.Errorf("the standing set is %d after a phone job was raised, want the four it was", got)
+	}
+	if got := own.Hot(); got != 0 {
+		t.Errorf("the phone job's own pool holds %d standing ports, want none of its own", got)
+	}
+}
+
+func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *testing.T) {
+	// A job of two on a machine keeping ten warm opens nothing: it runs on what is
+	// already there, which is the case this is all for.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 10,
+	})
+	saved, _ := opts.saved(io.Discard)
+
+	standing, err := opts.dial(t.Context(), saved, 1, 10, blanktrail.DeviceDesktop)
+	if err != nil {
+		t.Fatalf("opening the standing identities: %v", err)
+	}
+	t.Cleanup(func() { _ = standing.Close() })
+	standing.KeepWarm()
+
+	raise := opts.raise(saved, false, standing, blanktrail.DeviceDesktop)
+	if _, err := raise(t.Context(), 1, 2, blanktrail.DeviceDesktop); err != nil {
+		t.Fatalf("raising a job of two: %v", err)
+	}
+	if got := len(fake.OpenPorts()); got != 10 {
+		t.Errorf("%d ports are open, want the ten that were already warm", got)
+	}
+}
+
+func TestChecked_AsksOnceAMinuteRatherThanBeforeEveryPool(t *testing.T) {
+	// The check is three seconds of asking the same four questions, and it ran
+	// before every pool went up: a machine running ten jobs one after another
+	// spent half a minute of somebody's waiting on answers that had not changed.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	client, err := blanktrail.NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	forgetTheCheck(t)
+
+	var opts serveOptions
+	before := len(fake.Requests())
+	for range 5 {
+		if _, err := opts.checked(t.Context(), client, 2); err != nil {
+			t.Fatalf("checking the connection: %v", err)
+		}
+	}
+	if got := len(fake.Requests()) - before; got == 0 {
+		t.Fatal("the first check asked the service nothing at all")
+	}
+	first := len(fake.Requests()) - before
+
+	// Four more checks over the same connection asked nothing more.
+	if got := len(fake.Requests()) - before; got != first {
+		t.Errorf("five checks asked %d questions, want the %d one check asks", got, first)
+	}
+}
+
+func TestChecked_NeverRemembersARefusal(t *testing.T) {
+	// A machine whose connection is broken has to be able to fix it and try
+	// again at once. A refusal held for a minute is a minute of a page saying
+	// the same wrong thing however many times it is pressed.
+	fake := fakebt.New(t)
+	// No CA: the check finds a real fault and refuses.
+	client, err := blanktrail.NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	forgetTheCheck(t)
+
+	var opts serveOptions
+	if _, err := opts.checked(t.Context(), client, 2); err == nil {
+		t.Fatal("a connection with no certificate was passed by the check")
+	}
+	// Put right, and asked again: the answer has to change now rather than in a
+	// minute.
+	fake.SetCA(testCAPEM)
+	if _, err := opts.checked(t.Context(), client, 2); err != nil {
+		t.Errorf("a connection that has been put right is still refused: %v", err)
+	}
+}
+
+func TestChecked_AsksAgainForAPoolLargerThanTheOneItAnsweredAbout(t *testing.T) {
+	// The check reports what a pool of that many ports would run into. A larger
+	// pool answered from a smaller check would be told nothing about the ports it
+	// added — which is the one thing the licence limits are about.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	client, err := blanktrail.NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	forgetTheCheck(t)
+
+	var opts serveOptions
+	if _, err := opts.checked(t.Context(), client, 2); err != nil {
+		t.Fatalf("checking for two: %v", err)
+	}
+	asked := len(fake.Requests())
+	if _, err := opts.checked(t.Context(), client, 200); err != nil {
+		t.Fatalf("checking for two hundred: %v", err)
+	}
+	if len(fake.Requests()) == asked {
+		t.Error("a pool a hundred times larger was passed on the smaller pool's check")
+	}
+}
+
+// forgetTheCheck empties what the process remembers about the connection, so
+// one test's check is never another's answer.
+func forgetTheCheck(t *testing.T) {
+	t.Helper()
+	forget := func() {
+		lastCheck.mu.Lock()
+		lastCheck.at, lastCheck.ca, lastCheck.size = time.Time{}, nil, 0
+		lastCheck.mu.Unlock()
+	}
+	forget()
+	t.Cleanup(forget)
 }

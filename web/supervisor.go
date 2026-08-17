@@ -89,9 +89,20 @@ func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Repo
 	return (&run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink}).Run(ctx, j)
 }
 
-// Close gives up the identities. It runs when the job this pool was raised for
-// has let go of it.
-func (e *poolEngine) Close() error { return e.pool.Close() }
+// Close gives up the identities this job was raised. It runs when the job has
+// let go of them.
+//
+// A pool that holds a standing set is shrunk rather than closed: those ports are
+// the machine's and not this job's, kept open and warm so the next job starts
+// answering at once instead of a minute in. What the job opened on top of them
+// is what goes. A pool with no standing set is closed whole, as it always was.
+func (e *poolEngine) Close() error {
+	if e.pool.Hot() > 0 {
+		_, err := e.pool.Shrink(context.Background())
+		return err
+	}
+	return e.pool.Close()
+}
 
 // Pool is this job's pool, as it stands right now.
 func (e *poolEngine) Pool() poolFacts {

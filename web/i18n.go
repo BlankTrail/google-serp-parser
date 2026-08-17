@@ -108,6 +108,7 @@ var catalogue = map[Lang]map[string]string{
 		"jobs.state":           "State",
 		"job.state.finished":   "finished",
 		"job.state.unfinished": "unfinished",
+		"job.state.starting":   "reaching the identities",
 		"job.state.running":    "running",
 		"job.state.waiting":    "waiting its turn",
 		// Said of a job whose file stopped arriving. It names what happened and
@@ -311,6 +312,11 @@ var catalogue = map[Lang]map[string]string{
 		"browse.unreadable":          "This machine will not let this program read that folder.",
 		"settings.source.choose":     "Choose",
 
+		"settings.hot":              "Identities kept warm",
+		"settings.hot.ports":        "How many",
+		"settings.hot.why":          "Kept open between jobs and given one ordinary search every quarter of an hour, so they answer at once instead of meeting a challenge first. Nought keeps none. A job of this kind of page runs on them and opens what more it needs; a job of the other kind opens its own.",
+		"settings.hot.count":        "How many identities to keep warm has to be a whole number, and nought keeps none.",
+		"settings.hot.kind":         "That is not a kind of result page this program opens identities for.",
 		"settings.language":         "Interface language",
 		"settings.language.reader":  "Chosen automatically",
 		"settings.save":             "Save",
@@ -342,6 +348,7 @@ var catalogue = map[Lang]map[string]string{
 		"jobs.state":           "Состояние",
 		"job.state.finished":   "завершено",
 		"job.state.unfinished": "не завершено",
+		"job.state.starting":   "выходим на связь",
 		"job.state.running":    "выполняется",
 		"job.state.waiting":    "ждёт очереди",
 
@@ -521,6 +528,11 @@ var catalogue = map[Lang]map[string]string{
 		"browse.unreadable":          "Эта машина не даёт программе прочитать эту папку.",
 		"settings.source.choose":     "Выбрать",
 
+		"settings.hot":              "Держать прогретыми",
+		"settings.hot.ports":        "Сколько",
+		"settings.hot.why":          "Держатся открытыми между заданиями и получают один обычный запрос раз в четверть часа, поэтому отвечают сразу, а не после проверки. Ноль — не держать. Задание этого типа выдачи работает на них и открывает недостающие; задание другого типа открывает свои.",
+		"settings.hot.count":        "Сколько личностей держать прогретыми — это целое число, ноль означает не держать.",
+		"settings.hot.kind":         "Это не тот тип выдачи, под который программа открывает личности.",
 		"settings.language":         "Язык интерфейса",
 		"settings.language.reader":  "Авто выбор",
 		"settings.save":             "Сохранить",

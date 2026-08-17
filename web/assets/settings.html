@@ -107,6 +107,28 @@
 </div>
 </fieldset>
 
+{{/* The identities this machine keeps open between jobs. What it buys is
+     measured: a cold identity meets a challenge on its first request and the
+     answer arrives minutes later, while one that has answered recently answers
+     again in seconds. Nought is off, which is what this program did before
+     there was a choice. */}}
+<fieldset>
+<legend>{{.T "settings.hot"}}</legend>
+<div class="row">
+<div class="field">
+<label for="hot_ports">{{.T "settings.hot.ports"}}</label>
+<input id="hot_ports" name="hot_ports" type="number" min="0" value="{{.Form.Hot}}">
+</div>
+<div class="field">
+<label for="hot_device">{{.T "form.device"}}</label>
+<select id="hot_device" name="hot_device">
+{{range .Devices}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
+</div>
+<p class="empty">{{.T "settings.hot.why"}}</p>
+</fieldset>
+
 <fieldset>
 <legend>{{.T "settings.language"}}</legend>
 <div class="field">

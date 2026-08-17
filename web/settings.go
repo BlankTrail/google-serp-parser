@@ -29,6 +29,8 @@ const (
 	keyField     = "api_key"
 	searchField  = "search_ports"
 	pauseField   = "cooldown"
+	hotField     = "hot_ports"
+	hotKindField = "hot_device"
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
@@ -89,13 +91,17 @@ type settingsForm struct {
 	ControlURL string
 	// APIKey is empty on the way out and usually empty on the way in. The page
 	// cannot show the key, so an empty box means the key that is already saved.
-	APIKey  string
-	Search  string
-	Pause   string
-	Source  string
-	Where   string
-	Refresh string
-	Tongue  string
+	APIKey string
+	Search string
+	Pause  string
+	// Hot is how many identities this machine keeps open and warm between jobs,
+	// and HotDevice is which kind of result page they are opened for.
+	Hot       string
+	HotDevice string
+	Source    string
+	Where     string
+	Refresh   string
+	Tongue    string
 }
 
 // settingsFormOf reads the posted settings, leaving every box as text so a box
@@ -107,6 +113,8 @@ func settingsFormOf(r *http.Request) settingsForm {
 		APIKey:     strings.TrimSpace(r.FormValue(keyField)),
 		Search:     strings.TrimSpace(r.FormValue(searchField)),
 		Pause:      strings.TrimSpace(r.FormValue(pauseField)),
+		Hot:        strings.TrimSpace(r.FormValue(hotField)),
+		HotDevice:  strings.TrimSpace(r.FormValue(hotKindField)),
 		Source:     strings.TrimSpace(r.FormValue(sourceField)),
 		Where:      strings.TrimSpace(r.FormValue(whereField)),
 		Refresh:    strings.TrimSpace(r.FormValue(refreshField)),
@@ -124,6 +132,8 @@ func formShowing(saved settings.Settings) settingsForm {
 		ControlURL: saved.ControlURL,
 		Search:     strconv.Itoa(saved.SearchPorts),
 		Pause:      spellUnits(saved.Cooldown, pauseUnit),
+		Hot:        strconv.Itoa(saved.HotPorts),
+		HotDevice:  saved.HotDevice,
 		Source:     saved.Proxy.Kind,
 		Where:      saved.Proxy.Location,
 		Refresh:    spellUnits(saved.Proxy.Refresh, refreshUnit),
@@ -151,6 +161,24 @@ func (b *boxes) count(typed string, saved int, complaint string) int {
 	}
 	n, err := strconv.Atoi(typed)
 	if err != nil || n < 1 {
+		b.complaints = append(b.complaints, complaint)
+		return saved
+	}
+	return n
+}
+
+// none reads a box holding a number of things where none of them is an answer.
+//
+// It is separate from count because the two differ in exactly one place and it
+// is the place that matters: nought ports to search on is a machine that looks
+// configured and runs nothing, and nought ports kept warm is somebody switching
+// that off.
+func (b *boxes) none(typed string, saved int, complaint string) int {
+	if typed == "" {
+		return saved
+	}
+	n, err := strconv.Atoi(typed)
+	if err != nil || n < 0 {
 		b.complaints = append(b.complaints, complaint)
 		return saved
 	}
@@ -187,6 +215,14 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 		next.APIKey = f.APIKey
 	}
 	next.SearchPorts = b.count(f.Search, saved.SearchPorts, "settings.search.count")
+	// Nought is an answer here — it is how keeping identities warm is turned off
+	// — so this is read as a number of things that may be none of them, and only
+	// a negative or a word is a mistake.
+	next.HotPorts = b.none(f.Hot, saved.HotPorts, "settings.hot.count")
+	next.HotDevice = f.HotDevice
+	if next.HotDevice != "" && !blanktrail.KnownDevice(next.HotDevice) {
+		b.complaints = append(b.complaints, "settings.hot.kind")
+	}
 	next.Cooldown = b.span(f.Pause, saved.Cooldown, pauseUnit, "settings.pause.length")
 
 	// The list is switched off by choosing no source, which is why the source is
@@ -247,6 +283,9 @@ type settingsView struct {
 	// Sources are the places a list of addresses can come from, in the order the
 	// page offers them.
 	Sources []sourceOption
+	// Devices is every kind of result page the standing identities can be opened
+	// for, with the one in use already chosen.
+	Devices []jobDevice
 	// Tongues are the languages this machine can be set to answer in.
 	Tongues []tongueOption
 }
@@ -400,6 +439,7 @@ var severityKeys = map[blanktrail.Severity]string{
 func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, lang Lang, view settingsView) {
 	view.page = s.frame(r, lang, "settings.title", settingsAt)
 	view.Sources = sourcesOffered(view.Form.Source)
+	view.Devices = devicesOffered(view.Form.HotDevice)
 	view.Tongues = tonguesOffered(view.Form.Tongue)
 	s.render(w, r, "settings.html", view)
 }

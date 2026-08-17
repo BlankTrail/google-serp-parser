@@ -261,6 +261,13 @@ func stateOf(p progressJSON, listReady bool) string {
 		return "job.state.listunfinished"
 	case p.Finished:
 		return "job.state.finished"
+	case p.Running && p.Done+p.Failed == 0:
+		// Running and nothing settled yet. What is happening is that the
+		// identities are being reached: a cold one meets a challenge on its first
+		// request and the answer takes minutes, and a screen of noughts through
+		// all of that reads as a job that never started. It is measured, so it can
+		// be said.
+		return "job.state.starting"
 	case p.Running:
 		return "job.state.running"
 	case p.Queued:

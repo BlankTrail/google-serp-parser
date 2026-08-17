@@ -19,6 +19,12 @@ func standing(t *testing.T, hot int) (*Pool, *fakebt.Server) {
 	if err != nil {
 		t.Fatalf("opening %d standing ports: %v", hot, err)
 	}
+	// Said out loud, as a machine that keeps identities warm says it: a pool is
+	// the standing one only because somebody declared it so, and every other pool
+	// this program opens belongs to one job and is closed with it.
+	if got := pool.KeepWarm(); got != hot {
+		t.Fatalf("KeepWarm marked %d ports, want the %d that are open", got, hot)
+	}
 	t.Cleanup(func() { _ = pool.Close() })
 	return pool, f
 }
@@ -88,24 +94,51 @@ func TestTake_OffersAWarmPortBeforeAColdOne(t *testing.T) {
 	// A warm port answers where a cold one waits on a challenge, so the run
 	// starts producing at once instead of a minute in. This is what "the
 	// standing ports are used first" means in the one place it can be true.
-	pool, _ := standing(t, 1)
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, f, clock, 1, 1)
+	cfg.Cooldown = time.Minute
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("opening one standing port: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+	pool.KeepWarm()
 	if err := pool.Grow(context.Background(), 3); err != nil {
 		t.Fatalf("Grow: %v", err)
 	}
 
-	// Every port is ready and none has been used, so the only thing that can
-	// decide between them is which is warm.
+	// The warm port is made the most recently used of them, which is what it is
+	// on a real machine: the warmer has just been through it, and the ones the
+	// job opened have never been used at all. The clock is then moved past the
+	// cooldown so it is a candidate again.
+	//
+	// Now "the one that has rested longest" and "the warm one" are different
+	// ports, and only a rule that prefers the warm one picks it. Without the
+	// clock they are the same port and this test would pass on either rule.
+	warmed, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("warming the standing port: %v", err)
+	}
+	warmedPort := warmed.Port()
+	warmed.Release()
+	clock.Advance(2 * time.Minute)
+
+	pool.mu.Lock()
+	hot := pool.byNum[warmedPort]
+	pool.mu.Unlock()
+	if hot == nil || !hot.hot {
+		t.Fatalf("the fixture warmed port %d, which is not the standing one", warmedPort)
+	}
+
 	lease, err := pool.Acquire(context.Background())
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
 	defer lease.Release()
-
-	pool.mu.Lock()
-	defer pool.mu.Unlock()
-	got := pool.byNum[lease.Port()]
-	if got == nil || !got.hot {
-		t.Errorf("the first lease went to port %d, which is not one of the warm ones", lease.Port())
+	if lease.Port() != warmedPort {
+		t.Errorf("the lease went to port %d, and the warm one is %d — the coldest was "+
+			"preferred over the warmest", lease.Port(), warmedPort)
 	}
 }
 
@@ -122,6 +155,7 @@ func TestTake_SpreadsOntoTheColdOnesRatherThanHammeringTheWarm(t *testing.T) {
 		t.Fatalf("opening one standing port: %v", err)
 	}
 	defer func() { _ = pool.Close() }()
+	pool.KeepWarm()
 	if err := pool.Grow(context.Background(), 2); err != nil {
 		t.Fatalf("Grow: %v", err)
 	}
