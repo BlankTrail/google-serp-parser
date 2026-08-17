@@ -21,9 +21,12 @@
 <div class="metric"><dt class="label">{{.T "jobs.done"}}</dt><dd class="figure" id="run-done">{{.Running.Done}}</dd></div>
 <div class="metric"><dt class="label">{{.T "jobs.failed"}}</dt><dd class="figure" id="run-failed">{{.Running.Failed}}</dd></div>
 <div class="metric"><dt class="label">{{.T "jobs.left"}}</dt><dd class="figure" id="run-pending">{{.Running.Pending}}</dd></div>
-{{/* These two are read together or not at all, so they are drawn together. */}}
+{{/* How long it has been going, how fast it is going now, and what is left at
+     that speed. All three are measured from what this job has actually done:
+     the estimate that used to stand here was made before the run and was read
+     as a promise it could not keep. */}}
 <div class="metric"><dt class="label">{{.T "state.elapsed"}}</dt><dd class="figure" id="run-elapsed">{{.Running.Elapsed}}</dd></div>
-<div class="metric"><dt class="label">{{.T "state.expected"}}</dt><dd class="figure" id="run-expected">{{.Running.Expected}}</dd></div>
+<div class="metric"><dt class="label">{{.T "state.speed"}}</dt><dd class="figure" id="run-speed">{{.Running.Speed}}</dd></div>
 <div class="metric"><dt class="label">{{.T "state.rest"}}</dt><dd class="figure" id="run-rest">{{.Running.Rest}}</dd></div>
 </dl>
 {{/* Stopping a run is watched, so the stop stands where it is watched from, and
@@ -50,19 +53,24 @@
      start going, or the queue is not moving. Each is one figure large with what
      it is made of underneath, so the screen is glanced at rather than read. */}}
 <div class="groups">
-{{if .Failures}}
+{{/* How much is coming back answered, counted up. A share of refusals reads as
+     a fault report even at nought, and what somebody glances at while a job runs
+     is whether it is working — a number that should be high when things are
+     well. Every refusal is still here, underneath, where it says what to do. */}}
+{{if .Answered}}
 <section class="card">
-<h2>{{.T "state.failures"}}</h2>
-<p class="label">{{.T "state.failures.of"}}</p>
-<p class="figure" id="fail-share">{{.Failures.Share}}</p>
+<h2>{{.T "state.answered"}}</h2>
+<p class="label">{{.T "state.answered.of"}}</p>
+<p class="figure" id="ok-share">{{.Answered.Share}}</p>
 <dl class="detail">
-{{range .Failures.Reasons}}
-<dt>{{$.T .Key}}</dt><dd id="{{.Cell}}">{{.Count}}</dd>
-{{end}}
 {{/* The share and what it was taken over. A share with no base under it is a
      number nobody can check. */}}
-<dt>{{$.T "jobs.failed"}}</dt><dd id="fail-count">{{.Failures.Failed}}</dd>
-<dt>{{$.T "state.failures.settled"}}</dt><dd id="fail-settled">{{.Failures.Settled}}</dd>
+<dt>{{$.T "jobs.done"}}</dt><dd id="ok-count">{{.Answered.Done}}</dd>
+<dt>{{$.T "jobs.failed"}}</dt><dd id="fail-count">{{.Answered.Failed}}</dd>
+<dt>{{$.T "state.failures.settled"}}</dt><dd id="fail-settled">{{.Answered.Settled}}</dd>
+{{range .Answered.Reasons}}
+<dt>{{$.T .Key}}</dt><dd id="{{.Cell}}">{{.Count}}</dd>
+{{end}}
 </dl>
 </section>
 {{end}}

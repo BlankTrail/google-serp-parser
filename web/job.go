@@ -3,7 +3,6 @@
 package web
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -14,22 +13,20 @@ import (
 	"github.com/blanktrail/google-serp-parser/store"
 )
 
-// rowsShown is how much of a job's results the page draws.
+// rowsShown is how much of a job's results the page draws: the last of them,
+// newest first.
 //
 // A job of ten thousand queries holds a million rows. Nobody reads a million
 // rows in a browser, no browser lays them out quickly, and the export beside
-// them hands over every one.
-const rowsShown = 200
+// them hands over every one. What the page is for is the other question — is
+// this still working, and what is it bringing back — and fifty answers that as
+// well as a million, on a screen somebody can actually see the bottom of.
+const rowsShown = 50
 
 // refreshEvery is how often the page asks what has changed. The answer is four
 // numbers, so asking costs nothing worth counting, and asking faster would only
 // tighten the loop around queries that take seconds each.
 const refreshEvery = 2 * time.Second
-
-// errEnough ends the walk over a job's results once the page holds as many as
-// it draws. store.Rows hands a caller's error back unchanged, which is what
-// makes this a way of stopping rather than a failure.
-var errEnough = errors.New("web: the page holds every row it draws")
 
 // jobPath is where a job's own page lives. The list links to it and every
 // button sends the reader back to it, so the address is written once.
@@ -107,7 +104,18 @@ type jobPage struct {
 	// figure reading nought: a number on a screen is a thing to wonder about,
 	// and there is nothing here to wonder about.
 	Filtering bool
-	Capped    bool
+	// Sampled says the lists below are the last of what the job gathered rather
+	// than all of it, and Shown is how many that is. A page cannot draw ten
+	// million results and should not try: what somebody watching wants is proof
+	// that results are still arriving and a look at what they are. The whole lot
+	// is what the export is for.
+	Sampled bool
+	Shown   int
+	// Speed is how fast the job is settling queries now, or the mark when too
+	// little has settled to measure. It is on this page as well as the one before
+	// it because this is the page somebody opens when they want to know whether
+	// to leave the job alone.
+	Speed     string
 	Formats   []string
 	CanStop   bool
 	CanResume bool
@@ -135,16 +143,20 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	var rows []store.Row
 	var standings []store.Standing
 	var verdicts []store.Verdict
-	var capped bool
 	var err error
 	switch sum.Kind {
 	case store.KindIndex:
-		verdicts, capped, err = s.someVerdicts(r.Context(), sum.ID)
+		verdicts, err = s.store.LatestVerdicts(r.Context(), sum.ID, rowsShown)
 	case store.KindPosition:
-		standings, capped, err = s.someStandings(r.Context(), sum.ID)
+		standings, err = s.store.LatestStandings(r.Context(), sum.ID, rowsShown)
 	default:
-		rows, capped, err = s.someRows(r.Context(), sum.ID)
+		rows, err = s.store.LatestRows(r.Context(), sum.ID, rowsShown)
 	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	pace, err := s.store.Pace(r.Context(), sum.ID)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -185,8 +197,13 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		IsIndex:    sum.Kind == store.KindIndex,
 		IsPosition: sum.Kind == store.KindPosition,
 		Filtering:  sum.UniqueBy != store.UniqueOff,
-		Capped:     capped,
-		Formats:    export.Formats(),
+		// There is always more than this on a job of any size, and the page says
+		// so rather than leaving a reader to wonder whether twenty results is all
+		// their list produced.
+		Sampled: len(rows)+len(standings)+len(verdicts) >= rowsShown,
+		Shown:   rowsShown,
+		Speed:   perMinute(pace.PerMinute()),
+		Formats: export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
 		// somebody presses until they conclude the job cannot be stopped at all.
@@ -223,88 +240,6 @@ func (s *Server) jobAsked(w http.ResponseWriter, r *http.Request, asked string) 
 	return sum, true
 }
 
-// someRows reads as much of a job's results as the page draws, and says whether
-// there was more.
-//
-// The walk is stopped rather than the rows counted afterwards: the whole point
-// is not to read a million rows out of the history to throw all but two hundred
-// of them away.
-func (s *Server) someRows(ctx context.Context, jobID int64) ([]store.Row, bool, error) {
-	rows := make([]store.Row, 0, rowsShown)
-	err := s.store.Rows(ctx, jobID, func(row store.Row) error {
-		if len(rows) == rowsShown {
-			return errEnough
-		}
-		rows = append(rows, row)
-		return nil
-	})
-	if errors.Is(err, errEnough) {
-		return rows, true, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return rows, false, nil
-}
-
-// someVerdicts reads as many of an index job's answers as the page draws, and
-// says whether there were more.
-//
-// The walk is stopped for the reason someRows is stopped: a list of addresses is
-// as long as somebody's file, and reading a million of them to draw two hundred
-// is a million rows read to be thrown away.
-func (s *Server) someVerdicts(ctx context.Context, jobID int64) ([]store.Verdict, bool, error) {
-	out := make([]store.Verdict, 0, rowsShown)
-	err := s.store.Verdicts(ctx, jobID, func(v store.Verdict) error {
-		if len(out) == rowsShown {
-			return errEnough
-		}
-		out = append(out, v)
-		return nil
-	})
-	if errors.Is(err, errEnough) {
-		return out, true, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return out, false, nil
-}
-
-// someStandings reads as many of a position check's answers as the page draws,
-// and says whether there were more.
-//
-// The walk is stopped for the reason someVerdicts is stopped: a list of phrases
-// is as long as somebody's file, and reading a million of them to draw two
-// hundred is a million rows read to be thrown away.
-func (s *Server) someStandings(ctx context.Context, jobID int64) ([]store.Standing, bool, error) {
-	out := make([]store.Standing, 0, rowsShown)
-	err := s.store.Standings(ctx, jobID, func(st store.Standing) error {
-		if len(out) == rowsShown {
-			return errEnough
-		}
-		out = append(out, st)
-		return nil
-	})
-	if errors.Is(err, errEnough) {
-		return out, true, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return out, false, nil
-}
-
-// stateOf is the key of what to call a job's state.
-//
-// It answers with a key and never a sentence, because every phrase on every
-// page goes through the catalogue, and a state named in English here would be
-// the one English word on a Russian page.
-//
-// A list that never finished arriving is said first and over everything else.
-// Such a job has queries waiting and no stamp on it, which is exactly what an
-// unfinished run looks like, and calling the two by one name would tell the
-// reader to carry on with a job that cannot be carried on.
 func stateOf(p progressJSON, listReady bool) string {
 	switch {
 	case !listReady:

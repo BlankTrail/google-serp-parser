@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/google"
-	"github.com/blanktrail/google-serp-parser/run"
 	"github.com/blanktrail/google-serp-parser/store"
 )
 
@@ -67,10 +66,10 @@ type statePage struct {
 	page
 	// Running is the job in flight, or nil when there is none.
 	Running *runningView
-	// Failures is that same job's refusals. It goes with the job: a share of
-	// nothing, kept on the screen after the job it belonged to, is a number about
-	// a run that is over.
-	Failures *failureView
+	// Answered is that same job's share of queries that came back. It goes with
+	// the job: a share of nothing, kept on the screen after the job it belonged
+	// to, is a number about a run that is over.
+	Answered *successView
 	Pool     poolView
 	Queue    queueView
 	// Back is where a button pressed on this screen brings the reader: back here.
@@ -87,23 +86,36 @@ type runningView struct {
 	Done    int
 	Failed  int
 	Pending int
-	// Elapsed is how long it is since the job was written down, and Expected what
-	// the estimate quoted for the whole of it. They stand beside each other and
-	// the screen draws no conclusion from the pair.
-	Elapsed  string
-	Expected string
-	// Rest is what is left at the pace the job has actually kept, which is the
-	// mark when nothing has been settled yet and there is no pace to measure.
-	Rest string
+	// Elapsed is how long it is since the job was written down.
+	//
+	// The estimate that used to stand beside it is gone. It was read as a promise
+	// and was not one: what dominates it is the time to reach an identity that
+	// answers, measured at anything from half a minute to nine, and a figure that
+	// wrong beside a real elapsed time makes every other figure on the screen
+	// suspect.
+	Elapsed string
+	// Speed is how fast the job is settling queries now, and Rest is what is left
+	// at that speed. Both are the mark when too little has settled to measure,
+	// which is not the same as a job that has stopped.
+	Speed string
+	Rest  string
 }
 
-// failureView is how much of a job has been refused, and what came back.
-type failureView struct {
-	// Share is the part of the queries settled so far that were refused. It is of
-	// what has been settled rather than of the whole job, because early on the
-	// whole job is mostly work nobody has reached, and a share taken over that
-	// reads as nothing being wrong however badly it is going.
+// successView is how much of a job is coming back answered, and what the rest
+// came back as.
+//
+// It counts up rather than down. A share of refusals reads as a fault report
+// even at nought, and the figure somebody glances at while a job runs is "is
+// this working" — which is a number that should be high when things are well.
+// The refusals are still every one of them on the screen, underneath, where
+// they say what to do about it.
+type successView struct {
+	// Share is the part of the queries settled so far that came back answered. It
+	// is of what has been settled rather than of the whole job, because early on
+	// the whole job is mostly work nobody has reached, and a share taken over that
+	// reads the same however badly it is going.
 	Share   string
+	Done    int
 	Failed  int
 	Settled int
 	Reasons []reasonView
@@ -213,45 +225,63 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 	if err != nil {
 		return statePage{}, err
 	}
-	view.Running = s.runningView(sum, facts)
-	failures, err := s.failuresOf(ctx, sum)
+	pace, err := s.store.Pace(ctx, sum.ID)
 	if err != nil {
 		return statePage{}, err
 	}
-	view.Failures = failures
+	view.Running = s.runningView(sum, pace)
+	answered, err := s.answeredOf(ctx, sum)
+	if err != nil {
+		return statePage{}, err
+	}
+	view.Answered = answered
 	return view, nil
 }
 
-// runningView is the job in flight, with the two times the operator reads
-// together.
+// runningView is the job in flight: how long it has been going, how fast it is
+// going now, and what is left at that speed.
 //
-// The elapsed time is counted from when the job was written down and the
-// expected time is the estimate for the whole of it, so the two are about the
-// same thing and may honestly be put side by side. Neither is compared to the
-// other here; that is the reader's to do, with what they know and this does not.
-func (s *Server) runningView(sum store.JobSummary, facts poolFacts) *runningView {
-	elapsed := s.now().Sub(sum.CreatedAt)
-	est := run.EstimateSize(sum.Total, sum.Pages,
-		facts.Stats.Ports, facts.Threads, facts.Cooldown, run.MeasuredPace)
-
+// All three are measured from what the job has actually done. Nothing here is
+// an estimate made before the run, and nothing here compares the job to one:
+// the figure that used to do that was read as a promise and was not one.
+func (s *Server) runningView(sum store.JobSummary, pace store.Pace) *runningView {
 	view := &runningView{
-		ID:       sum.ID,
-		Name:     sum.Name,
-		Total:    sum.Total,
-		Done:     sum.Done,
-		Failed:   sum.Failed,
-		Pending:  sum.Pending,
-		Elapsed:  spell(elapsed),
-		Expected: spell(est.Expected),
-		Rest:     noFigure,
+		ID:      sum.ID,
+		Name:    sum.Name,
+		Total:   sum.Total,
+		Done:    sum.Done,
+		Failed:  sum.Failed,
+		Pending: sum.Pending,
+		Elapsed: spell(s.now().Sub(sum.CreatedAt)),
+		Speed:   noFigure,
+		Rest:    noFigure,
 	}
-	// What is left, at the pace this job has actually kept rather than the one it
-	// was quoted. It waits for a query to settle: a pace measured over none of
-	// them is a division by nothing.
-	if settled := sum.Done + sum.Failed; settled > 0 && elapsed > 0 {
-		view.Rest = spell(elapsed / time.Duration(settled) * time.Duration(sum.Pending))
+	if !pace.Known {
+		return view
+	}
+	// The speed the job is keeping now, and what is left at it. Measured over the
+	// last few settled queries rather than over the whole run: on a job that
+	// spent its first hour crawling, an average answers wrongly for the rest of
+	// the day, and both figures here are read by somebody asking about now.
+	view.Speed = perMinute(pace.PerMinute())
+	if perMin := pace.PerMinute(); perMin > 0 && sum.Pending > 0 {
+		view.Rest = spell(time.Duration(float64(sum.Pending) / perMin * float64(time.Minute)))
 	}
 	return view
+}
+
+// perMinute writes a speed the way a reader reads one: whole queries a minute
+// once there are some, and one decimal below that, where the difference between
+// half a query a minute and two is the difference between a job worth watching
+// and one worth stopping.
+func perMinute(rate float64) string {
+	if rate <= 0 {
+		return noFigure
+	}
+	if rate < 10 {
+		return strconv.FormatFloat(rate, 'f', 1, 64)
+	}
+	return strconv.Itoa(int(rate + 0.5))
 }
 
 // failuresOf is how much of a job has been refused and what came back.
@@ -260,7 +290,7 @@ func (s *Server) runningView(sum store.JobSummary, facts poolFacts) *runningView
 // settled. A history keeps text and not values, so the class is recovered by
 // the package that wrote it — see google.ClassInText — rather than guessed at
 // here from the wording.
-func (s *Server) failuresOf(ctx context.Context, sum store.JobSummary) (*failureView, error) {
+func (s *Server) answeredOf(ctx context.Context, sum store.JobSummary) (*successView, error) {
 	counted := make([]int, len(reasons))
 	err := s.store.Failures(ctx, sum.ID, func(why string) error {
 		class, _ := google.ClassInText(why)
@@ -271,9 +301,14 @@ func (s *Server) failuresOf(ctx context.Context, sum store.JobSummary) (*failure
 		return nil, err
 	}
 
-	view := &failureView{Share: noFigure, Failed: sum.Failed, Settled: sum.Done + sum.Failed}
+	view := &successView{
+		Share:   noFigure,
+		Done:    sum.Done,
+		Failed:  sum.Failed,
+		Settled: sum.Done + sum.Failed,
+	}
 	if view.Settled > 0 {
-		view.Share = strconv.Itoa(sum.Failed*100/view.Settled) + "%"
+		view.Share = strconv.Itoa(sum.Done*100/view.Settled) + "%"
 	}
 	for i, r := range reasons {
 		if counted[i] == 0 {

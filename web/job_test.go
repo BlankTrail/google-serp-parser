@@ -259,7 +259,7 @@ func TestJobPage_ShowsTheResultsTheJobCaptured(t *testing.T) {
 			t.Errorf("the page does not show %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, LangEN.T("job.results.capped")) {
+	if strings.Contains(body, LangEN.T("job.results.sample")) {
 		t.Error("a job of six rows was reported as too long to show")
 	}
 }
@@ -277,7 +277,7 @@ func TestJobPage_SaysSoRatherThanDrawingAMillionRows(t *testing.T) {
 	if got := strings.Count(body, "<tr"); got != rowsShown+1 {
 		t.Errorf("the page drew %d rows, want the %d it shows and a heading", got, rowsShown)
 	}
-	if !strings.Contains(body, LangEN.T("job.results.capped")) {
+	if !strings.Contains(body, LangEN.T("job.results.sample")) {
 		t.Errorf("the page shows part of the results and does not say so:\n%s", body)
 	}
 }
@@ -515,7 +515,7 @@ func TestJobPage_SaysSoRatherThanDrawingAMillionAddresses(t *testing.T) {
 	if got := strings.Count(body, "<tr"); got != rowsShown+1 {
 		t.Errorf("the page drew %d rows, want the %d it shows and a heading", got, rowsShown)
 	}
-	if !strings.Contains(body, LangEN.T("job.results.capped")) {
+	if !strings.Contains(body, LangEN.T("job.results.sample")) {
 		t.Errorf("the page shows part of the addresses and does not say so:\n%s", body)
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/google"
-	"github.com/blanktrail/google-serp-parser/run"
 	"github.com/blanktrail/google-serp-parser/store"
 )
 
@@ -190,16 +189,16 @@ func TestState_ShowsTheNumbersWithoutDrawingAConclusion(t *testing.T) {
 		}
 	}
 
-	// The screen had every opportunity to draw the conclusion: both numbers the
-	// conclusion would be drawn from are on it, and they disagree.
+	// The screen had every opportunity to draw the conclusion: the figures it
+	// would be drawn from are on it.
 	body := get(t, running, stateAt).Body.String()
-	elapsed, expected := shown(t, body, "run-elapsed"), shown(t, body, "run-expected")
-	if elapsed == "" || expected == "" {
-		t.Fatalf("the screen shows elapsed %q against expected %q, so it never had the two to compare",
-			elapsed, expected)
+	elapsed, share := shown(t, body, "run-elapsed"), shown(t, body, "ok-share")
+	if elapsed == "" || share == "" {
+		t.Fatalf("the screen shows elapsed %q against a share of %q, so it never had them to judge by",
+			elapsed, share)
 	}
-	if elapsed == expected {
-		t.Fatalf("the screen shows the same figure twice (%q), so nothing on it invited a conclusion", elapsed)
+	if share == elapsed {
+		t.Fatalf("the screen shows the same figure twice (%q), so nothing on it invited a conclusion", share)
 	}
 
 	// And the reading itself works. Without this the whole test passes on a
@@ -233,10 +232,10 @@ func TestState_ReservesColourAndIconsForWhatIsActuallyBroken(t *testing.T) {
 	}
 }
 
-func TestState_PutsElapsedAndExpectedSideBySide(t *testing.T) {
-	// The two numbers the operator compares have to be read together, in one
-	// glance. Elapsed at the top of the screen and the estimate in a footnote is
-	// the same comparison made impossible.
+func TestState_ShowsHowLongAndHowFastSideBySide(t *testing.T) {
+	// The three figures somebody watching reads together — how long, how fast,
+	// how much longer — have to be read in one glance. One at the top of the
+	// screen and the others in a footnote is the same comparison made impossible.
 	//
 	// The clock is held still so the elapsed figure is a number this test knows
 	// rather than however long the fixture took to build.
@@ -252,54 +251,98 @@ func TestState_PutsElapsedAndExpectedSideBySide(t *testing.T) {
 		t.Errorf("the screen says %q has passed, and 24 minutes have", got)
 	}
 
-	// What the estimate promised for this job, worked out from the pool the job
-	// is running on rather than from the time already spent: an "expected" that
-	// counted from the start of the job would be the elapsed figure again under
-	// another name, and the two would never disagree.
-	want := run.EstimateSize(sum.Total, sum.Pages,
-		fakePool.Stats.Ports, fakePool.Threads, fakePool.Cooldown, run.MeasuredPace)
-	if got := shown(t, body, "run-expected"); got != spell(want.Expected) {
-		t.Errorf("the screen says the estimate promised %q, and it promised %q", got, spell(want.Expected))
-	}
-
-	// Side by side: nothing else is drawn between the two.
+	// In order and with nothing between them.
 	from := strings.Index(body, `id="run-elapsed"`)
-	to := strings.Index(body, `id="run-expected"`)
-	if from < 0 || to < 0 || to < from {
-		t.Fatalf("the screen does not carry both figures in order:\n%s", body)
+	through := strings.Index(body, `id="run-speed"`)
+	to := strings.Index(body, `id="run-rest"`)
+	if from < 0 || through < 0 || to < 0 || from >= through || through >= to {
+		t.Fatalf("the screen does not carry the three figures in order:\n%s", body)
 	}
-	if between := body[from:to]; strings.Count(between, `id="`) != 1 {
-		t.Errorf("something else stands between how long it has taken and how long was quoted:\n%s", between)
+	if between := body[from:to]; strings.Count(between, `id="`) != 2 {
+		t.Errorf("something else stands between how long it has taken and how much is left:\n%s", between)
 	}
 }
 
-func TestState_ShowsWhatIsLeftAtThePaceTheJobIsActuallyKeeping(t *testing.T) {
-	// The third number of the pair: what remains, measured rather than quoted.
-	// Two queries settled in twenty minutes is ten minutes each, and three are
-	// left, so half an hour — arithmetic on what happened, and still no verdict.
-	s, _, id := stateServer(t)
-	sum, err := s.store.Progress(t.Context(), id)
-	if err != nil {
-		t.Fatalf("Progress: %v", err)
+func TestState_CarriesNoEstimateMadeBeforeTheRun(t *testing.T) {
+	// The figure that used to stand here was worked out before a single query
+	// went out, and what dominates it — the time to reach an identity that
+	// answers — has been measured at anything from half a minute to nine. Beside
+	// a real elapsed time it read as a promise, and a promise that wrong makes
+	// every other figure on the screen suspect.
+	s, _, _ := stateServer(t)
+	for _, l := range Languages() {
+		body := get(t, s, stateAt+"?lang="+string(l)).Body.String()
+		if strings.Contains(body, `id="run-expected"`) {
+			t.Errorf("the %s screen still quotes an estimate:\n%s", l, body)
+		}
 	}
-	s.now = func() time.Time { return sum.CreatedAt.Add(time.Duration(stateDone+stateFailed) * 10 * time.Minute) }
+	for _, key := range []string{"state.expected"} {
+		for _, l := range Languages() {
+			if l.T(key) != key {
+				t.Errorf("the catalogue still holds %q in %s, so something can still draw it", key, l)
+			}
+		}
+	}
+}
 
+func TestRunningView_SaysWhatIsLeftAtTheSpeedTheJobIsKeepingNow(t *testing.T) {
+	// The arithmetic, asked of the thing that does it. Two queries settled over
+	// twenty minutes is a tenth of a query a minute; three left at that speed is
+	// half an hour. Nothing here is quoted from before the run.
+	s := &Server{now: func() time.Time { return time.Date(2026, 8, 17, 12, 30, 0, 0, time.UTC) }}
+	sum := store.JobSummary{
+		ID: 1, Name: "nightly", Total: 5, Done: 2, Pending: 3,
+		CreatedAt: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC),
+	}
+	view := s.runningView(sum, store.Pace{Settled: 2, Over: 20 * time.Minute, Known: true})
+
+	if view.Rest != spell(30*time.Minute) {
+		t.Errorf("the screen says %q is left at this speed, and %q is", view.Rest, spell(30*time.Minute))
+	}
+	if view.Speed != "0.1" {
+		t.Errorf("the screen says the job is doing %q a minute, and it is doing 0.1", view.Speed)
+	}
+	if view.Elapsed != "30m" {
+		t.Errorf("the screen says %q has passed, and thirty minutes have", view.Elapsed)
+	}
+}
+
+func TestRunningView_SaysNothingRatherThanNoughtBeforeThereIsASpeed(t *testing.T) {
+	// Nought a minute is the speed of a job that has stopped. A job nobody has
+	// measured yet has not stopped, and an operator reading nought reaches for
+	// the stop button.
+	s := &Server{now: time.Now}
+	sum := store.JobSummary{ID: 1, Total: 5, Pending: 5, CreatedAt: time.Now()}
+	view := s.runningView(sum, store.Pace{})
+
+	if view.Speed != noFigure {
+		t.Errorf("a job with nothing measured yet reports a speed of %q", view.Speed)
+	}
+	if view.Rest != noFigure {
+		t.Errorf("a job with nothing measured yet reports %q left", view.Rest)
+	}
+}
+
+func TestState_ShowsTheSpeedItIsRunningAtNow(t *testing.T) {
+	// And the figure reaches the page, since a figure nothing carries onto the
+	// screen is a figure nobody has.
+	s, _, _ := stateServer(t)
 	body := get(t, s, stateAt).Body.String()
-	if got := shown(t, body, "run-rest"); got != spell(statePending*10*time.Minute) {
-		t.Errorf("the screen says %q is left at this pace, and %q is", got, spell(statePending*10*time.Minute))
+	if shown(t, body, "run-speed") == "" {
+		t.Errorf("the screen carries no speed at all:\n%s", body)
 	}
 }
 
 func TestState_BreaksFailuresDownByWhatCameBack(t *testing.T) {
-	// "A tenth of them failed" sends the reader to the database. What came back
-	// is written down when the query is settled, and the whole point of showing
-	// the share is to be able to look under it.
+	// "Nine tenths came back" sends the reader to the database for the other
+	// tenth. What came back is written down when the query is settled, and the
+	// whole point of showing the share is to be able to look under it.
 	s, _, _ := stateServer(t)
 	body := get(t, s, stateAt).Body.String()
 
 	settled := stateDone + stateFailed
-	if got, want := shown(t, body, "fail-share"), strconv.Itoa(stateFailed*100/settled)+"%"; got != want {
-		t.Errorf("the screen says %q of the settled queries were refused, and %q were", got, want)
+	if got, want := shown(t, body, "ok-share"), strconv.Itoa(stateDone*100/settled)+"%"; got != want {
+		t.Errorf("the screen says %q of the settled queries came back, and %q did", got, want)
 	}
 	// Two came back as one kind and one each as two others. A screen that summed
 	// them into a single reason answers three where each of these wants its own.
@@ -313,7 +356,8 @@ func TestState_BreaksFailuresDownByWhatCameBack(t *testing.T) {
 	// The share is shown over what it was taken over, because a percentage with
 	// no base under it is a number nobody can check.
 	for cell, want := range map[string]int{
-		"fail-count": stateFailed, "fail-settled": stateDone + stateFailed,
+		"ok-count": stateDone, "fail-count": stateFailed,
+		"fail-settled": stateDone + stateFailed,
 	} {
 		if got := shown(t, body, cell); got != strconv.Itoa(want) {
 			t.Errorf("the screen shows %s = %q, want %d", cell, got, want)
@@ -459,6 +503,33 @@ func TestSpell_WritesADurationTheWayAScreenIsRead(t *testing.T) {
 	} {
 		if got := spell(c.of); got != c.want {
 			t.Errorf("spell(%v) = %q, want %q", c.of, got, c.want)
+		}
+	}
+}
+
+func TestState_CountsWhatCameBackRatherThanWhatDidNot(t *testing.T) {
+	// A share of refusals reads as a fault report even at nought, and the figure
+	// somebody glances at while a job runs is whether it is working. It counts
+	// up, from a hundred.
+	//
+	// The fixture is deliberately a bad run — four refused against two answered
+	// — so a screen that swapped the two figures reads plausibly and is caught by
+	// the arithmetic rather than by the look of it.
+	s, _, _ := stateServer(t)
+	body := get(t, s, stateAt).Body.String()
+
+	settled := stateDone + stateFailed
+	if got := shown(t, body, "ok-share"); got != strconv.Itoa(stateDone*100/settled)+"%" {
+		t.Errorf("the screen reports %q, and %d of %d settled queries came back",
+			got, stateDone, settled)
+	}
+	for _, l := range Languages() {
+		body := get(t, s, stateAt+"?lang="+string(l)).Body.String()
+		if !strings.Contains(body, l.T("state.answered")) {
+			t.Errorf("the %s screen does not name what the share is of:\n%s", l, body)
+		}
+		if strings.Contains(body, l.T("state.failures")) {
+			t.Errorf("the %s screen still leads with the refusals:\n%s", l, body)
 		}
 	}
 }

@@ -41,6 +41,9 @@ var schemaStep7 string
 //go:embed schema_v8.sql
 var schemaStep8 string
 
+//go:embed schema_v9.sql
+var schemaStep9 string
+
 // steps is the upgrade path, one step per version: steps[i] takes a database at
 // version i to version i+1. A database that has never been written is version 0
 // and walks the whole list.
@@ -54,12 +57,13 @@ var schemaStep8 string
 // obvious alternative invites, where a current-shape file and a set of patches
 // drift because someone edited one of them.
 //
-// To add version 6: write the file, embed it, append it here. Nothing else —
+// To add version 10: write the file, embed it, append it here. Nothing else —
 // with one thing worth knowing before writing it, which step five is the first
 // to have needed. A step runs with foreign keys held off, because a step that
 // builds a table again has to drop the old one, and dropping a table other
 // tables point at deletes every row that pointed at it. See upgrade.
-var steps = []string{schemaStep1, schemaStep2, schemaStep3, schemaStep4, schemaStep5, schemaStep6, schemaStep7, schemaStep8}
+var steps = []string{schemaStep1, schemaStep2, schemaStep3, schemaStep4, schemaStep5,
+	schemaStep6, schemaStep7, schemaStep8, schemaStep9}
 
 // schemaVersion is what this build writes and understands. It counts the steps,
 // so a step cannot be added without the version following it.

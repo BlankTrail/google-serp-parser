@@ -109,6 +109,10 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// The index goes first: SQLite will not drop a column an index is built
+		// on, and the message it gives says nothing about the index.
+		`DROP INDEX IF EXISTS queries_settled_at`,
+		`ALTER TABLE queries DROP COLUMN settled_at`,
 		`ALTER TABLE jobs DROP COLUMN fields`,
 		`ALTER TABLE results DROP COLUMN display_path`,
 		`PRAGMA user_version = 6`,

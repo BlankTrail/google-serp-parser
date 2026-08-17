@@ -348,6 +348,50 @@ legend {
 	gap: 0.25rem;
 }
 
+/* How a job was set up: a label and its value, one setting to a line.
+
+   Each pair is wrapped in a block of its own, because a bare dl lays its terms
+   and its values out as separate runs — a value that is empty collapses, and
+   the labels above and below it close up into one line reading as a single
+   setting with two names. That is exactly what this looked like. */
+.settings-list {
+	display: grid;
+	gap: 0.35rem 1rem;
+	margin: 0 0 1rem;
+}
+
+.settings-list > div {
+	align-items: baseline;
+	display: grid;
+	gap: 1rem;
+	grid-template-columns: minmax(8rem, 14rem) 1fr;
+}
+
+.settings-list dt {
+	color: var(--quiet);
+	font-size: var(--small);
+}
+
+.settings-list dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+/* A cell holding something as long as an address. Without this the table is as
+   wide as its longest link and the page scrolls sideways to read a column that
+   was never the point. */
+.wraps {
+	max-width: 32rem;
+	overflow-wrap: anywhere;
+}
+
+/* And the table itself scrolls within its card rather than pushing the page
+   out, for the rows that are wide whatever is done to them. */
+.card > table {
+	display: block;
+	overflow-x: auto;
+}
+
 /* Where the reader is in the chooser, counted from the program's directory.
    It is set apart from the listing under it because it is the one line saying
    what the listing is a listing of. */

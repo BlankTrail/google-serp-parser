@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/google"
 )
@@ -133,8 +134,13 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 	if out.Err != nil {
 		state, msg = "failed", out.Err.Error()
 	}
+	// The moment is written with the state and in the same transaction, because
+	// the two are one fact: a query marked settled with no moment beside it is a
+	// query the speed on the screen cannot count, and one counted twice would be
+	// a speed nobody could reproduce from the history.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE queries SET state = ?, err = ? WHERE id = ?`, state, msg, queryID); err != nil {
+		`UPDATE queries SET state = ?, err = ?, settled_at = ? WHERE id = ?`,
+		state, msg, time.Now().UTC().Format(time.RFC3339Nano), queryID); err != nil {
 		return fmt.Errorf("store: settling the query: %w", err)
 	}
 	// Written only when there was something to add, so a query that dropped

@@ -22,6 +22,10 @@
      other job would be a number asking to be explained, and there would be
      nothing to explain. */}}
 {{if .Filtering}}<div class="metric"><dt class="label">{{.T "jobs.dropped"}}</dt><dd class="figure" id="count-dropped">{{.Progress.Dropped}}</dd></div>{{end}}
+{{/* How fast it is going now, measured over the last few queries that settled
+     rather than averaged over the whole run: on a job that spent its first hour
+     crawling, an average answers wrongly for the rest of the day. */}}
+<div class="metric"><dt class="label">{{.T "state.speed"}}</dt><dd class="figure" id="run-speed">{{.Speed}}</dd></div>
 <div class="metric"><dt class="label">{{.T "jobs.state"}}</dt><dd class="state" id="state">{{.T .State}}</dd></div>
 </dl>
 </section>
@@ -48,20 +52,24 @@
 
 <section class="settings card">
 <h2>{{.T "job.settings"}}</h2>
-<dl>
+{{/* Each setting is a label and its value on one line. A value left empty is
+     drawn as a dash rather than as nothing: an empty cell collapses, and the
+     labels above and below it close up into a line that reads as one setting
+     with two names. */}}
+<dl class="settings-list">
 {{/* Shown on the clock the reader started the run by. The history keeps the
      instant, and an instant printed as itself is hours from the wall. */}}
-<dt>{{.T "jobs.started"}}</dt><dd>{{.Job.Started.Local.Format "2006-01-02 15:04"}}</dd>
-<dt>{{.T "form.kind"}}</dt><dd>{{.T .Job.Kind}}</dd>
+<div><dt>{{.T "jobs.started"}}</dt><dd>{{.Job.Started.Local.Format "2006-01-02 15:04"}}</dd></div>
+<div><dt>{{.T "form.kind"}}</dt><dd>{{.T .Job.Kind}}</dd></div>
 {{/* The site the positions are about. It is drawn only where there is one: the
      other two kinds are about every site the page carried, and an empty line
      labelled "site" would be a setting asking to be explained. */}}
-{{if .Job.Target}}<dt>{{.T "form.target"}}</dt><dd>{{.Job.Target}}</dd>{{end}}
-<dt>{{.T "form.unique"}}</dt><dd>{{.T .Job.Filter}}</dd>
-<dt>{{.T "form.pages"}}</dt><dd class="count">{{.Job.Pages}}</dd>
-<dt>{{.T "form.country"}}</dt><dd>{{.Job.Country}}</dd>
-<dt>{{.T "form.language"}}</dt><dd>{{.Job.Language}}</dd>
-<dt>{{.T "form.spec"}}</dt><dd>{{.Job.Spec}}</dd>
+{{if .Job.Target}}<div><dt>{{.T "form.target"}}</dt><dd>{{.Job.Target}}</dd></div>{{end}}
+<div><dt>{{.T "form.unique"}}</dt><dd>{{.T .Job.Filter}}</dd></div>
+<div><dt>{{.T "form.pages"}}</dt><dd>{{.Job.Pages}}</dd></div>
+<div><dt>{{.T "form.country"}}</dt><dd>{{if .Job.Country}}{{.Job.Country}}{{else}}—{{end}}</dd></div>
+<div><dt>{{.T "form.language"}}</dt><dd>{{if .Job.Language}}{{.Job.Language}}{{else}}—{{end}}</dd></div>
+<div><dt>{{.T "form.spec"}}</dt><dd>{{if .Job.Spec}}{{.Job.Spec}}{{else}}—{{end}}</dd></div>
 </dl>
 
 {{/* The three that can still be changed, and only those. What stands above
@@ -87,6 +95,7 @@
 </div>
 <div class="actions"><button type="submit">{{.T "job.reshape"}}</button></div>
 <p class="empty">{{.T "job.reshape.why"}}</p>
+<p class="empty">{{.T "job.reshape.total"}}</p>
 {{if .Reshaped}}<p class="empty">{{.T .Reshaped}}</p>{{end}}
 </form>
 </section>
@@ -114,7 +123,7 @@
 {{if .IsIndex}}
 <h2>{{.T "job.verdicts"}}</h2>
 {{if .Verdicts}}
-{{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
+{{if .Sampled}}<p class="empty">{{.T "job.results.sample"}} {{.Shown}}</p>{{end}}
 <section class="card">
 <table>
 <thead>
@@ -144,7 +153,7 @@
      the depth is bad is the reader's to say. */}}
 <h2>{{.T "job.standings"}}</h2>
 {{if .Standings}}
-{{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
+{{if .Sampled}}<p class="empty">{{.T "job.results.sample"}} {{.Shown}}</p>{{end}}
 <section class="card">
 <table>
 <thead>
@@ -169,7 +178,7 @@
 {{else}}
 <h2>{{.T "job.results"}}</h2>
 {{if .Rows}}
-{{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
+{{if .Sampled}}<p class="empty">{{.T "job.results.sample"}} {{.Shown}}</p>{{end}}
 <section class="card">
 <table>
 <thead>
@@ -185,8 +194,8 @@
 <tr>
 <td>{{.Query}}</td>
 <td class="count">{{.Rank}}</td>
-<td>{{.Title}}</td>
-<td><a href="{{.URL}}">{{.URL}}</a></td>
+<td class="wraps">{{.Title}}</td>
+<td class="wraps"><a href="{{.URL}}">{{.URL}}</a></td>
 </tr>
 {{end}}
 </tbody>
