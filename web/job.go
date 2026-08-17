@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/export"
@@ -58,6 +59,17 @@ type jobSetup struct {
 	Country  string
 	Language string
 	Spec     string
+	// Ports, Threads and Tries are the pool this job runs on, and the three
+	// things about it that can still be changed. Everything above them is what
+	// the job is: the depth, the country and the filter are settled by the work
+	// already done under them, and changing one afterwards would leave a job
+	// whose results were gathered under two rules with nothing saying which.
+	//
+	// Nought in any of them is a job that named none, and the page shows it as
+	// what the run will use rather than as a nought nobody typed.
+	Ports   int
+	Threads int
+	Tries   int
 }
 
 // jobPage is one job: how it was set up, how far it has got, what it has
@@ -68,6 +80,9 @@ type jobPage struct {
 	Progress progressJSON
 	// State is the key of what to call the job's state, not the word itself.
 	State string
+	// Reshaped is the key of what to say about a change that has just been made,
+	// and empty when the reader did not arrive from one.
+	Reshaped string
 	// Rows is what a parse job captured, Standings is where a position check
 	// found its site, and Verdicts is what an index check established. A job is
 	// one kind, so exactly one of the three is ever filled, and the page draws
@@ -149,9 +164,13 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Country:  sum.Country,
 			Language: sum.Language,
 			Spec:     sum.SpecName,
+			Ports:    sum.Ports,
+			Threads:  sum.Threads,
+			Tries:    sum.Tries,
 		},
 		Progress:   at,
 		State:      stateOf(at, sum.PlanReady),
+		Reshaped:   reshapedSaid(r.URL.Query().Get(reshapedField)),
 		Rows:       rows,
 		Standings:  standings,
 		Verdicts:   verdicts,
@@ -290,4 +309,76 @@ func stateOf(p progressJSON, listReady bool) string {
 		return "job.state.waiting"
 	}
 	return "job.state.unfinished"
+}
+
+// apiReshape changes the pool a job will next run on.
+//
+// It changes those three and nothing else. What a job is — its depth, its
+// country, its filter — is settled by the work already done under it, and a
+// page that offered to change one of those would be offering to file results
+// gathered under two rules as though they were one.
+//
+// A job in flight is reshaped without being disturbed: it holds the pool it
+// raised for itself, and what is written here is what the next raise reads. The
+// page says that in words rather than leaving the reader to find out by
+// watching a number not change.
+func (s *Server) apiReshape(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.FormValue("job"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	err = s.store.Reshape(r.Context(), id,
+		countOf(r.FormValue("ports")), countOf(r.FormValue("threads")), countOf(r.FormValue("tries")))
+	switch {
+	case errors.Is(err, store.ErrNoJob):
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, store.ErrJobFinished):
+		// Nothing to change: the job has run. Saying so on its own page beats a
+		// refusal the reader has to interpret, and beats accepting it quietly,
+		// which reads as applied.
+		http.Redirect(w, r, jobPath(id)+"?"+reshapedField+"="+reshapeFinished, http.StatusSeeOther)
+		return
+	case err != nil:
+		s.fail(w, r, err)
+		return
+	}
+	http.Redirect(w, r, jobPath(id)+"?"+reshapedField+"="+reshapeDone, http.StatusSeeOther)
+}
+
+// countOf reads a number a person typed, and takes anything that is not one as
+// nothing said — which is what the store reads a nought as.
+func countOf(typed string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(typed))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// The answer a reshape leaves in the address it sends the reader back to. It is
+// in the address rather than in a session because this page is read by pressing
+// reload as often as by following a link, and a message kept anywhere else
+// would appear again on a reload that changed nothing.
+const (
+	reshapedField   = "reshaped"
+	reshapeDone     = "done"
+	reshapeFinished = "finished"
+)
+
+// reshapedSaid turns the word a reshape left in the address into the key of
+// what to say about it, and takes anything else as nothing to say.
+//
+// Anything else is not an error worth a page: the address is typed by hand as
+// often as it is followed, and a stranger's word in it means only that this
+// reader did not arrive from a change.
+func reshapedSaid(word string) string {
+	switch word {
+	case reshapeDone:
+		return "job.reshape.done"
+	case reshapeFinished:
+		return "job.reshape.finished"
+	}
+	return ""
 }

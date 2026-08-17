@@ -63,6 +63,32 @@
 <dt>{{.T "form.language"}}</dt><dd>{{.Job.Language}}</dd>
 <dt>{{.T "form.spec"}}</dt><dd>{{.Job.Spec}}</dd>
 </dl>
+
+{{/* The three that can still be changed, and only those. What stands above
+     them is what the job is: the depth, the country and the filter are settled
+     by the work already done under them, and changing one afterwards would
+     leave results gathered under two rules with nothing saying which was
+     which. */}}
+<form method="post" action="/api/reshape" class="fields">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<div class="row">
+<div class="field">
+<label for="threads">{{.T "form.threads"}}</label>
+<input id="threads" name="threads" type="number" min="1" value="{{.Job.Threads}}">
+</div>
+<div class="field">
+<label for="ports">{{.T "form.ports"}}</label>
+<input id="ports" name="ports" type="number" min="1" value="{{.Job.Ports}}">
+</div>
+<div class="field">
+<label for="tries">{{.T "form.tries"}}</label>
+<input id="tries" name="tries" type="number" min="1" value="{{.Job.Tries}}">
+</div>
+</div>
+<div class="actions"><button type="submit">{{.T "job.reshape"}}</button></div>
+<p class="empty">{{.T "job.reshape.why"}}</p>
+{{if .Reshaped}}<p class="empty">{{.T .Reshaped}}</p>{{end}}
+</form>
 </section>
 
 <section class="card">

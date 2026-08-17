@@ -312,7 +312,7 @@ func TestServe_LeavesTheJobPagesOwnAddressesWithThePages(t *testing.T) {
 	t.Setenv(envAPIKey, "")
 	at := servedAt(t, serveOptions{})
 
-	for _, path := range browserPolls {
+	for _, path := range web.BrowserPolls() {
 		got := ask(t, at+path+"?job=4242", "")
 		if got.json() {
 			t.Errorf("GET %s was answered by the programmable interface:\n%s", path, got.body)

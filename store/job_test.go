@@ -438,7 +438,7 @@ func TestReshape_ChangesThePoolOfThatJobAndOfNoOther(t *testing.T) {
 		t.Fatalf("CreateJob: %v", err)
 	}
 
-	if err := s.Reshape(context.Background(), mine, 11, 3); err != nil {
+	if err := s.Reshape(context.Background(), mine, 11, 3, 5); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
 	if ports, threads := poolOf(t, s, mine); ports != 11 || threads != 3 {
@@ -476,10 +476,10 @@ func TestReshape_RefusesAJobThatHasAlreadyFinished(t *testing.T) {
 		t.Fatalf("FinishJob: %v", err)
 	}
 
-	if err := s.Reshape(context.Background(), done, 11, 3); !errors.Is(err, ErrJobFinished) {
+	if err := s.Reshape(context.Background(), done, 11, 3, 5); !errors.Is(err, ErrJobFinished) {
 		t.Errorf("Reshape returned %v, want ErrJobFinished", err)
 	}
-	if err := s.Reshape(context.Background(), running, 11, 3); err != nil {
+	if err := s.Reshape(context.Background(), running, 11, 3, 5); err != nil {
 		t.Errorf("a job with work left could not be reshaped: %v", err)
 	}
 	if ports, threads := poolOf(t, s, done); ports != 4 || threads != 7 {
@@ -493,7 +493,7 @@ func TestReshape_RefusesAJobThatIsNotThere(t *testing.T) {
 	// the wrong id that their change landed.
 	s := testStore(t)
 	jobWith(t, s, "a")
-	if err := s.Reshape(context.Background(), 4242, 11, 3); !errors.Is(err, ErrNoJob) {
+	if err := s.Reshape(context.Background(), 4242, 11, 3, 5); !errors.Is(err, ErrNoJob) {
 		t.Errorf("Reshape returned %v, want ErrNoJob", err)
 	}
 }
@@ -508,7 +508,7 @@ func TestReshape_TakesTheNumbersAJobIsAlreadyOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.Reshape(context.Background(), id, 4, 7); err != nil {
+	if err := s.Reshape(context.Background(), id, 4, 7, 5); err != nil {
 		t.Errorf("Reshape of a job onto the pool it already has: %v", err)
 	}
 	if ports, threads := poolOf(t, s, id); ports != 4 || threads != 7 {
@@ -526,7 +526,7 @@ func TestReshape_ReadsAPoolBelowNothingAsOneThatWasNeverNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.Reshape(context.Background(), id, -4, -7); err != nil {
+	if err := s.Reshape(context.Background(), id, -4, -7, 5); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
 	if ports, threads := poolOf(t, s, id); ports != 0 || threads != 0 {

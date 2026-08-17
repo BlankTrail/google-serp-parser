@@ -5,6 +5,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -749,4 +750,71 @@ func rowsUnder(body string) string {
 		return ""
 	}
 	return body[from:to]
+}
+
+func TestReshape_ChangesThePoolTheJobWillComeUpOnAndNothingElse(t *testing.T) {
+	// Only three things about a job can still be changed. What it is — its depth,
+	// its country, its filter — is settled by the work already done under it, and
+	// a page that offered to change one of those would be offering to file
+	// results gathered under two rules as though they were one.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 2, 0, 0)
+	before := theJob(t, s, id)
+
+	rec := postForm(t, s, "/api/reshape", url.Values{
+		"job": {strconv.FormatInt(id, 10)}, "ports": {"11"}, "threads": {"3"}, "tries": {"17"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("reshaping came back %d, want a redirect: %s", rec.Code, rec.Body.String())
+	}
+
+	after := theJob(t, s, id)
+	// The three are all different from each other and from what was there, so a
+	// handler that read one box into another cannot pass this.
+	if after.Ports != 11 || after.Threads != 3 || after.Tries != 17 {
+		t.Errorf("the job now runs on ports=%d threads=%d tries=%d, want 11, 3 and 17",
+			after.Ports, after.Threads, after.Tries)
+	}
+	if after.Pages != before.Pages || after.Country != before.Country ||
+		after.UniqueBy != before.UniqueBy || after.Kind != before.Kind {
+		t.Errorf("reshaping changed what the job is: %+v against %+v", after, before)
+	}
+	if !strings.Contains(get(t, s, jobPath(id)+"?reshaped=done").Body.String(),
+		LangEN.T("job.reshape.done")) {
+		t.Error("the page says nothing about the change that was just made")
+	}
+}
+
+func TestReshape_SaysSoWhenTheJobHasAlreadyRunRatherThanAcceptingItQuietly(t *testing.T) {
+	// Accepting it reads as applied, and the reader would go on waiting for a
+	// change that has nothing left to change.
+	s := testServer(t)
+	id := seedJob(t, s, "done", 1, 1, 0)
+	if err := s.store.FinishJob(t.Context(), id); err != nil {
+		t.Fatalf("FinishJob: %v", err)
+	}
+
+	rec := postForm(t, s, "/api/reshape", url.Values{
+		"job": {strconv.FormatInt(id, 10)}, "ports": {"11"}, "threads": {"3"}, "tries": {"17"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("reshaping a finished job came back %d", rec.Code)
+	}
+	if got := theJob(t, s, id); got.Ports == 11 {
+		t.Error("a finished job was reshaped anyway")
+	}
+	if !strings.Contains(get(t, s, jobPath(id)+"?reshaped=finished").Body.String(),
+		LangEN.T("job.reshape.finished")) {
+		t.Error("the page does not say why nothing was changed")
+	}
+}
+
+// theJob reads one job's summary back out of the history.
+func theJob(t *testing.T, s *Server, id int64) store.JobSummary {
+	t.Helper()
+	sum, err := s.store.Progress(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	return sum
 }

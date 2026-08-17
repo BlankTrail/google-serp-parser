@@ -289,7 +289,7 @@ func TestOpen_CarriesAJobWrittenBeforeThePoolColumnsAndLeavesItRunnable(t *testi
 	if len(pending) != 1 {
 		t.Errorf("%d queries left to run after the upgrade, want the one that was not done", len(pending))
 	}
-	if err := again.Reshape(context.Background(), id, 5, 9); err != nil {
+	if err := again.Reshape(context.Background(), id, 5, 9, 5); err != nil {
 		t.Errorf("a job that came through the upgrade cannot be given a pool: %v", err)
 	}
 }

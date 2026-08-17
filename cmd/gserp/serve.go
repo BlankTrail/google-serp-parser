@@ -177,12 +177,6 @@ func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
 	return api.New(cfg)
 }
 
-// browserPolls are the addresses the job page's own script calls. They have sat
-// under /api/ since before anything else did, and they are named here so that
-// mounting the programmable interface under that prefix does not take the job
-// page's buttons away.
-var browserPolls = []string{"/api/progress", "/api/stop", "/api/resume"}
-
 // mount puts the two interfaces on one address: the pages at the root, and the
 // programmable interface under the two prefixes it is documented at.
 //
@@ -198,7 +192,7 @@ func mount(pages, programs http.Handler) http.Handler {
 	mux.Handle("/", pages)
 	mux.Handle("/api/", programs)
 	mux.Handle("/search", programs)
-	for _, at := range browserPolls {
+	for _, at := range web.BrowserPolls() {
 		mux.Handle(at, pages)
 	}
 	return mux

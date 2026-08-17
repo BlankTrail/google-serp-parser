@@ -184,6 +184,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/progress", s.apiProgress)
 	s.mux.HandleFunc("POST /api/stop", s.apiStop)
 	s.mux.HandleFunc("POST /api/resume", s.apiResume)
+	s.mux.HandleFunc("POST /api/reshape", s.apiReshape)
 	// The settings are offered only by a server that has somewhere to write them.
 	// A page that took a connection and dropped it is worse than no page: the
 	// reader has no way of telling the two apart until the next restart.
@@ -200,6 +201,19 @@ func (s *Server) routes() {
 
 // Handler is the server's routes, so a test can drive them without a socket.
 func (s *Server) Handler() http.Handler { return s.mux }
+
+// BrowserPolls are the addresses the pages themselves post to and poll, which
+// happen to sit under /api/ and have done since before anything programmable
+// did.
+//
+// It is published because whoever mounts a programmable interface on that
+// prefix takes them otherwise, and the page then goes on asking an address that
+// refuses it. The list lives here rather than there because these are this
+// package's own addresses: a page that grows another one grows it here, and a
+// list kept anywhere else is a list somebody has to remember to update.
+func BrowserPolls() []string {
+	return []string{"/api/progress", "/api/stop", "/api/resume", "/api/reshape"}
+}
 
 // ServeHandler runs the given handler on this server's socket and wind-down,
 // until the context is cancelled.

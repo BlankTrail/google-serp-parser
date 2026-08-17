@@ -355,7 +355,7 @@ var ErrJobFinished = errors.New("store: this job has already finished")
 // The reading and the write are one transaction because they are one decision:
 // a job that finished between a check outside a transaction and the write after
 // it would take a change this refuses, which is the exact case being refused.
-func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads int) error {
+func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads, tries int) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin reshaping job %d: %w", jobID, err)
@@ -375,8 +375,8 @@ func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads int) er
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE jobs SET ports = ?, threads = ? WHERE id = ?`,
-		atLeastNone(ports), atLeastNone(threads), jobID); err != nil {
+		`UPDATE jobs SET ports = ?, threads = ?, tries = ? WHERE id = ?`,
+		atLeastNone(ports), atLeastNone(threads), atLeastNone(tries), jobID); err != nil {
 		return fmt.Errorf("store: reshaping job %d: %w", jobID, err)
 	}
 	if err := tx.Commit(); err != nil {

@@ -453,3 +453,31 @@ func TestServe_FinishesTheAnswerAlreadyGoingOutBeforeItReturns(t *testing.T) {
 		t.Fatal("Serve did not return once the answer had gone out")
 	}
 }
+
+func TestBrowserPolls_NameEveryAddressThePagesThemselvesPostTo(t *testing.T) {
+	// Whoever mounts a programmable interface under /api/ takes whatever is not
+	// on this list, and the page then goes on posting to an address that refuses
+	// it. The list is read against the markup rather than against itself, so a
+	// page that grows an address without it being named here fails now instead
+	// of on somebody's screen.
+	s := testServer(t)
+	id := seedJob(t, s, "for its own page", 1, 0, 0)
+
+	named := map[string]bool{}
+	for _, at := range BrowserPolls() {
+		named[at] = true
+	}
+	for _, page := range []string{jobPath(id), "/", "/jobs", "/new", "/history"} {
+		body := get(t, s, page).Body.String()
+		for _, after := range strings.Split(body, `action="`)[1:] {
+			at, _, _ := strings.Cut(after, `"`)
+			if !strings.HasPrefix(at, "/api/") {
+				continue
+			}
+			if !named[at] {
+				t.Errorf("%s posts to %s, which is not named among the pages' own addresses",
+					page, at)
+			}
+		}
+	}
+}
