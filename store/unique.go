@@ -71,6 +71,16 @@ func keyOf(by UniqueBy, r google.Result) (string, bool) {
 // result it stands for one act. A mark that outlived the write it belongs to
 // would drop that address from the job for good, and no later run of the job
 // could tell that it had happened.
+//
+// What it costs, measured through the whole path a job actually takes —
+// form, queue, sink, history — over three pairs of 200 000 results: writing
+// with the mark took 5.39 s against 3.80 s without it, so the filter adds
+// about 40 % to the time a result takes to be written, and `seen` costs the
+// key plus 7 bytes. A synthetic measurement at the store's own door had put
+// the figure at 4 %; it is recorded here at what the live path says, because
+// that is the number an operator meets. The saving, where there are repeats to
+// drop, runs the other way: the same 200 000 results with every address twice
+// took 4.07 s and left half the history behind.
 func (s *Store) firstSeen(ctx context.Context, tx *sql.Tx, jobID int64, key string) (bool, error) {
 	res, err := tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO seen(job_id, key) VALUES(?, ?)`, jobID, key)

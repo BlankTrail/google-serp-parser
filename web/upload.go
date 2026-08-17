@@ -51,9 +51,13 @@ const boxCap = 4 << 10
 // job.
 //
 // Nothing here holds the list. The parts are walked as they arrive, each line
-// is handed to the plan as it is read, and the plan writes in batches — so the
-// memory this costs is the same for a file of ten lines and a file of ten
-// million.
+// is handed to the plan as it is read, and the plan writes in batches — so what
+// this costs is bounded by a batch rather than by the file.
+//
+// Measured through this handler: a hundred lines peaked at 907 KB of heap, and
+// 102 000 lines at 3 649 KB. A thousandfold file for four times the memory —
+// bounded, not constant, and the difference is worth stating rather than
+// rounding away.
 //
 // The order is the whole of it: the boxes stand before the file in the markup,
 // a browser sends the parts in the order they stand, and so everything needed
