@@ -1131,3 +1131,31 @@ func TestSupervisor_TakesAJobThroughTheEngineAsTheKindItWasFiledUnder(t *testing
 		})
 	}
 }
+
+func TestSupervisor_TakesAJobToAsManyIdentitiesAsTheJobAskedFor(t *testing.T) {
+	// The machinery for this was written with the run layer and nothing ever set
+	// it: every job ran on the built-in number, and no test noticed, because the
+	// run layer's own tests set it directly. This is the seam between the two —
+	// the store keeps it, the run layer honours it, and the supervisor is what
+	// carries it across.
+	v, st, eng := heldSupervisor(t)
+	_ = st
+	close(eng.hold)
+
+	id, err := v.Enqueue(store.JobSpec{
+		Name: "a tired list", Pages: 1, Country: "us", Language: "en", Tries: 17,
+	}, []string{"a"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	waitUntil(t, "the job to have been taken", func() bool {
+		_, seen := eng.ran(0)
+		return seen
+	})
+
+	got, _ := eng.ran(0)
+	if got.Tries != 17 {
+		t.Errorf("the job ran at %d identities per query, want the 17 it asked for", got.Tries)
+	}
+	_ = id
+}

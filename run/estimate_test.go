@@ -162,10 +162,12 @@ func TestEstimate_AJobThatNamesNoDepthIsCountedAtOnePage(t *testing.T) {
 	if est.Pages != 1 || est.Searches != 3 {
 		t.Errorf("Pages=%d Searches=%d, want 1 and 3", est.Pages, est.Searches)
 	}
-	// Per query: one page, two more taken again, and a visit for each of the
-	// three identities.
-	if est.MaxRequests != 18 {
-		t.Errorf("MaxRequests=%d, want 18", est.MaxRequests)
+	// Per query: one page, and for each identity after the first the page taken
+	// again and a fresh visit to the front page — so the ceiling grows with the
+	// retry limit, which is the point of quoting it at all.
+	if want := 3 * (1 + 2*defaultTries - 1); est.MaxRequests != want {
+		t.Errorf("MaxRequests=%d, want %d — three queries at %d identities each",
+			est.MaxRequests, want, defaultTries)
 	}
 }
 

@@ -20,9 +20,21 @@ import (
 var ErrNoIdentityLeft = errors.New("run: every identity refused this query")
 
 // defaultTries is how many identities one query is taken to before it is given
-// up on. Three gets past a refusal aimed at the identity, and is cheap enough
-// that a query which is genuinely unanswerable does not eat a job's budget.
-const defaultTries = 3
+// up on, when the job itself named none.
+//
+// It was three, chosen as "enough to get past a refusal aimed at the identity,
+// and cheap enough that a query which is genuinely unanswerable does not eat a
+// job's budget". The first live run to measure it disagreed: 77% of requests
+// refused, and two answers out of ten queries. On a poor list three tries lose
+// the job, and what the operator sees is not "the list is poor" but "the parser
+// does not work".
+//
+// Thirty is only as safe as the speed at which a dead identity is recognised. A
+// port the control service reports as open and which never answers costs the
+// whole request deadline each time it is tried, so thirty tries against thirty
+// of those is thirty deadlines on one query — which is why the number a port is
+// asked for is checked against this machine before the port is opened.
+const defaultTries = 30
 
 // Attempt is one search that survives a refused identity.
 //

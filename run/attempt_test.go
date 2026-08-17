@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -673,5 +674,24 @@ func TestAttempt_LetsAPageWalkSurviveARefusalUnchanged(t *testing.T) {
 	}
 	if walked != 1 {
 		t.Errorf("the walk saw %d pages of results, want 1", walked)
+	}
+}
+
+func TestDefaultTries_OutlastsAListThatRefusesMostRequests(t *testing.T) {
+	// Three was the number until a live run measured what it costs: 77% of
+	// requests refused, and two answers out of ten queries. A limit that low
+	// loses the whole job on a poor list, and what the operator sees is not
+	// "the list is poor" but "the parser does not work".
+	//
+	// The bound is stated rather than the number, so the figure can be tuned on
+	// later measurements without this test having to be edited to agree — but a
+	// quiet slide back to a handful is caught.
+	const refusalRate = 0.77
+	// At this refusal rate, a limit of n leaves refusalRate^n as the chance a
+	// query is written off having never been answered. Ten tries put that under
+	// one in ten; three leave it at almost one in two.
+	if odds := math.Pow(refusalRate, float64(defaultTries)); odds > 0.1 {
+		t.Errorf("at %d tries a query is written off unanswered %.0f%% of the time on the list "+
+			"this was measured against", defaultTries, odds*100)
 	}
 }

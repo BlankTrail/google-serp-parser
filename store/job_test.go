@@ -662,3 +662,46 @@ func TestCreateJob_FilesTheSiteAPositionCheckIsAboutAndHandsItToAResume(t *testi
 		t.Errorf("the resumed check is about %q, want example.com/wanted", taken.Spec.Target)
 	}
 }
+
+func TestCreateJob_KeepsTheRetryLimitTheJobAskedFor(t *testing.T) {
+	// The limit belongs to the job because the answer depends on the list. A
+	// store that dropped it would leave every job on the built-in number, which
+	// is exactly the state this column exists to end.
+	s := testStore(t)
+	id, err := s.CreateJob(t.Context(),
+		JobSpec{Name: "on a tired list", Pages: 1, Ports: 9, Threads: 4, Tries: 17},
+		[]string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	got, err := s.Jobs(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != id {
+		t.Fatalf("the job was not read back: %+v", got)
+	}
+	// The three numbers are all different on purpose: a store that read one
+	// column into another would answer this test with the wrong one and pass.
+	if got[0].Tries != 17 || got[0].Ports != 9 || got[0].Threads != 4 {
+		t.Errorf("tries=%d ports=%d threads=%d, want 17, 9 and 4",
+			got[0].Tries, got[0].Ports, got[0].Threads)
+	}
+}
+
+func TestCreateJob_LeavesAJobThatNamedNoRetryLimitNamingNone(t *testing.T) {
+	// Nought is a job that said nothing, and the store must not invent a number
+	// for it: what an unspoken limit becomes is decided where the run is set up,
+	// and a store with a second opinion would hide which jobs are in that state.
+	s := testStore(t)
+	if _, err := s.CreateJob(t.Context(), JobSpec{Name: "said nothing", Pages: 1}, []string{"a"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	got, err := s.Jobs(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if got[0].Tries != 0 {
+		t.Errorf("tries=%d, want the nought that says the job named none", got[0].Tries)
+	}
+}

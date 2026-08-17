@@ -116,6 +116,15 @@ type JobSpec struct {
 	// saves.
 	Ports   int
 	Threads int
+	// Tries is how many identities one query may be taken to before it is
+	// written off. Nought is a job that said nothing, read the same way the two
+	// above it are, and for the same reason: a job written before the column
+	// existed carries it and has to go on running.
+	//
+	// It is the job's and not the machine's because the answer depends on the
+	// list, and the list is somebody's: one operator's addresses are fresh this
+	// morning and another's have been hammered for a week.
+	Tries int
 }
 
 // kind is what to write in the column, which is never the empty string.
@@ -157,8 +166,8 @@ func (s JobSpec) refusal() error {
 // memory and a job created from a file arriving over a connection are the same
 // job, and an operator who cannot tell which path wrote theirs cannot be told
 // that only one of them keeps the numbers.
-func (s JobSpec) pool() (ports, threads int) {
-	return atLeastNone(s.Ports), atLeastNone(s.Threads)
+func (s JobSpec) pool() (ports, threads, tries int) {
+	return atLeastNone(s.Ports), atLeastNone(s.Threads), atLeastNone(s.Tries)
 }
 
 // atLeastNone reads a size below nothing as a size nobody named.
@@ -207,12 +216,12 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// none of it is, and there is no moment in between for a reader to see. A
 	// list too large to hold is written by a different path, which sets the flag
 	// after its last batch.
-	ports, threads := spec.pool()
+	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, spec_name, country, language, ports, threads, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, spec_name, country, language, ports, threads, tries, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
-		spec.SpecName, spec.Country, spec.Language, ports, threads)
+		spec.SpecName, spec.Country, spec.Language, ports, threads, tries)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -312,13 +321,13 @@ type UnfinishedJob struct {
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
 	var j UnfinishedJob
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, spec_name, country, language, ports, threads
+		`SELECT id, name, kind, target, unique_by, pages, spec_name, country, language, ports, threads, tries
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
-			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads)
+			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads, &j.Spec.Tries)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}

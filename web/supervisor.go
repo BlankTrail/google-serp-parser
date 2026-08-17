@@ -753,8 +753,12 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSumm
 	// The target travels with the kind that needs it. A position check handed on
 	// without the site it is about recognises nothing and reports every phrase as
 	// one the site does not rank for.
+	// The retry limit comes from the job for the same reason the pool does: how
+	// many identities a query is worth depends on the list, and the list is the
+	// operator's. A job that named none is run at whatever the run layer takes
+	// as its own default, which is the one place that number is written down.
 	j := run.Job{Kind: runKind(sum.Kind), Target: sum.Target,
-		Pages: sum.Pages, SpecName: sum.SpecName}
+		Pages: sum.Pages, SpecName: sum.SpecName, Tries: sum.Tries}
 	for _, q := range left {
 		j.Queries = append(j.Queries,
 			google.Query{Text: q.Text, Country: sum.Country, Language: sum.Language})
