@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -593,8 +594,15 @@ func TestLiveBrowser_SetsAJobUpStopsItTakesItUpAgainAndHandsItOver(t *testing.T)
 	if restingPage.watching {
 		errorf(t, "the page goes on asking about a job nobody is running")
 	}
-	if want := []string{"/api/resume"}; fmt.Sprint(restingPage.buttons) != fmt.Sprint(want) {
-		errorf(t, "a job that was stopped part way offers %v, want %v", restingPage.buttons, want)
+	// What is asked of the page is that it offers carrying on and does not offer
+	// stopping, rather than that it offers exactly one thing: the page has grown
+	// a form for changing the pool since this was written, and pinning the whole
+	// list makes every addition a failure here while catching nothing more.
+	if !slices.Contains(restingPage.buttons, "/api/resume") {
+		errorf(t, "a job that was stopped part way does not offer to carry on: %v", restingPage.buttons)
+	}
+	if slices.Contains(restingPage.buttons, "/api/stop") {
+		errorf(t, "a job that has already let go still offers to be stopped: %v", restingPage.buttons)
 	}
 
 	resumePressed := time.Now()
