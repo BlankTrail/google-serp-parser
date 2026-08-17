@@ -159,9 +159,9 @@ var catalogue = map[Lang]map[string]string{
 		// What the job asks Google. The lines of the list mean different things
 		// under the two, which is why the choice stands above the list rather
 		// than beside the depth.
-		"form.kind":         "What this asks Google",
-		"form.kind.search":  "Where phrases rank",
-		"form.kind.index":   "Whether addresses are in the index",
+		"form.kind":         "Kind of job",
+		"form.kind.search":  "Position check",
+		"form.kind.index":   "Index check",
 		"form.kind.why":     "An index job reads the list as addresses and asks Google whether it holds each one. It takes a single page per address, whatever the depth says, because the first page settles it.",
 		"form.kind.unknown": "That is not one of the things a job asks.",
 		// What the job throws away as it writes, and how many it threw. Both say
@@ -169,10 +169,10 @@ var catalogue = map[Lang]map[string]string{
 		// the reader meant is theirs to say. The sentence names the part that
 		// cannot be taken back, because it cannot — a dropped result is never
 		// written, and having it takes another run.
-		"form.unique":         "Repeats",
+		"form.unique":         "Dropping duplicates",
 		"form.unique.off":     "Keep every result",
-		"form.unique.url":     "One result per address",
-		"form.unique.host":    "One result per site",
+		"form.unique.url":     "Unique by url",
+		"form.unique.host":    "Unique by domain",
 		"form.unique.why":     "A repeat is dropped as the results arrive and is never written down, so it is not in the history and not in the export. This holds within this job alone — a site caught last month turns up again tonight — and it cannot be undone once the job has run. How many were dropped is shown on the job's own page.",
 		"form.unique.unknown": "That is not one of the ways of dropping repeats.",
 		"form.norunner":       "This server was started to read the history, so it cannot run a job.",
@@ -330,16 +330,16 @@ var catalogue = map[Lang]map[string]string{
 		"form.queries.required": "В списке нет ни одного запроса.",
 		"form.pages.positive":   "Запрос берётся хотя бы на одну страницу.",
 
-		"form.kind":         "О чём это спрашивает Google",
-		"form.kind.search":  "На каких местах фразы",
-		"form.kind.index":   "Есть ли адреса в индексе",
+		"form.kind":         "Тип задания",
+		"form.kind.search":  "Проверка позиций",
+		"form.kind.index":   "Проверка индексации",
 		"form.kind.why":     "Задание на индекс читает список как адреса и спрашивает Google, держит ли он каждый. На адрес берётся одна страница, какую бы глубину ни выставили: первая страница вопрос закрывает.",
 		"form.kind.unknown": "Такого задания не бывает.",
 
-		"form.unique":         "Повторы",
+		"form.unique":         "Удаление дублей",
 		"form.unique.off":     "Оставлять все результаты",
-		"form.unique.url":     "Один результат на адрес",
-		"form.unique.host":    "Один результат на сайт",
+		"form.unique.url":     "Уник по url",
+		"form.unique.host":    "Уник по домену",
 		"form.unique.why":     "Повтор отбрасывается по ходу поступления результатов и не записывается вовсе, поэтому его нет ни в истории, ни в выгрузке. Отбор действует в пределах этого задания — сайт, попавшийся месяц назад, сегодня покажется снова — и отменить его после прогона нельзя. Сколько отброшено, видно на странице задания.",
 		"form.unique.unknown": "Так повторы не отбрасываются.",
 		"form.norunner":       "Этот сервер поднят читать историю и выполнять задания не может.",

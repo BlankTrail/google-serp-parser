@@ -620,3 +620,17 @@ func TestNewJob_OffersEveryWayOfDroppingRepeats(t *testing.T) {
 		}
 	}
 }
+
+func TestNewJob_ComesWithANameAlreadyInIt(t *testing.T) {
+	// A job has to be named to be found again, and the reader came to run a list
+	// rather than to name one. The moment the form was opened tells two runs of
+	// the same list apart, and it is a default rather than a stamp: what the
+	// reader types over it is what the job is called.
+	s := testServer(t)
+	body := get(t, s, "/new").Body.String()
+
+	stamp := time.Now().Format("2006-01-02 15:04")
+	if !strings.Contains(body, `value="`+stamp+`"`) {
+		t.Errorf("the name box does not open with %q in it:\n%s", stamp, body)
+	}
+}

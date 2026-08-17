@@ -67,8 +67,20 @@ type jobForm struct {
 // The numbers are the ones the command starts from, so a job set up here and
 // the same job set up there cost the same, and neither has to be talked out of
 // a default the other does not have.
+//
+// The name is filled in with the moment the form was opened. A job has to be
+// named to be found again, and somebody who came to run a list rather than to
+// name one now types over a name that already tells two jobs of the same list
+// apart. It is the local time, written largest part first so a listing sorts by
+// it, and it is a default and not a stamp: whatever is typed over it wins.
 func blankForm() jobForm {
-	return jobForm{Kind: store.KindSearch, Pages: 1, Threads: 2, Ports: 6}
+	return jobForm{
+		Name:    time.Now().Format("2006-01-02 15:04"),
+		Kind:    store.KindSearch,
+		Pages:   1,
+		Threads: 2,
+		Ports:   6,
+	}
 }
 
 // kinds is what a job can be, in the order the form offers them, each with the
