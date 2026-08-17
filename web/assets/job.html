@@ -96,6 +96,16 @@
 <p class="export">
 {{range .Formats}}<a href="/export?job={{$.Progress.ID}}&format={{.}}">{{.}}</a>
 {{end}}</p>
+{{/* What the page carried besides its results, each in a file of its own: an ad
+     has a placement and no rank, a suggestion is a phrase and nothing else, and
+     folding either into the results would give every result columns that are
+     always empty. Offered only where the job kept them. */}}
+{{if .Job.KeptAds}}<p class="export">{{.T "job.export.ads"}}:
+{{range .Formats}}<a href="/export?job={{$.Progress.ID}}&format={{.}}&part=ads">{{.}}</a>
+{{end}}</p>{{end}}
+{{if .Job.KeptRelated}}<p class="export">{{.T "job.export.related"}}:
+{{range .Formats}}<a href="/export?job={{$.Progress.ID}}&format={{.}}&part=related">{{.}}</a>
+{{end}}</p>{{end}}
 </section>
 
 {{/* What an index job established, one line per address. The answer is the word

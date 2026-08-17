@@ -276,3 +276,92 @@ func (s *Store) History(ctx context.Context, host string, fn func(Position) erro
 	}
 	return nil
 }
+
+// Ad is one paid placement a page carried.
+type Ad struct {
+	Ordinal int
+	Query   string
+	Page    int
+	// Position is where it stood among the ads on that page, and Placement is
+	// which block it sat in — above the results, below them, or beside them.
+	// The two together are what an ad has instead of a rank.
+	Position  int
+	Placement string
+	Title     string
+	Host      string
+	URL       string
+	Snippet   string
+}
+
+// Ads hands every paid placement a job captured to fn, in the order the job had.
+//
+// It streams for the reason every walk here does: a job of ten thousand queries
+// is as many pages, and a file has no reason to hold them.
+//
+// What comes back is what was on those pages at that moment and never a list of
+// who advertises on a query: two captures of one query ten seconds apart
+// returned six ads and none.
+func (s *Store) Ads(ctx context.Context, jobID int64, fn func(Ad) error) error {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT q.ordinal, q.text, p.number, a.position, a.placement, a.title, a.host, a.url, a.snippet
+		   FROM ads a
+		   JOIN pages   p ON p.id = a.page_id
+		   JOIN queries q ON q.id = p.query_id
+		  WHERE q.job_id = ?
+		  ORDER BY q.ordinal, p.number, a.position`, jobID)
+	if err != nil {
+		return fmt.Errorf("store: reading the paid placements of job %d: %w", jobID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var a Ad
+		if err := rows.Scan(&a.Ordinal, &a.Query, &a.Page, &a.Position, &a.Placement,
+			&a.Title, &a.Host, &a.URL, &a.Snippet); err != nil {
+			return fmt.Errorf("store: reading a paid placement: %w", err)
+		}
+		if err := fn(a); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// Suggestion is one search a page offered beside its results.
+type Suggestion struct {
+	Ordinal int
+	Query   string
+	Page    int
+	// Position is where it stood in the list, kept because the page had an order
+	// and a list read back in another one says something different about what
+	// Google offers first.
+	Position int
+	Text     string
+}
+
+// Suggestions hands every related search a job captured to fn, in the order the
+// job had.
+func (s *Store) Suggestions(ctx context.Context, jobID int64, fn func(Suggestion) error) error {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT q.ordinal, q.text, p.number, r.position, r.query
+		   FROM related r
+		   JOIN pages   p ON p.id = r.page_id
+		   JOIN queries q ON q.id = p.query_id
+		  WHERE q.job_id = ?
+		  ORDER BY q.ordinal, p.number, r.position`, jobID)
+	if err != nil {
+		return fmt.Errorf("store: reading the related searches of job %d: %w", jobID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var g Suggestion
+		if err := rows.Scan(&g.Ordinal, &g.Query, &g.Page, &g.Position, &g.Text); err != nil {
+			return fmt.Errorf("store: reading a related search: %w", err)
+		}
+		if err := fn(g); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}

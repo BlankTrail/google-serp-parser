@@ -61,6 +61,24 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Which part of the job is being asked for. The results are what a download
+	// with nothing said means, because that is what a job is for; the other two
+	// are offered only by a job that kept them. A part the job never captured is
+	// refused rather than handed over empty — and it is refused here, before a
+	// byte of the answer has gone out, like every other refusal on this route.
+	part := r.URL.Query().Get(partField)
+	switch part {
+	case partAds, partRelated:
+		if !job.Fields.Keeps(fieldOfPart(part)) {
+			http.NotFound(w, r)
+			return
+		}
+	case "", partResults:
+	default:
+		http.NotFound(w, r)
+		return
+	}
+
 	kind, named := exportTypes[format]
 	if !named {
 		kind = "application/octet-stream"
@@ -77,7 +95,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	// The writers are built here rather than above because which one to build is
 	// not known until the job has been read, and neither writes anything until it
 	// is given something. The format was settled before any of it.
-	if err := s.writeExport(r.Context(), w, format, job); err != nil {
+	if err := s.writeExport(r.Context(), w, format, part, job); err != nil {
 		// The header is out and part of the file with it, so there is nothing
 		// left to tell the reader. The log is where this has to be visible.
 		s.log.Error("an export stopped part way through", "job", job.ID, "format", format, "error", err)
@@ -85,7 +103,13 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeExport writes the file a job's kind calls for.
-func (s *Server) writeExport(ctx context.Context, w io.Writer, format string, job store.JobSummary) error {
+func (s *Server) writeExport(ctx context.Context, w io.Writer, format, part string, job store.JobSummary) error {
+	switch part {
+	case partAds:
+		return s.streamAds(ctx, w, format, job.ID)
+	case partRelated:
+		return s.streamSuggestions(ctx, w, format, job.ID)
+	}
 	if job.Kind == store.KindIndex {
 		out, err := export.NewVerdicts(format, w)
 		if err != nil {
@@ -262,4 +286,59 @@ func columnsOf(fields store.Fields) []string {
 		}
 	}
 	return cols
+}
+
+// The parts of a job a download can ask for. Nothing said is the results, which
+// is what a job is for.
+const (
+	partField   = "part"
+	partResults = "results"
+	partAds     = "ads"
+	partRelated = "related"
+)
+
+// partField2field is the part of a job a download names, as the name the job's
+// own choice of what to keep uses.
+func fieldOfPart(part string) string {
+	if part == partAds {
+		return store.FieldAds
+	}
+	return store.FieldRelated
+}
+
+// streamAds writes every paid placement the job captured.
+func (s *Server) streamAds(ctx context.Context, w io.Writer, format string, jobID int64) error {
+	out, err := export.NewAds(format, w)
+	if err != nil {
+		return err
+	}
+	err = s.store.Ads(ctx, jobID, func(a store.Ad) error {
+		return out.Write(export.Ad{
+			Ordinal: a.Ordinal, Query: a.Query, Page: a.Page,
+			Position: a.Position, Placement: a.Placement,
+			Title: a.Title, Host: a.Host, URL: a.URL, Snippet: a.Snippet,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	return out.Close()
+}
+
+// streamSuggestions writes every search the pages offered beside their results.
+func (s *Server) streamSuggestions(ctx context.Context, w io.Writer, format string, jobID int64) error {
+	out, err := export.NewSuggestions(format, w)
+	if err != nil {
+		return err
+	}
+	err = s.store.Suggestions(ctx, jobID, func(g store.Suggestion) error {
+		return out.Write(export.Suggestion{
+			Ordinal: g.Ordinal, Query: g.Query, Page: g.Page,
+			Position: g.Position, Text: g.Text,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	return out.Close()
 }

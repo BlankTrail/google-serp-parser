@@ -557,3 +557,134 @@ func TestDownload_LeavesASearchJobsExportExactlyAsItWas(t *testing.T) {
 		t.Errorf("a search export carries %d rows, want the 4 the history holds", len(records)-1)
 	}
 }
+
+// withAside is a parse job that captured a result, two ads and two suggestions.
+//
+// The two ads sit in different blocks and the two suggestions in a definite
+// order, because a placement written into the wrong column and a list read back
+// the other way round are exactly what these files exist to carry.
+func withAside(t *testing.T, s *Server, keep string) int64 {
+	t.Helper()
+	id, err := s.store.CreateJob(t.Context(), store.JobSpec{
+		Name: "with what the page carried", Pages: 1, Fields: store.Fields(keep),
+	}, []string{"a phrase"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{
+		Ordinal: 0,
+		Pages: []google.SERP{{
+			Origin:  "https://www.google.com",
+			Results: []google.Result{resultAt("first.test", 1)},
+			Ads: []google.Ad{
+				{Placement: google.PlacementTop, Title: "top ad", Host: "paid.test",
+					URL: "https://paid.test/", Snippet: "what the ad said"},
+				{Placement: google.PlacementBottom, Title: "bottom ad", Host: "other.test"},
+			},
+			// Named so that the order the page had and the order they would fall
+			// into if sorted are different: with "first" and "second" a reader that
+			// lost the order entirely would still answer this test correctly.
+			Related: []string{"zebra came first", "apple came second"},
+		}},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	return id
+}
+
+func TestDownload_HandsOverWhatThePageCarriedBesidesItsResultsInFilesOfTheirOwn(t *testing.T) {
+	// An ad has a placement and no rank, a suggestion is a phrase and nothing
+	// else. Folded into the results they would give every result columns that
+	// are always empty, so each comes back in a file of its own.
+	s := testServer(t)
+	id := withAside(t, s, "")
+
+	ads := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=csv&part=ads")
+	if ads.Code != http.StatusOK {
+		t.Fatalf("the paid placements came back %d", ads.Code)
+	}
+	recs, err := csv.NewReader(bytes.NewReader(ads.Body.Bytes())).ReadAll()
+	if err != nil {
+		t.Fatalf("what came back does not read as CSV: %v", err)
+	}
+	if len(recs)-1 != 2 {
+		t.Fatalf("the file carries %d ads, want the two on the page: %v", len(recs)-1, recs)
+	}
+	// Found by heading rather than by counting, so a file that grew a column
+	// does not fail this for the wrong reason.
+	if got := column(t, recs, 1, "placement"); got != string(google.PlacementTop) {
+		t.Errorf("the first ad's block is %q, want the one above the results", got)
+	}
+	if got := column(t, recs, 2, "placement"); got != string(google.PlacementBottom) {
+		t.Errorf("the second ad's block is %q, want the one below them", got)
+	}
+
+	rel := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=csv&part=related")
+	recs, err = csv.NewReader(bytes.NewReader(rel.Body.Bytes())).ReadAll()
+	if err != nil {
+		t.Fatalf("what came back does not read as CSV: %v", err)
+	}
+	if len(recs)-1 != 2 {
+		t.Fatalf("the file carries %d suggestions, want the two on the page", len(recs)-1)
+	}
+	// The order is the page's own: a list read back the other way round says
+	// something different about what Google offers first.
+	if column(t, recs, 1, "text") != "zebra came first" ||
+		column(t, recs, 2, "text") != "apple came second" {
+		t.Errorf("the suggestions came back in another order: %v", recs)
+	}
+}
+
+func TestDownload_RefusesAPartTheJobNeverKeptRatherThanHandingOverAnEmptyFile(t *testing.T) {
+	// An empty file reads as a page that carried no advertising, which is a
+	// different thing from a job that was never asked to keep any.
+	s := testServer(t)
+	id := withAside(t, s, store.FieldURL)
+
+	for _, part := range []string{"ads", "related"} {
+		rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=csv&part="+part)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("asking for the %s of a job that kept none came back %d, want 404",
+				part, rec.Code)
+		}
+	}
+	// And nothing was written down either. The refusal above is read off what the
+	// job was asked to keep, so it fires whether or not the rows are there — this
+	// is what says the room was actually saved.
+	var ads int
+	if err := s.store.Ads(t.Context(), id, func(store.Ad) error { ads++; return nil }); err != nil {
+		t.Fatalf("Ads: %v", err)
+	}
+	var suggestions int
+	if err := s.store.Suggestions(t.Context(), id, func(store.Suggestion) error {
+		suggestions++
+		return nil
+	}); err != nil {
+		t.Fatalf("Suggestions: %v", err)
+	}
+	if ads != 0 || suggestions != 0 {
+		t.Errorf("the job kept %d ads and %d suggestions it was never asked for", ads, suggestions)
+	}
+
+	// And the job page does not offer what it cannot hand over.
+	body := get(t, s, jobPath(id)).Body.String()
+	if strings.Contains(body, "part=ads") || strings.Contains(body, "part=related") {
+		t.Errorf("the page offers a file the job never captured:\n%s", body)
+	}
+}
+
+// column is one field of one record, found by what the header calls it.
+//
+// By name and not by counting: a file that grew a column would otherwise fail
+// every test for the wrong reason, and one that lost a column would pass for
+// the wrong reason.
+func column(t *testing.T, recs [][]string, row int, name string) string {
+	t.Helper()
+	for i, head := range recs[0] {
+		if head == name {
+			return recs[row][i]
+		}
+	}
+	t.Fatalf("the file has no %q column: %v", name, recs[0])
+	return ""
+}

@@ -17,12 +17,18 @@ const (
 	FieldHost    = "host"
 	FieldSnippet = "snippet"
 	FieldPath    = "path"
+	// FieldAds and FieldRelated are what the page carried besides its results.
+	// They are in the same choice because the question is the same one — what is
+	// worth the room — even though they are kept in tables of their own.
+	FieldAds     = "ads"
+	FieldRelated = "related"
 )
 
 // EveryField is what a job keeps when it says nothing, in the order a file
 // writes them.
 func EveryField() []string {
-	return []string{FieldTitle, FieldURL, FieldLink, FieldHost, FieldSnippet, FieldPath}
+	return []string{FieldTitle, FieldURL, FieldLink, FieldHost, FieldSnippet, FieldPath,
+		FieldAds, FieldRelated}
 }
 
 // Fields is what a job keeps of each result, written down as the names

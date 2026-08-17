@@ -121,6 +121,9 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 				return fmt.Errorf("store: recording result %d: %w", rank, err)
 			}
 		}
+		if err := writeAside(ctx, tx, pageID, keep, serp); err != nil {
+			return err
+		}
 	}
 
 	// A query that was tried and refused is written as refused. Left pending it
@@ -157,4 +160,35 @@ func kept(fields Fields, name, value string) string {
 		return value
 	}
 	return ""
+}
+
+// writeAside writes what the page carried besides its results: the paid
+// placements and the searches it suggested.
+//
+// Neither is filtered for repeats. A repeat among results is a second sighting
+// of the same address, which is what the filter is about; the same advertiser
+// on two queries is two facts about two pages, and dropping the second would
+// answer "who advertises here" with a list that depends on the order the
+// queries ran in.
+func writeAside(ctx context.Context, tx *sql.Tx, pageID int64, keep Fields, serp google.SERP) error {
+	if keep.Keeps(FieldAds) {
+		for i, ad := range serp.Ads {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO ads(page_id, position, placement, title, host, url, snippet)
+				 VALUES(?, ?, ?, ?, ?, ?, ?)`,
+				pageID, i+1, string(ad.Placement), ad.Title, ad.Host, ad.URL, ad.Snippet); err != nil {
+				return fmt.Errorf("store: recording a paid placement: %w", err)
+			}
+		}
+	}
+	if keep.Keeps(FieldRelated) {
+		for i, query := range serp.Related {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO related(page_id, position, query) VALUES(?, ?, ?)`,
+				pageID, i+1, query); err != nil {
+				return fmt.Errorf("store: recording a related search: %w", err)
+			}
+		}
+	}
+	return nil
 }

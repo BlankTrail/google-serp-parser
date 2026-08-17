@@ -70,6 +70,12 @@ type jobSetup struct {
 	Ports   int
 	Threads int
 	Tries   int
+	// KeptAds and KeptRelated say whether this job captured what the page
+	// carried besides its results. The extra downloads are offered only where
+	// there is something to download: a link to an empty file reads as a page
+	// that carried no advertising, which is a different thing.
+	KeptAds     bool
+	KeptRelated bool
 }
 
 // jobPage is one job: how it was set up, how far it has got, what it has
@@ -155,18 +161,20 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "job.html", jobPage{
 		page: s.frame(r, lang, "job.title", jobsAt),
 		Job: jobSetup{
-			Name:     sum.Name,
-			Started:  sum.CreatedAt,
-			Kind:     kind,
-			Target:   sum.Target,
-			Filter:   filter,
-			Pages:    sum.Pages,
-			Country:  sum.Country,
-			Language: sum.Language,
-			Spec:     sum.SpecName,
-			Ports:    sum.Ports,
-			Threads:  sum.Threads,
-			Tries:    sum.Tries,
+			Name:        sum.Name,
+			Started:     sum.CreatedAt,
+			Kind:        kind,
+			Target:      sum.Target,
+			Filter:      filter,
+			Pages:       sum.Pages,
+			Country:     sum.Country,
+			Language:    sum.Language,
+			Spec:        sum.SpecName,
+			Ports:       sum.Ports,
+			Threads:     sum.Threads,
+			Tries:       sum.Tries,
+			KeptAds:     sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldAds),
+			KeptRelated: sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldRelated),
 		},
 		Progress:   at,
 		State:      stateOf(at, sum.PlanReady),
