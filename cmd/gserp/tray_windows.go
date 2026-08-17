@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -29,6 +30,11 @@ var trayIcon []byte
 // What the menu offers. There are two things somebody wants from a server
 // running behind an icon — look at it, and stop it — and a menu with more than
 // that on it is one they have to read.
+
+// trayClassName is the kind of window the icon talks through, and the name
+// anything outside this process asks the system for to know the program is up.
+const trayClassName = "gserp-tray"
+
 const (
 	menuOpen = 1
 	menuStop = 2
@@ -58,6 +64,8 @@ var (
 	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
 	procCreateIconFromResEx  = user32.NewProc("CreateIconFromResourceEx")
 	procShowWindow           = user32.NewProc("ShowWindow")
+	procFindWindow           = user32.NewProc("FindWindowW")
+	procGetModuleHandle      = kernel32.NewProc("GetModuleHandleW")
 	procShellNotifyIcon      = shell32.NewProc("Shell_NotifyIconW")
 	procGetConsoleWindow     = kernel32.NewProc("GetConsoleWindow")
 	procGetConsoleProcessLst = kernel32.NewProc("GetConsoleProcessList")
@@ -208,9 +216,15 @@ func runTray(ctx context.Context, stop context.CancelFunc, at string) error {
 		return err
 	}
 
-	class := windows.StringToUTF16Ptr("gserp-tray")
+	// A window belongs to the thread that made it and its messages arrive on
+	// that thread's queue and nowhere else. Without this the goroutine is free to
+	// be moved between making the window and asking for its messages, and then
+	// the icon is up and pressing it does nothing at all.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	var wnd windows.Handle
-	proc := windows.NewCallback(func(h windows.Handle, message uint32, wp, lp uintptr) uintptr {
+	proc := func(h windows.Handle, message uint32, wp, lp uintptr) uintptr {
 		switch message {
 		case wmTrayMessage:
 			switch lp {
@@ -230,36 +244,26 @@ func runTray(ctx context.Context, stop context.CancelFunc, at string) error {
 		}
 		r, _, _ := procDefWindowProc.Call(uintptr(h), uintptr(message), wp, lp)
 		return r
-	})
+	}
 
-	cls := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: proc, ClassName: class}
-	if r, _, e := procRegisterClassEx.Call(uintptr(unsafe.Pointer(&cls))); r == 0 {
-		return fmt.Errorf("registering the window class: %w", e)
+	class, err := registerTrayClass(proc)
+	if err != nil {
+		return err
 	}
-	h, _, e := procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(class)),
-		uintptr(unsafe.Pointer(class)), 0, 0, 0, 0, 0, 0, 0, 0, 0)
-	if h == 0 {
-		return fmt.Errorf("making the window the icon talks to: %w", e)
+	wnd, err = createTrayWindow(class)
+	if err != nil {
+		return err
 	}
-	wnd = windows.Handle(h)
 
-	data := notifyIconData{
-		Size:            uint32(unsafe.Sizeof(notifyIconData{})),
-		Wnd:             wnd,
-		ID:              1,
-		Flags:           nifMessage | nifIcon | nifTip,
-		CallbackMessage: wmTrayMessage,
-		Icon:            icon,
-	}
-	copy(data.Tip[:], windows.StringToUTF16("gserp — "+at))
-	if r, _, e := procShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&data))); r == 0 {
+	data, err := putIconUp(wnd, icon, "gserp — "+at)
+	if err != nil {
 		_, _, _ = procDestroyWindow.Call(uintptr(wnd))
-		return fmt.Errorf("putting the icon up: %w", e)
+		return err
 	}
 	defer func() {
 		// Taking the icon down is the last thing this does and there is nobody
 		// left to tell if it fails: the window it belongs to is going with it.
-		_, _, _ = procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&data)))
+		takeIconDown(data)
 	}()
 
 	// A server that ends on its own — a port already taken, a history that will
@@ -279,6 +283,76 @@ func runTray(ctx context.Context, stop context.CancelFunc, at string) error {
 		_, _, _ = procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		_, _, _ = procDispatchMessage.Call(uintptr(unsafe.Pointer(&m)))
 	}
+}
+
+// registerTrayClass registers the kind of window the icon talks through.
+//
+// The class belongs to this program's module, which makes it this program's
+// class and nobody else's: a class registered under a module is looked up under
+// that module alone, so the window is not something another program can reach
+// by name, and nothing here means it to be.
+func registerTrayClass(proc func(windows.Handle, uint32, uintptr, uintptr) uintptr) (*uint16, error) {
+	class := windows.StringToUTF16Ptr(trayClassName)
+	// The module this program is. There is no resource module to name in a
+	// program built by "go build" and nothing else, so this is the process
+	// itself, and the class belongs to it rather than to everything running.
+	module, _, _ := procGetModuleHandle.Call(0)
+	cls := wndClassEx{
+		Size:      uint32(unsafe.Sizeof(wndClassEx{})),
+		WndProc:   windows.NewCallback(proc),
+		Instance:  windows.Handle(module),
+		ClassName: class,
+	}
+	// A class already registered is the same class: this runs once in a program
+	// and more than once under a test, and the second registration failing is not
+	// a window that cannot be made.
+	if r, _, e := procRegisterClassEx.Call(uintptr(unsafe.Pointer(&cls))); r == 0 {
+		if !errors.Is(e, windows.ERROR_CLASS_ALREADY_EXISTS) {
+			return nil, fmt.Errorf("registering the window class: %w", e)
+		}
+	}
+	return class, nil
+}
+
+// createTrayWindow makes the window itself. It is never shown: it exists to
+// receive what the notification area sends when the icon is pressed.
+func createTrayWindow(class *uint16) (windows.Handle, error) {
+	module, _, _ := procGetModuleHandle.Call(0)
+	h, _, e := procCreateWindowEx.Call(0, uintptr(unsafe.Pointer(class)),
+		uintptr(unsafe.Pointer(class)), 0, 0, 0, 0, 0, 0, 0, module, 0)
+	if h == 0 {
+		return 0, fmt.Errorf("making the window the icon talks to: %w", e)
+	}
+	return windows.Handle(h), nil
+}
+
+// putIconUp asks the notification area for a place, and gives back what has to
+// be handed back to take it away again.
+//
+// This is the step that decides whether anybody sees this program at all: the
+// window above it is invisible by design, so a refusal here is a server running
+// with nothing on the screen to reach it by.
+func putIconUp(wnd, icon windows.Handle, tip string) (*notifyIconData, error) {
+	data := &notifyIconData{
+		Size:            uint32(unsafe.Sizeof(notifyIconData{})),
+		Wnd:             wnd,
+		ID:              1,
+		Flags:           nifMessage | nifIcon | nifTip,
+		CallbackMessage: wmTrayMessage,
+		Icon:            icon,
+	}
+	// The tip is a fixed room the system reads to its own end, so a longer
+	// address is cut rather than written past what was given.
+	copy(data.Tip[:len(data.Tip)-1], windows.StringToUTF16(tip))
+	if r, _, e := procShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(data))); r == 0 {
+		return nil, fmt.Errorf("putting the icon up: %w", e)
+	}
+	return data, nil
+}
+
+// takeIconDown gives the place back.
+func takeIconDown(data *notifyIconData) {
+	_, _, _ = procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(data)))
 }
 
 // showMenu draws the two things somebody wants from a server behind an icon.
