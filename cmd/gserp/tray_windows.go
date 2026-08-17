@@ -20,9 +20,13 @@ import (
 
 // tray.ico is the icon the notification area shows.
 //
-// It is embedded and handed to the system as bytes rather than compiled into
-// the executable's resources, because resources need a step between the source
-// and the binary and this program is built by "go build" and nothing else.
+// It is embedded and handed to the system as bytes rather than read out of the
+// executable's own resources, because the notification area wants a handle to
+// one image at the moment the icon goes up, and a file with one image in it is
+// the shortest way to give it one.
+//
+// The executable does carry an icon as well — the one Explorer draws — and both
+// come from the same drawing, in internal/icon, so the two cannot drift.
 //
 //go:embed tray.ico
 var trayIcon []byte
