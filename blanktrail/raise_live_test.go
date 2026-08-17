@@ -96,3 +96,84 @@ func TestLiveRotor_SaysHowLongAListTakesToLoad(t *testing.T) {
 	}
 	t.Logf("MEASUREMENT list: %d addresses in %v", rotor.Len(), took.Round(time.Millisecond))
 }
+
+// TestLiveRaise_SaysHowLongAPoolThroughAListTakes measures the raise an
+// operator actually runs.
+//
+// The measurement above opens ports with no upstream: the proxy dials out
+// directly. With a list of addresses each port is opened against one of them,
+// and whether the service reaches that address while the port is being opened —
+// or later, on the first request through it — is the difference between a job
+// that starts at once and one that starts a minute in. It is not written down
+// anywhere, so it is measured.
+func TestLiveRaise_SaysHowLongAPoolThroughAListTakes(t *testing.T) {
+	key, control := os.Getenv("BLANKTRAIL_API_KEY"), os.Getenv("BLANKTRAIL_URL")
+	list := os.Getenv("GSERP_PROXY_LIST")
+	if key == "" || control == "" || list == "" {
+		t.Skip("BLANKTRAIL_API_KEY, BLANKTRAIL_URL and GSERP_PROXY_LIST are not all set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	client, err := blanktrail.NewClient(control, key)
+	if err != nil {
+		t.Fatalf("control client: %v", err)
+	}
+	report := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{Ports: 1})
+	if !report.OK() {
+		t.Fatal("preflight failed")
+	}
+
+	started := time.Now()
+	rotor, err := blanktrail.NewRotor(ctx, blanktrail.Source{
+		Kind: "url", Location: list, DefaultScheme: "socks5",
+	})
+	if err != nil {
+		t.Fatalf("loading the list: %v", err)
+	}
+	t.Logf("MEASUREMENT list: %d addresses in %v", rotor.Len(),
+		time.Since(started).Round(time.Millisecond))
+
+	for _, size := range []struct{ threads, ports int }{{1, 1}, {4, 5}, {10, 10}} {
+		started := time.Now()
+		pool, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
+			Client: client, Threads: size.threads, PortsPerThread: size.ports,
+			Spec:     blanktrail.DefaultPortSpec(),
+			CA:       report.CA,
+			Channels: []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)},
+		})
+		took := time.Since(started)
+		if err != nil {
+			t.Errorf("MEASUREMENT raise through a list %dx%d: failed after %v: %v",
+				size.threads, size.ports, took.Round(time.Millisecond), err)
+			continue
+		}
+		opened := size.threads * size.ports
+		t.Logf("MEASUREMENT raise through a list %dx%d = %d ports: %v, which is %v a port",
+			size.threads, size.ports, opened, took.Round(time.Millisecond),
+			(took / time.Duration(opened)).Round(time.Millisecond))
+
+		// And the first request through it, which is the other half of the wait:
+		// if the ports came up quickly, this is where the minute went.
+		lease, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Errorf("leasing a port of %d: %v", opened, err)
+			_ = pool.Close()
+			continue
+		}
+		asked := time.Now()
+		res, err := lease.Client().Get("https://www.google.com/")
+		if err != nil {
+			t.Logf("MEASUREMENT first request through %d ports: failed after %v: %v",
+				opened, time.Since(asked).Round(time.Millisecond), err)
+		} else {
+			_ = res.Body.Close()
+			t.Logf("MEASUREMENT first request through %d ports: %d in %v",
+				opened, res.StatusCode, time.Since(asked).Round(time.Millisecond))
+		}
+		lease.Release()
+		if err := pool.Close(); err != nil {
+			t.Errorf("closing the pool of %d: %v", opened, err)
+		}
+	}
+}

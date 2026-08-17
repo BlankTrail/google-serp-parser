@@ -709,6 +709,14 @@ func (v *Supervisor) finished() {
 // it is still there to be carried on, and the reason is in the log because it is
 // a refusal from something on this machine rather than anything the job did.
 func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
+	// How long each part of starting takes, said out loud.
+	//
+	// An operator who has just pressed start watches a screen of noughts, and
+	// the honest answer to "why" is a number: reading the list back, putting the
+	// identities up, and then the first request — which on a cold identity is the
+	// long one. Without these three lines the whole wait is one silence, and
+	// every guess about which part of it is slow is as good as any other.
+	taken := time.Now()
 	j, sum, err := v.plan(ctx, id)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -719,6 +727,10 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
 	if len(j.Queries) == 0 {
 		return
 	}
+	read := time.Now()
+	v.log.Info("a job was read back and is about to have its identities raised",
+		"job", id, "queries", len(j.Queries), "took", read.Sub(taken).Round(time.Millisecond))
+
 	eng, err := v.raise(ctx, src, sum)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -728,6 +740,10 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
 		}
 		return
 	}
+	v.log.Info("the identities are up and the first query is going out",
+		"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
+		"took", time.Since(read).Round(time.Millisecond))
+
 	if rep := eng.Run(ctx, j, jobSink{st: v.st, jobID: id}); rep.Err != nil {
 		v.log.Error("a job was refused before anything was sent", "job", id, "error", rep.Err)
 	}
