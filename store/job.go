@@ -21,10 +21,26 @@ var ErrNoUnfinishedJob = errors.New("store: no unfinished job of this name")
 // finished being written.
 var ErrPlanUnfinished = errors.New("store: the job's plan was never finished")
 
+// KindSearch and KindIndex are the two things a job can be: one hands Google
+// phrases and reads back positions, the other hands it addresses and reads back
+// whether they are held at all.
+//
+// They are the two words the column will hold, and the database refuses a
+// third. A job filed under a kind no engine answers to would be picked up, found
+// to be nothing anyone runs, and left in the queue.
+const (
+	KindSearch = "search"
+	KindIndex  = "index"
+)
+
 // JobSpec is what a job was asked to do, kept so a later reader can tell one
 // night's numbers from another's without guessing at the settings behind them.
 type JobSpec struct {
 	Name string
+	// Kind is what the job asks Google for. Empty means KindSearch: every job
+	// written before this field existed was a search, and one whose kind went
+	// missing has to run as the ordinary thing rather than not at all.
+	Kind string
 	// Pages is how many result pages each query is taken to. Non-positive
 	// means one, because a job stored as fetching none would resume with
 	// nothing to do.
@@ -32,6 +48,18 @@ type JobSpec struct {
 	SpecName string
 	Country  string
 	Language string
+}
+
+// kind is what to write in the column, which is never the empty string.
+//
+// It is filled in on the way to the database rather than left to the column's
+// own default, so a job read straight back carries the kind the run will be
+// judged by instead of a blank that every reader has to interpret again.
+func (s JobSpec) kind() string {
+	if s.Kind == "" {
+		return KindSearch
+	}
+	return s.Kind
 }
 
 // PendingQuery is one piece of work a job has not finished.
@@ -70,9 +98,9 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// list too large to hold is written by a different path, which sets the flag
 	// after its last batch.
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, pages, spec_name, country, language, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, 1)`,
-		spec.Name, time.Now().UTC().Format(time.RFC3339), pages,
+		`INSERT INTO jobs(name, created_at, kind, pages, spec_name, country, language, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, 1)`,
+		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), pages,
 		spec.SpecName, spec.Country, spec.Language)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
@@ -171,12 +199,13 @@ type UnfinishedJob struct {
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
 	var j UnfinishedJob
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, pages, spec_name, country, language
+		`SELECT id, name, kind, pages, spec_name, country, language
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
-		Scan(&j.ID, &j.Spec.Name, &j.Spec.Pages, &j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language)
+		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Pages,
+			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}

@@ -204,6 +204,8 @@ func (f jobForm) carrying(box, value string) jobForm {
 	switch box {
 	case "name":
 		f.Name = value
+	case "kind":
+		f.Kind = value
 	case "country":
 		f.Country = value
 	case "language":

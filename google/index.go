@@ -32,8 +32,28 @@ type IndexStatus struct {
 // CheckIndexed answers whether Google holds a page or a site.
 //
 // One page of one query settles it. The question is presence, not rank, so the
-// first hit is the answer — and no address is needed to see it, which is what
-// keeps this check cheap under the link form that carries none.
+// first result that is the target is the answer.
+//
+// Only results that are the target count. A site: query is a request rather
+// than a guarantee, and Google mixes in results from elsewhere often enough
+// that a page holding nothing but those would otherwise answer "indexed" — a
+// verdict about a target Google never mentioned. It is the same fault
+// ListIndexed below already filters for, and it is worse here, because a
+// listing is read as a listing and a verdict is read as an answer.
+//
+// The rule for what counts is the one FindPosition uses, and for its reasons: a
+// target with a path is the exact address and nothing else of the site, and a
+// bare host is any page of the site. So "is example.com/page indexed" is not
+// answered by example.com/other, and "is example.com indexed" is answered by
+// any page of it.
+//
+// The cost is carried in the same place FindPosition carries it. Under the link
+// form that gives a host and no address, a target with a path cannot be
+// recognised at all and this answers "not indexed": the results carry nothing
+// to compare the address against. That answer is wrong for a page that is held,
+// and it is the direction to be wrong in — the other one credits a site with a
+// page on evidence that named somebody else. A caller who needs the address on
+// every result resolves them first; see ResolveAll.
 //
 // The caller's Query supplies the axes — country, language, device — and its
 // text is replaced by the operator.
@@ -63,9 +83,39 @@ func CheckIndexed(ctx context.Context, s Searcher, q Query, target string) (Inde
 		return IndexStatus{Target: target}, err
 	}
 
-	st := IndexStatus{Target: target, Hits: len(serp.Results), Indexed: len(serp.Results) > 0}
-	st.Sample = append(st.Sample, serp.Results[:min(len(serp.Results), indexSample)]...)
+	wantURL, wantHost := splitSite(target)
+	st := IndexStatus{Target: target}
+	for _, r := range serp.Results {
+		if !isTarget(r, wantURL, wantHost) {
+			continue
+		}
+		st.Hits++
+		// The sample is evidence for the verdict, so it holds what the verdict
+		// was reached on. Filled from the head of the page instead it would show
+		// the reader somebody else's pages under the sentence saying their page
+		// is held.
+		if len(st.Sample) < indexSample {
+			st.Sample = append(st.Sample, r)
+		}
+	}
+	st.Indexed = st.Hits > 0
 	return st, nil
+}
+
+// isTarget reports whether one result is the thing that was asked about.
+//
+// The two branches are the split splitSite makes and they are not
+// interchangeable. A question about a page answered by the host would report
+// example.com/page as held because example.com/other came back, which is the
+// fallback the ranking engine already refused: it credits a page with a
+// presence its site has and it does not.
+func isTarget(r Result, wantURL, wantHost string) bool {
+	if wantURL != "" {
+		// A result under the encrypted link form carries no address, so it
+		// cannot answer a question asked about one.
+		return r.Resolved() && sameURL(r.URL, wantURL)
+	}
+	return hostBelongsTo(r.Host, wantHost)
 }
 
 // ListIndexed walks a site: query and returns the results that are actually on

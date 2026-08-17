@@ -3,12 +3,15 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/blanktrail/google-serp-parser/export"
+	"github.com/blanktrail/google-serp-parser/google"
+	"github.com/blanktrail/google-serp-parser/store"
 )
 
 // heldServer is a server whose one job can be held in the middle of itself.
@@ -365,8 +368,8 @@ func TestJobList_LinksEveryJobToItsOwnPage(t *testing.T) {
 func TestJobPage_ShowsNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 	// A key on the page is a phrase that was never looked up. It lands on
 	// whichever phrase nobody wrote a test about, so this one is over all of
-	// them, in both languages, on a job with results, a job with none and a job
-	// that has finished.
+	// them, in both languages, on a job with results, a job with none, a job
+	// that has finished, and both states of the other kind of job.
 	s := testServer(t)
 	full := seedJob(t, s, "nightly", 3, 2, 1)
 	empty := seedJob(t, s, "morning", 3, 0, 0)
@@ -374,8 +377,18 @@ func TestJobPage_ShowsNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 	if err := s.store.FinishJob(t.Context(), done); err != nil {
 		t.Fatalf("FinishJob: %v", err)
 	}
+	// An index job draws the other half of this page, so the phrases on it are
+	// reached by nothing above.
+	checked := seedIndexJob(t, s, "addresses",
+		[]string{"example.com/a", "example.com/gone"},
+		map[string]bool{"example.com/a": true})
+	unchecked, err := s.store.CreateJob(t.Context(),
+		store.JobSpec{Name: "waiting", Kind: store.KindIndex, Pages: 1}, []string{"example.com/a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
 
-	for _, id := range []int64{full, empty, done} {
+	for _, id := range []int64{full, empty, done, checked, unchecked} {
 		for _, l := range Languages() {
 			body := get(t, s, jobPath(id)+"?lang="+string(l)).Body.String()
 			for key := range catalogue[l] {
@@ -384,5 +397,117 @@ func TestJobPage_ShowsNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// seedIndexJob writes an index job whose addresses have been checked: the ones
+// named in held came back, the rest were checked and did not.
+//
+// The page it produces is what an index run really leaves behind — a query
+// carrying results, and a query carrying a page with none — rather than a job
+// with rows in it that a test called an index job.
+func seedIndexJob(t *testing.T, s *Server, name string, addresses []string, held map[string]bool) int64 {
+	t.Helper()
+	ctx := t.Context()
+	id, err := s.store.CreateJob(ctx,
+		store.JobSpec{Name: name, Kind: store.KindIndex, Pages: 1}, addresses)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	for i, address := range addresses {
+		var found []google.Result
+		if held[address] {
+			found = []google.Result{{
+				Title: address, URL: "https://" + address, Host: "example.com", Snippet: "held"}}
+		}
+		if err := s.store.Record(ctx, id, store.QueryOutcome{
+			Ordinal: i,
+			Pages:   []google.SERP{{Origin: "https://www.google.com", Results: found}},
+		}); err != nil {
+			t.Fatalf("recording the check of %q: %v", address, err)
+		}
+	}
+	return id
+}
+
+func TestJobPage_AnswersForEveryAddressAnIndexJobChecked(t *testing.T) {
+	// The whole point of the job is the answer per address, and it is stated as
+	// what was found. A page that showed the captured results instead would show
+	// the addresses Google held and simply omit the ones it did not, which is
+	// the half of the answer the reader ran the job for.
+	s := testServer(t)
+	id := seedIndexJob(t, s, "addresses",
+		[]string{"example.com/a", "example.com/gone"},
+		map[string]bool{"example.com/a": true})
+
+	body := get(t, s, jobPath(id)).Body.String()
+	for _, want := range []string{"example.com/a", "example.com/gone",
+		LangEN.T("job.verdict.held"), LangEN.T("job.verdict.absent")} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page does not show %q:\n%s", want, body)
+		}
+	}
+	// The address that was not found is on the page as an answer and not as a
+	// row of results: an index job has no positions to draw.
+	if strings.Contains(body, LangEN.T("history.rank")) {
+		t.Errorf("an index job was drawn as a table of positions:\n%s", body)
+	}
+}
+
+func TestJobPage_SaysWhatKindOfJobItIs(t *testing.T) {
+	// The same page draws two jobs that ask Google different questions, and a
+	// reader who cannot tell which they are looking at cannot read either.
+	s := testServer(t)
+	search := seedJob(t, s, "phrases", 2, 1, 0)
+	index := seedIndexJob(t, s, "addresses", []string{"example.com/a"}, nil)
+
+	for kind, id := range map[string]int64{"form.kind.search": search, "form.kind.index": index} {
+		body := get(t, s, jobPath(id)).Body.String()
+		if want := LangEN.T(kind); !strings.Contains(body, want) {
+			t.Errorf("the page of job %d does not say it is %q:\n%s", id, want, body)
+		}
+	}
+}
+
+func TestJobPage_SaysSoWhenAnIndexJobHasCheckedNothingYet(t *testing.T) {
+	// An index job with nothing checked has no verdicts, which is not the same
+	// as a search job with nothing captured: the sentence has to name addresses,
+	// or the reader is told their addresses produced no results.
+	s := testServer(t)
+	id, err := s.store.CreateJob(t.Context(),
+		store.JobSpec{Name: "addresses", Kind: store.KindIndex, Pages: 1},
+		[]string{"example.com/a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	body := get(t, s, jobPath(id)).Body.String()
+	if strings.Contains(body, "<table") {
+		t.Error("a job that has checked nothing was shown an empty table")
+	}
+	if !strings.Contains(body, LangEN.T("job.verdicts.none")) {
+		t.Errorf("the page does not say that nothing has been checked:\n%s", body)
+	}
+	if strings.Contains(body, LangEN.T("job.results.none")) {
+		t.Errorf("an index job was told its results are empty:\n%s", body)
+	}
+}
+
+func TestJobPage_SaysSoRatherThanDrawingAMillionAddresses(t *testing.T) {
+	// A list of addresses is as long as somebody's file. The cap is the same one
+	// the results table has, and it is on the read as well as on the drawing.
+	s := testServer(t)
+	addresses := make([]string, rowsShown+50)
+	for i := range addresses {
+		addresses[i] = fmt.Sprintf("example.com/%d", i)
+	}
+	id := seedIndexJob(t, s, "wide", addresses, nil)
+
+	body := get(t, s, jobPath(id)).Body.String()
+	if got := strings.Count(body, "<tr"); got != rowsShown+1 {
+		t.Errorf("the page drew %d rows, want the %d it shows and a heading", got, rowsShown)
+	}
+	if !strings.Contains(body, LangEN.T("job.results.capped")) {
+		t.Errorf("the page shows part of the addresses and does not say so:\n%s", body)
 	}
 }

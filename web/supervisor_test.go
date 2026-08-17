@@ -972,3 +972,39 @@ func TestSupervisor_HoldsAJobUntilThereIsSomethingToRunItOn(t *testing.T) {
 	waitUntilTook(t, eng, "a")
 	waitUntil(t, "the waiting job is done", func() bool { return progress(t, st, id).Finished })
 }
+
+func TestSupervisor_TakesAJobThroughTheEngineAsTheKindItWasFiledUnder(t *testing.T) {
+	// The joint between the two halves of the kind. A job filed as an index
+	// check, drawn on its own page as an index check, and then handed to the
+	// engine as an ordinary search would search every address as a phrase — and
+	// the history, the page and the estimate would all go on saying the right
+	// thing about a run that asked the wrong question.
+	//
+	// Both kinds are asked for, because a version that always says index is
+	// wrong in the other direction and looks identical from the index side.
+	cases := []struct {
+		kind string
+		want run.Kind
+	}{
+		{store.KindIndex, run.Index},
+		{store.KindSearch, run.Search},
+		{"", run.Search},
+	}
+	for _, tc := range cases {
+		t.Run("filed as "+tc.kind, func(t *testing.T) {
+			v, _, eng := heldSupervisor(t)
+			if _, err := v.Enqueue(
+				store.JobSpec{Name: "j", Kind: tc.kind, Pages: 1}, []string{"example.com/a"}); err != nil {
+				t.Fatalf("Enqueue: %v", err)
+			}
+			waitUntil(t, "a job has reached the engine", func() bool {
+				_, taken := eng.ran(0)
+				return taken
+			})
+			got, _ := eng.ran(0)
+			if got.Kind != tc.want {
+				t.Errorf("the engine was handed kind %v, want %v", got.Kind, tc.want)
+			}
+		})
+	}
+}

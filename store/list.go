@@ -26,6 +26,11 @@ type JobSummary struct {
 	FinishedAt time.Time
 	Finished   bool
 
+	// Kind is what the job asks Google for — KindSearch or KindIndex. A reader
+	// that does not know it cannot say what a row of this job means: the same
+	// captured result is a position under one kind and a verdict under the other.
+	Kind string
+
 	Pages    int
 	Country  string
 	Language string
@@ -49,7 +54,7 @@ type JobSummary struct {
 // what keeps a job nothing was recorded against in the answer, with a count of
 // nothing rather than a count of one.
 const jobSummaryQuery = `
-	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''),
+	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind,
 	       j.pages, j.country, j.language, j.spec_name, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
@@ -119,7 +124,7 @@ type scanner interface {
 func scanSummary(row scanner) (JobSummary, error) {
 	var sum JobSummary
 	var created, finished string
-	err := row.Scan(&sum.ID, &sum.Name, &created, &finished,
+	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.SpecName, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {

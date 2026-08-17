@@ -44,7 +44,11 @@ func buttons() actions {
 // It holds strings where the form holds strings, so a refusal can show exactly
 // what was typed rather than a number that failed to parse and became zero.
 type jobForm struct {
-	Name     string
+	Name string
+	// Kind is what the job asks Google for, in the words the history files it
+	// under. Empty is a search, so a form posted without the field is the job
+	// this program did before there was a choice.
+	Kind     string
 	Queries  string
 	Country  string
 	Language string
@@ -60,7 +64,72 @@ type jobForm struct {
 // the same job set up there cost the same, and neither has to be talked out of
 // a default the other does not have.
 func blankForm() jobForm {
-	return jobForm{Pages: 1, Threads: 2, Ports: 6}
+	return jobForm{Kind: store.KindSearch, Pages: 1, Threads: 2, Ports: 6}
+}
+
+// kinds is what a job can be, in the order the form offers them, each with the
+// key of what to call it.
+//
+// The two travel together so the markup cannot offer a choice the handler does
+// not take, or file a job under a word the database refuses.
+type jobKind struct {
+	Value string
+	Label string
+}
+
+func kinds() []jobKind {
+	return []jobKind{
+		{Value: store.KindSearch, Label: "form.kind.search"},
+		{Value: store.KindIndex, Label: "form.kind.index"},
+	}
+}
+
+// kindKey is the key of what to call a job of this kind, and whether it is a
+// kind at all.
+//
+// A form arriving with something else is refused rather than run as a search.
+// The two kinds ask Google different questions and the answers mean different
+// things, so quietly picking one would file a run under a question nobody asked.
+func kindKey(kind string) (string, bool) {
+	if kind == "" {
+		return "form.kind.search", true
+	}
+	for _, k := range kinds() {
+		if k.Value == kind {
+			return k.Label, true
+		}
+	}
+	// The word itself comes back, for the reason an untranslated key does: it is
+	// ugly and it reports itself, which beats a page that quietly calls a job
+	// something it is not.
+	return kind, false
+}
+
+// runKind turns the word the history files a job under into what the runner
+// does with it.
+//
+// This is the one place the two vocabularies meet. The runner holds no words
+// the database would accept and the database holds no behaviour, so a kind
+// nobody has taught this function is run as a search — which is why nothing
+// reaches here without going through kindKey first.
+func runKind(kind string) run.Kind {
+	if kind == store.KindIndex {
+		return run.Index
+	}
+	return run.Search
+}
+
+// depth is how many result pages this job takes per line.
+//
+// An index check takes one however deep the box is set: presence is settled by
+// the first page. It is settled here rather than in the runner so that the job
+// filed in the history, the estimate quoted for it and the work actually done
+// all name one number.
+func (f jobForm) depth() int {
+	if f.Kind == store.KindIndex {
+		return 1
+	}
+	return f.Pages
 }
 
 // queryOf reads one line of a list and says whether there is a query on it.
@@ -93,7 +162,10 @@ func (f jobForm) faults() []string {
 	if strings.TrimSpace(f.Name) == "" {
 		complaints = append(complaints, "form.name.required")
 	}
-	if f.Pages < 1 {
+	if _, known := kindKey(f.Kind); !known {
+		complaints = append(complaints, "form.kind.unknown")
+	}
+	if f.depth() < 1 {
 		complaints = append(complaints, "form.pages.positive")
 	}
 	return complaints
@@ -122,7 +194,8 @@ func (f jobForm) parse() ([]string, []string) {
 func (f jobForm) spec() store.JobSpec {
 	return store.JobSpec{
 		Name:     strings.TrimSpace(f.Name),
-		Pages:    f.Pages,
+		Kind:     f.Kind,
+		Pages:    f.depth(),
 		Country:  f.Country,
 		Language: f.Language,
 		SpecName: f.SpecName,
@@ -132,7 +205,7 @@ func (f jobForm) spec() store.JobSpec {
 // work is the job the estimate is of: the queries as they would be searched
 // for, at the depth they would be taken to.
 func (f jobForm) work(queries []string) run.Job {
-	j := run.Job{Pages: f.Pages, SpecName: f.SpecName}
+	j := run.Job{Kind: runKind(f.Kind), Pages: f.depth(), SpecName: f.SpecName}
 	for _, text := range queries {
 		j.Queries = append(j.Queries,
 			google.Query{Text: text, Country: f.Country, Language: f.Language})
@@ -149,6 +222,7 @@ func formOf(r *http.Request) jobForm {
 	}
 	return jobForm{
 		Name:     strings.TrimSpace(r.FormValue("name")),
+		Kind:     strings.TrimSpace(r.FormValue("kind")),
 		Queries:  r.FormValue("queries"),
 		Country:  strings.TrimSpace(r.FormValue("country")),
 		Language: strings.TrimSpace(r.FormValue("language")),
@@ -208,6 +282,9 @@ type newPage struct {
 	Complaints []string
 	Estimate   *estimateView
 	Do         actions
+	// Kinds is every kind a job can be, so the choice on the page is the choice
+	// the handler takes and not a second list of it.
+	Kinds []jobKind
 }
 
 // showNew draws the new-job page, filling in the parts of it that are the same
@@ -221,6 +298,7 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		Complaints: complaints,
 		Estimate:   est,
 		Do:         buttons(),
+		Kinds:      kinds(),
 	})
 }
 

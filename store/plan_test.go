@@ -398,3 +398,27 @@ func TestPlan_DoesNotHoldAMillionLinesInMemory(t *testing.T) {
 		t.Errorf("%d of a million lines were written", got)
 	}
 }
+
+func TestOpenPlan_FilesTheJobUnderTheKindItWasAskedFor(t *testing.T) {
+	// A list of addresses too long to hold arrives by this door and no other, so
+	// a kind this door dropped would make the index job unreachable for exactly
+	// the lists it was built for.
+	s := testStore(t)
+	p, err := s.OpenPlan(t.Context(), JobSpec{Name: "addresses", Kind: KindIndex, Pages: 1})
+	if err != nil {
+		t.Fatalf("OpenPlan: %v", err)
+	}
+	if err := p.Add(t.Context(), "example.com/a"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := p.Ready(t.Context()); err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	sum, err := s.Progress(t.Context(), p.JobID())
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Kind != KindIndex {
+		t.Errorf("an uploaded job reads as kind %q, want %q", sum.Kind, KindIndex)
+	}
+}

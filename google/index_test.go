@@ -5,6 +5,7 @@ package google
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,24 @@ import (
 type searchFunc func(context.Context, Query) (SERP, error)
 
 func (f searchFunc) Search(ctx context.Context, q Query) (SERP, error) { return f(ctx, q) }
+
+// serpWithURLs builds a page whose results carry their address, which serpOf
+// cannot do: it builds the link form that gives a host and nothing more, and a
+// case about recognising an address needs the address on the page.
+//
+// The host is taken from the address rather than passed in beside it, so no
+// case can accidentally describe a result whose host and address disagree.
+func serpWithURLs(urls ...string) SERP {
+	s := SERP{}
+	for i, raw := range urls {
+		r := Result{Position: i + 1, URL: raw, Link: raw, Form: LinkDirect}
+		if u, err := url.Parse(raw); err == nil {
+			r.Host = u.Hostname()
+		}
+		s.Results = append(s.Results, r)
+	}
+	return s
+}
 
 func TestSiteQuery_BuildsTheOperator(t *testing.T) {
 	cases := []struct{ in, want string }{
@@ -50,16 +69,121 @@ func TestSiteQuery_ReducesATargetToHostAndPath(t *testing.T) {
 }
 
 func TestCheckIndexed_OneResultIsEnough(t *testing.T) {
-	// The question is presence, not rank, so a single hit answers it — and
-	// answering it needs no address, which is what makes this check cheap
-	// under the link form that carries none.
-	f := &fakeSearcher{pages: []SERP{serpOf("example.com")}}
-	got, err := CheckIndexed(context.Background(), f, Query{Text: "ignored"}, "example.com/page")
+	// The question is presence, not rank, so one result that is the target
+	// answers it. A site is answered from the host alone, which is what keeps
+	// this check cheap under the link form that carries no address at all.
+	f := &fakeSearcher{pages: []SERP{serpOf("elsewhere.test", "example.com")}}
+	got, err := CheckIndexed(context.Background(), f, Query{Text: "ignored"}, "example.com")
 	if err != nil {
 		t.Fatalf("CheckIndexed: %v", err)
 	}
 	if !got.Indexed || got.Hits != 1 {
 		t.Errorf("indexed=%v hits=%d, want true 1", got.Indexed, got.Hits)
+	}
+}
+
+func TestCheckIndexed_SaysNotIndexedWhenOnlyOtherSitesCameBack(t *testing.T) {
+	// A site: query is a request, not a guarantee. This is the fault the
+	// neighbouring ListIndexed already defends against and this one did not.
+	//
+	// Both link forms are put through it. With addresses on the page the verdict
+	// has everything it needs to compare and must still say no; without them
+	// there is nothing to compare at all, and the answer is the same.
+	cases := []struct {
+		name string
+		page SERP
+	}{
+		{"results carrying their address",
+			serpWithURLs("https://elsewhere.test/a", "https://another.test/b")},
+		{"results carrying a host and no address", serpOf("elsewhere.test", "another.test")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSearcher{pages: []SERP{tc.page}}
+			got, err := CheckIndexed(context.Background(), f, Query{Text: "x"}, "example.com/page")
+			if err != nil {
+				t.Fatalf("CheckIndexed: %v", err)
+			}
+			if got.Indexed {
+				t.Error("reported indexed when nothing that came back was the page asked about")
+			}
+			if got.Hits != 0 {
+				t.Errorf("Hits=%d, want none — they belong to other sites", got.Hits)
+			}
+			if len(got.Sample) != 0 {
+				t.Errorf("carried %d results as evidence for a verdict of no", len(got.Sample))
+			}
+		})
+	}
+}
+
+func TestCheckIndexed_AnotherPageOfTheSiteDoesNotAnswerForThisOne(t *testing.T) {
+	// Asked about a page, answered with the site's other page. It is the same
+	// fallback FindPosition refused, and refusing it here matters for the same
+	// reason: the operator reaches a path, so the site's front page comes back
+	// on a query about a path that is gone, and a check that took it would
+	// report every address of a live site as held.
+	f := &fakeSearcher{pages: []SERP{serpWithURLs(
+		"https://example.com/other", "https://example.com/")}}
+	got, err := CheckIndexed(context.Background(), f, Query{Text: "x"}, "example.com/page")
+	if err != nil {
+		t.Fatalf("CheckIndexed: %v", err)
+	}
+	if got.Indexed || got.Hits != 0 {
+		t.Errorf("indexed=%v hits=%d off the site's other pages, want false 0", got.Indexed, got.Hits)
+	}
+}
+
+func TestCheckIndexed_MatchesAcrossSchemeAndWWWAndTrailingSlash(t *testing.T) {
+	// Google writes an address these four ways freely and a caller never means
+	// any of them. Each stands on its own fixture, so a comparison that loses
+	// one of the four is named by the case that fails rather than hidden behind
+	// the other three.
+	cases := []struct{ name, target, found string }{
+		{"all four at once", "http://example.com/page", "https://www.example.com/page/"},
+		{"the scheme", "http://example.com/page", "https://example.com/page"},
+		{"a www on the page", "example.com/page", "https://www.example.com/page"},
+		{"a www in the question", "www.example.com/page", "https://example.com/page"},
+		{"a trailing slash on the page", "example.com/page", "https://example.com/page/"},
+		{"a trailing slash in the question", "example.com/page/", "https://example.com/page"},
+		{"the case of the host", "example.com/page", "https://EXAMPLE.COM/page"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSearcher{pages: []SERP{serpWithURLs(tc.found)}}
+			got, err := CheckIndexed(context.Background(), f, Query{Text: "x"}, tc.target)
+			if err != nil {
+				t.Fatalf("CheckIndexed: %v", err)
+			}
+			if !got.Indexed {
+				t.Errorf("%q was not recognised as %q", tc.found, tc.target)
+			}
+		})
+	}
+}
+
+func TestCheckIndexed_ABareHostAsksAboutTheSiteNotOnePage(t *testing.T) {
+	// «Is example.com indexed» is a question about the site; any page of it
+	// answers yes. That is the same split FindPosition already makes.
+	f := &fakeSearcher{pages: []SERP{serpWithURLs("https://example.com/some/deep/page")}}
+	got, err := CheckIndexed(context.Background(), f, Query{Text: "x"}, "example.com")
+	if err != nil {
+		t.Fatalf("CheckIndexed: %v", err)
+	}
+	if !got.Indexed {
+		t.Error("a page of the site did not answer a question about the site")
+	}
+}
+
+func TestCheckIndexed_CountsOnlyWhatMatched(t *testing.T) {
+	f := &fakeSearcher{pages: []SERP{serpWithURLs(
+		"https://example.com/a", "https://elsewhere.test/b", "https://example.com/c")}}
+	got, err := CheckIndexed(context.Background(), f, Query{Text: "x"}, "example.com")
+	if err != nil {
+		t.Fatalf("CheckIndexed: %v", err)
+	}
+	if got.Hits != 2 {
+		t.Errorf("Hits=%d, want the 2 that were on the site", got.Hits)
 	}
 }
 
@@ -132,20 +256,31 @@ func TestCheckIndexed_TakesOnlyOnePage(t *testing.T) {
 }
 
 func TestCheckIndexed_CarriesAFewResultsAsEvidence(t *testing.T) {
-	// Every hit is counted, because the count is the measurement. Only the
-	// first few are carried, because the status is a verdict and the page
-	// behind it is what ListIndexed is for.
-	f := &fakeSearcher{pages: []SERP{serpOf(
-		"example.com", "example.com", "example.com", "example.com", "example.com")}}
+	// Every hit on the site is counted, because the count is the measurement.
+	// Only the first few are carried, because the status is a verdict and the
+	// page behind it is what ListIndexed is for.
+	//
+	// The page opens and closes with somebody else's site, which is how Google
+	// answers a site: query often enough to matter. What is carried is the
+	// evidence the verdict was reached on, so the stranger at the top must not
+	// be in it, and the two strangers must not be in the count.
+	f := &fakeSearcher{pages: []SERP{serpOf("elsewhere.test",
+		"example.com", "example.com", "example.com", "example.com", "example.com",
+		"another.test")}}
 	got, err := CheckIndexed(context.Background(), f, Query{}, "example.com")
 	if err != nil {
 		t.Fatalf("CheckIndexed: %v", err)
 	}
 	if got.Hits != 5 {
-		t.Errorf("Hits=%d, want all 5 counted", got.Hits)
+		t.Errorf("Hits=%d, want the 5 on the site", got.Hits)
 	}
 	if len(got.Sample) != 3 {
-		t.Errorf("carried %d results, want 3", len(got.Sample))
+		t.Fatalf("carried %d results, want 3", len(got.Sample))
+	}
+	for _, r := range got.Sample {
+		if r.Host != "example.com" {
+			t.Errorf("carried a result from %q as evidence about example.com", r.Host)
+		}
 	}
 }
 

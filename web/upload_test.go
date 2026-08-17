@@ -47,7 +47,7 @@ func uploadBody(t *testing.T, boxes map[string]string, list string) (string, *by
 	t.Helper()
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
-	for _, box := range []string{"name", "pages", "country", "language", "spec"} {
+	for _, box := range []string{"name", "kind", "pages", "country", "language", "spec"} {
 		value, filled := boxes[box]
 		if !filled {
 			continue
@@ -640,5 +640,44 @@ func TestUpload_ShowsNoBareKeyWhereAPhraseBelongs(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestUpload_FilesTheJobUnderTheKindTheFormChose(t *testing.T) {
+	// A list of addresses too long to type arrives by this door. A kind dropped
+	// here would search a million addresses as phrases, and the reader would
+	// find out from the results.
+	s := testServerHolding(t)
+	rec := postUpload(t, s, map[string]string{
+		"name": "addresses", "kind": store.KindIndex, "pages": "1",
+	}, "example.com/a\nexample.com/b\n")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the upload gave %d, want a redirect:\n%s", rec.Code, rec.Body.String())
+	}
+	if job := theOneJob(t, s); job.Kind != store.KindIndex {
+		t.Errorf("the uploaded job was filed as kind %q, want %q", job.Kind, store.KindIndex)
+	}
+}
+
+func TestUpload_RefusesAKindNothingAnswersToBeforeReadingTheFile(t *testing.T) {
+	// Every fault that can be known before the file is read is said before it.
+	// Writing a million lines into a job that names a question nobody answers is
+	// minutes spent to arrive at a sentence that could have been said first.
+	s := testServerHolding(t)
+	rec := postUpload(t, s, map[string]string{
+		"name": "odd", "kind": "images", "pages": "1",
+	}, "example.com/a\n")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an unknown kind gave %d, want the form back", rec.Code)
+	}
+	if want := LangEN.T("form.kind.unknown"); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("the page does not say %q:\n%s", want, rec.Body.String())
+	}
+	jobs, err := s.store.Jobs(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Errorf("%d jobs written for a kind nothing answers to, want none", len(jobs))
 	}
 }

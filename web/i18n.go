@@ -117,6 +117,15 @@ var catalogue = map[Lang]map[string]string{
 		"job.results.capped": "Only the first results are drawn here. The export holds every one.",
 		"job.export":         "Export",
 
+		// What an index job established. Both answers say what was found and
+		// neither is dressed as good news or bad: whether an address missing from
+		// the index is a problem is the reader's to say.
+		"job.verdicts":       "Addresses",
+		"job.verdicts.none":  "No address has been checked yet.",
+		"job.verdict":        "In the index",
+		"job.verdict.held":   "found",
+		"job.verdict.absent": "not found",
+
 		"new.title":             "New job",
 		"form.name":             "Name",
 		"form.queries":          "Queries, one per line",
@@ -132,8 +141,16 @@ var catalogue = map[Lang]map[string]string{
 		"form.name.required":    "The job needs a name to be filed under.",
 		"form.queries.required": "There is not one query in the list.",
 		"form.pages.positive":   "A query is taken to at least one page.",
-		"form.norunner":         "This server was started to read the history, so it cannot run a job.",
-		"form.notsetup":         "There is nothing to run a job on yet. Open the settings and set the connection up.",
+		// What the job asks Google. The lines of the list mean different things
+		// under the two, which is why the choice stands above the list rather
+		// than beside the depth.
+		"form.kind":         "What this asks Google",
+		"form.kind.search":  "Where phrases rank",
+		"form.kind.index":   "Whether addresses are in the index",
+		"form.kind.why":     "An index job reads the list as addresses and asks Google whether it holds each one. It takes a single page per address, whatever the depth says, because the first page settles it.",
+		"form.kind.unknown": "That is not one of the things a job asks.",
+		"form.norunner":     "This server was started to read the history, so it cannot run a job.",
+		"form.notsetup":     "There is nothing to run a job on yet. Open the settings and set the connection up.",
 		// The file. Every one of these says what happened and what is left behind,
 		// because a list that stopped arriving leaves a job in the history and the
 		// reader has to know it is there.
@@ -264,6 +281,12 @@ var catalogue = map[Lang]map[string]string{
 		"job.results.capped": "Здесь показаны только первые строки. В выгрузке — все.",
 		"job.export":         "Выгрузка",
 
+		"job.verdicts":       "Адреса",
+		"job.verdicts.none":  "Ни одного адреса ещё не проверено.",
+		"job.verdict":        "В индексе",
+		"job.verdict.held":   "найден",
+		"job.verdict.absent": "не найден",
+
 		"new.title":             "Новое задание",
 		"form.name":             "Название",
 		"form.queries":          "Запросы, по одному в строке",
@@ -279,8 +302,14 @@ var catalogue = map[Lang]map[string]string{
 		"form.name.required":    "Заданию нужно название, под которым оно ляжет в историю.",
 		"form.queries.required": "В списке нет ни одного запроса.",
 		"form.pages.positive":   "Запрос берётся хотя бы на одну страницу.",
-		"form.norunner":         "Этот сервер поднят читать историю и выполнять задания не может.",
-		"form.notsetup":         "Выполнять задание пока не на чем. Откройте настройки и настройте связь.",
+
+		"form.kind":         "О чём это спрашивает Google",
+		"form.kind.search":  "На каких местах фразы",
+		"form.kind.index":   "Есть ли адреса в индексе",
+		"form.kind.why":     "Задание на индекс читает список как адреса и спрашивает Google, держит ли он каждый. На адрес берётся одна страница, какую бы глубину ни выставили: первая страница вопрос закрывает.",
+		"form.kind.unknown": "Такого задания не бывает.",
+		"form.norunner":     "Этот сервер поднят читать историю и выполнять задания не может.",
+		"form.notsetup":     "Выполнять задание пока не на чем. Откройте настройки и настройте связь.",
 
 		"form.list.title":        "Список файлом",
 		"form.list":              "Файл, по одному запросу в строке",

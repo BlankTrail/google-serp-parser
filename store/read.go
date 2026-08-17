@@ -96,6 +96,64 @@ func (s *Store) Failures(ctx context.Context, jobID int64, fn func(why string) e
 	return nil
 }
 
+// Verdict is what one index check settled about one address.
+type Verdict struct {
+	// Ordinal is the address's place in the list the job was given, so a reader
+	// can lay a verdict beside the line of the file it came from.
+	Ordinal int
+	Target  string
+	Held    bool
+}
+
+// Verdicts hands what an index job established about each of its addresses to
+// fn, in the order the list had.
+//
+// The verdict is worked out here rather than kept anywhere. An index check
+// records what it found as an ordinary page of results, so an address Google
+// held has results filed against it and one it did not has none — and a column
+// saying the same thing again is a second copy to keep right, with no way of
+// telling which one lied on the day they disagree.
+//
+// Only addresses that were checked are handed over. One nobody reached yet
+// carries no verdict, and one whose request was refused carries none either:
+// reporting either as not held is exactly the wrong answer this check exists to
+// avoid, and a reader has no way to disbelieve it.
+//
+// It streams, for the reason every walk over a job's results does: a list of
+// addresses is as long as somebody's file.
+func (s *Store) Verdicts(ctx context.Context, jobID int64, fn func(Verdict) error) error {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT q.ordinal, q.text, count(r.id)
+		   FROM queries q
+		   LEFT JOIN pages   p ON p.query_id = q.id
+		   LEFT JOIN results r ON r.page_id  = p.id
+		  WHERE q.job_id = ? AND q.state = 'done'
+		  GROUP BY q.id
+		  ORDER BY q.ordinal`, jobID)
+	if err != nil {
+		return fmt.Errorf("store: reading the verdicts of job %d: %w", jobID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var v Verdict
+		var found int
+		if err := rows.Scan(&v.Ordinal, &v.Target, &found); err != nil {
+			return fmt.Errorf("store: reading a verdict: %w", err)
+		}
+		v.Held = found > 0
+		if err := fn(v); err != nil {
+			return err
+		}
+	}
+	// A walk cut short by a database that went away must not read as a run that
+	// checked fewer addresses than it did.
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: reading the verdicts of job %d: %w", jobID, err)
+	}
+	return nil
+}
+
 // Position is where a site stood for one query on one run.
 type Position struct {
 	JobID   int64

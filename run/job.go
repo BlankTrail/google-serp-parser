@@ -29,8 +29,26 @@ type Sink interface {
 // line up with its queries.
 var ErrOrdinalsMismatch = errors.New("run: Ordinals must be empty or as long as Queries")
 
+// Kind is what a job asks of Google.
+//
+// It is a number here and a word in the history, and the one place that turns
+// one into the other is the one place that has both. A package that runs work
+// has no business holding the vocabulary a database column accepts.
+type Kind int
+
+const (
+	// Search takes each query to the depth the job asks for and reports the
+	// pages that came back.
+	Search Kind = iota
+	// Index reads each line as an address and reports whether Google holds it.
+	Index
+)
+
 // Job is a list of queries and how deep to take each one.
 type Job struct {
+	// Kind is what to ask about each line. The zero value is Search, which is
+	// what a job that names nothing has always been.
+	Kind Kind
 	// Queries are taken in this order and reported in it.
 	Queries []google.Query
 	// Ordinals gives each query its place in the list the job originally had,
@@ -41,6 +59,9 @@ type Job struct {
 	Ordinals []int
 	// Pages is how many result pages each query is taken to. Non-positive means
 	// one. A walk stops earlier when the page says the results have run out.
+	//
+	// An index job ignores it: presence is settled by the first page, and taking
+	// a second would spend a request to re-answer a question already answered.
 	Pages int
 	// SpecName asks for ports opened under a named template, so a run that wants
 	// mobile results is not quietly answered from a desktop one. Empty takes any
@@ -178,7 +199,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 				first = false
 
 				results[i].Attempted = true
-				results[i].Pages, results[i].Err = attempt.Walk(ctx, j.Queries[i], pages)
+				results[i].Pages, results[i].Err = take(ctx, attempt, j.Kind, j.Queries[i], pages)
 				if r.Sink != nil {
 					// The failures go to the sink as well as the successes.
 					// A query whose failure was never written down is one a
@@ -226,4 +247,26 @@ sending:
 		}
 	}
 	return rep
+}
+
+// take runs one line the way the job asked for it.
+//
+// The two kinds come back in the same shape, which is what lets everything
+// downstream — the sink, the history, the export — stay one path. What an index
+// check found is dressed as a page of results because that is what it is: the
+// results that were the address asked about.
+//
+// A page holding nothing is how "Google does not hold this" is written down,
+// and it is written down rather than skipped. A query left with no page at all
+// is a query the next resume takes up again, so an address genuinely absent
+// would be checked on every run for as long as it stayed absent.
+func take(ctx context.Context, a *Attempt, kind Kind, q google.Query, pages int) ([]google.SERP, error) {
+	if kind != Index {
+		return a.Walk(ctx, q, pages)
+	}
+	st, err := google.CheckIndexed(ctx, a, q, q.Text)
+	if err != nil {
+		return nil, err
+	}
+	return []google.SERP{{Query: q.Text, Results: st.Sample}}, nil
 }

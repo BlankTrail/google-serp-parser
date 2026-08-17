@@ -609,7 +609,7 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, error) {
 	if err != nil {
 		return run.Job{}, err
 	}
-	j := run.Job{Pages: sum.Pages, SpecName: sum.SpecName}
+	j := run.Job{Kind: runKind(sum.Kind), Pages: sum.Pages, SpecName: sum.SpecName}
 	for _, q := range left {
 		j.Queries = append(j.Queries,
 			google.Query{Text: q.Text, Country: sum.Country, Language: sum.Language})

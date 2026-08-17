@@ -446,3 +446,110 @@ func TestFailures_StopsAtOnceWhenTheCallerHasSeenEnough(t *testing.T) {
 		t.Errorf("the callback saw %d refusals after asking to stop, want 1", seen)
 	}
 }
+
+// checkedIndex writes down what an index check found for one address: a page
+// carrying the results that were the address, which for an address nobody held
+// is a page carrying none.
+func checkedIndex(t *testing.T, s *Store, jobID int64, ordinal int, found ...string) {
+	t.Helper()
+	rs := make([]google.Result, 0, len(found))
+	for i, raw := range found {
+		rs = append(rs, google.Result{Title: raw, URL: raw, Host: fmt.Sprintf("h%d", i)})
+	}
+	if err := s.Record(context.Background(), jobID, QueryOutcome{
+		Ordinal: ordinal,
+		Pages:   []google.SERP{{Origin: "https://www.google.com", Results: rs}},
+	}); err != nil {
+		t.Fatalf("Record(ordinal %d): %v", ordinal, err)
+	}
+}
+
+func collectVerdicts(t *testing.T, s *Store, jobID int64) []Verdict {
+	t.Helper()
+	var got []Verdict
+	if err := s.Verdicts(context.Background(), jobID, func(v Verdict) error {
+		got = append(got, v)
+		return nil
+	}); err != nil {
+		t.Fatalf("Verdicts: %v", err)
+	}
+	return got
+}
+
+func TestVerdicts_ReadsTheAnswerOffWhatWasCaptured(t *testing.T) {
+	// The verdict is not a column. An address Google held has results filed
+	// against it and one it did not has none, and a second copy of that fact is
+	// a second thing to keep right.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "index", Kind: KindIndex, Pages: 1},
+		[]string{"example.com/a", "example.com/gone", "example.com/c"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	checkedIndex(t, s, id, 0, "https://example.com/a")
+	checkedIndex(t, s, id, 1)
+	checkedIndex(t, s, id, 2, "https://example.com/c", "https://example.com/c?utm=1")
+
+	want := []Verdict{
+		{Ordinal: 0, Target: "example.com/a", Held: true},
+		{Ordinal: 1, Target: "example.com/gone", Held: false},
+		{Ordinal: 2, Target: "example.com/c", Held: true},
+	}
+	if got := collectVerdicts(t, s, id); !reflect.DeepEqual(got, want) {
+		t.Errorf("Verdicts gave %+v, want %+v", got, want)
+	}
+}
+
+func TestVerdicts_LeavesOutAnAddressNothingWasEstablishedAbout(t *testing.T) {
+	// An address nobody reached and an address whose request was refused carry
+	// no verdict. Reporting either as absent from the index is exactly the wrong
+	// answer this check exists to avoid, and a reader has no way to disbelieve
+	// it: it looks identical to a real absence.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "index", Kind: KindIndex, Pages: 1},
+		[]string{"example.com/checked", "example.com/refused", "example.com/untouched"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	checkedIndex(t, s, id, 0)
+	if err := s.Record(context.Background(), id, QueryOutcome{
+		Ordinal: 1, Err: errors.New("blocked")}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	got := collectVerdicts(t, s, id)
+	want := []Verdict{{Ordinal: 0, Target: "example.com/checked", Held: false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Verdicts gave %+v, want only the address that was checked: %+v", got, want)
+	}
+}
+
+func TestVerdicts_HandsBackWhatTheCallerStoppedOn(t *testing.T) {
+	// The walk streams, so the screen that draws two hundred of a million
+	// addresses stops it with its own error rather than reading the rest to
+	// throw them away.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "index", Kind: KindIndex, Pages: 1},
+		[]string{"a.test", "b.test", "c.test"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	for i := range 3 {
+		checkedIndex(t, s, id, i, "https://found.test/x")
+	}
+
+	stop := errors.New("enough")
+	seen := 0
+	if err := s.Verdicts(context.Background(), id, func(Verdict) error {
+		seen++
+		return stop
+	}); !errors.Is(err, stop) {
+		t.Fatalf("Verdicts returned %v, want the caller's own error", err)
+	}
+	if seen != 1 {
+		t.Errorf("walked %d addresses after being stopped on the first", seen)
+	}
+}

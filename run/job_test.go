@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -478,5 +479,114 @@ func TestRunner_AsksForEveryPageTheJobRequestedOnOneIdentity(t *testing.T) {
 	}
 	if rep.Requests != 1 {
 		t.Errorf("Requests=%d, want the 1 identity an unrefused walk costs", rep.Requests)
+	}
+}
+
+// serpBodyOf builds a result page from a list of addresses, so an index case
+// can be answered the way a site: query really is answered: with the address
+// asked about among other people's.
+func serpBodyOf(urls ...string) string {
+	body := `<!doctype html><html><body><div id="search">`
+	for _, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil {
+			panic("a case named an address that will not parse: " + raw)
+		}
+		body += `<div data-snc="x"><a href="` + raw + `" data-ved="2"><h3>Title</h3></a>` +
+			`<cite>` + u.Host + `</cite></div>`
+	}
+	return body + `</div></body></html>`
+}
+
+func TestRunner_AnIndexJobKeepsOnlyWhatWasTheAddressAskedAbout(t *testing.T) {
+	// The page answers with a stranger, the address itself, and another page of
+	// the same site. Only the middle one is the answer to "is this address in
+	// the index", and only it belongs in the history: what is recorded here is
+	// what the verdict is later read off.
+	var asked atomic.Value
+	o := newOrigin(t, func(r *http.Request, _ int) string {
+		asked.Store(r.URL.Query().Get("q"))
+		return serpBodyOf("https://elsewhere.test/x",
+			"https://example.com/page", "https://example.com/other")
+	})
+	f := poolFacing(t, o.addr(), 2)
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	// The depth is set past one to pin that an index job ignores it: presence is
+	// settled by the first page, and a second would be a request spent to
+	// re-answer a question already answered.
+	rep := r.Run(context.Background(), Job{
+		Kind: Index, Queries: []google.Query{usQuery("example.com/page")}, Pages: 3})
+
+	if rep.Done != 1 {
+		t.Fatalf("Done=%d, want 1 (failed %d: %v)", rep.Done, rep.Failed, rep.Results[0].Err)
+	}
+	if got, _ := asked.Load().(string); got != "site:example.com/page" {
+		t.Errorf("asked %q, want the operator for the address", got)
+	}
+	if got := o.searches.Load(); got != 1 {
+		t.Errorf("%d searches for one address, want 1", got)
+	}
+	pages := rep.Results[0].Pages
+	if len(pages) != 1 {
+		t.Fatalf("recorded %d pages, want 1", len(pages))
+	}
+	if n := len(pages[0].Results); n != 1 {
+		t.Fatalf("recorded %d results, want the 1 that was the address: %+v", n, pages[0].Results)
+	}
+	if got := pages[0].Results[0].URL; got != "https://example.com/page" {
+		t.Errorf("recorded %q, want the address that was asked about", got)
+	}
+}
+
+func TestRunner_AnIndexJobRecordsAnAddressNobodyHeldAsAnAnswer(t *testing.T) {
+	// Google answering with somebody else's pages is a real answer and the
+	// address is not in the index. It is written down as a page holding nothing
+	// rather than left unwritten: a query with nothing recorded against it is
+	// one every later resume takes up again, so an address genuinely absent
+	// would be re-checked for as long as it stayed absent.
+	o := newOrigin(t, func(*http.Request, int) string {
+		return serpBodyOf("https://elsewhere.test/x", "https://another.test/y")
+	})
+	f := poolFacing(t, o.addr(), 2)
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	rep := r.Run(context.Background(), Job{
+		Kind: Index, Queries: []google.Query{usQuery("example.com/page")}, Pages: 1})
+
+	if rep.Done != 1 {
+		t.Fatalf("Done=%d, want 1 — an address nobody holds is not a failed query (%v)",
+			rep.Done, rep.Results[0].Err)
+	}
+	pages := rep.Results[0].Pages
+	if len(pages) != 1 {
+		t.Fatalf("recorded %d pages, want the 1 that says the answer was taken", len(pages))
+	}
+	if n := len(pages[0].Results); n != 0 {
+		t.Errorf("recorded %d results for an address nobody held: %+v", n, pages[0].Results)
+	}
+}
+
+func TestRunner_ASearchJobIsUnchangedByTheIndexKindExisting(t *testing.T) {
+	// The kind a job names is the kind it runs. A search asked for by name and a
+	// search asked for by naming nothing are the same job, and neither of them
+	// goes near the index check.
+	for _, kind := range []Kind{Search, Kind(0)} {
+		o := newOrigin(t, func(r *http.Request, _ int) string {
+			if strings.HasPrefix(r.URL.Query().Get("q"), "site:") {
+				t.Error("a search job asked the index operator")
+			}
+			return serpBody("example.com")
+		})
+		f := poolFacing(t, o.addr(), 2)
+
+		r := &Runner{Pool: f.Pool, Threads: 1}
+		rep := r.Run(context.Background(), Job{Kind: kind, Queries: usQueries(1), Pages: 1})
+		if rep.Done != 1 {
+			t.Fatalf("Done=%d, want 1 (%v)", rep.Done, rep.Results[0].Err)
+		}
+		if n := len(rep.Results[0].Pages[0].Results); n != 1 {
+			t.Errorf("a search job recorded %d results, want the 1 the page carried", n)
+		}
 	}
 }

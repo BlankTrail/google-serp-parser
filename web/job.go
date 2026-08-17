@@ -41,8 +41,11 @@ func jobPath(id int64) string { return "/job/" + strconv.FormatInt(id, 10) }
 // what the page renders and what its script polls, so a number about this job
 // has one place to come from.
 type jobSetup struct {
-	Name     string
-	Started  time.Time
+	Name    string
+	Started time.Time
+	// Kind is the key of what to call what this job asks Google, never the word
+	// itself: every phrase on every page goes through the catalogue.
+	Kind     string
 	Pages    int
 	Country  string
 	Language string
@@ -56,8 +59,17 @@ type jobPage struct {
 	Job      jobSetup
 	Progress progressJSON
 	// State is the key of what to call the job's state, not the word itself.
-	State     string
-	Rows      []store.Row
+	State string
+	// Rows is what a search job captured and Verdicts is what an index job
+	// established. A job is one kind or the other, so exactly one of them is
+	// ever filled, and the page draws whichever it was handed.
+	Rows     []store.Row
+	Verdicts []store.Verdict
+	// IsIndex says which of the two the page is drawing. It is not read off the
+	// lists themselves: an index job that has checked nothing yet holds no
+	// verdicts, and drawing it as a search would tell the reader their addresses
+	// captured no results.
+	IsIndex   bool
 	Capped    bool
 	Formats   []string
 	CanStop   bool
@@ -80,18 +92,33 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, capped, err := s.someRows(r.Context(), sum.ID)
+	// One kind is read or the other, never both. A job of a million addresses
+	// holds no positions to draw, and walking its results to find that out is
+	// the million-row read this page is written not to do.
+	var rows []store.Row
+	var verdicts []store.Verdict
+	var capped bool
+	var err error
+	if sum.Kind == store.KindIndex {
+		verdicts, capped, err = s.someVerdicts(r.Context(), sum.ID)
+	} else {
+		rows, capped, err = s.someRows(r.Context(), sum.ID)
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	at := s.progress(sum)
+	// A kind the catalogue has no word for is not drawn as a search. It is a job
+	// nothing here can describe, and naming it wrongly is worse than the key.
+	kind, _ := kindKey(sum.Kind)
 
 	s.render(w, r, "job.html", jobPage{
 		page: s.frame(r, lang, "job.title", jobsAt),
 		Job: jobSetup{
 			Name:     sum.Name,
 			Started:  sum.CreatedAt,
+			Kind:     kind,
 			Pages:    sum.Pages,
 			Country:  sum.Country,
 			Language: sum.Language,
@@ -100,6 +127,8 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		Progress: at,
 		State:    stateOf(at, sum.PlanReady),
 		Rows:     rows,
+		Verdicts: verdicts,
+		IsIndex:  sum.Kind == store.KindIndex,
 		Capped:   capped,
 		Formats:  export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
@@ -160,6 +189,30 @@ func (s *Server) someRows(ctx context.Context, jobID int64) ([]store.Row, bool, 
 		return nil, false, err
 	}
 	return rows, false, nil
+}
+
+// someVerdicts reads as many of an index job's answers as the page draws, and
+// says whether there were more.
+//
+// The walk is stopped for the reason someRows is stopped: a list of addresses is
+// as long as somebody's file, and reading a million of them to draw two hundred
+// is a million rows read to be thrown away.
+func (s *Server) someVerdicts(ctx context.Context, jobID int64) ([]store.Verdict, bool, error) {
+	out := make([]store.Verdict, 0, rowsShown)
+	err := s.store.Verdicts(ctx, jobID, func(v store.Verdict) error {
+		if len(out) == rowsShown {
+			return errEnough
+		}
+		out = append(out, v)
+		return nil
+	})
+	if errors.Is(err, errEnough) {
+		return out, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return out, false, nil
 }
 
 // stateOf is the key of what to call a job's state.

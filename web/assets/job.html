@@ -48,6 +48,7 @@
 {{/* Shown on the clock the reader started the run by. The history keeps the
      instant, and an instant printed as itself is hours from the wall. */}}
 <dt>{{.T "jobs.started"}}</dt><dd>{{.Job.Started.Local.Format "2006-01-02 15:04"}}</dd>
+<dt>{{.T "form.kind"}}</dt><dd>{{.T .Job.Kind}}</dd>
 <dt>{{.T "form.pages"}}</dt><dd class="count">{{.Job.Pages}}</dd>
 <dt>{{.T "form.country"}}</dt><dd>{{.Job.Country}}</dd>
 <dt>{{.T "form.language"}}</dt><dd>{{.Job.Language}}</dd>
@@ -62,6 +63,35 @@
 {{end}}</p>
 </section>
 
+{{/* What an index job established, one line per address. The answer is the word
+     for what was found and nothing more: a colour or an icon on "not held"
+     would be this program calling a fact a problem. */}}
+{{if .IsIndex}}
+<h2>{{.T "job.verdicts"}}</h2>
+{{if .Verdicts}}
+{{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
+<section class="card">
+<table>
+<thead>
+<tr>
+<th>{{.T "history.address"}}</th>
+<th>{{.T "job.verdict"}}</th>
+</tr>
+</thead>
+<tbody>
+{{range .Verdicts}}
+<tr>
+<td>{{.Target}}</td>
+<td>{{if .Held}}{{$.T "job.verdict.held"}}{{else}}{{$.T "job.verdict.absent"}}{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</section>
+{{else}}
+<p class="empty">{{.T "job.verdicts.none"}}</p>
+{{end}}
+{{else}}
 <h2>{{.T "job.results"}}</h2>
 {{if .Rows}}
 {{if .Capped}}<p class="empty">{{.T "job.results.capped"}}</p>{{end}}
@@ -89,5 +119,6 @@
 </section>
 {{else}}
 <p class="empty">{{.T "job.results.none"}}</p>
+{{end}}
 {{end}}
 {{end}}

@@ -82,9 +82,9 @@ func (s *Store) OpenPlan(ctx context.Context, spec JobSpec) (*Plan, error) {
 		pages = 1
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, pages, spec_name, country, language, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, 0)`,
-		spec.Name, time.Now().UTC().Format(time.RFC3339), pages,
+		`INSERT INTO jobs(name, created_at, kind, pages, spec_name, country, language, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, 0)`,
+		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), pages,
 		spec.SpecName, spec.Country, spec.Language)
 	if err != nil {
 		return nil, fmt.Errorf("store: recording the job: %w", err)
