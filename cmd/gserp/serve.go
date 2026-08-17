@@ -55,6 +55,12 @@ type serveOptions struct {
 	DB      string
 	Threads int
 	Ports   int
+	// onListen is told the address the system actually gave, once it is bound
+	// and before anything is served on it. It is how the tray icon knows where
+	// to send a browser: a caller who asked for port zero has no other way to
+	// learn it, and one who asked for a port somebody else holds must not be
+	// sent to a page that is not there.
+	onListen func(at string)
 }
 
 // serveFlags declares the flags. It is separate from the parsing so the help
@@ -142,6 +148,12 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "gserp is listening on http://%s — open that in a browser\n", ln.Addr())
+	// Told here and not sooner: everything above can still end this without a
+	// server, and a caller that opened a browser on the strength of an earlier
+	// word would have sent it to a socket nothing ever answered on.
+	if opts.onListen != nil {
+		opts.onListen(ln.Addr().String())
+	}
 	return pages.ServeHandler(ctx, ln, mount(pages.Handler(), programs.Handler()))
 }
 

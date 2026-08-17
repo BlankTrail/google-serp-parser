@@ -39,8 +39,7 @@ func exitCode(err error) int {
 
 func dispatch(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		usage()
-		return nil
+		return noArguments(ctx)
 	}
 	switch args[0] {
 	case "run":

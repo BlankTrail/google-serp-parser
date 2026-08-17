@@ -60,6 +60,10 @@
 		here.replaceWith(screen);
 		lit.replaceWith(header);
 		document.title = arrived.title;
+		// The screen that just arrived has never been through anything that runs
+		// once on load. What listens for this is what shapes the new-job form,
+		// and without it that form works on a reload and not on a swap.
+		window.dispatchEvent(new Event("gserp:screen"));
 		return true;
 	}
 
@@ -233,6 +237,76 @@
 		show(window.location.pathname + window.location.search, false, function () {
 			window.location.reload();
 		});
+	});
+
+
+	// The new-job form shows every box it has, and this puts away the ones the
+	// choices above them have made beside the point: the site a position check
+	// is about is not a question a parse answers, and a list typed in is not a
+	// list in a file.
+	//
+	// Hiding is done here and not on the server for one reason: without a script
+	// the form still has to work, and a box that only the server can put back is
+	// a box a reader without a script can never fill in. So the markup carries
+	// everything, this hides what does not apply, and a browser with no script
+	// shows the lot — more than somebody needs, and never less.
+	// closestField is the block a box stands in, which is what is shown or put
+	// away — a box hidden while its label stays is a label for nothing.
+	function closestField(box) {
+		return box ? box.closest(".field") || box : null;
+	}
+
+	function shape(root) {
+		var kind = root.querySelector("[name=kind]");
+		var from = root.querySelector("[name=from]");
+		if (!kind || !from) {
+			return;
+		}
+		var forKind = {
+			search: ["target"],
+			position: [],
+			index: ["target", "keep"]
+		};
+		var apply = function () {
+			var hidden = forKind[kind.value] || [];
+			mark(root, "target", hidden.indexOf("target") >= 0);
+			mark(root, "keep", hidden.indexOf("keep") >= 0);
+			// The depth is settled for an index check whatever the box says: the
+			// first page answers the question, and the handler forces it.
+			mark(root, "pages", kind.value === "index");
+			mark(root, "queries", from.value === "file");
+			mark(root, "list", from.value !== "file");
+		};
+		kind.addEventListener("change", apply);
+		from.addEventListener("change", apply);
+		apply();
+	}
+
+	// mark hides or shows the field a box stands in, along with whatever the page
+	// wrote under it: a box put away without its own sentence leaves the sentence
+	// explaining something nobody can see.
+	function mark(root, name, away) {
+		// The parts of a result are a group of boxes sharing one name rather than
+		// one box, so the group itself is what is put away.
+		var field = name === "keep"
+			? root.querySelector(".keep-group")
+			: closestField(root.querySelector("[name=" + name + "]"));
+		if (!field) {
+			return;
+		}
+		field.hidden = away;
+		var said = field.nextElementSibling;
+		if (said && said.classList.contains("empty")) {
+			said.hidden = away;
+		}
+	}
+
+	shape(document);
+
+	// A form that arrived with a swapped screen has to be shaped as well, or it
+	// is the one screen where this works only on a reload.
+	window.addEventListener("gserp:screen", function () {
+		shape(document);
 	});
 
 	watch();

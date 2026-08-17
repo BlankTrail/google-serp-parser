@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -785,4 +786,52 @@ func TestTranslate_SaysWhichLanguageArrivedAndWhatItIsShortOf(t *testing.T) {
 	if strings.Contains(said, "jobs.title") {
 		t.Errorf("a phrase the file does say is reported missing:\n%s", said)
 	}
+}
+
+func TestServe_TellsTheCallerWhereItIsListeningOnceItIsBound(t *testing.T) {
+	// A caller who asked for port zero has no other way to learn the port, and
+	// the icon in the notification area sends a browser to exactly this address:
+	// told too early it would send it to a socket nothing is on yet, and told
+	// the address that was asked for rather than the one that was given, it
+	// would send it somewhere else entirely.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	at := make(chan string, 1)
+	opts := serveOptions{
+		Addr: "127.0.0.1:0",
+		DB:   filepath.Join(t.TempDir(), "h.db"),
+		onListen: func(where string) {
+			select {
+			case at <- where:
+			default:
+			}
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- serveInterface(ctx, io.Discard, opts) }()
+
+	var where string
+	select {
+	case where = <-at:
+	case err := <-done:
+		t.Fatalf("the server ended before it said where it was listening: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the server never said where it was listening")
+	}
+	if _, port, err := net.SplitHostPort(where); err != nil || port == "0" {
+		t.Fatalf("it says it is listening at %q, which is not a port the system gave", where)
+	}
+
+	// And it is listening there by the time it says so.
+	res, err := http.Get("http://" + where + "/")
+	if err != nil {
+		t.Fatalf("nothing answers at the address it named: %v", err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("the address it named answered %d", res.StatusCode)
+	}
+	cancel()
+	<-done
 }

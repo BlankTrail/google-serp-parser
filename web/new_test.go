@@ -635,3 +635,60 @@ func groupUnder(t *testing.T, body, legend string) string {
 	t.Fatalf("no group on this page is headed %q: %s", legend, body)
 	return ""
 }
+
+// The boxes the script puts away, named once so that both sides can be checked
+// against the same list: the form has to carry each of them, and the script has
+// to name each of them.
+var shaped = []string{"kind", "from", "target", "pages", "queries", "list"}
+
+func TestNewForm_CarriesEveryBoxTheScriptPutsAwayAndTheHooksItPutsThemAwayBy(t *testing.T) {
+	// Nothing here runs a line of the script — there is no runtime to run it
+	// with. What is pinned is the seam between the two files, which is the only
+	// part of this that rots without a word: renaming a box on the form leaves a
+	// script quietly hiding nothing, and a reader sees a form asking for a site
+	// that a parse has no use for.
+	body := get(t, testServer(t), "/new").Body.String()
+	script := mustAsset(t, "static/app.js")
+
+	for _, name := range shaped {
+		if !strings.Contains(body, `name="`+name+`"`) {
+			t.Errorf("the form has no box named %q, and the script hides that box", name)
+		}
+		// Named either as a name it hides or as a box it reads a choice from.
+		if !strings.Contains(script, `"`+name+`"`) &&
+			!strings.Contains(script, "[name="+name+"]") {
+			t.Errorf("the script never names %q, so that box is shown whatever is chosen", name)
+		}
+	}
+
+	// The parts of a result are a group of boxes under one name, so the group is
+	// what is put away and the group is what has to be findable.
+	if !strings.Contains(body, `class="keep-group"`) {
+		t.Error("the form marks no group of result parts, so the script cannot put it away")
+	}
+	if !strings.Contains(script, "keep-group") {
+		t.Error("the script never looks for the group of result parts, so it stays up for an index check")
+	}
+
+	// Every box the script hides is hidden by the block it stands in, and a box
+	// standing in no such block would take its label with it or leave it behind.
+	if !strings.Contains(script, ".field") {
+		t.Error("the script hides boxes rather than the blocks they stand in, which leaves their labels")
+	}
+	if strings.Count(body, `class="field`) < len(shaped)-2 {
+		t.Errorf("the form has %d blocks for %d boxes the script hides",
+			strings.Count(body, `class="field`), len(shaped))
+	}
+}
+
+func TestNewForm_ShapesItselfAgainWhenAScreenArrivesWithoutAReload(t *testing.T) {
+	// The form is reached by pressing a tab as often as by opening its address,
+	// and a screen swapped in is markup the shaping never saw. Without this the
+	// form is shaped on a reload and not otherwise, which is the hardest kind of
+	// half-working to notice.
+	script := mustAsset(t, "static/app.js")
+	if strings.Count(script, "gserp:screen") < 2 {
+		t.Error("nothing both announces a swapped screen and listens for one, " +
+			"so a form reached by pressing a tab is never shaped")
+	}
+}
