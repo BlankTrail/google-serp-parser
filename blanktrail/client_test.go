@@ -143,6 +143,56 @@ func TestClient_OpenPortCarriesTimeoutSecondsAndIdleSecondsIndependently(t *test
 	}
 }
 
+func TestClient_OpenPortSendsUpstreamTLSInsecureOnlyWhenSet(t *testing.T) {
+	// The certificate this is about belongs to the leg between the control
+	// service and the upstream proxy, and only an https:// proxy has one. Sent
+	// unconditionally, an unset false would read to the proxy the same as an
+	// operator who typed it in on purpose — and this one is a deliberate trade
+	// against the CONNECT targets and the proxy's own credentials, made for a
+	// proxy the caller already trusts.
+	c, fake := newTestClient(t)
+
+	spec := DefaultPortSpec()
+	spec.UpstreamTLSInsecure = true
+	if _, err := c.OpenPort(context.Background(), 20013, spec, Egress{}); err != nil {
+		t.Fatalf("OpenPort: %v", err)
+	}
+
+	var sent map[string]any
+	for _, r := range fake.Requests() {
+		if r.Path == "/api/v1/ports/open" {
+			if err := json.Unmarshal([]byte(r.Body), &sent); err != nil {
+				t.Fatalf("decode recorded open body: %v", err)
+			}
+		}
+	}
+	if sent == nil {
+		t.Fatal("no request recorded for /api/v1/ports/open")
+	}
+	if got, ok := sent["upstream_tls_insecure"].(bool); !ok || !got {
+		t.Errorf("open body upstream_tls_insecure=%v, want true", sent["upstream_tls_insecure"])
+	}
+
+	c2, fake2 := newTestClient(t)
+	if _, err := c2.OpenPort(context.Background(), 20014, DefaultPortSpec(), Egress{}); err != nil {
+		t.Fatalf("OpenPort: %v", err)
+	}
+	sent = nil
+	for _, r := range fake2.Requests() {
+		if r.Path == "/api/v1/ports/open" {
+			if err := json.Unmarshal([]byte(r.Body), &sent); err != nil {
+				t.Fatalf("decode recorded open body: %v", err)
+			}
+		}
+	}
+	if sent == nil {
+		t.Fatal("no request recorded for /api/v1/ports/open")
+	}
+	if v, present := sent["upstream_tls_insecure"]; present {
+		t.Errorf("open body carries upstream_tls_insecure=%v when nobody asked for it", v)
+	}
+}
+
 func TestClient_OpenPortSendsSpecAndParsesProfile(t *testing.T) {
 	c, fake := newTestClient(t)
 

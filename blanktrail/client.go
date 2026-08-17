@@ -127,6 +127,15 @@ type PortSpec struct {
 	// Keep PoolConfig.RequestTimeout well above this value.
 	TimeoutSeconds int    // seconds the port waits on one request; 0 leaves it to the proxy
 	LeakGuard      string // "", off, warn, enforce
+
+	// UpstreamTLSInsecure trusts a self-signed certificate on an https:// proxy.
+	// It has no effect on any other scheme: the certificate it is about belongs
+	// to the leg between this control service and the proxy itself, which only
+	// exists when that proxy is reached over TLS. The proxy's login, password and
+	// every CONNECT target travel over that leg, so this is a deliberate trade —
+	// it exists for a proxy the caller already trusts and would otherwise refuse
+	// to open at all.
+	UpstreamTLSInsecure bool
 }
 
 // DefaultPortSpec is the configuration a session-oriented scraper wants: a real
@@ -170,25 +179,26 @@ type PortInfo struct {
 // Note: auto_rotate is deliberately absent. It was removed from the control API
 // — a profile is applied on open by itself.
 type openPortRequest struct {
-	Port            int     `json:"port"`
-	Protocol        string  `json:"protocol"`
-	Mode            string  `json:"mode,omitempty"`
-	Browser         string  `json:"browser,omitempty"`
-	OS              string  `json:"os,omitempty"`
-	Upstream        *string `json:"upstream,omitempty"`
-	UpstreamGateway string  `json:"upstream_gateway,omitempty"`
-	H2Spoofing      *bool   `json:"h2_spoofing,omitempty"`
-	SpoofHeaders    *bool   `json:"spoof_headers,omitempty"`
-	SpoofUserAgent  *bool   `json:"spoof_user_agent,omitempty"`
-	JSSolver        *bool   `json:"js_solver,omitempty"`
-	KeepSessions    *bool   `json:"keep_sessions,omitempty"`
-	Decompress      *bool   `json:"decompress,omitempty"`
-	EnableHTTP3     *bool   `json:"enable_http3,omitempty"`
-	MaxConcurrent   *int    `json:"max_concurrent,omitempty"`
-	RetryDelayMs    *int    `json:"retry_delay_ms,omitempty"`
-	IdleSeconds     *int    `json:"idle_seconds,omitempty"`
-	TimeoutSeconds  *int    `json:"timeout_seconds,omitempty"`
-	LeakGuard       string  `json:"leak_guard,omitempty"`
+	Port                int     `json:"port"`
+	Protocol            string  `json:"protocol"`
+	Mode                string  `json:"mode,omitempty"`
+	Browser             string  `json:"browser,omitempty"`
+	OS                  string  `json:"os,omitempty"`
+	Upstream            *string `json:"upstream,omitempty"`
+	UpstreamGateway     string  `json:"upstream_gateway,omitempty"`
+	H2Spoofing          *bool   `json:"h2_spoofing,omitempty"`
+	SpoofHeaders        *bool   `json:"spoof_headers,omitempty"`
+	SpoofUserAgent      *bool   `json:"spoof_user_agent,omitempty"`
+	JSSolver            *bool   `json:"js_solver,omitempty"`
+	KeepSessions        *bool   `json:"keep_sessions,omitempty"`
+	Decompress          *bool   `json:"decompress,omitempty"`
+	EnableHTTP3         *bool   `json:"enable_http3,omitempty"`
+	MaxConcurrent       *int    `json:"max_concurrent,omitempty"`
+	RetryDelayMs        *int    `json:"retry_delay_ms,omitempty"`
+	IdleSeconds         *int    `json:"idle_seconds,omitempty"`
+	TimeoutSeconds      *int    `json:"timeout_seconds,omitempty"`
+	LeakGuard           string  `json:"leak_guard,omitempty"`
+	UpstreamTLSInsecure *bool   `json:"upstream_tls_insecure,omitempty"`
 }
 
 func (s PortSpec) request(port int, eg Egress) openPortRequest {
@@ -208,6 +218,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 		Decompress:     &dec,
 		EnableHTTP3:    &h3,
 		LeakGuard:      s.LeakGuard,
+	}
+	if s.UpstreamTLSInsecure {
+		v := true
+		req.UpstreamTLSInsecure = &v
 	}
 	if s.MaxConcurrent > 0 {
 		n := s.MaxConcurrent
