@@ -54,6 +54,34 @@ type JobSpec struct {
 	SpecName string
 	Country  string
 	Language string
+
+	// Ports is how many Google identities this job runs on at once, and Threads
+	// is how many queries it keeps in flight over them. They belong to the job
+	// and not to the machine because a pool is raised for one job and taken down
+	// when that job lets go: no two jobs share one, so no two jobs have to agree
+	// on its size.
+	//
+	// Zero means this job named no size. It does not mean a pool of nothing, and
+	// the difference is the whole point: every job written before these fields
+	// existed reads back as zero, and a job recorded last week has to go on
+	// running rather than refuse to.
+	//
+	// What that zero becomes is deliberately decided elsewhere — where pools are
+	// raised, not here. This package has no number it could honestly put in its
+	// place: the size a job that named none should run at is whatever the program
+	// raising pools was configured with, it changes when that configuration
+	// changes, and a store that baked one in would be a second place claiming to
+	// own it. Substituting one on the way in or out would also leave a job that
+	// named nothing indistinguishable from one that named exactly that number,
+	// and telling those two apart is precisely what a page offering to change the
+	// pool has to do.
+	//
+	// A number below nothing is read as nothing named, for the same reason a
+	// non-positive page count is read as one page: it is a fumbled field, not a
+	// run somebody meant, and refusing the whole job over it costs more than it
+	// saves.
+	Ports   int
+	Threads int
 }
 
 // kind is what to write in the column, which is never the empty string.
@@ -66,6 +94,25 @@ func (s JobSpec) kind() string {
 		return KindSearch
 	}
 	return s.Kind
+}
+
+// pool is what to write in the two pool columns.
+//
+// It is one function rather than a line at each of the two places a job is
+// written, because the two must not drift: a job created from a list held in
+// memory and a job created from a file arriving over a connection are the same
+// job, and an operator who cannot tell which path wrote theirs cannot be told
+// that only one of them keeps the numbers.
+func (s JobSpec) pool() (ports, threads int) {
+	return atLeastNone(s.Ports), atLeastNone(s.Threads)
+}
+
+// atLeastNone reads a size below nothing as a size nobody named.
+func atLeastNone(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
 }
 
 // PendingQuery is one piece of work a job has not finished.
@@ -103,11 +150,12 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// none of it is, and there is no moment in between for a reader to see. A
 	// list too large to hold is written by a different path, which sets the flag
 	// after its last batch.
+	ports, threads := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, unique_by, pages, spec_name, country, language, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, unique_by, pages, spec_name, country, language, ports, threads, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), string(spec.UniqueBy), pages,
-		spec.SpecName, spec.Country, spec.Language)
+		spec.SpecName, spec.Country, spec.Language, ports, threads)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -194,7 +242,8 @@ type UnfinishedJob struct {
 // The settings come back with it. A job picked up part way has to run as the
 // job it is: taking today's depth or today's country instead would mix results
 // of two shapes into one run, and nothing in the history would say which rows
-// were which.
+// were which. The pool travels with them, because the run being taken up is the
+// one that raises it.
 //
 // A job whose plan was never finished is passed over rather than chosen. It is
 // the newest job of its name and it is not work, and choosing it would refuse
@@ -205,13 +254,13 @@ type UnfinishedJob struct {
 func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob, error) {
 	var j UnfinishedJob
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, unique_by, pages, spec_name, country, language
+		`SELECT id, name, kind, unique_by, pages, spec_name, country, language, ports, threads
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.UniqueBy, &j.Spec.Pages,
-			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language)
+			&j.Spec.SpecName, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}
@@ -219,6 +268,54 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 		return UnfinishedJob{}, fmt.Errorf("store: looking for an unfinished %q: %w", name, err)
 	}
 	return j, nil
+}
+
+// ErrJobFinished is returned when something a job has already finished is asked
+// to change.
+var ErrJobFinished = errors.New("store: this job has already finished")
+
+// Reshape changes the pool a job will be run on.
+//
+// It changes nothing about the pool a job is running on this minute. The numbers
+// are read when a pool is raised, so a job already under way keeps the one it
+// has and takes the new size at the next raise — the caller has to say that, and
+// this cannot say it for them.
+//
+// A finished job is refused. There is no next raise for it to take, so writing
+// the numbers would leave a row nothing will ever read, and answering nothing at
+// all is the same as answering "applied" to whoever asked.
+//
+// The reading and the write are one transaction because they are one decision:
+// a job that finished between a check outside a transaction and the write after
+// it would take a change this refuses, which is the exact case being refused.
+func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin reshaping job %d: %w", jobID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var finished bool
+	err = tx.QueryRowContext(ctx,
+		`SELECT finished_at IS NOT NULL FROM jobs WHERE id = ?`, jobID).Scan(&finished)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("%w: %d", ErrNoJob, jobID)
+	case err != nil:
+		return fmt.Errorf("store: reading job %d: %w", jobID, err)
+	case finished:
+		return fmt.Errorf("%w: %d", ErrJobFinished, jobID)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE jobs SET ports = ?, threads = ? WHERE id = ?`,
+		atLeastNone(ports), atLeastNone(threads), jobID); err != nil {
+		return fmt.Errorf("store: reshaping job %d: %w", jobID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: committing the reshape of job %d: %w", jobID, err)
+	}
+	return nil
 }
 
 // FinishJob stamps a job as done.

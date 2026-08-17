@@ -325,9 +325,16 @@ func TestLastUnfinished_CarriesTheSettingsTheJobWasCreatedWith(t *testing.T) {
 	// this program has always done — and a resume that read the blank back as a
 	// blank would have to decide all over again what the run it is carrying on
 	// was asking.
+	//
+	// The pool is part of that: the run being taken up is the one that raises it,
+	// so a resume that came back without the numbers would raise whatever the
+	// machine felt like instead of what the job asked for. Ports and threads are
+	// deliberately different numbers, and different from the depth, so that two
+	// of them swapped anywhere along the way is a failure rather than a pass.
 	s := testStore(t)
 	if _, err := s.CreateJob(context.Background(),
-		JobSpec{Name: "nightly", Pages: 3, SpecName: "desktop", Country: "de", Language: "de"},
+		JobSpec{Name: "nightly", Pages: 3, SpecName: "desktop", Country: "de", Language: "de",
+			Ports: 4, Threads: 7},
 		[]string{"a"}); err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -337,9 +344,194 @@ func TestLastUnfinished_CarriesTheSettingsTheJobWasCreatedWith(t *testing.T) {
 		t.Fatalf("LastUnfinished: %v", err)
 	}
 	want := JobSpec{Name: "nightly", Kind: KindSearch, Pages: 3,
-		SpecName: "desktop", Country: "de", Language: "de"}
+		SpecName: "desktop", Country: "de", Language: "de", Ports: 4, Threads: 7}
 	if got.Spec != want {
 		t.Errorf("LastUnfinished returned %+v, want %+v", got.Spec, want)
+	}
+}
+
+// poolOf reads the two pool columns of a job straight out of the database, so a
+// test can tell what was written from what a reader would make of it.
+func poolOf(t *testing.T, s *Store, jobID int64) (ports, threads int) {
+	t.Helper()
+	if err := s.db.QueryRow(`SELECT ports, threads FROM jobs WHERE id = ?`, jobID).
+		Scan(&ports, &threads); err != nil {
+		t.Fatalf("reading the pool of job %d: %v", jobID, err)
+	}
+	return ports, threads
+}
+
+func TestCreateJob_KeepsThePoolTheJobAskedFor(t *testing.T) {
+	// The size of the pool is a property of the job now, not of the machine, and
+	// a job that reached the database without it would be run on whatever number
+	// the program happened to be holding.
+	//
+	// Four ports and seven threads: two different numbers, neither of them the
+	// page count, so a pair written into each other's column fails here instead
+	// of much later, on a run nobody can explain.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "nightly", Pages: 3, Ports: 4, Threads: 7}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if ports, threads := poolOf(t, s, id); ports != 4 || threads != 7 {
+		t.Errorf("the job reads back as %d ports and %d threads, want 4 and 7", ports, threads)
+	}
+}
+
+func TestCreateJob_LeavesAJobThatNamedNoPoolNamingNone(t *testing.T) {
+	// Zero is stored as zero and comes back as zero. It says this job named no
+	// size, which is the one thing every job written before these columns existed
+	// says too, and whoever raises the pool is the only one placed to decide what
+	// that becomes. A number put in here instead would be filed as a size the
+	// operator asked for, and the page offering to change it could never again
+	// tell the two apart.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(), JobSpec{Name: "plain", Pages: 1}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if ports, threads := poolOf(t, s, id); ports != 0 || threads != 0 {
+		t.Errorf("a job that named no pool was stored with %d ports and %d threads, want zero for both",
+			ports, threads)
+	}
+	sum, err := s.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Ports != 0 || sum.Threads != 0 {
+		t.Errorf("a job that named no pool reads back as %d ports and %d threads, want zero for both",
+			sum.Ports, sum.Threads)
+	}
+}
+
+func TestCreateJob_ReadsAPoolBelowNothingAsOneThatWasNeverNamed(t *testing.T) {
+	// A negative is a fumbled field, not a run somebody meant, and it is the one
+	// value the column itself refuses. Turning the whole job away over it costs
+	// more than reading it as the nothing it is.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "j", Pages: 1, Ports: -4, Threads: -7}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if ports, threads := poolOf(t, s, id); ports != 0 || threads != 0 {
+		t.Errorf("a job asking for %d ports and %d threads was stored as %d and %d, want zero for both",
+			-4, -7, ports, threads)
+	}
+}
+
+func TestReshape_ChangesThePoolOfThatJobAndOfNoOther(t *testing.T) {
+	// Two jobs, four different numbers between them. With one job in the fixture,
+	// a statement that changed every row in the table would pass this, and the
+	// first operator to reshape one run would quietly reshape the lot.
+	s := testStore(t)
+	mine, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "mine", Pages: 1, Ports: 4, Threads: 7}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	theirs, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "theirs", Pages: 1, Ports: 9, Threads: 2}, []string{"b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	if err := s.Reshape(context.Background(), mine, 11, 3); err != nil {
+		t.Fatalf("Reshape: %v", err)
+	}
+	if ports, threads := poolOf(t, s, mine); ports != 11 || threads != 3 {
+		t.Errorf("the reshaped job runs on %d ports and %d threads, want 11 and 3", ports, threads)
+	}
+	if ports, threads := poolOf(t, s, theirs); ports != 9 || threads != 2 {
+		t.Errorf("another job was reshaped to %d ports and %d threads, want the 9 and 2 it asked for",
+			ports, threads)
+	}
+}
+
+func TestReshape_RefusesAJobThatHasAlreadyFinished(t *testing.T) {
+	// A finished job will never raise a pool again, so there is nothing for the
+	// new numbers to be read by. Taking them and saying nothing reads as having
+	// applied them, and the operator walks away believing a run that is over will
+	// come back different.
+	//
+	// The second job is unfinished and reshaped afterwards, because a refusal
+	// that refused everything would pass a test that only ever asked about the
+	// finished one. The finished job's pool is read after that second reshape
+	// rather than before it: read first, it would say nothing about a statement
+	// that reshapes every row it can reach on somebody else's behalf.
+	s := testStore(t)
+	done, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "done", Pages: 1, Ports: 4, Threads: 7}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	running, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "running", Pages: 1, Ports: 9, Threads: 2}, []string{"b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.FinishJob(context.Background(), done); err != nil {
+		t.Fatalf("FinishJob: %v", err)
+	}
+
+	if err := s.Reshape(context.Background(), done, 11, 3); !errors.Is(err, ErrJobFinished) {
+		t.Errorf("Reshape returned %v, want ErrJobFinished", err)
+	}
+	if err := s.Reshape(context.Background(), running, 11, 3); err != nil {
+		t.Errorf("a job with work left could not be reshaped: %v", err)
+	}
+	if ports, threads := poolOf(t, s, done); ports != 4 || threads != 7 {
+		t.Errorf("the finished job ended up on %d ports and %d threads, want the 4 and 7 it ran on",
+			ports, threads)
+	}
+}
+
+func TestReshape_RefusesAJobThatIsNotThere(t *testing.T) {
+	// Writing nothing and reporting nothing wrong would tell somebody who typed
+	// the wrong id that their change landed.
+	s := testStore(t)
+	jobWith(t, s, "a")
+	if err := s.Reshape(context.Background(), 4242, 11, 3); !errors.Is(err, ErrNoJob) {
+		t.Errorf("Reshape returned %v, want ErrNoJob", err)
+	}
+}
+
+func TestReshape_TakesTheNumbersAJobIsAlreadyOn(t *testing.T) {
+	// A form is submitted with the fields it was shown, so the commonest reshape
+	// of all changes nothing. Reading that as a job that could not be found would
+	// make the ordinary case look like a failure.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "j", Pages: 1, Ports: 4, Threads: 7}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.Reshape(context.Background(), id, 4, 7); err != nil {
+		t.Errorf("Reshape of a job onto the pool it already has: %v", err)
+	}
+	if ports, threads := poolOf(t, s, id); ports != 4 || threads != 7 {
+		t.Errorf("the job runs on %d ports and %d threads, want 4 and 7", ports, threads)
+	}
+}
+
+func TestReshape_ReadsAPoolBelowNothingAsOneThatWasNeverNamed(t *testing.T) {
+	// The same reading the job was created under. A reshape that stored what
+	// creation refuses would leave the column holding a number no pool can be
+	// built from.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "j", Pages: 1, Ports: 4, Threads: 7}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.Reshape(context.Background(), id, -4, -7); err != nil {
+		t.Fatalf("Reshape: %v", err)
+	}
+	if ports, threads := poolOf(t, s, id); ports != 0 || threads != 0 {
+		t.Errorf("a reshape to %d ports and %d threads stored %d and %d, want zero for both",
+			-4, -7, ports, threads)
 	}
 }
 

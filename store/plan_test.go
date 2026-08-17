@@ -422,3 +422,28 @@ func TestOpenPlan_FilesTheJobUnderTheKindItWasAskedFor(t *testing.T) {
 		t.Errorf("an uploaded job reads as kind %q, want %q", sum.Kind, KindIndex)
 	}
 }
+
+func TestOpenPlan_KeepsThePoolTheJobAskedFor(t *testing.T) {
+	// A list of any size arrives by this door and no other, so a pool this door
+	// dropped would be a pool nobody could ask for on the only jobs large enough
+	// to care about its size. Four and seven are different numbers on purpose:
+	// written into each other's column they would still add up here.
+	s := testStore(t)
+	p, err := s.OpenPlan(t.Context(), JobSpec{Name: "uploaded", Pages: 1, Ports: 4, Threads: 7})
+	if err != nil {
+		t.Fatalf("OpenPlan: %v", err)
+	}
+	if err := p.Add(t.Context(), "iphone 13"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := p.Ready(t.Context()); err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	sum, err := s.Progress(t.Context(), p.JobID())
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Ports != 4 || sum.Threads != 7 {
+		t.Errorf("an uploaded job runs on %d ports and %d threads, want 4 and 7", sum.Ports, sum.Threads)
+	}
+}

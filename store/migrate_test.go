@@ -10,11 +10,31 @@ import (
 	"testing"
 )
 
+// windBackToVersionThree turns a database this build has just made into the one
+// the build before the pool columns would have left behind.
+func windBackToVersionThree(t *testing.T, s *Store) {
+	t.Helper()
+	for _, stmt := range []string{
+		`ALTER TABLE jobs DROP COLUMN ports`,
+		`ALTER TABLE jobs DROP COLUMN threads`,
+		`PRAGMA user_version = 3`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("winding back with %q: %v", stmt, err)
+		}
+	}
+}
+
 // windBackToVersionOne turns a database this build has just made into the
 // database the first build would have left behind: every column and table the
 // steps after it brought is gone, and the stamp says 1.
+//
+// It goes through the wind-back for each version rather than listing every
+// column itself, so that a step added without a wind-back for it is a test that
+// fails rather than a step the upgrade path is never asked to run.
 func windBackToVersionOne(t *testing.T, s *Store) {
 	t.Helper()
+	windBackToVersionThree(t, s)
 	for _, stmt := range []string{
 		`ALTER TABLE jobs DROP COLUMN dropped`,
 		`DROP TABLE seen`,
@@ -101,13 +121,16 @@ func TestOpen_CarriesAnOlderDatabaseAndEverythingInItToThisVersion(t *testing.T)
 	}
 
 	var kind, uniqueBy string
-	var dropped int
-	if err := again.db.QueryRow(`SELECT kind, unique_by, dropped FROM jobs WHERE id = ?`, id).
-		Scan(&kind, &uniqueBy, &dropped); err != nil {
+	var dropped, ports, threads int
+	if err := again.db.QueryRow(`SELECT kind, unique_by, dropped, ports, threads FROM jobs WHERE id = ?`, id).
+		Scan(&kind, &uniqueBy, &dropped, &ports, &threads); err != nil {
 		t.Fatalf("reading the new columns: %v", err)
 	}
 	if kind != "search" || uniqueBy != "" || dropped != 0 {
 		t.Errorf("a job from before the columns existed reads as kind %q, unique_by %q, %d dropped — want a plain search that filtered nothing", kind, uniqueBy, dropped)
+	}
+	if ports != 0 || threads != 0 {
+		t.Errorf("a job from before the pool columns existed reads as %d ports and %d threads — want the zero that says it named none", ports, threads)
 	}
 
 	if _, err := again.db.Exec(`INSERT INTO seen(job_id, key) VALUES(?, 'https://one.test/1')`, id); err != nil {
@@ -143,6 +166,73 @@ func TestOpen_LeavesAJobFromBeforeThePlanFlagResumable(t *testing.T) {
 
 	if _, err := again.LastUnfinished(context.Background(), "j"); err != nil {
 		t.Errorf("a job that came through the upgrade cannot be taken up: %v", err)
+	}
+}
+
+func TestOpen_CarriesAJobWrittenBeforeThePoolColumnsAndLeavesItRunnable(t *testing.T) {
+	// The one upgrade this version makes, run against a database with a night's
+	// work in it rather than an empty one — an empty database would take any step
+	// that compiles.
+	//
+	// A job recorded before a job could carry a pool has to go on being work. It
+	// comes back saying it named no size, which is what the raising of a pool is
+	// prepared for, rather than a size of nothing, which is a job that would
+	// never run again.
+	path := filepath.Join(t.TempDir(), "gserp.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	id := jobWith(t, s, "a", "b")
+	mustRecord(t, s, id, 0, "one.test", "two.test")
+	windBackToVersionThree(t, s)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a version-3 database: %v", err)
+	}
+	defer func() { _ = again.Close() }()
+
+	var version int
+	if err := again.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("reading the version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Errorf("the upgraded database says version %d, want %d", version, schemaVersion)
+	}
+
+	sum, err := again.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Total != 2 || sum.Done != 1 {
+		t.Errorf("the upgraded job reads as %d queries, %d done — want 2 and 1", sum.Total, sum.Done)
+	}
+	if sum.Ports != 0 || sum.Threads != 0 {
+		t.Errorf("a job from before the columns reads as %d ports and %d threads, want neither named",
+			sum.Ports, sum.Threads)
+	}
+
+	taken, err := again.LastUnfinished(context.Background(), "j")
+	if err != nil {
+		t.Fatalf("a job that came through the upgrade cannot be taken up: %v", err)
+	}
+	if taken.Spec.Ports != 0 || taken.Spec.Threads != 0 {
+		t.Errorf("the resumed job asks for %d ports and %d threads, want neither named",
+			taken.Spec.Ports, taken.Spec.Threads)
+	}
+	pending, err := again.Pending(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Errorf("%d queries left to run after the upgrade, want the one that was not done", len(pending))
+	}
+	if err := again.Reshape(context.Background(), id, 5, 9); err != nil {
+		t.Errorf("a job that came through the upgrade cannot be given a pool: %v", err)
 	}
 }
 
@@ -296,6 +386,37 @@ func TestJobs_TakeOnlyTheKindsAndFiltersThatMeanSomething(t *testing.T) {
 			 VALUES('j', '2026-08-16T10:00:00Z', 1, ?)`, c.value)
 		if got := err == nil; got != c.want {
 			t.Errorf("%s = %q was %s (%v), want it %s",
+				c.column, c.value,
+				map[bool]string{true: "taken", false: "refused"}[got], err,
+				map[bool]string{true: "taken", false: "refused"}[c.want])
+		}
+	}
+}
+
+func TestJobs_RefuseAPoolSmallerThanNothing(t *testing.T) {
+	// Nothing this package writes can get here — a size below nothing is read as
+	// a size nobody named long before the insert — so this is the guard against a
+	// writer that went around it. Zero has a meaning and has to be taken; minus
+	// one has none under any reading, and a job carrying it would be raised
+	// against a number no pool can be built from.
+	s := testStore(t)
+	for _, c := range []struct {
+		column string
+		value  int
+		want   bool
+	}{
+		{"ports", 0, true},
+		{"ports", 4, true},
+		{"ports", -1, false},
+		{"threads", 0, true},
+		{"threads", 7, true},
+		{"threads", -1, false},
+	} {
+		_, err := s.db.Exec(
+			`INSERT INTO jobs(name, created_at, pages, `+c.column+`)
+			 VALUES('j', '2026-08-16T10:00:00Z', 1, ?)`, c.value)
+		if got := err == nil; got != c.want {
+			t.Errorf("%s = %d was %s (%v), want it %s",
 				c.column, c.value,
 				map[bool]string{true: "taken", false: "refused"}[got], err,
 				map[bool]string{true: "taken", false: "refused"}[c.want])

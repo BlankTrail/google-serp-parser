@@ -188,6 +188,54 @@ func TestProgress_CarriesTheSettingsAndTheTimes(t *testing.T) {
 	}
 }
 
+func TestJobs_CarryThePoolEachOfThemRunsOn(t *testing.T) {
+	// Two jobs no longer share a pool, so a listing that showed one job's numbers
+	// against another's name would be describing runs that never happened.
+	//
+	// All four numbers differ, and neither job's pair matches the other's or its
+	// own depth. That is what makes this say something: with two jobs asking for
+	// the same pool, a listing reading one row's ports for every row would pass,
+	// and with ports equal to threads a pair of columns read in the wrong order
+	// would pass as well.
+	s := testStore(t)
+	small, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "small", Pages: 1, Ports: 4, Threads: 7}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	stampJob(t, s, small, "2026-08-01T10:00:00Z")
+	large, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "large", Pages: 1, Ports: 9, Threads: 2}, []string{"b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	stampJob(t, s, large, "2026-08-02T10:00:00Z")
+
+	listed, err := s.Jobs(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	want := map[int64][2]int{small: {4, 7}, large: {9, 2}}
+	if len(listed) != len(want) {
+		t.Fatalf("%d jobs listed, want %d", len(listed), len(want))
+	}
+	for _, got := range listed {
+		if w := want[got.ID]; got.Ports != w[0] || got.Threads != w[1] {
+			t.Errorf("job %q is listed on %d ports and %d threads, want %d and %d",
+				got.Name, got.Ports, got.Threads, w[0], w[1])
+		}
+	}
+
+	one, err := s.Progress(context.Background(), small)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if one.Ports != 4 || one.Threads != 7 {
+		t.Errorf("job %q reads on its own as %d ports and %d threads, want 4 and 7",
+			one.Name, one.Ports, one.Threads)
+	}
+}
+
 func TestProgress_SaysAFinishedJobIsFinished(t *testing.T) {
 	s := testStore(t)
 	id := jobWith(t, s, "a")
