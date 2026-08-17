@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -508,12 +509,30 @@ func groupChannels(assigned []Channel) [][]Channel {
 // openOne opens one port under spec on eg and returns the number it settled on.
 // Every number it worked through, opened or not, is recorded in used.
 //
-// A number the proxy just suggested can still refuse to open. The proxy knows
-// about the ports it holds itself and nothing else on the machine, and a number
-// this program has only just closed is kept by the operating system for a while
-// afterwards. With a pool that lives for one job — opened and closed all day —
-// that stops being rare, so a taken number costs another number rather than the
-// whole pool.
+// A number the proxy just suggested can still be held by something else. The
+// proxy knows about the ports it holds itself and nothing else on the machine,
+// and a number this program has only just closed is kept by the operating system
+// for a while afterwards. With a pool that lives for one job — opened and closed
+// all day — that stops being rare, so a taken number costs another number rather
+// than the whole pool.
+//
+// Whether a number is free is asked of THIS MACHINE, before the proxy is asked
+// to stand on it — see numberFree. Asking the proxy is useless, and that is
+// measured rather than assumed: against the live service on 127.0.0.1:8891, a
+// number an ordinary listener on this machine already held was answered with
+// 200 and "opened", was listed among the open ports afterwards, and then never
+// answered a single request through it — twelve seconds and nothing. Both the
+// answer and the list say the same thing about a port that works and a port that
+// cannot exist, so neither can be believed. A listener can.
+//
+// The check races and nothing can stop it racing: between this program closing
+// its listener and the proxy binding the number, some other program on the
+// machine can take it. The window is the width of one control-API call, against
+// a port that then lives for a whole job, so narrowing it is worth what it
+// costs — but narrowing is all it is, and that is precisely why the check does
+// not replace the handling of a refusal below. The two cover different halves:
+// the check catches what this machine can see is taken, the refusal catches what
+// it cannot, including whatever slips into that window.
 //
 // A number that was refused is left exactly as it was found: whatever holds it,
 // this program did not open it, and reaching for a port it does not own is the
@@ -534,8 +553,15 @@ func (p *Pool) openOne(ctx context.Context, used map[int]bool, spec PortSpec, eg
 		}
 		// The number is spent whether or not it opens: pickPort avoids only what
 		// used holds, so a refused number left unmarked would be handed back on
-		// the next turn and refused again for as long as the attempts last.
+		// the next turn and refused again for as long as the attempts last. That
+		// holds for a number this machine refuses just as it holds for one the
+		// proxy refuses — the number is no freer the second time it is looked at.
 		used[num] = true
+
+		if err := p.numberFree(num); err != nil {
+			lastTaken = err
+			continue
+		}
 
 		if _, err := p.cl.OpenPort(ctx, num, spec, eg); err != nil {
 			if !numberTaken(err) {
@@ -550,14 +576,60 @@ func (p *Pool) openOne(ctx context.Context, used map[int]bool, spec PortSpec, eg
 		tries, lastTaken)
 }
 
+// numberFree asks this machine whether num is still free on the host the ports
+// live on, and returns nil when it is. A non-nil error means the number is held
+// by something and the pool should take a different one.
+//
+// The question is asked the only way it can be answered honestly: by opening a
+// listener on that exact address and closing it again immediately. Immediately,
+// and not on a defer at the end of the open: the number has to be free again
+// before the proxy is asked to bind it, or the only program standing in the
+// proxy's way would be this one.
+//
+// A bind can also fail for reasons that say nothing about the number — the host
+// may not be an address of this machine at all, which is the case whenever the
+// proxy runs somewhere else. Telling that apart needs no error codes: ask the
+// same host for any port at all. If even that is refused, the failure was about
+// the host, this check has no opinion, and the number goes to the proxy to be
+// judged there. Reading such a failure as "taken" would work through every
+// number in the range and open no ports whatsoever.
+//
+// Binding is also what keeps the answer honest from one system to the next. The
+// check asks the question the proxy's own bind will ask, so whatever the rules
+// are about a number just released — Windows refuses it for a while, Linux with
+// SO_REUSEADDR does not — the check inherits them rather than guessing at them.
+func (p *Pool) numberFree(num int) error {
+	ln, err := net.Listen("tcp", net.JoinHostPort(p.host, strconv.Itoa(num)))
+	if err == nil {
+		_ = ln.Close()
+		return nil
+	}
+	// Any port at all on the same host: this separates a number that is held
+	// from a host this machine cannot bind on in the first place.
+	probe, probeErr := net.Listen("tcp", net.JoinHostPort(p.host, "0"))
+	if probeErr != nil {
+		return nil
+	}
+	_ = probe.Close()
+	return fmt.Errorf("blanktrail: port %d is already held on %s by something outside the proxy: %w", num, p.host, err)
+}
+
 // numberTaken reports whether an OpenPort failure was about the port NUMBER —
 // something already holds it — and could therefore succeed on another one.
 //
 // This is the one judgement in the retry, and it cannot be made with certainty.
-// What a live BlankTrail answers when a number is busy has not been measured;
 // 409 Conflict is the status HTTP has for "what you named is already taken" and
-// what the fake control API answers, but nothing rules out the proxy reporting
-// the bind failure as a 500, or a 400 with the reason in the body.
+// what the fake control API answers, but nothing rules out a proxy reporting the
+// bind failure as a 500, or a 400 with the reason in the body.
+//
+// What IS measured is that the live service answers none of those. Asked to open
+// a number this machine already held, it answered 200 and "opened" and listed
+// the port afterwards; requests through that port then hung until the deadline.
+// So against that service this test never fires, and the reason a number is
+// stepped over is numberFree above, not anything read out of an answer. It is
+// kept because it costs nothing, because it is right for a service that does
+// report the conflict, and because the window numberFree cannot close is exactly
+// the one a conflict would be reported in.
 //
 // So the list is deliberately short and errs towards NOT trying another number.
 // Both mistakes are possible and they are not equal:
@@ -570,8 +642,9 @@ func (p *Pool) openOne(ctx context.Context, used map[int]bool, spec PortSpec, eg
 //     one.
 //
 // The second is the worse trade, so anything not on this list ends the open and
-// carries its own error out. When a run against a real proxy shows what a busy
-// number actually answers, this is the place to add it.
+// carries its own error out. If some other proxy is ever seen answering a busy
+// number with a status of its own, this is the place to add it — but do not add
+// the one measured here, because what it answers is 200.
 //
 // A failure that is not an *APIError never reached the proxy at all — a refused
 // connection, a spent deadline — and no other number would fare better.

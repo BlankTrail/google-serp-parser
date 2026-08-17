@@ -120,12 +120,19 @@ func poolFacing(t *testing.T, originAddr string, ports int, tune ...func(*blankt
 	}
 
 	f := &facing{byPort: map[int]int{}}
+	// Reserving the numbers is what makes them a free consecutive run; holding
+	// them while the pool opens would defeat it. NewPool asks this machine
+	// whether a number is free before it asks the proxy to stand on it, because
+	// a number something here already holds is one the proxy reports "opened"
+	// for and nothing ever answers on. So the reservation is let go before the
+	// pool looks, and the stand-ins take the same numbers back once the pool
+	// holds them — which is also the order the real thing runs in: the proxy
+	// binds the port when it is opened, and not before.
 	lns := reserveConsecutive(t, ports)
-	for _, ln := range lns {
-		port := ln.Addr().(*net.TCPAddr).Port
-		go serveStandIn(ln, originAddr, func() { f.carried(port) })
-	}
 	first := lns[0].Addr().(*net.TCPAddr).Port
+	for _, ln := range lns {
+		_ = ln.Close()
+	}
 
 	ups, bad := blanktrail.Parse("192.0.2.1:1080\n192.0.2.2:1080\n192.0.2.3:1080\n192.0.2.4:1080", "socks5")
 	if len(bad) > 0 {
@@ -153,6 +160,17 @@ func poolFacing(t *testing.T, originAddr string, ports int, tune ...func(*blankt
 		t.Fatalf("NewPool: %v", err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
+
+	for i := 0; i < ports; i++ {
+		port := first + i
+		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			t.Fatalf("the stand-in for port %d could not take the number back: %v", port, err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		go serveStandIn(ln, originAddr, func() { f.carried(port) })
+	}
+
 	f.Pool = p
 	return f
 }
@@ -160,16 +178,19 @@ func poolFacing(t *testing.T, originAddr string, ports int, tune ...func(*blankt
 // reserveConsecutive holds a run of consecutive loopback ports, which is what
 // the pool can be pointed at: it takes a range and opens the first free ports
 // inside it.
+//
+// The run is searched for in a fixed band rather than taken from the numbers
+// the operating system hands out on its own. Those are the numbers it also
+// gives to outgoing connections, and this run is let go of before the pool
+// opens on it: on Windows a number released at 61000 was handed straight to one
+// of the pool's own control-API connections and was gone by the time the pool
+// asked for it. 31000–32000 is below both the Windows dynamic range and the
+// Linux one, and above the band the product's own proxies live in. The pool's
+// own tests search a band below this one, so two packages under test at once do
+// not take numbers from each other.
 func reserveConsecutive(t *testing.T, n int) []net.Listener {
 	t.Helper()
-	for attempt := 0; attempt < 40; attempt++ {
-		probe, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("listen: %v", err)
-		}
-		base := probe.Addr().(*net.TCPAddr).Port
-		_ = probe.Close()
-
+	for base := 31000; base+n <= 32000; base += n {
 		lns := make([]net.Listener, 0, n)
 		for i := 0; i < n; i++ {
 			ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(base+i)))

@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1603,7 +1605,12 @@ func TestNewPool_APortNumberAlreadyTakenCostsAnotherNumberNotThePool(t *testing.
 	// that number, not about the pool.
 	fake := fakebt.New(t)
 	clock := newFakeClock()
-	const taken, free = 20000, 20001
+	// Two numbers this machine has just proved free, so that the pool's own
+	// check of them (numberFree) has nothing to say and the refusal under test
+	// is the only thing standing in the way.
+	run := freeRun(t, 2)
+	taken, free := portOf(run[0]), portOf(run[1])
+	closeAll(t, run)
 
 	r := &refuseOpen{refuse: func(port, _ int) (int, string, bool) {
 		return http.StatusConflict, portTakenBody, port == taken
@@ -1642,7 +1649,7 @@ func TestNewPool_APortNumberAlreadyTakenCostsAnotherNumberNotThePool(t *testing.
 	// a port it does not own is the one thing the pool must never do.
 	p.Close()
 	for _, req := range fake.Requests() {
-		if req.Path == "/api/v1/ports/close" && strings.Contains(req.Body, `"port":20000`) {
+		if req.Path == "/api/v1/ports/close" && strings.Contains(req.Body, fmt.Sprintf(`"port":%d`, taken)) {
 			t.Errorf("the pool closed port %d, which it never opened", taken)
 		}
 	}
@@ -1803,6 +1810,339 @@ func TestNewPool_GivesUpOnTakenNumbersAtTheCeilingTheSearchAlreadyUses(t *testin
 	}
 	if got := fake.OpenPorts(); len(got) != 0 {
 		t.Errorf("ports left open after a pool that never came up: %v", got)
+	}
+}
+
+// liveLikeControl stands in for the control API as it was actually measured,
+// not as a well-behaved one would be.
+//
+// Two things it does that the plain fake cannot:
+//
+//   - It hands out the port numbers the test lists, in the order listed, so a
+//     test can put a number this machine holds anywhere in the sequence rather
+//     than wherever the machine happened to put it. When the list runs out the
+//     real fake answers, which is a genuinely free number.
+//   - It answers every open with the fake's own 200 "opened" — and separately
+//     tries to bind the number itself, the way a proxy that really opened a port
+//     would have to, recording the numbers where that failed. Against the live
+//     service on 127.0.0.1:8891 the answer was 200 for a number this machine
+//     already held; the port was then listed and dead. So "opened" proves
+//     nothing, and what the test asks instead is whether a port could have
+//     existed at all.
+type liveLikeControl struct {
+	rt      http.RoundTripper
+	suggest []int
+
+	mu     sync.Mutex
+	handed int
+	opened []int
+	dead   []int
+	held   []net.Listener
+}
+
+func (m *liveLikeControl) RoundTrip(req *http.Request) (*http.Response, error) {
+	switch req.URL.Path {
+	case "/api/v1/ports/suggest":
+		m.mu.Lock()
+		var num int
+		if m.handed < len(m.suggest) {
+			num = m.suggest[m.handed]
+			m.handed++
+		}
+		m.mu.Unlock()
+		if num == 0 {
+			return m.rt.RoundTrip(req)
+		}
+		return jsonResponse(req, http.StatusOK, fmt.Sprintf(`{"port":%d}`, num))
+	case "/api/v1/ports/open":
+		return m.serveOpen(req)
+	}
+	return m.rt.RoundTrip(req)
+}
+
+func (m *liveLikeControl) serveOpen(req *http.Request) (*http.Response, error) {
+	raw, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(raw))
+
+	var open struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(raw, &open); err != nil {
+		return nil, err
+	}
+	// A proxy opening a port has to bind it. This one does the same, and keeps
+	// what it bound: a number handed back to the pool has to stay the pool's.
+	ln, bindErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", open.Port))
+
+	m.mu.Lock()
+	m.opened = append(m.opened, open.Port)
+	if bindErr != nil {
+		m.dead = append(m.dead, open.Port)
+	} else {
+		m.held = append(m.held, ln)
+	}
+	m.mu.Unlock()
+
+	return m.rt.RoundTrip(req)
+}
+
+// opens lists the numbers the control API was asked to open, in order.
+func (m *liveLikeControl) opens() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]int(nil), m.opened...)
+}
+
+// deadPorts lists the numbers it answered "opened" on and could not bind — the
+// ports that are listed, counted, leased out, and answer nothing.
+func (m *liveLikeControl) deadPorts() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]int(nil), m.dead...)
+}
+
+func (m *liveLikeControl) close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ln := range m.held {
+		_ = ln.Close()
+	}
+	m.held = nil
+}
+
+func jsonResponse(req *http.Request, status int, body string) (*http.Response, error) {
+	return &http.Response{
+		StatusCode:    status,
+		Status:        http.StatusText(status),
+		Header:        http.Header{"Content-Type": []string{"application/json"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Request:       req,
+	}, nil
+}
+
+// poolConfigVia is testPoolConfig with every control-API call going through rt.
+func poolConfigVia(t *testing.T, fake *fakebt.Server, clock *fakeClock, threads, perThread int, rt http.RoundTripper) PoolConfig {
+	t.Helper()
+	cfg := testPoolConfig(t, fake, clock, threads, perThread)
+	c, err := NewClient(fake.URL(), fake.Key(), WithHTTPClient(&http.Client{Transport: rt, Timeout: 15 * time.Second}))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	cfg.Client = c
+	return cfg
+}
+
+// freeRun binds n consecutive port numbers on the loopback and hands back the
+// listeners, still open — so the numbers are this machine's until the test lets
+// them go. Holding them is what makes them dependable: a number merely reported
+// free a moment ago can be taken by anything before it is used.
+//
+// The band matters. Numbers the operating system hands out by itself are the
+// ones it also gives to outgoing connections, and these are let go of before
+// the pool looks at them: a number released at 61000 on Windows was handed to
+// one of the test's own connections before the pool got there. 30000–31000 is
+// below the dynamic range of both Windows and Linux and above the band the
+// product's own proxies live in, and the run package searches the band above
+// this one, so two packages under test at once do not take numbers from each
+// other.
+func freeRun(t *testing.T, n int) []net.Listener {
+	t.Helper()
+	for base := 30000; base+n <= 31000; base += n {
+		lns := make([]net.Listener, 0, n)
+		for i := 0; i < n; i++ {
+			ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", base+i))
+			if err != nil {
+				break
+			}
+			lns = append(lns, ln)
+		}
+		if len(lns) == n {
+			t.Cleanup(func() { closeAll(t, lns) })
+			return lns
+		}
+		closeAll(t, lns)
+	}
+	t.Fatalf("no run of %d free ports between 30000 and 31000 on this machine", n)
+	return nil
+}
+
+// portOf reports the number a held listener occupies.
+func portOf(ln net.Listener) int { return ln.Addr().(*net.TCPAddr).Port }
+
+// closeAll releases held numbers at once. Closing is not deferred anywhere a
+// number is about to be opened: the point of the arrangement is which numbers
+// are free at the moment the pool looks.
+func closeAll(t *testing.T, lns []net.Listener) {
+	t.Helper()
+	for _, ln := range lns {
+		_ = ln.Close()
+	}
+}
+
+func TestNewPool_StepsOverANumberThisMachineHoldsAlthoughTheProxySaysYes(t *testing.T) {
+	// The measured fault, whole: the service answers 200 and lists a port it
+	// cannot possibly have bound, so the pool has to ask the machine instead.
+	//
+	// The arrangement is deliberately not "the first number is held". Both
+	// held numbers come after one that opens, and they come in a pair, so a
+	// check made once per port — or only on the first number of an open, or only
+	// after the first refusal — fails here while passing the easy stand.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+
+	run := freeRun(t, 4)
+	first, busy, alsoBusy, second := portOf(run[0]), portOf(run[1]), portOf(run[2]), portOf(run[3])
+	// The two in the middle stay held for the whole test; the outer two are the
+	// machine's answer to what the pool may have.
+	closeAll(t, []net.Listener{run[0], run[3]})
+
+	m := &liveLikeControl{
+		rt:      http.DefaultTransport,
+		suggest: []int{first, busy, alsoBusy, second},
+	}
+	defer m.close()
+	cfg := poolConfigVia(t, fake, clock, 1, 2, m)
+	cfg.ProxyHost = "127.0.0.1"
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if got, want := m.opens(), []int{first, second}; !sameInts(got, want) {
+		t.Errorf("the proxy was asked to open %v, want %v: %d and %d are held by this machine and would answer nothing",
+			got, want, busy, alsoBusy)
+	}
+	if got := m.deadPorts(); len(got) != 0 {
+		t.Errorf("the proxy could not bind %v although it answered that they opened — "+
+			"a number checked and not let go again is a number the proxy cannot have", got)
+	}
+	if got, want := fake.OpenPorts(), []int{first, second}; !sameInts(got, want) {
+		t.Errorf("the pool holds %v, want %v", got, want)
+	}
+	if p.Size() != 2 {
+		t.Errorf("Size=%d, want 2", p.Size())
+	}
+}
+
+func TestNewPool_ANumberThisMachineHoldsIsNotOfferedToItselfTwice(t *testing.T) {
+	// A held number has to be written down as spent exactly like a refused one.
+	// The port range makes the pool walk the numbers in order, so one it stepped
+	// over and did not write down is the very next number it is handed — and the
+	// open runs out of attempts on a range with one busy number in it.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+
+	run := freeRun(t, 3)
+	lo, held, hi := portOf(run[0]), portOf(run[1]), portOf(run[2])
+	closeAll(t, []net.Listener{run[0], run[2]}) // run[1] stays this machine's
+
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.ProxyHost = "127.0.0.1"
+	cfg.PortRange = [2]int{lo, hi}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if got, want := fake.OpenPorts(), []int{lo, hi}; !sameInts(got, want) {
+		t.Errorf("the pool holds %v, want %v — %d is held by this machine", got, want, held)
+	}
+}
+
+func TestNewPool_SaysWhichNumberThisMachineHeldWhenNoneAreLeft(t *testing.T) {
+	// Every number in the range is held here. "The range is exhausted" alone
+	// reads as a range too small for the pool and sends the operator to widen
+	// it; the number that was actually in the way has to come out with it.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+
+	run := freeRun(t, 2) // both stay held for the whole test
+	lo, hi := portOf(run[0]), portOf(run[1])
+
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.ProxyHost = "127.0.0.1"
+	cfg.PortRange = [2]int{lo, hi}
+
+	p, err := NewPool(context.Background(), cfg)
+	if err == nil {
+		p.Close()
+		t.Fatal("NewPool came up on a range where this machine holds every number")
+	}
+	if got := err.Error(); !strings.Contains(got, fmt.Sprintf("port %d is already held", hi)) {
+		t.Errorf("error %q does not name a number this machine is holding", got)
+	}
+	if got := fake.OpenPorts(); len(got) != 0 {
+		t.Errorf("the proxy was asked to open %v, and every one of them is held here", got)
+	}
+}
+
+func TestNewPool_AsksAboutTheAddressThePortsWillLiveOnAndNoOther(t *testing.T) {
+	// A number is taken only on the address it is taken on: 127.0.0.1:N and
+	// 127.0.0.2:N are two sockets, and this machine holds both at once —
+	// measured, on Windows and on Linux. The pool's ports live on ProxyHost, so
+	// ProxyHost is what the question has to be asked about; a check nailed to
+	// the loopback would step over numbers that are free where the ports are.
+	//
+	// On a machine with no second loopback address the check falls silent and
+	// the number goes through for that reason instead, which this test cannot
+	// tell apart — it can only fail when the check is asked about the wrong one.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+
+	run := freeRun(t, 1)
+	num := portOf(run[0]) // held on 127.0.0.1, and only there
+
+	m := &liveLikeControl{rt: http.DefaultTransport, suggest: []int{num}}
+	cfg := poolConfigVia(t, fake, clock, 1, 1, m)
+	cfg.ProxyHost = "127.0.0.2"
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	if got, want := fake.OpenPorts(), []int{num}; !sameInts(got, want) {
+		t.Errorf("the pool holds %v, want %v: %d is held on 127.0.0.1, and the ports live on 127.0.0.2",
+			got, want, num)
+	}
+}
+
+func TestNewPool_DoesNotJudgeNumbersOnAHostThatIsNotThisMachine(t *testing.T) {
+	// The check speaks for one machine: the one it runs on. Point ProxyHost at a
+	// proxy running elsewhere and every bind here fails for a reason that has
+	// nothing to do with the number. Reading those as "taken" would walk the
+	// whole range and open nothing at all — the check has to fall silent
+	// instead and let the proxy answer.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+
+	run := freeRun(t, 1)
+	num := portOf(run[0]) // held here, and here is not where the proxy is
+
+	m := &liveLikeControl{rt: http.DefaultTransport, suggest: []int{num}}
+	cfg := poolConfigVia(t, fake, clock, 1, 1, m)
+	// TEST-NET-1 (RFC 5737): reserved for documentation, so it is not an address
+	// of this machine and nothing can be bound on it.
+	cfg.ProxyHost = "192.0.2.1"
+
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool refused a number it cannot have an opinion about: %v", err)
+	}
+	defer p.Close()
+
+	if got, want := fake.OpenPorts(), []int{num}; !sameInts(got, want) {
+		t.Errorf("the pool holds %v, want %v", got, want)
 	}
 }
 
