@@ -193,6 +193,17 @@ func poolConfig(threads, ports int) blanktrail.PoolConfig {
 		DelayMin:       shortestPause,
 		DelayMax:       longestPause,
 		ReviveAfter:    time.Minute,
+		// A fresh connection for every request, and the reason is measured. The
+		// connection this program keeps alive ends at the proxy on this machine,
+		// not at the address the work actually travels through — so it goes on
+		// looking healthy long after the route behind it has died, and the next
+		// request is handed a tunnel to nowhere. On a live list, keeping them
+		// alive answered 1.1 queries a minute against 4.3 for opening one each
+		// time, at a cost of one handshake — measured at a second and a half.
+		//
+		// Nothing about the identity is lost by it: the cookies and the profile
+		// belong to the port, which the proxy keeps, and not to the connection.
+		NoKeepAlives: true,
 	}
 }
 

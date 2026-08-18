@@ -48,7 +48,7 @@ type RequestTrace struct {
 // newBaseTransport builds the HTTP-CONNECT transport that talks to one proxy
 // port. The port terminates the tunnelled TLS and presents a certificate chained
 // to the proxy's CA, so the client must trust that CA.
-func newBaseTransport(proxyHost string, port int, ca *x509.CertPool, insecure bool) *http.Transport {
+func newBaseTransport(proxyHost string, port int, ca *x509.CertPool, insecure, noKeepAlives bool) *http.Transport {
 	proxyURL := &url.URL{Scheme: "http", Host: net.JoinHostPort(proxyHost, strconv.Itoa(port))}
 	tlsCfg := &tls.Config{}
 	if insecure {
@@ -59,6 +59,7 @@ func newBaseTransport(proxyHost string, port int, ca *x509.CertPool, insecure bo
 	return &http.Transport{
 		Proxy:               http.ProxyURL(proxyURL),
 		TLSClientConfig:     tlsCfg,
+		DisableKeepAlives:   noKeepAlives,
 		MaxIdleConns:        4,
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     90 * time.Second,

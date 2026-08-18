@@ -109,6 +109,17 @@ type PoolConfig struct {
 	// [PortRange[0], PortRange[1]]. Otherwise the proxy suggests free ports.
 	PortRange [2]int
 
+	// NoKeepAlives opens a fresh connection for every request instead of keeping
+	// one alive between them.
+	//
+	// Reuse is worth a handshake and nothing more, and it is not always worth
+	// even that: a request handed a pooled tunnel has been measured waiting tens
+	// of seconds — minutes, at worst — for a first byte that a request on its own
+	// connection got in four, with the whole of that spent after it had been
+	// sent. What costs it is the proxy's, not this program's, so this is a switch
+	// rather than a rule.
+	NoKeepAlives bool
+
 	// Trace, when set, is told how every request through every port went: where
 	// it was when it stopped waiting, and what it got. It is off unless somebody
 	// asks, because the timing hooks cost a little on each request — and because
@@ -534,7 +545,7 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 			specName:  specNames[i],
 			spec:      spec,
 			hot:       hot,
-			base:      newBaseTransport(host, num, p.cfg.CA, p.cfg.Insecure),
+			base:      newBaseTransport(host, num, p.cfg.CA, p.cfg.Insecure, p.cfg.NoKeepAlives),
 			renewedAt: p.cfg.Now(),
 		}
 		// lastUsed stays zero so a fresh port is immediately available.

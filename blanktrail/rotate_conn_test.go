@@ -236,3 +236,52 @@ func TestTrace_SaysWhereARequestWasWhenItStopped(t *testing.T) {
 		t.Error("the first request on a new port is reported as reusing a connection")
 	}
 }
+
+// TestNoKeepAlives_GivesEveryRequestAConnectionOfItsOwn is the switch the
+// measurement asked for.
+//
+// The connection this program keeps alive ends at the proxy on this machine and
+// not at the address the work travels through, so it goes on looking healthy
+// long after the route behind it has died — and the next request is handed a
+// tunnel to nowhere, which is time spent waiting on something that cannot
+// answer. On a live list, keeping them alive answered a quarter of what opening
+// one per request did.
+func TestNoKeepAlives_GivesEveryRequestAConnectionOfItsOwn(t *testing.T) {
+	var conns atomic.Int64
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	origin.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	t.Cleanup(origin.Close)
+
+	pool, _ := poolOnAStandIn(t, origin.Listener.Addr().String(), func(cfg *PoolConfig) {
+		cfg.NoKeepAlives = true
+	})
+	lease, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	for i := range 3 {
+		req, err := http.NewRequest(http.MethodGet, origin.URL, nil)
+		if err != nil {
+			t.Fatalf("building request %d: %v", i+1, err)
+		}
+		resp, err := lease.Do(req)
+		if err != nil {
+			t.Fatalf("request %d: %v", i+1, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+
+	if got := conns.Load(); got != 3 {
+		t.Errorf("three requests arrived on %d connections, want one each: a request "+
+			"handed a connection somebody else opened is a request that cannot tell "+
+			"whether the route behind it is still there", got)
+	}
+}
