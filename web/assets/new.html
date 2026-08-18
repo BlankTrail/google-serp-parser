@@ -26,6 +26,11 @@
 {{end}}</select>
 </div>
 <p class="empty">{{.T "form.kind.why"}}</p>
+<ul class="notes">
+<li>{{.T "form.kind.parse.why"}}</li>
+<li>{{.T "form.kind.position.why"}}</li>
+<li>{{.T "form.kind.index.why"}}</li>
+</ul>
 {{/* The site a position check is about. It stands with the kind that asks for
      it and is drawn whatever the kind is chosen, because there is no script on
      this page to show it when one is: a box that appeared and disappeared would
@@ -126,8 +131,11 @@
 <input id="cooldown" name="cooldown" type="number" min="0" value="{{.Form.Cooldown}}">
 </div>
 </div>
-<p class="empty">{{.T "form.tries.why"}}</p>
-<p class="empty">{{.T "form.pause.why"}}</p>
+<ul class="notes">
+<li>{{.T "form.tries.why"}}</li>
+<li>{{.T "form.pause.why"}}</li>
+</ul>
+<p class="empty">{{.T "form.pool.why"}}</p>
 </fieldset>
 <div class="field">
 <label for="queries">{{.T "form.queries"}}</label>

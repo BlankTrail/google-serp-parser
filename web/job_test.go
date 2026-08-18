@@ -133,14 +133,26 @@ func TestJobPage_OffersToStopOnlyTheJobThatIsRunning(t *testing.T) {
 	if strings.Contains(running, LangEN.T("job.resume")) {
 		t.Error("a running job is offered a resume, which would queue it a second time")
 	}
-	if !strings.Contains(running, LangEN.T("job.state.running")) {
-		t.Error("the page does not say the job is running")
+	// A job that has started and settled nothing is reaching its identities, and
+	// the page says so: the two states are different things to be told, and a
+	// job that spent its first minute on a challenge would otherwise read as one
+	// that is answering.
+	if got := shown(t, running, "state"); got != LangEN.T("job.state.starting") {
+		t.Errorf("the page says the job is %q, and it has started without settling anything", got)
 	}
 
 	eng.let(t, 1)
 	waitUntil(t, "one query is recorded", func() bool {
 		return progress(t, s.store, id).Done == 1
 	})
+	// Now it is answering, and the state has to say the other thing. The word is
+	// read out of the cell that holds it rather than looked for anywhere on the
+	// page: "running" is an ordinary word, and a page mentioning it in a note
+	// under some field would satisfy a search of the whole page while the state
+	// said something else entirely — which is exactly what this test used to do.
+	if got := shown(t, get(t, s, jobPath(id)).Body.String(), "state"); got != LangEN.T("job.state.running") {
+		t.Errorf("the page says the job is %q after a query settled, want it running", got)
+	}
 	if err := v.Stop(id); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}

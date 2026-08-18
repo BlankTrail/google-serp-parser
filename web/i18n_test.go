@@ -39,6 +39,14 @@ func TestCatalogue_BothLanguagesSayTheSameThings(t *testing.T) {
 var sameInBoth = map[string]bool{
 	"form.device.desktop": true,
 	"form.device.mobile":  true,
+	// The four ways a proxy address may be written are the writing itself,
+	// character for character, and a reader compares them against the lines in
+	// their own file. Translating "host" or "password" here would produce a
+	// pattern that matches nothing.
+	"settings.source.form.plain":  true,
+	"settings.source.form.after":  true,
+	"settings.source.form.before": true,
+	"settings.source.form.at":     true,
 }
 
 func TestCatalogue_SaysNothingTwiceTheSameWay(t *testing.T) {

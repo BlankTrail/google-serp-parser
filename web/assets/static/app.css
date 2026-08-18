@@ -521,6 +521,44 @@ tbody tr:last-child td {
 	margin: 0;
 }
 
+/* What a field is worth saying about, one point to a line.
+
+   A hint that is three sentences of prose is a hint the reader has to hold all
+   of at once to find the one part that applies to them; the same three points
+   in a list are read by looking. Drawn as quietly as the paragraphs beside
+   them, because these are notes on a form and not the form itself. */
+.notes {
+	color: var(--quiet);
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.notes li {
+	margin: 0.15rem 0;
+	padding-left: 0.9rem;
+	position: relative;
+}
+
+.notes li::before {
+	content: "—";
+	left: 0;
+	position: absolute;
+}
+
+/* The ways a proxy address may be written are literal text and are read
+   character by character, so they are set in the same face as the addresses
+   they describe — and without the dash, which would read as part of the
+   format. */
+.forms li {
+	font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+	padding-left: 0;
+}
+
+.forms li::before {
+	content: none;
+}
+
 .settings dl {
 	display: grid;
 	gap: 0.4rem 1.5rem;
