@@ -58,6 +58,12 @@ type serveOptions struct {
 	DB      string
 	Threads int
 	Ports   int
+	// Trace writes a line for every request every identity makes: where it was
+	// when it stopped waiting, and what it got back. It is off by default and is
+	// meant to be turned on for as long as it takes to answer a question — a run
+	// at a hundred threads writes a line per request per page, which is a great
+	// deal of reading and a little slower than not writing it.
+	Trace bool
 	// onListen is told the address the system actually gave, once it is bound
 	// and before anything is served on it. It is how the tray icon knows where
 	// to send a browser: a caller who asked for port zero has no other way to
@@ -78,6 +84,8 @@ func serveFlags(opts *serveOptions) *flag.FlagSet {
 	fs.StringVar(&opts.DB, "db", "gserp.db", "history database to open")
 	fs.IntVar(&opts.Threads, "threads", defaultThreads, "queries taken at once")
 	fs.IntVar(&opts.Ports, "ports", defaultPorts, "ports per thread")
+	fs.BoolVar(&opts.Trace, "trace", false,
+		"log every request an identity makes: where it waited and what came back")
 	return fs
 }
 
@@ -263,6 +271,7 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 		if fromEnv {
 			cfg := poolConfig(1, want)
 			cfg.Specs = blanktrail.SpecsFor(device)
+			cfg.Trace = o.tracer()
 			return openPool(ctx, io.Discard, cfg)
 		}
 		return o.dial(ctx, saved, 1, want, device, 0)
@@ -348,6 +357,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 		if fromEnv {
 			cfg := poolConfig(threads, ports)
 			cfg.Specs = blanktrail.SpecsFor(device)
+			cfg.Trace = o.tracer()
 			return openPool(ctx, io.Discard, cfg)
 		}
 		return o.dial(ctx, saved, threads, ports, device, cooldown)
@@ -397,6 +407,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	// the pool two named templates and it spreads the ports over both, so a run
 	// on phones is a run on more than one phone.
 	cfg.Specs = blanktrail.SpecsFor(device)
+	cfg.Trace = o.tracer()
 	// The gap between two requests on one identity is the job's. Nought is a job
 	// that named none, and the pool then derives it from the ports and the pause
 	// range — which is the one place that number is worked out.
@@ -523,6 +534,44 @@ func (o serveOptions) runOn(settings.Settings, bool) (threads, ports int) {
 // It goes to standard error, stamped and levelled, rather than onto standard
 // output among the lines written for a person to read: the two are read by
 // different things, and only one of them can be redirected away.
+// tracer turns the -trace flag into what a pool wants: a function told how each
+// request went, or nothing at all.
+//
+// Nothing at all rather than a function that returns early, because the pool
+// installs its timing hooks only where somebody is listening, and a listener
+// that discards what it hears is the same cost as one that does not.
+func (o serveOptions) tracer() func(blanktrail.RequestTrace) {
+	if !o.Trace {
+		return nil
+	}
+	log := o.logger(os.Stderr)
+	return func(tr blanktrail.RequestTrace) {
+		// The stages are cumulative from the start of the request, so each one
+		// reads as "by when", and a stage that never happened is absent rather
+		// than nought — which is the difference between "instant" and "never".
+		fields := []any{"port", tr.Port, "attempt", tr.Attempt, "reused", tr.Reused,
+			"total", tr.Total.Round(time.Millisecond)}
+		for _, stage := range []struct {
+			name string
+			at   time.Duration
+		}{
+			{"connected", tr.Connect}, {"tls", tr.TLS},
+			{"sent", tr.Wrote}, {"first byte", tr.FirstByte},
+		} {
+			if stage.at > 0 {
+				fields = append(fields, stage.name, stage.at.Round(time.Millisecond))
+			}
+		}
+		switch {
+		case tr.Err != nil:
+			fields = append(fields, "error", o.clean(tr.Err.Error()))
+		default:
+			fields = append(fields, "status", tr.Status)
+		}
+		log.Info("a request through an identity", fields...)
+	}
+}
+
 func (o serveOptions) logger(w io.Writer) *slog.Logger {
 	return slog.New(&scrubbing{Handler: slog.NewTextHandler(w, nil), clean: o.clean})
 }

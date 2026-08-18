@@ -116,6 +116,8 @@ Serve flags:
   --db string                 history database to open (default gserp.db)
   --threads int               queries taken at once (default 2)
   --ports int                 ports per thread (default 3)
+  --trace                     log every request an identity makes: where it
+                              waited and what came back
 
 Key flags:
   --db string                 database the keys are kept in (default gserp.db)

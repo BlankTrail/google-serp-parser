@@ -10,10 +10,40 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"time"
 )
+
+// RequestTrace is what one request through one port did, timed at the points
+// where a request can actually be stuck.
+//
+// It exists because "the job is slow" has several causes that look identical
+// from outside: a proxy that never completes the tunnel, one that completes it
+// and then never answers, and a target that answers slowly are three different
+// faults with three different remedies, and the only way to tell them apart is
+// to time the request where it waits.
+//
+// The spans are cumulative from the start of the attempt, not from each other,
+// so a zero says a stage never happened rather than that it was instant. Total
+// is the whole attempt, and is set even when it failed.
+type RequestTrace struct {
+	Port    int
+	Attempt int // 0 for the first try of a request, 1 upwards for its retries
+	// Reused says the request went out on a connection that was already open, in
+	// which case Connect and TLS are zero because neither happened again.
+	Reused bool
+	// Connect is when the tunnel to the proxy was established, TLS when the
+	// handshake through it finished, Wrote when the request had been sent, and
+	// FirstByte when the first byte of the response came back. A request that
+	// hangs waiting for an answer shows Wrote set and FirstByte zero — which is a
+	// different fault from one that never reaches Connect at all.
+	Connect, TLS, Wrote, FirstByte, Total time.Duration
+	// Status is what came back, or zero when nothing did; Err is why.
+	Status int
+	Err    error
+}
 
 // newBaseTransport builds the HTTP-CONNECT transport that talks to one proxy
 // port. The port terminates the tunnelled TLS and presents a certificate chained
@@ -69,6 +99,10 @@ type ladder struct {
 	rt   http.RoundTripper
 	port int
 	rem  remedy
+	// trace, when set, is told how each attempt went. It is nil unless somebody
+	// asked for it: the timing hooks it installs cost a little on every request,
+	// and a program nobody is debugging should not pay for them.
+	trace func(RequestTrace)
 }
 
 func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -88,7 +122,15 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		}
 
-		resp, err := t.rt.RoundTrip(req.Clone(req.Context()))
+		sent := req.Clone(req.Context())
+		var mark *stopwatch
+		if t.trace != nil {
+			sent, mark = timed(sent)
+		}
+		resp, err := t.rt.RoundTrip(sent)
+		if t.trace != nil {
+			t.trace(mark.done(t.port, attempt, resp, err))
+		}
 		if err != nil {
 			// The egress did not carry the request at all: blame it, not the origin.
 			t.rem.markBadEgress(t.port)
@@ -169,4 +211,68 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// stopwatch records when each stage of one request happened.
+//
+// The hooks fire on the transport's own goroutines, and the request they belong
+// to is over before done is called, so the fields are written before they are
+// read and no lock is needed between them.
+type stopwatch struct {
+	began                             time.Time
+	reused                            bool
+	connect, tls, wrote, firstByte    time.Duration
+	connectAt, tlsAt, wroteAt, byteAt time.Time
+}
+
+// timed returns the request with timing hooks attached and the stopwatch that
+// will hold what they saw.
+func timed(req *http.Request) (*http.Request, *stopwatch) {
+	w := &stopwatch{began: time.Now()}
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			w.reused = info.Reused
+			if info.Reused {
+				w.connectAt = time.Now()
+			}
+		},
+		ConnectDone: func(_, _ string, err error) {
+			if err == nil {
+				w.connectAt = time.Now()
+			}
+		},
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			if err == nil {
+				w.tlsAt = time.Now()
+			}
+		},
+		WroteRequest:         func(httptrace.WroteRequestInfo) { w.wroteAt = time.Now() },
+		GotFirstResponseByte: func() { w.byteAt = time.Now() },
+	}
+	return req.WithContext(httptrace.WithClientTrace(req.Context(), trace)), w
+}
+
+// done closes the stopwatch and reports what the attempt did.
+func (w *stopwatch) done(port, attempt int, resp *http.Response, err error) RequestTrace {
+	since := func(at time.Time) time.Duration {
+		if at.IsZero() {
+			return 0
+		}
+		return at.Sub(w.began)
+	}
+	out := RequestTrace{
+		Port:      port,
+		Attempt:   attempt,
+		Reused:    w.reused,
+		Connect:   since(w.connectAt),
+		TLS:       since(w.tlsAt),
+		Wrote:     since(w.wroteAt),
+		FirstByte: since(w.byteAt),
+		Total:     time.Since(w.began),
+		Err:       err,
+	}
+	if resp != nil {
+		out.Status = resp.StatusCode
+	}
+	return out
 }

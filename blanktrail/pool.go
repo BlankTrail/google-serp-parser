@@ -109,6 +109,13 @@ type PoolConfig struct {
 	// [PortRange[0], PortRange[1]]. Otherwise the proxy suggests free ports.
 	PortRange [2]int
 
+	// Trace, when set, is told how every request through every port went: where
+	// it was when it stopped waiting, and what it got. It is off unless somebody
+	// asks, because the timing hooks cost a little on each request — and because
+	// a line per request is a great deal of reading for a program that is
+	// working.
+	Trace func(RequestTrace)
+
 	// CA is the proxy's MITM CA. Insecure skips verification instead — only for
 	// tests, never in production.
 	CA       *x509.CertPool
@@ -533,7 +540,7 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 		// lastUsed stays zero so a fresh port is immediately available.
 		pt.client = &http.Client{
 			Timeout:   p.cfg.RequestTimeout,
-			Transport: &ladder{rt: pt.base, port: num, rem: p},
+			Transport: &ladder{rt: pt.base, port: num, rem: p, trace: p.cfg.Trace},
 		}
 		p.mu.Lock()
 		p.ports = append(p.ports, pt)
@@ -1315,6 +1322,14 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	if err := p.cl.SetUpstream(ctx, num, next.Upstream); err != nil {
 		return err
 	}
+	// Every connection this transport is holding open was a tunnel through the
+	// address just abandoned, and changing the upstream does not change where an
+	// already-open tunnel goes. Handed back on the next request, one of them
+	// sends the work down the very route this rotation exists to leave — and
+	// what comes back is a torn-down connection, which counts as another failure,
+	// rotates again, and finds another stale tunnel. Dropping them is what makes
+	// a rotation mean anything.
+	pt.base.CloseIdleConnections()
 	pt.mu.Lock()
 	pt.session++
 	pt.answered = false
