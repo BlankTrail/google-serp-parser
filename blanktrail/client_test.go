@@ -45,37 +45,35 @@ func TestDefaultPortSpec_LeavesMaxConcurrentUnset(t *testing.T) {
 	}
 }
 
-// TestDefaultPortSpec_LeavesEverySpanToTheProxy pins a measured decision, not
-// an oversight.
+// TestDefaultPortSpec_BoundsSilenceAndLeavesTheIdleSpanAlone pins the two
+// spans this client names, and the one it does not.
 //
-// This client sent thirty into the idle span while believing it bounded a
-// request: it was asking the proxy to close idle tunnels after thirty seconds
-// while its own transport kept them for ninety, and a request handed one in
-// between died on a connection the proxy had already let go. Naming the other
-// two was then tried on a live list and lost to the proxy's own — four answers
-// in eight against two — because a failing address gets its tunnel open and
-// then goes silent, which no connect span bounds and a longer request span only
-// makes dearer.
-func TestDefaultPortSpec_LeavesEverySpanToTheProxy(t *testing.T) {
+// The thirty seconds bound silence and not the request: they cover the dial and
+// then the wait for a first byte, and are spent once one arrives. They need no
+// margin for a challenge, because the proxy stretches its own waits while it
+// solves one — a longer span buys nothing but longer silences, which is what a
+// live list showed when a hundred and eighty answered half as much.
+//
+// The idle span stays the proxy's. This client sent thirty into it while
+// believing it bounded a request, which asked the proxy to close idle tunnels
+// after thirty seconds while the transport here kept them for ninety.
+func TestDefaultPortSpec_BoundsSilenceAndLeavesTheIdleSpanAlone(t *testing.T) {
 	s := DefaultPortSpec()
-	for _, span := range []struct {
-		what string
-		n    int
-	}{
-		{"ConnectTimeoutSeconds", s.ConnectTimeoutSeconds},
-		{"RequestTimeoutSeconds", s.RequestTimeoutSeconds},
-		{"IdleTimeoutSeconds", s.IdleTimeoutSeconds},
-	} {
-		if span.n != 0 {
-			t.Errorf("%s=%d, want it left to the proxy", span.what, span.n)
-		}
+	if s.ConnectTimeoutSeconds != 5 {
+		t.Errorf("ConnectTimeoutSeconds=%d, want 5", s.ConnectTimeoutSeconds)
+	}
+	if s.RequestTimeoutSeconds != 30 {
+		t.Errorf("RequestTimeoutSeconds=%d, want 30", s.RequestTimeoutSeconds)
+	}
+	if s.IdleTimeoutSeconds != 0 {
+		t.Errorf("IdleTimeoutSeconds=%d, want it left to the proxy", s.IdleTimeoutSeconds)
 	}
 }
 
-// TestClient_OpenPortNamesNoSpanByDefault proves the decision above reaches the
-// wire. A struct-only assertion would not catch a request builder that filled
-// one in on its own.
-func TestClient_OpenPortNamesNoSpanByDefault(t *testing.T) {
+// TestClient_OpenPortSendsTheSpansItNames proves the decision above reaches the
+// wire. A struct-only assertion on DefaultPortSpec would not catch a request
+// builder that had stopped sending them.
+func TestClient_OpenPortSendsTheSpansItNames(t *testing.T) {
 	c, fake := newTestClient(t)
 
 	if _, err := c.OpenPort(context.Background(), 20011, DefaultPortSpec(), Egress{}); err != nil {
@@ -93,12 +91,16 @@ func TestClient_OpenPortNamesNoSpanByDefault(t *testing.T) {
 	if sent == nil {
 		t.Fatal("no request recorded for /api/v1/ports/open")
 	}
-	for _, key := range []string{
-		"connect_timeout_seconds", "request_timeout_seconds", "timeout_seconds",
-	} {
-		if v, present := sent[key]; present {
-			t.Errorf("open body carries %s=%v, want the key absent so the proxy governs it", key, v)
-		}
+	if got, ok := sent["connect_timeout_seconds"].(float64); !ok || got != 5 {
+		t.Errorf("open body connect_timeout_seconds=%v, want 5", sent["connect_timeout_seconds"])
+	}
+	if got, ok := sent["request_timeout_seconds"].(float64); !ok || got != 30 {
+		t.Errorf("open body request_timeout_seconds=%v, want 30", sent["request_timeout_seconds"])
+	}
+	// The idle span is not one of them: this client keeps no connection idle and
+	// has no reason to hold an opinion about when the proxy closes its own.
+	if v, present := sent["timeout_seconds"]; present {
+		t.Errorf("open body carries timeout_seconds=%v, want the key absent", v)
 	}
 }
 
@@ -109,6 +111,8 @@ func TestClient_OpenPortOmitsASpanNobodySet(t *testing.T) {
 	c, fake := newTestClient(t)
 
 	spec := DefaultPortSpec()
+	spec.ConnectTimeoutSeconds = 0
+	spec.RequestTimeoutSeconds = 0
 
 	if _, err := c.OpenPort(context.Background(), 20012, spec, Egress{}); err != nil {
 		t.Fatalf("OpenPort: %v", err)

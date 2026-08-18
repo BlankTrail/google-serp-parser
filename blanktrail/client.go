@@ -128,21 +128,25 @@ type PortSpec struct {
 	// The three spans the proxy keeps on this port's own traffic. Each bounds a
 	// different wait, and telling them apart is the whole point of having three:
 	//
-	//   ConnectTimeoutSeconds — reaching the upstream proxy. A dead address is
-	//     dead within a second or two, so this is the one to keep short: it is
-	//     what decides how long a port is held by an address that will never
-	//     answer. Measured on a poor list, most failures are exactly this.
-	//   RequestTimeoutSeconds — the request itself, once the upstream is
-	//     reached. This one has to be generous: a challenge solved on the way
-	//     through takes one to three minutes, measured, and cutting it short
-	//     throws away work that was about to succeed.
-	//   IdleTimeoutSeconds — how long the proxy keeps an idle connection. It
-	//     must not be shorter than what the client keeps its own idle
-	//     connections for, or the client hands back a tunnel the proxy has
-	//     already closed and the request dies on it.
+	//   ConnectTimeoutSeconds — reaching the upstream address.
+	//   RequestTimeoutSeconds — silence, in two places: the whole dial cycle
+	//     including its retries, and then the wait for the first byte of the
+	//     answer. It is not a ceiling on the request. Once a byte has arrived
+	//     this span is spent and IdleTimeoutSeconds governs the rest, so a large
+	//     or slow answer is never cut off by it — only a silence is. Each
+	//     request on a kept-alive connection gets the budget afresh.
+	//   IdleTimeoutSeconds — how long the proxy keeps a connection with nothing
+	//     travelling on it. It must not be shorter than what the client keeps
+	//     its own idle connections for, or the client hands back a tunnel the
+	//     proxy has already closed and the request dies on it.
+	//
+	// None of them needs a margin for a challenge being solved: the proxy raises
+	// its own waits for as long as that takes. What does need the margin is the
+	// caller's own deadline on the whole exchange — PoolConfig.RequestTimeout -
+	// because that one is measured from this side, where a solve in progress
+	// looks the same as a silence.
 	//
 	// Nought on any of them leaves that span to the proxy's own default.
-	// Keep PoolConfig.RequestTimeout above RequestTimeoutSeconds.
 	ConnectTimeoutSeconds int
 	RequestTimeoutSeconds int
 	IdleTimeoutSeconds    int
@@ -175,26 +179,26 @@ func DefaultPortSpec() PortSpec {
 		Decompress:     true,
 		// MaxConcurrent is left unset (0) so the proxy applies its own default.
 		//
-		// So are all three spans, and that is a measured decision rather than an
-		// omission. The proxy's own are five seconds to reach an address and
-		// thirty for the request after it, and on a live list they beat every
-		// pair this client tried. Traced, a failing address on a poor list gets
-		// its tunnel open and then goes silent — which is past the connect span
-		// and inside the request one — so shortening the connect wait bounds
-		// nothing, while lengthening the request wait to let a challenge finish
-		// only makes those silences dearer. Measured: four answers in eight on
-		// the proxy's own against two in eight on five and a hundred and eighty,
-		// with failures taking up to four minutes instead of thirty seconds.
+		// Five seconds to reach an address, which is enough for a slow one, and
+		// thirty seconds of silence after that. Neither needs to allow for a
+		// challenge: the proxy stretches its own waits while it solves one, and
+		// the span below is spent the moment a first byte arrives — so what these
+		// thirty seconds bound is a request that has produced nothing at all, and
+		// a run that has heard nothing for that long has nothing to wait for.
 		//
-		// A caller who has measured their own list should set these from what
-		// they measured. This one has, and what it measured says to leave them.
+		// A longer one was tried on a live list and lost: a hundred and eighty
+		// answered two requests in eight against four, and made each silence four
+		// minutes instead of thirty seconds. Silence is the only thing this span
+		// buys, and buying more of it is the whole of what went wrong.
 		//
-		// The idle span especially. This client used to send thirty into it while
-		// believing it bounded a request: it was asking the proxy to close idle
-		// tunnels after thirty seconds while its own transport kept them for
-		// ninety, and a request handed one in between died on a connection the
-		// proxy had already let go.
-		LeakGuard: "warn",
+		// The idle span is left to the proxy. This client used to send thirty into
+		// it while believing it bounded a request: it was asking the proxy to
+		// close idle tunnels after thirty seconds while its own transport kept
+		// them for ninety, and a request handed one in between died on a
+		// connection the proxy had already let go.
+		ConnectTimeoutSeconds: 5,
+		RequestTimeoutSeconds: 30,
+		LeakGuard:             "warn",
 	}
 }
 
