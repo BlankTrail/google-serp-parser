@@ -364,3 +364,59 @@ func TestSleepCtx_HonoursCancellation(t *testing.T) {
 		t.Errorf("err=%v, want context.Canceled", err)
 	}
 }
+
+// TestLadder_LeavesADeadAddressAtOnceRatherThanCountingToThree pins the rule
+// the measurement bought.
+//
+// A transport error says this address did not carry the request. Repeating
+// through it cannot change that, and on a live list it never did: 0 answers in
+// 18 repeats, against 3 in 15 for the first request after a rotation. So the
+// rotation happens on the failure itself, whatever the pool's own count of
+// consecutive failures says — that count stays for what it is actually for,
+// which is giving up on a port nothing can save.
+func TestLadder_LeavesADeadAddressAtOnceRatherThanCountingToThree(t *testing.T) {
+	boom := errors.New("read tcp: connection reset by peer")
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		failWith(boom),
+		respond(200, nil, "data"),
+	}}
+	// The pool would not rotate for a long while yet, and the ladder rotates
+	// anyway: a request that never left is not worth repeating down the same
+	// route.
+	rem := &fakeRemedy{retries: 2, rotateOnNth: 99}
+	l := &ladder{rt: rt, port: 20021, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("status=%d, want the 200 the retry got after moving address", resp.StatusCode)
+	}
+	if rem.rotations != 1 {
+		t.Errorf("rotations=%d, want one on the failure itself", rem.rotations)
+	}
+	if rem.markedBad != 1 {
+		t.Errorf("markedBad=%d, want the address blamed once", rem.markedBad)
+	}
+}
+
+// TestLadder_StillCountsToTheThresholdForARefusedAnswer keeps the other half of
+// the rule honest: a response that arrived and was refused is not an address
+// that failed to carry anything, and the pool's count is what decides there.
+func TestLadder_StillCountsToTheThresholdForARefusedAnswer(t *testing.T) {
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		respond(503, nil, "nope"),
+		respond(503, nil, "nope"),
+		respond(200, nil, "data"),
+	}}
+	rem := &fakeRemedy{retries: 3, rotateOnNth: 99}
+	l := &ladder{rt: rt, port: 20022, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if rem.rotations != 0 {
+		t.Errorf("rotations=%d, want none: the pool's count had not been reached", rem.rotations)
+	}
+}

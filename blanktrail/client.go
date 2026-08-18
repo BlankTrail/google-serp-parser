@@ -121,6 +121,21 @@ type PortSpec struct {
 	Decompress     bool // hand the client an identity-encoded body
 	EnableHTTP3    bool // re-originate over HTTP/3 where the target offers it
 
+	// ForceIPv4Egress keeps the leg out of the proxy on IPv4, and InjectECS
+	// tells the resolver which subnet the traffic will leave from. Both are on
+	// by default where a port is opened by hand, and this client says nothing
+	// about either.
+	//
+	// That is deliberate for now rather than settled. Turning them on, together
+	// with the leak guard off, was tried on a live list and answered 5 queries
+	// in 30 against 14 for the profile this client already had — which is
+	// evidence against, on a sample small enough that it may be the addresses
+	// each arm happened to draw rather than the profile. What settles it is a
+	// wider run, and until there is one the defaults stay where the measuring
+	// found them.
+	ForceIPv4Egress bool
+	InjectECS       bool
+
 	MaxConcurrent int // in-flight requests allowed on the port
 	RetryDelayMs  int // proxy-side retry delay
 	IdleSeconds   int // per-port idle timeout (0 = inherit the global one)
@@ -237,6 +252,8 @@ type openPortRequest struct {
 	KeepSessions          *bool   `json:"keep_sessions,omitempty"`
 	Decompress            *bool   `json:"decompress,omitempty"`
 	EnableHTTP3           *bool   `json:"enable_http3,omitempty"`
+	ForceIPv4Egress       *bool   `json:"egress_force_ipv4,omitempty"`
+	InjectECS             *bool   `json:"ecs_enabled,omitempty"`
 	MaxConcurrent         *int    `json:"max_concurrent,omitempty"`
 	RetryDelayMs          *int    `json:"retry_delay_ms,omitempty"`
 	IdleSeconds           *int    `json:"idle_seconds,omitempty"`
@@ -250,20 +267,23 @@ type openPortRequest struct {
 func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	h2, hdr, ua := s.H2Spoofing, s.SpoofHeaders, s.SpoofUserAgent
 	js, jar, dec, h3 := s.JSSolver, s.KeepSessions, s.Decompress, s.EnableHTTP3
+	v4, ecs := s.ForceIPv4Egress, s.InjectECS
 	req := openPortRequest{
-		Port:           port,
-		Protocol:       "http", // HTTP CONNECT forward proxy
-		Mode:           s.Mode,
-		Browser:        s.Browser,
-		OS:             s.OS,
-		H2Spoofing:     &h2,
-		SpoofHeaders:   &hdr,
-		SpoofUserAgent: &ua,
-		JSSolver:       &js,
-		KeepSessions:   &jar,
-		Decompress:     &dec,
-		EnableHTTP3:    &h3,
-		LeakGuard:      s.LeakGuard,
+		Port:            port,
+		Protocol:        "http", // HTTP CONNECT forward proxy
+		Mode:            s.Mode,
+		Browser:         s.Browser,
+		OS:              s.OS,
+		H2Spoofing:      &h2,
+		SpoofHeaders:    &hdr,
+		SpoofUserAgent:  &ua,
+		JSSolver:        &js,
+		KeepSessions:    &jar,
+		Decompress:      &dec,
+		EnableHTTP3:     &h3,
+		ForceIPv4Egress: &v4,
+		InjectECS:       &ecs,
+		LeakGuard:       s.LeakGuard,
 	}
 	if s.UpstreamTLSInsecure {
 		v := true

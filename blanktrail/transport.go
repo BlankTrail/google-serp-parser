@@ -135,9 +135,15 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			// The egress did not carry the request at all: blame it, not the origin.
 			t.rem.markBadEgress(t.port)
-			if t.rem.attemptFailed(t.port) {
-				_ = t.rem.rotateEgress(req.Context(), t.port)
-			}
+			// And leave it now, rather than after two more requests through it.
+			// Measured on a live list: a repeat through an address that has just
+			// failed answered 0 of 18, while the first request after a rotation
+			// answered 3 of 15 — so counting to three before moving spends two
+			// requests that cannot succeed and delays the one that can. The count
+			// is still kept, because it is what eventually quarantines a port
+			// nothing can save.
+			_ = t.rem.attemptFailed(t.port)
+			_ = t.rem.rotateEgress(req.Context(), t.port)
 			if attempt >= retryBudget {
 				return nil, err
 			}

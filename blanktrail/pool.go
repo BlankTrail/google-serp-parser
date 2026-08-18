@@ -1310,6 +1310,17 @@ func (p *Pool) rotateProfile(ctx context.Context, num int) error {
 	return nil
 }
 
+// RotateEgressFor moves one port to another address, as a failed request makes
+// the pool do on its own.
+//
+// It is exported so that a measurement can tell two things apart that look the
+// same from outside: a port that is spent, and an address that is dead. The
+// pool's own rotation is bound up with counting failures, and a test of "what
+// happens after a rotation" has to be able to ask for one.
+func (p *Pool) RotateEgressFor(ctx context.Context, num int) error {
+	return p.rotateEgress(ctx, num)
+}
+
 func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	pt := p.port(num)
 	if pt == nil {
