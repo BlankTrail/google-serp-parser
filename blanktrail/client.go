@@ -124,9 +124,30 @@ type PortSpec struct {
 	MaxConcurrent int // in-flight requests allowed on the port
 	RetryDelayMs  int // proxy-side retry delay
 	IdleSeconds   int // per-port idle timeout (0 = inherit the global one)
-	// Keep PoolConfig.RequestTimeout well above this value.
-	TimeoutSeconds int    // seconds the port waits on one request; 0 leaves it to the proxy
-	LeakGuard      string // "", off, warn, enforce
+
+	// The three spans the proxy keeps on this port's own traffic. Each bounds a
+	// different wait, and telling them apart is the whole point of having three:
+	//
+	//   ConnectTimeoutSeconds — reaching the upstream proxy. A dead address is
+	//     dead within a second or two, so this is the one to keep short: it is
+	//     what decides how long a port is held by an address that will never
+	//     answer. Measured on a poor list, most failures are exactly this.
+	//   RequestTimeoutSeconds — the request itself, once the upstream is
+	//     reached. This one has to be generous: a challenge solved on the way
+	//     through takes one to three minutes, measured, and cutting it short
+	//     throws away work that was about to succeed.
+	//   IdleTimeoutSeconds — how long the proxy keeps an idle connection. It
+	//     must not be shorter than what the client keeps its own idle
+	//     connections for, or the client hands back a tunnel the proxy has
+	//     already closed and the request dies on it.
+	//
+	// Nought on any of them leaves that span to the proxy's own default.
+	// Keep PoolConfig.RequestTimeout above RequestTimeoutSeconds.
+	ConnectTimeoutSeconds int
+	RequestTimeoutSeconds int
+	IdleTimeoutSeconds    int
+
+	LeakGuard string // "", off, warn, enforce
 
 	// UpstreamTLSInsecure trusts a self-signed certificate on an https:// proxy.
 	// It has no effect on any other scheme: the certificate it is about belongs
@@ -153,8 +174,27 @@ func DefaultPortSpec() PortSpec {
 		KeepSessions:   true,
 		Decompress:     true,
 		// MaxConcurrent is left unset (0) so the proxy applies its own default.
-		TimeoutSeconds: 30,
-		LeakGuard:      "warn",
+		//
+		// So are all three spans, and that is a measured decision rather than an
+		// omission. The proxy's own are five seconds to reach an address and
+		// thirty for the request after it, and on a live list they beat every
+		// pair this client tried. Traced, a failing address on a poor list gets
+		// its tunnel open and then goes silent — which is past the connect span
+		// and inside the request one — so shortening the connect wait bounds
+		// nothing, while lengthening the request wait to let a challenge finish
+		// only makes those silences dearer. Measured: four answers in eight on
+		// the proxy's own against two in eight on five and a hundred and eighty,
+		// with failures taking up to four minutes instead of thirty seconds.
+		//
+		// A caller who has measured their own list should set these from what
+		// they measured. This one has, and what it measured says to leave them.
+		//
+		// The idle span especially. This client used to send thirty into it while
+		// believing it bounded a request: it was asking the proxy to close idle
+		// tunnels after thirty seconds while its own transport kept them for
+		// ninety, and a request handed one in between died on a connection the
+		// proxy had already let go.
+		LeakGuard: "warn",
 	}
 }
 
@@ -179,26 +219,28 @@ type PortInfo struct {
 // Note: auto_rotate is deliberately absent. It was removed from the control API
 // — a profile is applied on open by itself.
 type openPortRequest struct {
-	Port                int     `json:"port"`
-	Protocol            string  `json:"protocol"`
-	Mode                string  `json:"mode,omitempty"`
-	Browser             string  `json:"browser,omitempty"`
-	OS                  string  `json:"os,omitempty"`
-	Upstream            *string `json:"upstream,omitempty"`
-	UpstreamGateway     string  `json:"upstream_gateway,omitempty"`
-	H2Spoofing          *bool   `json:"h2_spoofing,omitempty"`
-	SpoofHeaders        *bool   `json:"spoof_headers,omitempty"`
-	SpoofUserAgent      *bool   `json:"spoof_user_agent,omitempty"`
-	JSSolver            *bool   `json:"js_solver,omitempty"`
-	KeepSessions        *bool   `json:"keep_sessions,omitempty"`
-	Decompress          *bool   `json:"decompress,omitempty"`
-	EnableHTTP3         *bool   `json:"enable_http3,omitempty"`
-	MaxConcurrent       *int    `json:"max_concurrent,omitempty"`
-	RetryDelayMs        *int    `json:"retry_delay_ms,omitempty"`
-	IdleSeconds         *int    `json:"idle_seconds,omitempty"`
-	TimeoutSeconds      *int    `json:"timeout_seconds,omitempty"`
-	LeakGuard           string  `json:"leak_guard,omitempty"`
-	UpstreamTLSInsecure *bool   `json:"upstream_tls_insecure,omitempty"`
+	Port                  int     `json:"port"`
+	Protocol              string  `json:"protocol"`
+	Mode                  string  `json:"mode,omitempty"`
+	Browser               string  `json:"browser,omitempty"`
+	OS                    string  `json:"os,omitempty"`
+	Upstream              *string `json:"upstream,omitempty"`
+	UpstreamGateway       string  `json:"upstream_gateway,omitempty"`
+	H2Spoofing            *bool   `json:"h2_spoofing,omitempty"`
+	SpoofHeaders          *bool   `json:"spoof_headers,omitempty"`
+	SpoofUserAgent        *bool   `json:"spoof_user_agent,omitempty"`
+	JSSolver              *bool   `json:"js_solver,omitempty"`
+	KeepSessions          *bool   `json:"keep_sessions,omitempty"`
+	Decompress            *bool   `json:"decompress,omitempty"`
+	EnableHTTP3           *bool   `json:"enable_http3,omitempty"`
+	MaxConcurrent         *int    `json:"max_concurrent,omitempty"`
+	RetryDelayMs          *int    `json:"retry_delay_ms,omitempty"`
+	IdleSeconds           *int    `json:"idle_seconds,omitempty"`
+	ConnectTimeoutSeconds *int    `json:"connect_timeout_seconds,omitempty"`
+	RequestTimeoutSeconds *int    `json:"request_timeout_seconds,omitempty"`
+	TimeoutSeconds        *int    `json:"timeout_seconds,omitempty"`
+	LeakGuard             string  `json:"leak_guard,omitempty"`
+	UpstreamTLSInsecure   *bool   `json:"upstream_tls_insecure,omitempty"`
 }
 
 func (s PortSpec) request(port int, eg Egress) openPortRequest {
@@ -235,8 +277,16 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 		n := s.IdleSeconds
 		req.IdleSeconds = &n
 	}
-	if s.TimeoutSeconds > 0 {
-		n := s.TimeoutSeconds
+	if s.ConnectTimeoutSeconds > 0 {
+		n := s.ConnectTimeoutSeconds
+		req.ConnectTimeoutSeconds = &n
+	}
+	if s.RequestTimeoutSeconds > 0 {
+		n := s.RequestTimeoutSeconds
+		req.RequestTimeoutSeconds = &n
+	}
+	if s.IdleTimeoutSeconds > 0 {
+		n := s.IdleTimeoutSeconds
 		req.TimeoutSeconds = &n
 	}
 	switch {

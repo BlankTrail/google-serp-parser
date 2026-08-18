@@ -18,21 +18,20 @@ import (
 	"github.com/blanktrail/google-serp-parser/settings"
 )
 
-// TestPortTimeout_LiveWhatTheProxySideBudgetCosts compares the per-port request
-// budget this program sends the control service against a much larger one.
+// TestPortTimeout_LiveWhatBoundingTheConnectCosts compares leaving the proxy's
+// spans to it against naming them: a short wait to reach an address, and a
+// generous one for the request that follows.
 //
-// PortSpec.TimeoutSeconds is what the proxy allows one request through a port,
-// and this program has always sent 30. A reference client run against the same
-// list and the same service, differing chiefly in sending 300, produced answers
-// at 248 a minute with dozens of solver processes busy, where this program
-// produced single figures with almost none — and a solved challenge was
-// measured, in this same repository, taking one to three minutes. Thirty
-// seconds is less than that, so the question is whether the shorter budget is
-// cutting challenge solves off before they finish.
+// The two are different waits and a poor list makes them opposite problems.
+// Most addresses in one are dead, and a dead one is dead within a second or
+// two, so a long wait to connect is a port held for nothing; most answers,
+// meanwhile, come from a request that met a challenge and took one to three
+// minutes to come back with a page, so a short wait for the request throws away
+// work that was about to succeed.
 //
 // Nothing is asserted. Both arms run against the live service, and the answer
 // rates decide.
-func TestPortTimeout_LiveWhatTheProxySideBudgetCosts(t *testing.T) {
+func TestPortTimeout_LiveWhatBoundingTheConnectCosts(t *testing.T) {
 	path := os.Getenv(envLiveDB)
 	if path == "" {
 		t.Skipf("%s is not set", envLiveDB)
@@ -43,15 +42,20 @@ func TestPortTimeout_LiveWhatTheProxySideBudgetCosts(t *testing.T) {
 		t.Skip("no connection and list are saved")
 	}
 
-	for _, budget := range []int{30, 300} {
-		t.Run(map[int]string{30: "thirty seconds (what this program sends)",
-			300: "three hundred seconds"}[budget], func(t *testing.T) {
-			timeoutTrial(t, o, saved, budget)
+	for _, arm := range []struct {
+		name             string
+		connect, request int
+	}{
+		{"left to the proxy", 0, 0},
+		{"five seconds to connect, three minutes to answer", 5, 180},
+	} {
+		t.Run(arm.name, func(t *testing.T) {
+			timeoutTrial(t, o, saved, arm.connect, arm.request)
 		})
 	}
 }
 
-func timeoutTrial(t *testing.T, o serveOptions, saved settings.Settings, budget int) {
+func timeoutTrial(t *testing.T, o serveOptions, saved settings.Settings, connect, request int) {
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
 
@@ -73,7 +77,8 @@ func timeoutTrial(t *testing.T, o serveOptions, saved settings.Settings, budget 
 	}
 
 	spec := blanktrail.DefaultPortSpec()
-	spec.TimeoutSeconds = budget
+	spec.ConnectTimeoutSeconds = connect
+	spec.RequestTimeoutSeconds = request
 
 	pool, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 		Client: client, Threads: 1, PortsPerThread: ports,
@@ -112,8 +117,8 @@ func timeoutTrial(t *testing.T, o serveOptions, saved settings.Settings, budget 
 	}
 	wg.Wait()
 
-	t.Logf("port budget %ds: %d/%d answered in %v",
-		budget, answered, ports, time.Since(started).Round(time.Second))
+	t.Logf("connect %ds, request %ds: %d/%d answered in %v",
+		connect, request, answered, ports, time.Since(started).Round(time.Second))
 	for what, n := range kinds {
 		t.Logf("  %d x %s", n, what)
 	}

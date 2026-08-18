@@ -45,19 +45,37 @@ func TestDefaultPortSpec_LeavesMaxConcurrentUnset(t *testing.T) {
 	}
 }
 
-// TestDefaultPortSpec_TimeoutSecondsIs30 pins the default per-request,
-// port-side timeout.
-func TestDefaultPortSpec_TimeoutSecondsIs30(t *testing.T) {
+// TestDefaultPortSpec_LeavesEverySpanToTheProxy pins a measured decision, not
+// an oversight.
+//
+// This client sent thirty into the idle span while believing it bounded a
+// request: it was asking the proxy to close idle tunnels after thirty seconds
+// while its own transport kept them for ninety, and a request handed one in
+// between died on a connection the proxy had already let go. Naming the other
+// two was then tried on a live list and lost to the proxy's own — four answers
+// in eight against two — because a failing address gets its tunnel open and
+// then goes silent, which no connect span bounds and a longer request span only
+// makes dearer.
+func TestDefaultPortSpec_LeavesEverySpanToTheProxy(t *testing.T) {
 	s := DefaultPortSpec()
-	if s.TimeoutSeconds != 30 {
-		t.Errorf("TimeoutSeconds=%d, want 30", s.TimeoutSeconds)
+	for _, span := range []struct {
+		what string
+		n    int
+	}{
+		{"ConnectTimeoutSeconds", s.ConnectTimeoutSeconds},
+		{"RequestTimeoutSeconds", s.RequestTimeoutSeconds},
+		{"IdleTimeoutSeconds", s.IdleTimeoutSeconds},
+	} {
+		if span.n != 0 {
+			t.Errorf("%s=%d, want it left to the proxy", span.what, span.n)
+		}
 	}
 }
 
-// TestClient_OpenPortSendsTimeoutSeconds proves the default reaches the wire:
-// a struct-only assertion on DefaultPortSpec() would not catch a regression in
-// PortSpec.request that stopped sending the field.
-func TestClient_OpenPortSendsTimeoutSeconds(t *testing.T) {
+// TestClient_OpenPortNamesNoSpanByDefault proves the decision above reaches the
+// wire. A struct-only assertion would not catch a request builder that filled
+// one in on its own.
+func TestClient_OpenPortNamesNoSpanByDefault(t *testing.T) {
 	c, fake := newTestClient(t)
 
 	if _, err := c.OpenPort(context.Background(), 20011, DefaultPortSpec(), Egress{}); err != nil {
@@ -75,19 +93,22 @@ func TestClient_OpenPortSendsTimeoutSeconds(t *testing.T) {
 	if sent == nil {
 		t.Fatal("no request recorded for /api/v1/ports/open")
 	}
-	if got, ok := sent["timeout_seconds"].(float64); !ok || got != 30 {
-		t.Errorf("open body timeout_seconds=%v, want 30", sent["timeout_seconds"])
+	for _, key := range []string{
+		"connect_timeout_seconds", "request_timeout_seconds", "timeout_seconds",
+	} {
+		if v, present := sent[key]; present {
+			t.Errorf("open body carries %s=%v, want the key absent so the proxy governs it", key, v)
+		}
 	}
 }
 
-// TestClient_OpenPortOmitsTimeoutSecondsWhenUnset proves a zero TimeoutSeconds
-// leaves the key out of the body entirely, so the proxy applies its own
-// default instead of receiving an explicit zero.
-func TestClient_OpenPortOmitsTimeoutSecondsWhenUnset(t *testing.T) {
+// TestClient_OpenPortOmitsASpanNobodySet proves a zero leaves the key out of
+// the body entirely, so the proxy applies its own default instead of receiving
+// an explicit zero — which it would read as "no wait at all".
+func TestClient_OpenPortOmitsASpanNobodySet(t *testing.T) {
 	c, fake := newTestClient(t)
 
 	spec := DefaultPortSpec()
-	spec.TimeoutSeconds = 0
 
 	if _, err := c.OpenPort(context.Background(), 20012, spec, Egress{}); err != nil {
 		t.Fatalf("OpenPort: %v", err)
@@ -104,20 +125,25 @@ func TestClient_OpenPortOmitsTimeoutSecondsWhenUnset(t *testing.T) {
 	if sent == nil {
 		t.Fatal("no request recorded for /api/v1/ports/open")
 	}
-	if v, present := sent["timeout_seconds"]; present {
-		t.Errorf("open body carries timeout_seconds=%v, want the key absent so the proxy governs it", v)
+	for _, key := range []string{"connect_timeout_seconds", "request_timeout_seconds", "timeout_seconds"} {
+		if v, present := sent[key]; present {
+			t.Errorf("open body carries %s=%v, want the key absent so the proxy governs it", key, v)
+		}
 	}
 }
 
-// TestClient_OpenPortCarriesTimeoutSecondsAndIdleSecondsIndependently proves
-// the two proxy-side settings are wired separately: one governs how long an
-// idle port survives, the other bounds a single request, and setting them to
-// different values must not collapse them into one.
-func TestClient_OpenPortCarriesTimeoutSecondsAndIdleSecondsIndependently(t *testing.T) {
+// TestClient_OpenPortCarriesEverySpanIndependently proves the four proxy-side
+// spans are wired separately. They govern different waits — reaching an
+// address, the request after it, an idle connection, and the port's own life —
+// and any two of them collapsed into one would be a setting that silently
+// changes another.
+func TestClient_OpenPortCarriesEverySpanIndependently(t *testing.T) {
 	c, fake := newTestClient(t)
 
 	spec := DefaultPortSpec()
-	spec.TimeoutSeconds = 45
+	spec.ConnectTimeoutSeconds = 7
+	spec.RequestTimeoutSeconds = 45
+	spec.IdleTimeoutSeconds = 600
 	spec.IdleSeconds = 120
 
 	if _, err := c.OpenPort(context.Background(), 20013, spec, Egress{}); err != nil {
@@ -135,11 +161,18 @@ func TestClient_OpenPortCarriesTimeoutSecondsAndIdleSecondsIndependently(t *test
 	if sent == nil {
 		t.Fatal("no request recorded for /api/v1/ports/open")
 	}
-	if got, ok := sent["timeout_seconds"].(float64); !ok || got != 45 {
-		t.Errorf("open body timeout_seconds=%v, want 45", sent["timeout_seconds"])
-	}
-	if got, ok := sent["idle_seconds"].(float64); !ok || got != 120 {
-		t.Errorf("open body idle_seconds=%v, want 120", sent["idle_seconds"])
+	for _, want := range []struct {
+		key string
+		n   float64
+	}{
+		{"connect_timeout_seconds", 7},
+		{"request_timeout_seconds", 45},
+		{"timeout_seconds", 600},
+		{"idle_seconds", 120},
+	} {
+		if got, ok := sent[want.key].(float64); !ok || got != want.n {
+			t.Errorf("open body %s=%v, want %v", want.key, sent[want.key], want.n)
+		}
 	}
 }
 
