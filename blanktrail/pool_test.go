@@ -2167,3 +2167,48 @@ func writeList(t *testing.T, path, raw string) {
 		t.Fatalf("writing the list: %v", err)
 	}
 }
+
+func TestPool_HuntsFifteenAddressesForOneRequestByDefault(t *testing.T) {
+	// The budget a request gets for walking away from addresses that do not
+	// carry it, which is the one that decides what a run gets out of a large
+	// cheap list. Five was not enough: most addresses in such a list are dead,
+	// each costs about two seconds and no pause, and a job at fifty threads that
+	// gave up after five settled four queries a minute.
+	//
+	// It is the pool's own default rather than the retry budget, because the two
+	// are spent on different things — one waits out a refusal at the other end,
+	// the other looks for a machine that answers at all.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	p, err := NewPool(context.Background(), testPoolConfig(t, f, clock, 1, 1))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if got := p.hunt(); got != 15 {
+		t.Errorf("one request may be carried to %d addresses, want fifteen", got)
+	}
+	if p.hunt() <= p.maxRetries() {
+		t.Errorf("the hunt is %d against a retry budget of %d: looking for an address "+
+			"that answers must be the larger of the two", p.hunt(), p.maxRetries())
+	}
+}
+
+func TestPool_TakesAHuntBudgetTheCallerNamed(t *testing.T) {
+	// An operator who has measured their own list should be able to say how far
+	// a request may be carried on it.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, f, clock, 1, 1)
+	cfg.AddressesPerRequest = 3
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if got := p.hunt(); got != 3 {
+		t.Errorf("hunt=%d, want the three that were asked for", got)
+	}
+}

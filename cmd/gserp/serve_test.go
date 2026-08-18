@@ -1054,3 +1054,72 @@ func saveSettingsBeside(t *testing.T, db string, s settings.Settings) {
 		t.Fatalf("Save: %v", err)
 	}
 }
+
+// benchKeeper stands where the history keeps the addresses found dead.
+type benchKeeper struct {
+	kept    map[string]time.Time
+	written map[string]time.Time
+	forgot  bool
+}
+
+func (b *benchKeeper) Rested(context.Context) (map[string]time.Time, error) {
+	return b.kept, nil
+}
+
+func (b *benchKeeper) Rest(_ context.Context, key string, since time.Time) error {
+	if b.written == nil {
+		b.written = map[string]time.Time{}
+	}
+	b.written[key] = since
+	return nil
+}
+
+func (b *benchKeeper) ForgetRestsBefore(context.Context, time.Time) error {
+	b.forgot = true
+	return nil
+}
+
+func TestRecall_TellsAFreshRotorWhatTheLastRunLearned(t *testing.T) {
+	// A restart without this walks straight back into every address the run
+	// before spent its time finding dead, and on a large cheap list that is most
+	// of them.
+	ups, bad := blanktrail.Parse("10.0.0.1:1080\n10.0.0.2:1080", "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	keeper := &benchKeeper{kept: map[string]time.Time{
+		ups[0].Key(): time.Now().Add(-time.Minute),
+	}}
+	opts := serveOptions{Rests: keeper}
+	rotor := blanktrail.NewStaticRotor(ups)
+
+	opts.recall(t.Context(), rotor)
+
+	if got := rotor.Benched(); got != 1 {
+		t.Errorf("%d addresses rest after the record was read back, want the one in it", got)
+	}
+	if !keeper.forgot {
+		t.Error("the stale records were not cleared, so the table grows for the life of the machine")
+	}
+}
+
+func TestRemember_WritesDownAnAddressAsItIsFoundDead(t *testing.T) {
+	// Written as it happens rather than gathered at shutdown: a program that is
+	// killed never reaches a shutdown, and the run that has just spent an hour
+	// learning which addresses are dead is the one worth not losing.
+	keeper := &benchKeeper{}
+	opts := serveOptions{Rests: keeper}
+	at := time.Now()
+
+	opts.remember("socks5|10.0.0.9:1080", at)
+
+	if got, ok := keeper.written["socks5|10.0.0.9:1080"]; !ok || !got.Equal(at) {
+		t.Errorf("the record holds %v, want the address at %v", keeper.written, at)
+	}
+}
+
+func TestRemember_SaysNothingWhenThereIsNowhereToKeepIt(t *testing.T) {
+	// A command exercised without a history has nowhere to write, and that is
+	// not a fault worth a panic on every failed address.
+	serveOptions{}.remember("socks5|10.0.0.9:1080", time.Now())
+}

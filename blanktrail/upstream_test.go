@@ -707,3 +707,99 @@ func BenchmarkRotorNextReleasingATenthOfAFullSizeList(b *testing.B) {
 		}
 	}
 }
+
+func TestRotor_MarkDeadPutsAnAddressAwayAtOnce(t *testing.T) {
+	// A request that never arrived says something final about the address, and
+	// counting to three before acting on it spends two more requests that cannot
+	// succeed. Measured on a live list: a repeat through an address that has
+	// just failed answered 0 of 18, and an address that does answer keeps
+	// answering — 60 of 60.
+	ups, bad := Parse("10.0.0.1:1080\n10.0.0.2:1080", "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	r := NewStaticRotor(ups)
+
+	r.MarkDead(ups[0])
+	if got := r.Benched(); got != 1 {
+		t.Fatalf("%d addresses are resting after one was found dead, want one", got)
+	}
+	// And it is not handed out again while it rests: every turn of the rotation
+	// comes back with the other one.
+	for i := range 4 {
+		got, ok := r.Next()
+		if !ok {
+			t.Fatalf("turn %d: the rotor has nothing left, and one address is fine", i+1)
+		}
+		if got.Key() == ups[0].Key() {
+			t.Errorf("turn %d handed out the address that did not carry a request", i+1)
+		}
+	}
+}
+
+func TestRotor_MarkBadStillCountsToTheThreshold(t *testing.T) {
+	// The other half of the rule. An answer that was refused came back, so the
+	// address carried it: what was refused is about the target, and one refusal
+	// is not a reason to spend an address.
+	ups, _ := Parse("10.0.0.1:1080\n10.0.0.2:1080", "socks5")
+	r := NewStaticRotor(ups)
+
+	r.MarkBad(ups[0])
+	if got := r.Benched(); got != 0 {
+		t.Errorf("%d addresses rest after one refused answer, want none", got)
+	}
+	r.MarkBad(ups[0])
+	r.MarkBad(ups[0])
+	if got := r.Benched(); got != 1 {
+		t.Errorf("%d addresses rest after three refusals, want the one", got)
+	}
+}
+
+func TestRotor_RestingAndRestoreCarryABenchAcrossARestart(t *testing.T) {
+	// A program restarted without its bench walks straight back into every
+	// address it spent yesterday learning to avoid, which on a list where most
+	// are dead is most of the first hour.
+	ups, _ := Parse("10.0.0.1:1080\n10.0.0.2:1080\n10.0.0.3:1080", "socks5")
+	clock := time.Now()
+	first := NewStaticRotor(ups, WithClock(func() time.Time { return clock }))
+	first.MarkDead(ups[0])
+
+	rests := first.Resting()
+	if len(rests) != 1 {
+		t.Fatalf("the bench holds %d addresses, want the one that was found dead", len(rests))
+	}
+
+	// A new rotor, as a restart builds: it knows nothing until it is told.
+	next := NewStaticRotor(ups, WithClock(func() time.Time { return clock.Add(time.Hour) }))
+	if got := next.Benched(); got != 0 {
+		t.Fatalf("a fresh rotor already rests %d addresses", got)
+	}
+	next.Restore(rests)
+	if got := next.Benched(); got != 1 {
+		t.Errorf("%d addresses rest after the bench was carried over, want one", got)
+	}
+
+	// And a rest that has already run out is not restarted: it belongs to the
+	// address, not to the program that wrote it down.
+	late := NewStaticRotor(ups, WithClock(func() time.Time { return clock.Add(7 * time.Hour) }))
+	late.Restore(rests)
+	if got := late.Benched(); got != 0 {
+		t.Errorf("%d addresses rest after their rest had already elapsed", got)
+	}
+}
+
+func TestRotor_OnBenchIsToldEachAddressPutAway(t *testing.T) {
+	// The hook exists so the bench can be written down as it is made rather than
+	// swept up at shutdown, which a program that is killed never reaches.
+	ups, _ := Parse("10.0.0.1:1080\n10.0.0.2:1080", "socks5")
+	var seen []string
+	r := NewStaticRotor(ups, WithOnBench(func(key string, _ time.Time) {
+		seen = append(seen, key)
+	}))
+
+	r.MarkDead(ups[0])
+	r.MarkDead(ups[0]) // already resting: said once, not twice
+	if len(seen) != 1 || seen[0] != ups[0].Key() {
+		t.Errorf("the hook heard %v, want the one address put away once", seen)
+	}
+}

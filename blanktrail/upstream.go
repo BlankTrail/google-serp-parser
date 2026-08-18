@@ -271,6 +271,9 @@ type Rotor struct {
 	maxFails    int
 	rest        time.Duration
 	now         func() time.Time
+	// onBench, when set, is told each time an address is put away, so a caller
+	// can write the rest down somewhere it survives this program.
+	onBench func(key string, since time.Time)
 
 	src  Source
 	stop chan struct{}
@@ -313,6 +316,12 @@ const defaultRest = 6 * time.Hour
 
 // RotorOption adjusts a rotor at construction.
 type RotorOption func(*Rotor)
+
+// WithOnBench sets a function told each time an address is put away, so the
+// rest can be written down somewhere it outlives this program.
+func WithOnBench(fn func(key string, since time.Time)) RotorOption {
+	return func(r *Rotor) { r.onBench = fn }
+}
 
 // WithRest sets how long a benched address rests. Zero or less keeps the
 // default.
@@ -500,12 +509,83 @@ func (r *Rotor) MarkBad(u Upstream) {
 	key := u.Key()
 	r.fails[key]++
 	if r.fails[key] >= r.maxFails {
-		if _, resting := r.benched[key]; !resting {
-			since := r.now()
-			r.benched[key] = since
-			if end := since.Add(r.rest); r.nextRelease.IsZero() || end.Before(r.nextRelease) {
-				r.nextRelease = end
-			}
+		r.bench(key)
+	}
+}
+
+// MarkDead records that an address did not carry a request at all, and puts it
+// away at once rather than counting.
+//
+// The two are told apart because they are about different things. An answer
+// somebody refused came back, so the address carried it and the refusal is
+// about the target; that one counts to the threshold. A request that never
+// arrived is about the address, and measured on a live list it is final: a
+// repeat through an address that has just failed answered 0 of 18, while the
+// same ports rotated onto another answered 3 of 15, and an address that does
+// answer keeps answering — 60 of 60 across six of them. So there is nothing to
+// learn from asking a second time, and a great deal of a run's time to lose.
+func (r *Rotor) MarkDead(u Upstream) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := u.Key()
+	r.fails[key] = r.maxFails
+	r.bench(key)
+}
+
+// bench puts an address away for its rest. Called with the lock held.
+func (r *Rotor) bench(key string) {
+	if _, resting := r.benched[key]; resting {
+		return
+	}
+	since := r.now()
+	r.benched[key] = since
+	if end := since.Add(r.rest); r.nextRelease.IsZero() || end.Before(r.nextRelease) {
+		r.nextRelease = end
+	}
+	if r.onBench != nil {
+		r.onBench(key, since)
+	}
+}
+
+// Resting is every address on the bench right now, and when each one's rest
+// began.
+//
+// It is a copy, and it is here so a caller can write the rests down. A program
+// restarted without them starts the day by walking back into every address it
+// spent yesterday learning to avoid — which on a list where most addresses are
+// dead is most of the first hour.
+func (r *Rotor) Resting() map[string]time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]time.Time, len(r.benched))
+	for k, since := range r.benched {
+		out[k] = since
+	}
+	return out
+}
+
+// Restore takes rests recorded earlier and puts those addresses back on the
+// bench for whatever is left of them.
+//
+// A rest that has already run out is dropped rather than restarted: it is the
+// address's rest, not the program's, and the point of writing it down was to
+// carry it, not to renew it. An address the current list does not hold is kept
+// all the same — the list may be reloaded from a source that has it again.
+func (r *Rotor) Restore(rests map[string]time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	for key, since := range rests {
+		if now.Sub(since) >= r.rest {
+			continue
+		}
+		if _, resting := r.benched[key]; resting {
+			continue
+		}
+		r.benched[key] = since
+		r.fails[key] = r.maxFails
+		if end := since.Add(r.rest); r.nextRelease.IsZero() || end.Before(r.nextRelease) {
+			r.nextRelease = end
 		}
 	}
 }

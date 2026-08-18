@@ -85,6 +85,12 @@ type remedy interface {
 	attemptSucceeded(port int)
 	rotateEgress(ctx context.Context, port int) error
 	markBadEgress(port int)
+	// markDeadEgress reports that the address did not carry the request at all,
+	// which is final rather than a count towards anything.
+	markDeadEgress(port int)
+	// hunt is how many addresses one request may be carried to before it gives
+	// up, which is a different budget from the retries a refused answer gets.
+	hunt() int
 	// exhausted reports that the whole retry budget was spent and the response is
 	// still not usable.
 	exhausted(port int)
@@ -116,6 +122,11 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	var delay time.Duration
+	// Two budgets, because they answer two questions. hunted counts the
+	// addresses this request has been carried to, and is spent finding one that
+	// works; attempt counts the times a refused answer was asked for again, and
+	// is spent waiting out something at the other end.
+	hunted := 0
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			if err := t.rem.wait(req.Context(), delay); err != nil {
@@ -133,21 +144,25 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			t.trace(mark.done(t.port, attempt, resp, err))
 		}
 		if err != nil {
-			// The egress did not carry the request at all: blame it, not the origin.
-			t.rem.markBadEgress(t.port)
-			// And leave it now, rather than after two more requests through it.
-			// Measured on a live list: a repeat through an address that has just
-			// failed answered 0 of 18, while the first request after a rotation
-			// answered 3 of 15 — so counting to three before moving spends two
-			// requests that cannot succeed and delays the one that can. The count
-			// is still kept, because it is what eventually quarantines a port
+			// The egress did not carry the request at all: blame it, not the
+			// origin, and leave it now rather than after two more requests
+			// through it. Measured on a live list: a repeat through an address
+			// that has just failed answered 0 of 18, while the first request
+			// after a rotation answered 3 of 15 — and an address that does
+			// answer keeps answering, 60 of 60. The port's own failure count is
+			// still kept, because it is what eventually quarantines a port
 			// nothing can save.
+			t.rem.markDeadEgress(t.port)
 			_ = t.rem.attemptFailed(t.port)
 			_ = t.rem.rotateEgress(req.Context(), t.port)
-			if attempt >= retryBudget {
+			hunted++
+			if hunted >= t.rem.hunt() {
 				return nil, err
 			}
-			delay = backoff(attempt + 1)
+			// No backoff here. There is nothing to wait out: the address is gone
+			// and the next one is a different machine entirely, so a pause would
+			// be time spent for nobody.
+			delay = 0
 			continue
 		}
 

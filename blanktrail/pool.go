@@ -149,6 +149,16 @@ type PoolConfig struct {
 	// MaxRetriesPerReq is how many times the ladder retries a blocked request
 	// before handing the blocked response back (default 4).
 	MaxRetriesPerReq int
+	// AddressesPerRequest is how many addresses one request may be carried to
+	// when they fail to carry it at all (default 15).
+	//
+	// It is a separate budget from the retries above, because the two are spent
+	// on different things: a refused answer is waited out, and a dead address is
+	// walked away from. On a list where most addresses are dead — which is what
+	// a large cheap list is — walking away is nearly free and finding a live one
+	// is the whole job, so this is the larger of the two and takes no pause
+	// between tries.
+	AddressesPerRequest int
 	// RotateAfterFailures is how many consecutive failed attempts a port may
 	// collect before its egress is replaced (default 3). A failure is any non-2xx
 	// response or a transport error — this package does not reason about why.
@@ -383,6 +393,9 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	}
 	if cfg.MaxRetriesPerReq <= 0 {
 		cfg.MaxRetriesPerReq = 4
+	}
+	if cfg.AddressesPerRequest <= 0 {
+		cfg.AddressesPerRequest = 15
 	}
 	if cfg.Spec.Browser == "" {
 		cfg.Spec = DefaultPortSpec()
@@ -1362,9 +1375,21 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	return nil
 }
 
-// markBadEgress reports that an egress did not carry its work — it failed at
-// the connection level, or the answer it brought back was refused — so the
-// channel can stop handing that address out.
+// markDeadEgress reports that an egress did not carry the request at all, so
+// the channel can stop handing that address out now rather than after counting.
+func (p *Pool) markDeadEgress(num int) {
+	pt := p.port(num)
+	if pt == nil {
+		return
+	}
+	pt.ch.MarkDead(pt.egress())
+}
+
+// hunt is how many addresses one request may be carried to.
+func (p *Pool) hunt() int { return p.cfg.AddressesPerRequest }
+
+// markBadEgress reports that an egress carried its work and the answer was
+// refused, so the channel can count that against the address.
 //
 // It deliberately does not penalise the channel: this runs on every attempt, and
 // a single request against a dead proxy would spend the channel's whole weight

@@ -70,8 +70,11 @@ type fakeRemedy struct {
 	exhaustedCalls int
 	waits          []time.Duration
 
+	markedDead int
+
 	retries     int
 	rotateOnNth int // attemptFailed returns true on this failure number (0 = never)
+	addresses   int // how many addresses one request may be carried to (0 = five)
 }
 
 func (r *fakeRemedy) attemptFailed(int) bool {
@@ -82,8 +85,16 @@ func (r *fakeRemedy) attemptFailedStatus(port, _ int) bool    { return r.attempt
 func (r *fakeRemedy) attemptSucceeded(int)                    { r.successes++ }
 func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return nil }
 func (r *fakeRemedy) markBadEgress(int)                       { r.markedBad++ }
+func (r *fakeRemedy) markDeadEgress(int)                      { r.markedDead++ }
 func (r *fakeRemedy) exhausted(int)                           { r.exhaustedCalls++ }
 func (r *fakeRemedy) maxRetries() int                         { return r.retries }
+
+func (r *fakeRemedy) hunt() int {
+	if r.addresses > 0 {
+		return r.addresses
+	}
+	return 5
+}
 
 func (r *fakeRemedy) wait(_ context.Context, d time.Duration) error {
 	r.waits = append(r.waits, d)
@@ -326,8 +337,13 @@ func TestLadder_ConnectionFailureBlamesTheEgress(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Errorf("status=%d, want 200 after rotating away from the dead proxy", resp.StatusCode)
 	}
-	if rem.markedBad != 1 {
-		t.Errorf("markedBad=%d, want 1", rem.markedBad)
+	// Dead, not merely bad: the request never arrived, so the address gets no
+	// count against it — it is put away.
+	if rem.markedDead != 1 {
+		t.Errorf("markedDead=%d, want 1", rem.markedDead)
+	}
+	if rem.markedBad != 0 {
+		t.Errorf("markedBad=%d, want none: nothing came back to be refused", rem.markedBad)
 	}
 	if rem.rotations != 1 {
 		t.Errorf("rotations=%d, want 1", rem.rotations)
@@ -396,8 +412,8 @@ func TestLadder_LeavesADeadAddressAtOnceRatherThanCountingToThree(t *testing.T) 
 	if rem.rotations != 1 {
 		t.Errorf("rotations=%d, want one on the failure itself", rem.rotations)
 	}
-	if rem.markedBad != 1 {
-		t.Errorf("markedBad=%d, want the address blamed once", rem.markedBad)
+	if rem.markedDead != 1 {
+		t.Errorf("markedDead=%d, want the address put away once", rem.markedDead)
 	}
 }
 
@@ -418,5 +434,66 @@ func TestLadder_StillCountsToTheThresholdForARefusedAnswer(t *testing.T) {
 	}
 	if rem.rotations != 0 {
 		t.Errorf("rotations=%d, want none: the pool's count had not been reached", rem.rotations)
+	}
+}
+
+// TestLadder_CarriesARequestToFifteenAddressesBeforeGivingUp pins the hunt, and
+// that it is a budget of its own.
+//
+// On a list where most addresses are dead — which is what a large cheap list is
+// — finding a live one is the whole job, and each dead one costs about two
+// seconds and no pause, because there is nothing at the other end to wait out.
+// Five was not enough: a live trace of a job at fifty threads settled four
+// queries a minute while the same list, hunted properly, answered ten times
+// that.
+func TestLadder_CarriesARequestToFifteenAddressesBeforeGivingUp(t *testing.T) {
+	boom := errors.New("read tcp: connection reset by peer")
+	steps := make([]func() (*http.Response, error), 0, 15)
+	for range 14 {
+		steps = append(steps, failWith(boom))
+	}
+	steps = append(steps, respond(200, nil, "data"))
+
+	rt := &fakeRT{steps: steps}
+	// The retry budget for a refused answer is small and must not bound this.
+	rem := &fakeRemedy{retries: 1, addresses: 15}
+	l := &ladder{rt: rt, port: 20023, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("status=%d, want the 200 the fifteenth address gave", resp.StatusCode)
+	}
+	if rem.rotations != 14 {
+		t.Errorf("rotations=%d, want one for each address that did not carry it", rem.rotations)
+	}
+	// And no waiting between them: a dead address is not a busy one.
+	for i, d := range rem.waits {
+		if d != 0 {
+			t.Errorf("wait %d was %v, want none before trying another address", i+1, d)
+		}
+	}
+}
+
+// TestLadder_StopsHuntingAtTheBudget keeps the other end honest: the hunt is
+// bounded, or a request through a list of nothing but dead addresses would walk
+// the whole list.
+func TestLadder_StopsHuntingAtTheBudget(t *testing.T) {
+	boom := errors.New("EOF")
+	steps := make([]func() (*http.Response, error), 0, 20)
+	for range 20 {
+		steps = append(steps, failWith(boom))
+	}
+	rt := &fakeRT{steps: steps}
+	rem := &fakeRemedy{retries: 1, addresses: 3}
+	l := &ladder{rt: rt, port: 20024, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); !errors.Is(err, boom) {
+		t.Fatalf("err=%v, want the failure of the last address tried", err)
+	}
+	if rem.markedDead != 3 {
+		t.Errorf("markedDead=%d, want the three the budget allowed", rem.markedDead)
 	}
 }

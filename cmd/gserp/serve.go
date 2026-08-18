@@ -64,6 +64,10 @@ type serveOptions struct {
 	// at a hundred threads writes a line per request per page, which is a great
 	// deal of reading and a little slower than not writing it.
 	Trace bool
+	// Rests is where addresses found dead are written down, so a restart does
+	// not walk back into every one of them. Nil keeps no such record, which is
+	// what a command exercised without a history has.
+	Rests rests
 	// onListen is told the address the system actually gave, once it is bound
 	// and before anything is served on it. It is how the tray icon knows where
 	// to send a browser: a caller who asked for port zero has no other way to
@@ -135,6 +139,10 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	if exe, err := os.Executable(); err == nil {
 		opts.translate(out, filepath.Join(filepath.Dir(exe), translationsName))
 	}
+
+	// The history is also where the addresses found dead are kept, so a run
+	// begins knowing what the last one learned.
+	opts.Rests = st
 
 	// Closed before the history, because a job it ends is written down as it
 	// lets go of it. Close waits for that.
@@ -425,10 +433,15 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	if saved.Proxy.Kind != "" {
 		// The list is loaded here and reloaded on its own interval afterwards, so a
 		// list that changes during a run is a list this pool follows.
-		rotor, err := blanktrail.NewRotor(ctx, listFrom(saved.Proxy))
+		rotor, err := blanktrail.NewRotor(ctx, listFrom(saved.Proxy),
+			blanktrail.WithOnBench(o.remember))
 		if err != nil {
 			return nil, o.scrubbed(err)
 		}
+		// What this machine already knows about the list. Without it every start
+		// walks back into the addresses the last run spent its time finding dead,
+		// and on a large cheap list that is most of them.
+		o.recall(ctx, rotor)
 		cfg.Channels = []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)}
 	}
 
@@ -437,6 +450,50 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 		return nil, o.scrubbed(err)
 	}
 	return pool, nil
+}
+
+// rests is where the addresses this machine has found dead are kept between
+// runs. It is an interface rather than the history itself so that the command
+// can be exercised without one, and nil is a machine that keeps no such record.
+type rests interface {
+	Rested(ctx context.Context) (map[string]time.Time, error)
+	Rest(ctx context.Context, key string, since time.Time) error
+	ForgetRestsBefore(ctx context.Context, cut time.Time) error
+}
+
+// remember writes down that an address was found dead, as the pool finds it.
+//
+// It is written as it happens rather than gathered at shutdown, because a
+// program that is killed never reaches a shutdown — and the run that has just
+// spent an hour learning which addresses are dead is exactly the one worth not
+// losing. A failure to write is not worth stopping a run for: the cost is one
+// address tried again after the next start.
+func (o serveOptions) remember(key string, since time.Time) {
+	if o.Rests == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = o.Rests.Rest(ctx, key, since)
+}
+
+// recall tells a fresh rotor what this machine already knows, and forgets what
+// has gone stale while it is there.
+//
+// The cut is generous on purpose. How long a rest lasts is the rotor's own
+// business and it drops the ones that have run out as it takes them in, so what
+// is deleted here is only what could not matter to any rotor: a day is several
+// times the rest and leaves nothing useful behind.
+func (o serveOptions) recall(ctx context.Context, rotor *blanktrail.Rotor) {
+	if o.Rests == nil {
+		return
+	}
+	_ = o.Rests.ForgetRestsBefore(ctx, time.Now().Add(-24*time.Hour))
+	kept, err := o.Rests.Rested(ctx)
+	if err != nil || len(kept) == 0 {
+		return
+	}
+	rotor.Restore(kept)
 }
 
 // listScheme is how an address is reached when its line does not say. Lists are

@@ -109,6 +109,7 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS rested_upstreams`,
 		// The index goes first: SQLite will not drop a column an index is built
 		// on, and the message it gives says nothing about the index.
 		`ALTER TABLE jobs DROP COLUMN cooldown_ms`,

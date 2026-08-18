@@ -44,8 +44,13 @@ type Channel interface {
 	// Renew changes the egress IP behind cur and returns the egress to use from
 	// now on. It returns ErrRenewUnsupported when the channel has a fixed IP.
 	Renew(ctx context.Context, cur Egress) (Egress, error)
-	// MarkBad records that an egress failed at the connection level.
+	// MarkBad records that an egress carried a request and the answer was
+	// refused. Whether that costs the address anything is the channel's own
+	// business.
 	MarkBad(Egress)
+	// MarkDead records that an egress did not carry the request at all. A
+	// channel that keeps a list is expected to stop handing this one out.
+	MarkDead(Egress)
 	// Close releases any background resources.
 	Close()
 }
@@ -82,10 +87,25 @@ func (c *listChannel) Renew(_ context.Context, _ Egress) (Egress, error) {
 }
 
 func (c *listChannel) MarkBad(eg Egress) {
-	ups, _ := Parse(eg.Upstream, "socks5")
-	if len(ups) == 1 {
-		c.rotor.MarkBad(ups[0])
+	if u, ok := oneUpstream(eg); ok {
+		c.rotor.MarkBad(u)
 	}
+}
+
+func (c *listChannel) MarkDead(eg Egress) {
+	if u, ok := oneUpstream(eg); ok {
+		c.rotor.MarkDead(u)
+	}
+}
+
+// oneUpstream reads back the address an egress was built from, and says no when
+// the text is not one address.
+func oneUpstream(eg Egress) (Upstream, bool) {
+	ups, _ := Parse(eg.Upstream, "socks5")
+	if len(ups) != 1 {
+		return Upstream{}, false
+	}
+	return ups[0], true
 }
 
 func (c *listChannel) Close() { c.rotor.Close() }
@@ -141,8 +161,12 @@ func NewRotatingChannel(name string, up Upstream, rotateURL string, minInterval 
 func (c *rotatingChannel) Name() string         { return c.name }
 func (c *rotatingChannel) Kind() ChannelKind    { return KindRotating }
 func (c *rotatingChannel) Next() (Egress, bool) { return Egress{Upstream: c.up.URL()}, true }
-func (c *rotatingChannel) MarkBad(Egress)       {}
-func (c *rotatingChannel) Close()               {}
+
+// A channel with one address has nowhere to move to, so neither report
+// changes anything for it. The rotate URL is what replaces its address.
+func (c *rotatingChannel) MarkBad(Egress)  {}
+func (c *rotatingChannel) MarkDead(Egress) {}
+func (c *rotatingChannel) Close()          {}
 
 func (c *rotatingChannel) Renew(ctx context.Context, cur Egress) (Egress, error) {
 	if c.rotateURL == "" {
@@ -195,8 +219,11 @@ func NewDirectChannel(name string) Channel {
 func (c *fixedChannel) Name() string         { return c.name }
 func (c *fixedChannel) Kind() ChannelKind    { return c.kind }
 func (c *fixedChannel) Next() (Egress, bool) { return c.eg, true }
-func (c *fixedChannel) MarkBad(Egress)       {}
-func (c *fixedChannel) Close()               {}
+
+// A fixed address is the caller's choice and stays whatever it does.
+func (c *fixedChannel) MarkBad(Egress)  {}
+func (c *fixedChannel) MarkDead(Egress) {}
+func (c *fixedChannel) Close()          {}
 
 func (c *fixedChannel) Renew(_ context.Context, cur Egress) (Egress, error) {
 	return cur, ErrRenewUnsupported
