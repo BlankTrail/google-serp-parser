@@ -63,6 +63,10 @@ func (s *spyBody) Close() error {
 
 // fakeRemedy records what the ladder asked for.
 type fakeRemedy struct {
+	// kinds counts what the ladder named each failure, so a test can check that
+	// a dead address and a wall are told apart rather than added together.
+	kinds map[Failure]int
+
 	failures       int
 	successes      int
 	rotations      int
@@ -562,5 +566,57 @@ func TestLadder_LeavesAnAddressThatHasAnsweredAfterTwoMissesInARow(t *testing.T)
 	}
 	if rem.rotations != 1 {
 		t.Errorf("rotations=%d, want the one the second miss in a row calls for", rem.rotations)
+	}
+}
+
+func (f *fakeRemedy) failed(kind Failure) {
+	if f.kinds == nil {
+		f.kinds = map[Failure]int{}
+	}
+	f.kinds[kind]++
+}
+
+func TestLadder_NamesEveryFailureItMeetsAndNoneOfTheSuccesses(t *testing.T) {
+	// The counting has to happen where the failure does. Every other place that
+	// could do it — the caller, the attempt, the screen — sees a query rather
+	// than a request, and a query that succeeded on its fourth address would be
+	// counted as one thing going well instead of three going wrong and one
+	// going right.
+	for _, tc := range []struct {
+		name string
+		step func() (*http.Response, error)
+		want Failure
+	}{
+		{"never arrived", failWith(errors.New("read tcp: connection was forcibly closed")), FailureTransport},
+		{"relay refused", respond(526, nil, ""), FailureRelay},
+		{"walled", respond(403, nil, ""), FailureOther},
+	} {
+		rem := &fakeRemedy{keeps: true}
+		l := &ladder{rt: &fakeRT{steps: []func() (*http.Response, error){tc.step}}, port: 1, rem: rem}
+		resp, _ := l.RoundTrip(newReq(t, http.MethodGet, ""))
+		if resp != nil {
+			drainAndClose(resp)
+		}
+		// Every attempt that failed is one failure, and a ladder that walked
+		// four addresses counts four: what is pinned here is the kind, and that
+		// nothing else was counted alongside it.
+		if rem.kinds[tc.want] < 1 {
+			t.Errorf("%s: %q was not counted at all (counted %v)", tc.name, tc.want, rem.kinds)
+		}
+		if len(rem.kinds) != 1 {
+			t.Errorf("%s: counted %v, want only %q", tc.name, rem.kinds, tc.want)
+		}
+	}
+
+	// And an answer that succeeded is not a failure of any kind.
+	rem := &fakeRemedy{keeps: true}
+	l := &ladder{rt: &fakeRT{steps: []func() (*http.Response, error){respond(200, nil, "data")}}, port: 1, rem: rem}
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	drainAndClose(resp)
+	if len(rem.kinds) != 0 {
+		t.Errorf("an answer that succeeded was counted as %v", rem.kinds)
 	}
 }

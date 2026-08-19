@@ -3,7 +3,6 @@
 package run
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -231,29 +230,10 @@ func serveStandIn(ln net.Listener, originAddr string, carried func()) {
 	}
 }
 
+// joinToOrigin answers whichever protocol the pool dialled this port with and
+// joins it to the origin.
 func joinToOrigin(c net.Conn, originAddr string) {
-	defer func() { _ = c.Close() }()
-
-	br := bufio.NewReader(c)
-	req, err := http.ReadRequest(br)
-	if err != nil || req.Method != http.MethodConnect {
-		return
-	}
-	up, err := net.Dial("tcp", originAddr)
-	if err != nil {
-		_, _ = io.WriteString(c, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
-		return
-	}
-	defer func() { _ = up.Close() }()
-
-	if _, err := io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		return
-	}
-	go func() {
-		_, _ = io.Copy(up, br)
-		_ = up.Close()
-	}()
-	_, _ = io.Copy(c, up)
+	fakebt.Join(c, originAddr)
 }
 
 // exhaustedPool opens a pool whose only port is already spent, so an acquire

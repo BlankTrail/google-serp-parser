@@ -3,7 +3,6 @@
 package blanktrail
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -148,34 +147,16 @@ func poolOnAStandIn(t *testing.T, originAddr string, tune ...func(*PoolConfig)) 
 
 // standInProxy answers CONNECT on one of the pool's ports and joins the caller
 // to the origin, so the tunnel is real and end-to-end TLS reaches the origin.
+// standInProxy answers on one of the pool's ports, in whichever protocol the
+// pool dialled it with, and joins the caller to the origin so the tunnel is
+// real and end-to-end TLS reaches the origin.
 func standInProxy(ln net.Listener, originAddr string) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go func() {
-			defer func() { _ = c.Close() }()
-			br := bufio.NewReader(c)
-			req, err := http.ReadRequest(br)
-			if err != nil || req.Method != http.MethodConnect {
-				return
-			}
-			up, err := net.Dial("tcp", originAddr)
-			if err != nil {
-				_, _ = io.WriteString(c, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
-				return
-			}
-			defer func() { _ = up.Close() }()
-			if _, err := io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-				return
-			}
-			go func() {
-				_, _ = io.Copy(up, br)
-				_ = up.Close()
-			}()
-			_, _ = io.Copy(c, up)
-		}()
+		go fakebt.Join(c, originAddr)
 	}
 }
 

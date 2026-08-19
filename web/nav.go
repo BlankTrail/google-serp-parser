@@ -10,6 +10,7 @@ const (
 	stateAt   = "/"
 	jobsAt    = "/jobs"
 	newAt     = "/new"
+	proxiesAt = "/proxies"
 	historyAt = "/history"
 )
 
@@ -48,6 +49,7 @@ var tabs = []tab{
 	{Key: "state.title", At: stateAt},
 	{Key: "jobs.title", At: jobsAt},
 	{Key: "new.title", At: newAt},
+	{Key: "proxies.title", At: proxiesAt},
 	{Key: "history.title", At: historyAt},
 }
 

@@ -355,6 +355,12 @@ type Stats struct {
 	// rotation.
 	Revivals int64
 
+	// Failures counts what went wrong, by kind. A run whose failures are nearly
+	// all transport is a run on dead addresses; one whose failures are walls is
+	// being refused by the origin, and no amount of rotating will help it. The
+	// two read identically in a single total, which is why there is not one.
+	Failures map[Failure]int64
+
 	// Warm counts the ports whose current identity has brought back an answer
 	// somebody accepted. It is what a machine keeping identities open has to
 	// report: twelve kept and two warm is a set that is still worth almost
@@ -367,6 +373,14 @@ func (p *Pool) Stats() Stats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st := p.stats
+	// Copied, because the caller is a screen and the pool goes on counting: a
+	// map handed out by reference is one two goroutines write and read at once.
+	if p.stats.Failures != nil {
+		st.Failures = make(map[Failure]int64, len(p.stats.Failures))
+		for k, v := range p.stats.Failures {
+			st.Failures[k] = v
+		}
+	}
 	st.Ports = len(p.ports)
 	st.Quarantined = 0
 
@@ -579,7 +593,7 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 			specName:  specNames[i],
 			spec:      spec,
 			hot:       hot,
-			base:      newBaseTransport(host, num, p.cfg.CA, p.cfg.Insecure, p.cfg.NoKeepAlives),
+			base:      newBaseTransport(host, num, spec.Protocol, p.cfg.CA, p.cfg.Insecure, p.cfg.NoKeepAlives),
 			renewedAt: p.cfg.Now(),
 		}
 		// lastUsed stays zero so a fresh port is immediately available.

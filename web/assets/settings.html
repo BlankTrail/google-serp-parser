@@ -115,8 +115,16 @@
 {{range .Devices}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
 </div>
+<div class="field">
+<label for="port_protocol">{{.T "form.wire"}}</label>
+<select id="port_protocol" name="port_protocol">
+<option value="socks5"{{if eq .Form.Wire "socks5"}} selected{{end}}>SOCKS5</option>
+<option value="http"{{if eq .Form.Wire "http"}} selected{{end}}>HTTP</option>
+</select>
+</div>
 </div>
 <p class="empty">{{.T "settings.hot.why"}}</p>
+<p class="empty">{{.T "settings.wire.why"}}</p>
 </fieldset>
 
 <fieldset>

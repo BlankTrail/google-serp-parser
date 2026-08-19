@@ -110,6 +110,12 @@ func oneUpstream(eg Egress) (Upstream, bool) {
 
 func (c *listChannel) Close() { c.rotor.Close() }
 
+// Len is how many addresses this channel's list holds, and Resting is the ones
+// set aside off a failure. They are here rather than on Channel because a
+// direct connection and a fixed address have no list to answer about.
+func (c *listChannel) Len() int                      { return c.rotor.Len() }
+func (c *listChannel) Resting() map[string]time.Time { return c.rotor.Resting() }
+
 // --- rotating channel ---
 
 type rotatingChannel struct {
@@ -281,6 +287,17 @@ func (m *Mixer) Reward(ch Channel) {
 	if w := m.weights[ch.Name()]; w < initialWeight*2 {
 		m.weights[ch.Name()] = w + 1
 	}
+}
+
+// Channels lists every channel this mixer holds, healthy or not.
+//
+// A penalised channel still has its list, and a reading of how many addresses
+// there are that left out the channel nobody is drawing from any more would say
+// the pool has fewer addresses than it does.
+func (m *Mixer) Channels() []Channel {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]Channel(nil), m.channels...)
 }
 
 // Healthy lists the channels still receiving ports.

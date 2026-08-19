@@ -67,6 +67,10 @@ type poolFacts struct {
 	Stats    blanktrail.Stats
 	Threads  int
 	Cooldown time.Duration
+	// Pool is the identities themselves, for the one screen that asks them
+	// something the counts cannot answer: how large the address list is and how
+	// much of it is resting. It is nil when there is no pool.
+	Pool *blanktrail.Pool
 }
 
 // poolEngine takes one job through one pool of identities.
@@ -109,7 +113,7 @@ func (e *poolEngine) Close() error {
 
 // Pool is this job's pool, as it stands right now.
 func (e *poolEngine) Pool() poolFacts {
-	return poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown()}
+	return poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown(), Pool: e.pool}
 }
 
 // Dial raises the identities one job asked to run on.
@@ -241,6 +245,13 @@ type Supervisor struct {
 	// nil unless somebody asked for a trace.
 	watch run.Watch
 
+	// cleared is when the pool's counters were last put back to nought, and
+	// started is when this server came up. Together they are what the proxy
+	// screen dates its reading from, so a figure on it is never one whose
+	// beginning the reader has to remember.
+	cleared clearedAt
+	started time.Time
+
 	// asking is the address of the last request that went out and the job it
 	// went out for. It is kept behind a lock of its own rather than the one
 	// above: every request of every thread writes it, and taking the lock that
@@ -320,6 +331,7 @@ func start(st *store.Store, src source, ports, threads int) *Supervisor {
 		log:      slog.Default(),
 		wake:     make(chan struct{}, 1),
 		stopping: make(chan struct{}),
+		started:  time.Now(),
 		done:     make(chan struct{}),
 	}
 	go v.work()
@@ -947,3 +959,32 @@ func (v *Supervisor) Asking(job int64) string { return v.asking.at(job) }
 // what would come of that is a phone sending no Accept at all — which is a
 // request no browser has ever made.
 func runsOnPhones(device string) bool { return device == blanktrail.DeviceMobile }
+
+// clearedAt is when the pool's counters were last cleared.
+//
+// It has a lock of its own rather than sharing the one that guards the queue:
+// what it holds is read by a screen and written by a button, and neither has
+// any business waiting on a worker deciding what runs next.
+type clearedAt struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+// clearedProxies records that the counters were put back to nought just now.
+func (v *Supervisor) clearedProxies(at time.Time) {
+	v.cleared.mu.Lock()
+	v.cleared.at = at
+	v.cleared.mu.Unlock()
+}
+
+// proxiesClearedAt is when the counters were last cleared, which before any
+// press of the button is when this server started: the counts have been running
+// since then, and dating them from anything else would be a lie of five words.
+func (v *Supervisor) proxiesClearedAt() time.Time {
+	v.cleared.mu.Lock()
+	defer v.cleared.mu.Unlock()
+	if v.cleared.at.IsZero() {
+		return v.started
+	}
+	return v.cleared.at
+}

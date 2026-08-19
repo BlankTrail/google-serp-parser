@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -431,5 +432,56 @@ func TestDefaultPortSpec_AllowsAnUpstreamThatTerminatesTLSItself(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"allow_mitm_upstream":true`) {
 		t.Errorf("the open request does not allow a MITM upstream: %s", body)
+	}
+}
+
+func TestPortSpec_OpensAndDialsOverSOCKS5UnlessHTTPWasNamed(t *testing.T) {
+	// A port is opened as SOCKS5 and reached as SOCKS5, and the two have to be
+	// the same word. An HTTP forward proxy speaks CONNECT and therefore only
+	// TCP, so everything the port could otherwise do over UDP — QUIC, and
+	// resolving names at the far end rather than here — has nowhere to travel
+	// and quietly does not happen.
+	//
+	// The failure this guards against is silent in the worst way: a port opened
+	// for one protocol and dialled with the other does not refuse, it hangs,
+	// and what the trace shows is an address that looks dead.
+	if got := DefaultPortSpec().Protocol; got != ProtocolSOCKS5 {
+		t.Errorf("the default spec opens ports as %q, want socks5", got)
+	}
+
+	body, err := json.Marshal(DefaultPortSpec().request(1, Egress{}))
+	if err != nil {
+		t.Fatalf("marshalling the request: %v", err)
+	}
+	if !strings.Contains(string(body), `"protocol":"socks5"`) {
+		t.Errorf("the open request does not ask for socks5: %s", body)
+	}
+
+	// And what a spec names is what both halves use, so an operator who puts it
+	// back to HTTP gets a port opened for HTTP and dialled as one.
+	spec := DefaultPortSpec()
+	spec.Protocol = ProtocolHTTP
+	body, err = json.Marshal(spec.request(1, Egress{}))
+	if err != nil {
+		t.Fatalf("marshalling the request: %v", err)
+	}
+	if !strings.Contains(string(body), `"protocol":"http"`) {
+		t.Errorf("a spec that named http did not ask for it: %s", body)
+	}
+
+	for _, tc := range []struct{ named, want string }{
+		{"", "socks5"},
+		{ProtocolSOCKS5, "socks5"},
+		{ProtocolHTTP, "http"},
+		{"nonsense", "socks5"},
+	} {
+		tr := newBaseTransport("127.0.0.1", 20000, tc.named, nil, false, false)
+		u, err := tr.Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "example.com"}})
+		if err != nil {
+			t.Fatalf("Proxy(%q): %v", tc.named, err)
+		}
+		if u.Scheme != tc.want {
+			t.Errorf("a port named %q is dialled over %q, want %q", tc.named, u.Scheme, tc.want)
+		}
 	}
 }

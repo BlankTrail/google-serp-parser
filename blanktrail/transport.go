@@ -48,8 +48,16 @@ type RequestTrace struct {
 // newBaseTransport builds the HTTP-CONNECT transport that talks to one proxy
 // port. The port terminates the tunnelled TLS and presents a certificate chained
 // to the proxy's CA, so the client must trust that CA.
-func newBaseTransport(proxyHost string, port int, ca *x509.CertPool, insecure, noKeepAlives bool) *http.Transport {
-	proxyURL := &url.URL{Scheme: "http", Host: net.JoinHostPort(proxyHost, strconv.Itoa(port))}
+func newBaseTransport(proxyHost string, port int, protocol string, ca *x509.CertPool,
+	insecure, noKeepAlives bool) *http.Transport {
+	// The scheme has to be the one the port was opened as. A port opened for
+	// SOCKS5 and dialled as an HTTP proxy answers nothing intelligible, and the
+	// failure reads as the address being dead rather than as this program
+	// talking the wrong protocol at it.
+	proxyURL := &url.URL{
+		Scheme: ProtocolOr(protocol),
+		Host:   net.JoinHostPort(proxyHost, strconv.Itoa(port)),
+	}
 	tlsCfg := &tls.Config{}
 	if insecure {
 		tlsCfg.InsecureSkipVerify = true
@@ -83,6 +91,8 @@ type remedy interface {
 	attemptFailedStatus(port int, status int) (rotate bool)
 	// attemptSucceeded clears the port's consecutive-failure count.
 	attemptSucceeded(port int)
+	// failed records one failure of a kind, for the reading a screen shows.
+	failed(kind Failure)
 	rotateEgress(ctx context.Context, port int) error
 	markBadEgress(port int)
 	// markDeadEgress reports that the address did not carry the request at all,
@@ -147,6 +157,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			t.trace(mark.done(t.port, attempt, resp, err))
 		}
 		if err != nil {
+			t.rem.failed(failureOf(err, 0))
 			// The request never arrived. Whether that is the address's fault is
 			// the pool's to say: an address that has answered before is allowed
 			// one miss, and one that has never answered is simply dead.
@@ -169,6 +180,8 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			t.rem.attemptSucceeded(t.port)
 			return resp, nil
 		}
+
+		t.rem.failed(failureOf(nil, resp.StatusCode))
 
 		// Any non-2xx counts against the port, whatever the reason, unless the
 		// caller has said this particular status should not. A dead proxy, a

@@ -208,6 +208,7 @@ func (s *Server) routes() {
 	// as it arrives and a form the server reads whole cannot be.
 	s.mux.HandleFunc("POST "+uploadAt, s.uploadList)
 	s.mux.HandleFunc("GET /job/{id}", s.job)
+	s.mux.HandleFunc("GET "+proxiesAt, s.proxies)
 	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)
 	// What the job page polls, and what its two buttons send. Both buttons are
@@ -219,6 +220,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/resume", s.apiResume)
 	s.mux.HandleFunc("POST /api/delete", s.apiDelete)
 	s.mux.HandleFunc("POST /api/reshape", s.apiReshape)
+	// Clearing the reading of the pool is a press like the others: post alone,
+	// so a browser walking a link does not wipe somebody's measurement.
+	s.mux.HandleFunc("POST /api/proxies/reset", s.resetProxies)
 	// The settings are offered only by a server that has somewhere to write them.
 	// A page that took a connection and dropped it is worse than no page: the
 	// reader has no way of telling the two apart until the next restart.

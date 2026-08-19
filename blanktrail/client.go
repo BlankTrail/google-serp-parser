@@ -177,6 +177,14 @@ type PortSpec struct {
 	// to open at all.
 	UpstreamTLSInsecure bool
 
+	// Protocol is how this program reaches the opened port: "socks5" or "http".
+	//
+	// SOCKS5 carries what an HTTP forward proxy cannot. A CONNECT proxy speaks
+	// only TCP, so everything the port could otherwise do over UDP — QUIC, and
+	// resolving names at the far end rather than here — has nowhere to travel
+	// and quietly does not happen. Empty means socks5.
+	Protocol string
+
 	// AllowMITMUpstream lets the port work through an upstream proxy that
 	// terminates TLS itself and presents its own certificate.
 	//
@@ -193,11 +201,35 @@ type PortSpec struct {
 	AllowMITMUpstream bool
 }
 
+// The protocols a port may be opened as, and the one a spec that names none
+// gets.
+const (
+	ProtocolSOCKS5 = "socks5"
+	ProtocolHTTP   = "http"
+)
+
+// ProtocolOr is the protocol named, or the default where none was.
+//
+// It is one function because three places have to agree on it: the request that
+// opens the port, the transport that dials it, and the screen that says which
+// is in use. Two of them agreeing and the third not is a pool this program
+// talks to over a protocol it was not opened for.
+func ProtocolOr(p string) string {
+	if p == ProtocolHTTP {
+		return ProtocolHTTP
+	}
+	return ProtocolSOCKS5
+}
+
 // DefaultPortSpec is the configuration a session-oriented scraper wants: a real
 // profile from the curated database, Challenge Breaker armed, and a private
 // cookie jar.
 func DefaultPortSpec() PortSpec {
 	return PortSpec{
+		// Named rather than left to the fallback, so a spec printed or shown on
+		// a screen says which protocol it is rather than an empty box the reader
+		// has to know the meaning of.
+		Protocol:       ProtocolSOCKS5,
 		Mode:           "db",
 		Browser:        "chrome",
 		OS:             "windows",
@@ -292,7 +324,7 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	v4, ecs := s.ForceIPv4Egress, s.InjectECS
 	req := openPortRequest{
 		Port:            port,
-		Protocol:        "http", // HTTP CONNECT forward proxy
+		Protocol:        ProtocolOr(s.Protocol),
 		Mode:            s.Mode,
 		Browser:         s.Browser,
 		OS:              s.OS,

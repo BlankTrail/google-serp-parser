@@ -449,11 +449,15 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 		ports = o.Ports
 	}
 	cfg := poolConfig(threads, ports)
+	cfg.Spec.Protocol = saved.PortProtocol
 	// Which kind of result page this job asked for. Desktop opens every port
 	// under the one default template, as this program always has; mobile hands
 	// the pool two named templates and it spreads the ports over both, so a run
 	// on phones is a run on more than one phone.
 	cfg.Specs = blanktrail.SpecsFor(device)
+	for i := range cfg.Specs {
+		cfg.Specs[i].Spec.Protocol = saved.PortProtocol
+	}
 	cfg.Trace = o.tracer()
 	cfg.OnLease = o.leaseTracer()
 	// The gap between two requests on one identity is the job's. Nought is a job

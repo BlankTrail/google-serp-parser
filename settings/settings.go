@@ -66,10 +66,20 @@ type Settings struct {
 	// growth back when it ends; a job of the other kind opens its own from cold,
 	// because a phone's results are not a desktop's and an identity cannot be
 	// both.
-	HotPorts  int         `json:"hot_ports"`
-	HotDevice string      `json:"hot_device"`
-	Proxy     ProxySource `json:"proxy"`
-	Language  string      `json:"language"`
+	HotPorts  int    `json:"hot_ports"`
+	HotDevice string `json:"hot_device"`
+	// PortProtocol is how this program reaches the identities it opens: socks5
+	// or http.
+	//
+	// SOCKS5 carries what an HTTP forward proxy cannot: a CONNECT proxy speaks
+	// only TCP, so QUIC and resolving names at the far end have nowhere to
+	// travel and quietly do not happen. It is a setting rather than a rule
+	// because it is the sort of thing that wants putting back without a rebuild
+	// if a service on some machine turns out to answer one and not the other.
+	// Empty is socks5.
+	PortProtocol string      `json:"port_protocol"`
+	Proxy        ProxySource `json:"proxy"`
+	Language     string      `json:"language"`
 }
 
 // DefaultControlURL is where the identities are asked for on a machine where

@@ -29,6 +29,7 @@ const (
 	keyField     = "api_key"
 	hotField     = "hot_ports"
 	hotKindField = "hot_device"
+	wireField    = "port_protocol"
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
@@ -90,10 +91,12 @@ type settingsForm struct {
 	// and HotDevice is which kind of result page they are opened for.
 	Hot       string
 	HotDevice string
-	Source    string
-	Where     string
-	Refresh   string
-	Tongue    string
+	// Wire is how this program reaches the identities it opens: socks5 or http.
+	Wire    string
+	Source  string
+	Where   string
+	Refresh string
+	Tongue  string
 }
 
 // settingsFormOf reads the posted settings, leaving every box as text so a box
@@ -105,6 +108,7 @@ func settingsFormOf(r *http.Request) settingsForm {
 		APIKey:     strings.TrimSpace(r.FormValue(keyField)),
 		Hot:        strings.TrimSpace(r.FormValue(hotField)),
 		HotDevice:  strings.TrimSpace(r.FormValue(hotKindField)),
+		Wire:       strings.TrimSpace(r.FormValue(wireField)),
 		Source:     strings.TrimSpace(r.FormValue(sourceField)),
 		Where:      strings.TrimSpace(r.FormValue(whereField)),
 		Refresh:    strings.TrimSpace(r.FormValue(refreshField)),
@@ -122,6 +126,7 @@ func formShowing(saved settings.Settings) settingsForm {
 		ControlURL: saved.ControlURL,
 		Hot:        strconv.Itoa(saved.HotPorts),
 		HotDevice:  saved.HotDevice,
+		Wire:       blanktrail.ProtocolOr(saved.PortProtocol),
 		Source:     saved.Proxy.Kind,
 		Where:      saved.Proxy.Location,
 		Refresh:    spellUnits(saved.Proxy.Refresh, refreshUnit),
@@ -188,6 +193,7 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	// — so this is read as a number of things that may be none of them, and only
 	// a negative or a word is a mistake.
 	next.HotPorts = b.none(f.Hot, saved.HotPorts, "settings.hot.count")
+	next.PortProtocol = blanktrail.ProtocolOr(f.Wire)
 	next.HotDevice = f.HotDevice
 	if next.HotDevice != "" && !blanktrail.KnownDevice(next.HotDevice) {
 		b.complaints = append(b.complaints, "settings.hot.kind")
