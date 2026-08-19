@@ -47,10 +47,14 @@ type proxiesPage struct {
 	Warm        int
 	Quarantined int
 
-	// Requests is what went out since the counters were cleared, Failed how many
-	// of those did not come back with an answer, and Share the second as a
-	// percentage of the first.
+	// Requests is how many identities were handed work since the counters were
+	// cleared and Attempts how many times a request actually went on the wire,
+	// which is the larger of the two: one query walks as many addresses as it
+	// needs. Failed is how many attempts did not come back with an answer, and
+	// Share is that against the attempts — against the requests it came out
+	// above a hundred per cent.
 	Requests int64
+	Attempts int64
 	Failed   int64
 	Share    string
 
@@ -132,6 +136,7 @@ func (s *Server) proxiesOf() proxiesPage {
 	view.Warm = st.Warm
 	view.Quarantined = st.Quarantined
 	view.Requests = st.Requests
+	view.Attempts = st.Attempts
 	view.Rotations = st.EgressRotations
 	view.Quarantines = st.Quarantines
 	view.Revivals = st.Revivals
@@ -143,7 +148,7 @@ func (s *Server) proxiesOf() proxiesPage {
 	for _, kind := range blanktrail.Failures {
 		view.Failed += st.Failures[kind]
 	}
-	view.Share = shareOf(view.Failed, view.Requests)
+	view.Share = shareOf(view.Failed, view.Attempts)
 	for _, kind := range blanktrail.Failures {
 		n := st.Failures[kind]
 		view.Kinds = append(view.Kinds, failureRow{

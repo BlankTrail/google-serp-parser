@@ -93,6 +93,9 @@ type remedy interface {
 	attemptSucceeded(port int)
 	// failed records one failure of a kind, for the reading a screen shows.
 	failed(kind Failure)
+	// attempted records that a request was put on the wire, which is what a
+	// share of failures is read against.
+	attempted()
 	rotateEgress(ctx context.Context, port int) error
 	markBadEgress(port int)
 	// markDeadEgress reports that the address did not carry the request at all,
@@ -152,6 +155,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		if t.trace != nil {
 			sent, mark = timed(sent)
 		}
+		t.rem.attempted()
 		resp, err := t.rt.RoundTrip(sent)
 		if t.trace != nil {
 			t.trace(mark.done(t.port, attempt, resp, err))

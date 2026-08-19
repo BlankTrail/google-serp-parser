@@ -113,8 +113,8 @@ func (c *listChannel) Close() { c.rotor.Close() }
 // Len is how many addresses this channel's list holds, and Resting is the ones
 // set aside off a failure. They are here rather than on Channel because a
 // direct connection and a fixed address have no list to answer about.
-func (c *listChannel) Len() int                      { return c.rotor.Len() }
-func (c *listChannel) Resting() map[string]time.Time { return c.rotor.Resting() }
+func (c *listChannel) Len() int     { return c.rotor.Len() }
+func (c *listChannel) Resting() int { return c.rotor.RestingHere() }
 
 // --- rotating channel ---
 

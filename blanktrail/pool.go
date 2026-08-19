@@ -340,7 +340,12 @@ type Stats struct {
 	// pool has a single unnamed template.
 	Specs map[string]SpecStats
 
-	Requests         int64
+	Requests int64
+	// Attempts is how many times a request was actually put on the wire, which
+	// is more than Requests: one query walks as many addresses as it needs. It
+	// is the only honest thing to read a share of failures against — against
+	// Requests the share came out above a hundred per cent.
+	Attempts         int64
 	ProfileRotations int64
 	EgressRotations  int64
 	Renewals         int64
@@ -424,7 +429,23 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		return nil, errors.New("blanktrail: PoolConfig.Client is required")
 	}
 	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 300 * time.Second
+		// Long enough to outlast a challenge being solved, and no longer.
+		//
+		// The solver is given five minutes for a reCAPTCHA, and a request that
+		// meets one spends the dial, the request itself and then that wait. Five
+		// minutes flat was therefore a cap that landed in the middle of a solve
+		// rather than after it: measured on a live run, 49 requests were
+		// abandoned by this clock while the far end was still working for them —
+		// and abandoning one does not call it off, so the solver went on solving
+		// for answers nobody was waiting for. 120 solves were in flight against
+		// 50 threads that could receive one.
+		//
+		// Seven and a half minutes covers the solve with the request around it.
+		// What it is not is a licence to hang: silence is bounded by the proxy,
+		// which allows five seconds to reach an address and thirty with nothing
+		// coming back, and this is only the outer bound on a request that is
+		// being worked on rather than ignored.
+		cfg.RequestTimeout = 450 * time.Second
 	}
 	if cfg.MaxRetriesPerReq <= 0 {
 		cfg.MaxRetriesPerReq = 4

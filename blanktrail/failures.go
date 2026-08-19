@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // Failure is one kind of thing that goes wrong on the way to an answer.
@@ -77,6 +76,13 @@ func failureOf(err error, status int) Failure {
 	}
 }
 
+// attempted records that a request was put on the wire.
+func (p *Pool) attempted() {
+	p.mu.Lock()
+	p.stats.Attempts++
+	p.mu.Unlock()
+}
+
 // failed records one failure of a kind against the pool.
 func (p *Pool) failed(kind Failure) {
 	p.mu.Lock()
@@ -99,6 +105,7 @@ func (p *Pool) ResetStats() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stats.Requests = 0
+	p.stats.Attempts = 0
 	p.stats.ProfileRotations = 0
 	p.stats.EgressRotations = 0
 	p.stats.Renewals = 0
@@ -117,7 +124,7 @@ func (p *Pool) ResetStats() {
 // would be asking three of them a question only one can answer.
 type counted interface {
 	Len() int
-	Resting() map[string]time.Time
+	Resting() int
 }
 
 // Addresses says how many egress addresses this pool can draw on and how many
@@ -133,7 +140,7 @@ func (p *Pool) Addresses() (total, resting int) {
 			continue
 		}
 		total += c.Len()
-		resting += len(c.Resting())
+		resting += c.Resting()
 	}
 	return total, resting
 }

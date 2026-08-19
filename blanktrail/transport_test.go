@@ -64,8 +64,11 @@ func (s *spyBody) Close() error {
 // fakeRemedy records what the ladder asked for.
 type fakeRemedy struct {
 	// kinds counts what the ladder named each failure, so a test can check that
-	// a dead address and a wall are told apart rather than added together.
-	kinds map[Failure]int
+	// a dead address and a wall are told apart rather than added together, and
+	// attempts counts what went on the wire, which is what a share of failures
+	// is read against.
+	kinds    map[Failure]int
+	attempts int
 
 	failures       int
 	successes      int
@@ -568,6 +571,8 @@ func TestLadder_LeavesAnAddressThatHasAnsweredAfterTwoMissesInARow(t *testing.T)
 		t.Errorf("rotations=%d, want the one the second miss in a row calls for", rem.rotations)
 	}
 }
+
+func (f *fakeRemedy) attempted() { f.attempts++ }
 
 func (f *fakeRemedy) failed(kind Failure) {
 	if f.kinds == nil {

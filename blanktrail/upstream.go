@@ -564,6 +564,25 @@ func (r *Rotor) Resting() map[string]time.Time {
 	return out
 }
 
+// Resting counts the addresses this list holds that are on the bench.
+//
+// It is not len(Resting()): a rest is kept for an address the current list does
+// not hold, because the list may be reloaded from a source that has it again,
+// and the rests carried over from earlier runs are of a list that has changed
+// since. Counted the other way, a screen said 18889 of 15000 addresses were
+// resting, which is not a fact about anything.
+func (r *Rotor) RestingHere() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, l := range r.ups {
+		if _, resting := r.benched[l.key]; resting {
+			n++
+		}
+	}
+	return n
+}
+
 // Restore takes rests recorded earlier and puts those addresses back on the
 // bench for whatever is left of them.
 //
