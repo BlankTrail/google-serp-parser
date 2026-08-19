@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -308,11 +309,33 @@ func withKeys(ups []Upstream) []listed {
 // defaultRest is how long an address that failed its way out of the rotation
 // waits before it is offered again.
 //
-// Six hours is long enough that a temporary refusal has expired and short
-// enough that a bought list is not spent after one bad afternoon. A refusal a
-// minute ago rarely means the address is dead: it was busy, or it was turned
-// away for a while, and both pass.
-const defaultRest = 6 * time.Hour
+// Six hours was the figure, on the reasoning that a temporary refusal wants
+// waiting out and a bought list should not be spent after one bad afternoon.
+// What it missed is what these lists are: a backconnect gateway, where the
+// address is a door onto an exit that rotates behind it. Which doors work
+// changes by the minute, so a miss is a fact about this minute and not about
+// the door, and six hours is a sentence passed on evidence that has expired by
+// the time it is a tenth served.
+//
+// Measured on a live list of fifteen thousand: 14999 of them were resting at
+// once, the run was down to thirteen queries a minute, and 92 per cent of what
+// went out never arrived — because the only addresses left to hand out were the
+// ones already known bad. Five minutes is long enough that the address is not
+// tried again inside the same failure and short enough that a list cannot be
+// eaten.
+const defaultRest = 5 * time.Minute
+
+// benchShare is the most of a list that may be resting at once, as a share of
+// the addresses the list holds.
+//
+// The rest above decides how long one address waits; this decides how many may
+// be waiting together, and it is the one that makes "the whole list is resting"
+// impossible rather than merely unlikely. When the bench is over its share the
+// address that has rested longest goes back, whether or not its rest is up: an
+// address that has waited longer than every other is the best guess available
+// at which of them might work now, and a pool with nothing to hand out has no
+// guesses left at all.
+const benchShare = 0.75
 
 // RotorOption adjusts a rotor at construction.
 type RotorOption func(*Rotor)
@@ -545,6 +568,41 @@ func (r *Rotor) bench(key string) {
 	if r.onBench != nil {
 		r.onBench(key, since)
 	}
+	r.keepBenchInBounds()
+}
+
+// keepBenchInBounds takes the longest-rested addresses back until the bench is
+// within its share of the list. Called with the lock held.
+//
+// A list is not spent because every address in it has missed once. On a
+// backconnect gateway a miss is about the minute rather than the door, and a
+// bench with no ceiling turns a bad ten minutes into a pool with nothing to
+// hand out: measured live, 14999 of fifteen thousand addresses were resting at
+// once and 92 per cent of every request never arrived, because the only
+// addresses left to offer were ones already known bad.
+//
+// The longest-rested go first, which is the only ordering with an argument
+// behind it: whatever was true when they were put away is the least likely to
+// still be true.
+func (r *Rotor) keepBenchInBounds() {
+	ceiling := int(float64(len(r.ups)) * benchShare)
+	if ceiling < 1 || len(r.benched) <= ceiling {
+		return
+	}
+	type rested struct {
+		key   string
+		since time.Time
+	}
+	all := make([]rested, 0, len(r.benched))
+	for key, since := range r.benched {
+		all = append(all, rested{key: key, since: since})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].since.Before(all[j].since) })
+	for _, one := range all[:len(r.benched)-ceiling] {
+		delete(r.benched, one.key)
+		delete(r.fails, one.key)
+	}
+	r.refreshNextRelease()
 }
 
 // Resting is every address on the bench right now, and when each one's rest
@@ -580,6 +638,23 @@ func (r *Rotor) RestingHere() int {
 			n++
 		}
 	}
+	return n
+}
+
+// ReleaseAll takes every address off the bench and says how many came back.
+//
+// It is the answer to a bench filled by something that was never the addresses'
+// doing — the service on this machine restarting, a network that was away for a
+// minute — where every entry is evidence of one event rather than of fifteen
+// thousand. Waiting each rest out would take as long as the rests, and the
+// program has no way of knowing that it should not.
+func (r *Rotor) ReleaseAll() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := len(r.benched)
+	clear(r.benched)
+	clear(r.fails)
+	r.nextRelease = time.Time{}
 	return n
 }
 

@@ -65,6 +65,20 @@ func (s *Store) Rest(ctx context.Context, key string, since time.Time) error {
 // ever failed, and the rests among them expired long ago. The caller names the
 // moment because how long a rest lasts is the pool's business, not this
 // table's.
+// ForgetAllRests drops every rest written down.
+//
+// It is what a release of the whole bench has to do as well as clearing it in
+// memory: the rests are read back at the next start precisely so a restart does
+// not walk into yesterday's dead addresses, and a release that left them there
+// would last until the program was closed and no longer.
+func (s *Store) ForgetAllRests(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM rested_upstreams`)
+	if err != nil {
+		return fmt.Errorf("store: forgetting the rests: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ForgetRestsBefore(ctx context.Context, cut time.Time) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM rested_upstreams WHERE since < ?`,
 		cut.UTC().Format(time.RFC3339Nano))

@@ -87,6 +87,7 @@ type failureRow struct {
 // and not the pool's.
 var failureKeys = map[blanktrail.Failure]string{
 	blanktrail.FailureTransport: "proxies.kind.transport",
+	blanktrail.FailurePort:      "proxies.kind.port",
 	blanktrail.FailureRelay:     "proxies.kind.relay",
 	blanktrail.FailureWall:      "proxies.kind.wall",
 	blanktrail.FailureTimeout:   "proxies.kind.timeout",
@@ -116,6 +117,35 @@ func (s *Server) resetProxies(w http.ResponseWriter, r *http.Request) {
 		if pool := s.sup.pool().Pool; pool != nil {
 			pool.ResetStats()
 			s.sup.clearedProxies(time.Now())
+		}
+	}
+	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
+}
+
+// releaseRested takes every resting address back into rotation and shows the
+// screen again.
+//
+// It is for a bench filled by something that was never the addresses' doing —
+// the proxy service restarting, a network away for a minute — where every entry
+// on it is evidence of one event rather than of a whole list. Waiting each rest
+// out would take as long as the rests, and nothing in the program can know that
+// it should not.
+//
+// The counts are left alone. What happened still happened, and a reading that
+// forgot it would hide the very event this was pressed because of.
+func (s *Server) releaseRested(w http.ResponseWriter, r *http.Request) {
+	if s.sup != nil {
+		if pool := s.sup.pool().Pool; pool != nil {
+			pool.ReleaseRested()
+		}
+	}
+	if s.store != nil {
+		// Written down so a restart does not walk back into yesterday's dead
+		// addresses, so a release that left them there would last until the next
+		// start and no longer.
+		if err := s.store.ForgetAllRests(r.Context()); err != nil {
+			s.fail(w, r, err)
+			return
 		}
 	}
 	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)

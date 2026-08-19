@@ -134,3 +134,24 @@ func TestFailureKeys_NamesEveryKindThePoolCanReport(t *testing.T) {
 		}
 	}
 }
+
+func TestProxiesRelease_TakesTheBenchBackAndComesBackToTheScreen(t *testing.T) {
+	// For a bench filled by something that was never the addresses' doing — the
+	// proxy service restarting, a network away for a minute. It is a post like
+	// the other button, so a browser walking a link cannot undo somebody's
+	// measurement of a list.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/api/proxies/release", url.Values{})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != proxiesAt {
+		t.Errorf("the press lands on %q, want %q", got, proxiesAt)
+	}
+
+	plain := httptest.NewRecorder()
+	s.Handler().ServeHTTP(plain, httptest.NewRequest(http.MethodGet, "/api/proxies/release", nil))
+	if plain.Code == http.StatusSeeOther || plain.Code == http.StatusOK {
+		t.Errorf("a walked link let the bench go: status=%d", plain.Code)
+	}
+}

@@ -161,7 +161,14 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			t.trace(mark.done(t.port, attempt, resp, err))
 		}
 		if err != nil {
-			t.rem.failed(failureOf(err, 0))
+			kind := failureOf(err, 0)
+			t.rem.failed(kind)
+			if kind == FailurePort {
+				// The proxy's own port did not answer, so nothing went through
+				// it and the address behind it has done nothing. Blaming it here
+				// is how one restart of the service put a whole list away.
+				return nil, err
+			}
 			// The request never arrived. Whether that is the address's fault is
 			// the pool's to say: an address that has answered before is allowed
 			// one miss, and one that has never answered is simply dead.

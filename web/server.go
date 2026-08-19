@@ -223,6 +223,7 @@ func (s *Server) routes() {
 	// Clearing the reading of the pool is a press like the others: post alone,
 	// so a browser walking a link does not wipe somebody's measurement.
 	s.mux.HandleFunc("POST /api/proxies/reset", s.resetProxies)
+	s.mux.HandleFunc("POST /api/proxies/release", s.releaseRested)
 	// The settings are offered only by a server that has somewhere to write them.
 	// A page that took a connection and dropped it is worse than no page: the
 	// reader has no way of telling the two apart until the next restart.

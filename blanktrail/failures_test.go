@@ -5,6 +5,8 @@ package blanktrail
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -247,5 +249,101 @@ func TestRotorRestingHere_CountsOnlyTheAddressesThisListHolds(t *testing.T) {
 	if got := r.RestingHere(); got != 1 {
 		t.Errorf("%d of this list's addresses are resting, want the one that is: "+
 			"a rest for an address the list does not hold is not one of them", got)
+	}
+}
+
+func TestFailureOf_TellsTheProxysOwnPortFromTheAddressBehindIt(t *testing.T) {
+	// The remedy is opposite, so the two must never be counted as one. Every
+	// other failure is evidence against the address and is answered by leaving
+	// it; a port that did not answer is evidence about the service on this
+	// machine, and answering it the same way blames a whole list for one
+	// restart. Measured live after the proxy was restarted a few times: 14999 of
+	// fifteen thousand addresses resting, none of which had done anything.
+	dialed := &net.OpError{
+		Op:  "dial",
+		Net: "tcp",
+		Err: errors.New("no connection could be made because the target machine actively refused it"),
+	}
+	if got := failureOf(dialed, 0); got != FailurePort {
+		t.Errorf("a port that would not be dialled is named %q, want %q", got, FailurePort)
+	}
+
+	// And a failure that happened after the dial travelled through the proxy, so
+	// it is about the address.
+	after := &net.OpError{
+		Op:  "read",
+		Net: "tcp",
+		Err: errors.New("an existing connection was forcibly closed"),
+	}
+	if got := failureOf(after, 0); got != FailureTransport {
+		t.Errorf("a connection closed after it was made is named %q, want %q",
+			got, FailureTransport)
+	}
+}
+
+func TestLadder_HoldsNothingAgainstAnAddressItNeverReached(t *testing.T) {
+	// When the proxy service restarts, its ports close. Every request in flight
+	// fails to dial, and a ladder that treated that as the address's doing put
+	// the whole list away for something the list had no part in.
+	dialed := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	rem := &fakeRemedy{keeps: true}
+	l := &ladder{rt: &fakeRT{steps: []func() (*http.Response, error){failWith(dialed)}}, port: 1, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatal("a port that would not be dialled came back as a success")
+	}
+	if rem.kinds[FailurePort] != 1 {
+		t.Errorf("the failure was counted as %v, want one against the port", rem.kinds)
+	}
+	if rem.markedDead != 0 {
+		t.Errorf("the address was marked dead %d times for a port that never answered",
+			rem.markedDead)
+	}
+	if rem.rotations != 0 {
+		t.Errorf("the port was rotated %d times onto another address for a failure "+
+			"that was not the address's", rem.rotations)
+	}
+	if rem.misses != 0 {
+		t.Errorf("the address collected %d misses for a request that never left "+
+			"this machine", rem.misses)
+	}
+}
+
+func TestRotorReleaseAll_TakesEveryRestingAddressBack(t *testing.T) {
+	// For a bench filled by something that was never the addresses' doing.
+	// Waiting each rest out would take as long as the rests, and nothing in the
+	// program can know that it should not.
+	ups, bad := Parse(strings.Join([]string{
+		"1.1.1.1:1", "2.2.2.2:2", "3.3.3.3:3",
+	}, "\n"), "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	r := NewStaticRotor(ups)
+	r.MarkDead(ups[0])
+	r.MarkDead(ups[1])
+	if got := r.RestingHere(); got != 2 {
+		t.Fatalf("%d addresses are resting, want the two that were put away", got)
+	}
+
+	if got := r.ReleaseAll(); got != 2 {
+		t.Errorf("%d addresses came back, want two", got)
+	}
+	if got := r.RestingHere(); got != 0 {
+		t.Errorf("%d addresses are still resting after the bench was let go", got)
+	}
+	// And each is offered again rather than merely un-benched.
+	seen := map[string]bool{}
+	for range len(ups) {
+		u, ok := r.Next()
+		if !ok {
+			t.Fatal("the rotor has nothing to hand out after the bench was let go")
+		}
+		seen[u.Key()] = true
+	}
+	for _, u := range ups {
+		if !seen[u.Key()] {
+			t.Errorf("%s was not offered again after the bench was let go", u.Key())
+		}
 	}
 }

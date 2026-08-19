@@ -55,7 +55,11 @@
 <form method="post" action="/api/proxies/reset">
 <button type="submit">{{.T "proxies.reset"}}</button>
 </form>
+<form method="post" action="/api/proxies/release">
+<button type="submit">{{.T "proxies.release"}}</button>
+</form>
 </div>
 <p class="empty">{{.T "proxies.reset.why"}}</p>
+<p class="empty">{{.T "proxies.release.why"}}</p>
 </section>
 {{end}}

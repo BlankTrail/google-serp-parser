@@ -5,6 +5,7 @@ package blanktrail
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -35,13 +36,25 @@ const (
 	// FailureTimeout is our own clock running out — the deadline this program
 	// set, not one the far end kept.
 	FailureTimeout Failure = "timeout"
+	// FailurePort is the proxy's own port not answering at all: nothing was
+	// dialled through, so nothing can be said about the address behind it.
+	//
+	// It is told apart from the rest because the remedy is opposite. Every other
+	// failure is evidence against the address and is answered by leaving it; this
+	// one is evidence about the service on this machine, and answering it the
+	// same way blames the whole list for one restart. Measured on a live run
+	// after the proxy was restarted a few times: 14999 of fifteen thousand
+	// addresses were resting, and none of them had done anything.
+	FailurePort Failure = "port"
 	// FailureOther is any other answer that was not a success.
 	FailureOther Failure = "other"
 )
 
 // Failures is every kind in the order a screen should show them, so two screens
 // cannot disagree about the order.
-var Failures = []Failure{FailureTransport, FailureRelay, FailureWall, FailureTimeout, FailureOther}
+var Failures = []Failure{
+	FailureTransport, FailurePort, FailureRelay, FailureWall, FailureTimeout, FailureOther,
+}
 
 // relayRefused is what a proxy answers when the upstream terminates TLS itself
 // and it has not been told that is allowed.
@@ -56,6 +69,14 @@ func failureOf(err error, status int) Failure {
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return FailureTimeout
+		}
+		// A dial that failed is a dial to the proxy on this machine: that is the
+		// only thing this program connects to, everything beyond it being the
+		// proxy's business. So nothing travelled, and there is nothing to hold
+		// against the address.
+		var dial *net.OpError
+		if errors.As(err, &dial) && dial.Op == "dial" {
+			return FailurePort
 		}
 		// The transport's own deadline arrives as an error that says so in
 		// words and matches no sentinel: net/http wraps it, and the wrapper is
@@ -81,6 +102,22 @@ func (p *Pool) attempted() {
 	p.mu.Lock()
 	p.stats.Attempts++
 	p.mu.Unlock()
+}
+
+// ReleaseRested takes every resting address back into rotation and says how
+// many came back.
+//
+// It is for a bench filled by something that was never the addresses' doing.
+// The counts are left alone: what happened still happened, and a reading that
+// forgot it would hide the very event this was pressed because of.
+func (p *Pool) ReleaseRested() int {
+	n := 0
+	for _, ch := range p.mixer.Channels() {
+		if c, ok := ch.(counted); ok {
+			n += c.ReleaseAll()
+		}
+	}
+	return n
 }
 
 // failed records one failure of a kind against the pool.
@@ -125,6 +162,7 @@ func (p *Pool) ResetStats() {
 type counted interface {
 	Len() int
 	Resting() int
+	ReleaseAll() int
 }
 
 // Addresses says how many egress addresses this pool can draw on and how many

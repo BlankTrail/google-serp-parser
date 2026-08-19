@@ -4,6 +4,7 @@ package blanktrail
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -386,31 +388,6 @@ func TestRotor_HandsOutTheLongestRestedWhenEveryAddressIsBenched(t *testing.T) {
 	}
 }
 
-func TestRotor_RestDefaultsToSixHours(t *testing.T) {
-	clock := time.Unix(1700000000, 0)
-	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
-	r := NewStaticRotor(ups, WithClock(func() time.Time { return clock }))
-
-	for i := 0; i < 3; i++ {
-		r.MarkBad(ups[0])
-	}
-	clock = clock.Add(5*time.Hour + 59*time.Minute)
-	for i := 0; i < 4; i++ {
-		if u, _ := r.Next(); u.Key() == ups[0].Key() {
-			t.Fatal("the address came back before six hours had passed")
-		}
-	}
-	clock = clock.Add(2 * time.Minute)
-	var seen bool
-	for i := 0; i < 4 && !seen; i++ {
-		u, _ := r.Next()
-		seen = u.Key() == ups[0].Key()
-	}
-	if !seen {
-		t.Error("the address did not come back once six hours had passed")
-	}
-}
-
 func TestRotor_AnOptionCarryingNothingLeavesTheDefaultInPlace(t *testing.T) {
 	// Options come from configuration, where a field left unset is the common
 	// case and must mean "as it comes", not "no rest at all" or "no clock".
@@ -770,7 +747,7 @@ func TestRotor_RestingAndRestoreCarryABenchAcrossARestart(t *testing.T) {
 	}
 
 	// A new rotor, as a restart builds: it knows nothing until it is told.
-	next := NewStaticRotor(ups, WithClock(func() time.Time { return clock.Add(time.Hour) }))
+	next := NewStaticRotor(ups, WithClock(func() time.Time { return clock.Add(time.Minute) }))
 	if got := next.Benched(); got != 0 {
 		t.Fatalf("a fresh rotor already rests %d addresses", got)
 	}
@@ -781,7 +758,7 @@ func TestRotor_RestingAndRestoreCarryABenchAcrossARestart(t *testing.T) {
 
 	// And a rest that has already run out is not restarted: it belongs to the
 	// address, not to the program that wrote it down.
-	late := NewStaticRotor(ups, WithClock(func() time.Time { return clock.Add(7 * time.Hour) }))
+	late := NewStaticRotor(ups, WithClock(func() time.Time { return clock.Add(defaultRest + time.Minute) }))
 	late.Restore(rests)
 	if got := late.Benched(); got != 0 {
 		t.Errorf("%d addresses rest after their rest had already elapsed", got)
@@ -801,5 +778,72 @@ func TestRotor_OnBenchIsToldEachAddressPutAway(t *testing.T) {
 	r.MarkDead(ups[0]) // already resting: said once, not twice
 	if len(seen) != 1 || seen[0] != ups[0].Key() {
 		t.Errorf("the hook heard %v, want the one address put away once", seen)
+	}
+}
+
+func TestRotor_NeverRestsTheWholeListAtOnce(t *testing.T) {
+	// A list is not spent because every address in it has missed once. On a
+	// backconnect gateway a miss is about the minute rather than the door, and a
+	// bench with no ceiling turns a bad ten minutes into a pool with nothing to
+	// hand out: measured live, 14999 of fifteen thousand addresses were resting
+	// at once, 92 per cent of every request never arrived, and the run was down
+	// to thirteen queries a minute — because the only addresses left to offer
+	// were ones already known bad.
+	lines := make([]string, 0, 20)
+	for i := range 20 {
+		lines = append(lines, fmt.Sprintf("10.0.0.%d:1080", i+1))
+	}
+	ups, bad := Parse(strings.Join(lines, "\n"), "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	clock := newFakeClock()
+	r := NewStaticRotor(ups)
+	r.now = clock.Now
+
+	// Every address in the list is found dead, one after another.
+	for _, u := range ups {
+		clock.Advance(time.Second)
+		r.MarkDead(u)
+	}
+
+	resting := r.RestingHere()
+	ceiling := int(float64(len(ups)) * benchShare)
+	if resting > ceiling {
+		t.Errorf("%d of %d addresses are resting, want no more than %d",
+			resting, len(ups), ceiling)
+	}
+	if resting == len(ups) {
+		t.Fatal("the whole list is resting: there is nothing left to hand out")
+	}
+
+	// And what came back is what had rested longest — whatever was true when it
+	// was put away is the least likely to still be true.
+	back := r.Resting()
+	for _, u := range ups[:len(ups)-ceiling] {
+		if _, still := back[u.Key()]; still {
+			t.Errorf("%s was put away first and is still resting while later ones came back",
+				u.Key())
+		}
+	}
+
+	// The rotor can still hand something out, which is the whole point.
+	if _, ok := r.Next(); !ok {
+		t.Error("the rotor has nothing to hand out after every address missed once")
+	}
+}
+
+func TestDefaultRest_IsShortEnoughForAListWhoseExitsRotate(t *testing.T) {
+	// Six hours was a sentence passed on evidence that expires in minutes. The
+	// address is a door onto an exit that rotates behind it, so which doors work
+	// changes constantly, and a miss says something about this minute rather
+	// than about the door.
+	if defaultRest > 15*time.Minute {
+		t.Errorf("an address rests %s after one miss, which on a list whose exits "+
+			"rotate is a verdict on evidence that has expired", defaultRest)
+	}
+	if defaultRest < time.Minute {
+		t.Errorf("an address rests only %s, which is short enough to be handed "+
+			"back inside the same failure", defaultRest)
 	}
 }
