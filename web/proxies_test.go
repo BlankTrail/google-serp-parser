@@ -155,3 +155,29 @@ func TestProxiesRelease_TakesTheBenchBackAndComesBackToTheScreen(t *testing.T) {
 		t.Errorf("a walked link let the bench go: status=%d", plain.Code)
 	}
 }
+
+func TestBrowserPolls_ClaimsEveryAddressThePagesPress(t *testing.T) {
+	// Whatever is mounted on /api/ takes every address under it this list does
+	// not claim, so an address the pages press and this does not name is a
+	// button that answers 404. Both buttons on the proxy screen did exactly that
+	// on the day they were added, because the routes and the published list were
+	// two lists.
+	claimed := map[string]bool{}
+	for _, at := range BrowserPolls() {
+		claimed[at] = true
+	}
+	for _, want := range []string{"/api/proxies/reset", "/api/proxies/release"} {
+		if !claimed[want] {
+			t.Errorf("the pages press %s and nothing claims it: whatever is mounted "+
+				"on /api/ takes it", want)
+		}
+	}
+
+	// And every address registered is one published, which is what makes the two
+	// impossible to disagree.
+	for _, p := range browserPolls {
+		if !claimed[p.path] {
+			t.Errorf("%s is registered and not published", p.path)
+		}
+	}
+}

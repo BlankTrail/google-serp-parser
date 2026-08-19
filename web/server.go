@@ -215,15 +215,14 @@ func (s *Server) routes() {
 	// registered for post alone, so a browser prefetching a link, or anything
 	// else that walks one, is answered with a refusal rather than with somebody
 	// else's job ending.
-	s.mux.HandleFunc("GET /api/progress", s.apiProgress)
-	s.mux.HandleFunc("POST /api/stop", s.apiStop)
-	s.mux.HandleFunc("POST /api/resume", s.apiResume)
-	s.mux.HandleFunc("POST /api/delete", s.apiDelete)
-	s.mux.HandleFunc("POST /api/reshape", s.apiReshape)
-	// Clearing the reading of the pool is a press like the others: post alone,
-	// so a browser walking a link does not wipe somebody's measurement.
-	s.mux.HandleFunc("POST /api/proxies/reset", s.resetProxies)
-	s.mux.HandleFunc("POST /api/proxies/release", s.releaseRested)
+	// What the pages themselves post to and poll. They are registered from the
+	// same list BrowserPolls publishes, so the two cannot drift: an address
+	// added here and missing there is taken by whatever is mounted on /api/,
+	// and the page goes on pressing a button that answers 404. That is exactly
+	// what happened to the two on the proxy screen.
+	for _, poll := range browserPolls {
+		s.mux.HandleFunc(poll.method+" "+poll.path, poll.by(s))
+	}
 	// The settings are offered only by a server that has somewhere to write them.
 	// A page that took a connection and dropped it is worse than no page: the
 	// reader has no way of telling the two apart until the next restart.
@@ -241,17 +240,48 @@ func (s *Server) routes() {
 // Handler is the server's routes, so a test can drive them without a socket.
 func (s *Server) Handler() http.Handler { return s.mux }
 
-// BrowserPolls are the addresses the pages themselves post to and poll, which
+// poll is one address a page of this package posts to or polls.
+type poll struct {
+	method string
+	path   string
+	// by is the handler on a server, taken as a method value so the list can be
+	// written before any server exists.
+	by func(*Server) http.HandlerFunc
+}
+
+// browserPolls is every address the pages themselves post to and poll, which
 // happen to sit under /api/ and have done since before anything programmable
 // did.
 //
+// It is one list because it is read twice: the routes are registered from it,
+// and BrowserPolls publishes it to whoever mounts a programmable interface on
+// the same prefix — that mount takes every address under /api/ this list does
+// not claim. Kept as two lists, an address added to one and not the other is a
+// button on a page that answers 404, which is what the two on the proxy screen
+// did on the day they were added.
+var browserPolls = []poll{
+	{http.MethodGet, "/api/progress", func(s *Server) http.HandlerFunc { return s.apiProgress }},
+	{http.MethodPost, "/api/stop", func(s *Server) http.HandlerFunc { return s.apiStop }},
+	{http.MethodPost, "/api/resume", func(s *Server) http.HandlerFunc { return s.apiResume }},
+	{http.MethodPost, "/api/delete", func(s *Server) http.HandlerFunc { return s.apiDelete }},
+	{http.MethodPost, "/api/reshape", func(s *Server) http.HandlerFunc { return s.apiReshape }},
+	// Both are presses rather than links: a browser walking one would wipe
+	// somebody's measurement of a list, or undo a bench they meant to keep.
+	{http.MethodPost, "/api/proxies/reset", func(s *Server) http.HandlerFunc { return s.resetProxies }},
+	{http.MethodPost, "/api/proxies/release", func(s *Server) http.HandlerFunc { return s.releaseRested }},
+}
+
+// BrowserPolls are the addresses the pages themselves post to and poll.
+//
 // It is published because whoever mounts a programmable interface on that
 // prefix takes them otherwise, and the page then goes on asking an address that
-// refuses it. The list lives here rather than there because these are this
-// package's own addresses: a page that grows another one grows it here, and a
-// list kept anywhere else is a list somebody has to remember to update.
+// refuses it.
 func BrowserPolls() []string {
-	return []string{"/api/progress", "/api/stop", "/api/resume", "/api/reshape", "/api/delete"}
+	out := make([]string, 0, len(browserPolls))
+	for _, p := range browserPolls {
+		out = append(out, p.path)
+	}
+	return out
 }
 
 // ServeHandler runs the given handler on this server's socket and wind-down,
