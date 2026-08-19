@@ -1014,7 +1014,33 @@ func (p *Pool) Size() int {
 }
 
 // Cooldown is the minimum gap between two requests on the same port.
-func (p *Pool) Cooldown() time.Duration { return p.cool }
+func (p *Pool) Cooldown() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cool
+}
+
+// PaceAt sets the gap this pool keeps between two requests on one identity.
+//
+// A pool outlives the thing running on it: the standing set is opened once, as
+// one thread's worth of however many identities the machine keeps, and every
+// job afterwards runs on that same pool grown to its own size. The pace worked
+// out at opening is the standing set's, and it is the wrong number for a job —
+// ten identities paced for one thread came out at thirty-five seconds, and a
+// job of fifty threads on a hundred identities inherited it. A hundred
+// identities that may each be asked once every thirty-five seconds is a hundred
+// and seventy-one requests a minute and not one more, whatever the job asked
+// for, and that is exactly where such a job stopped accelerating.
+//
+// So whoever takes the pool says how it is paced.
+func (p *Pool) PaceAt(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	p.mu.Lock()
+	p.cool = d
+	p.mu.Unlock()
+}
 
 // NextDelay returns a random pause inside the configured delay range. Callers
 // use it to pace their own requests; a perfectly even interval is itself a

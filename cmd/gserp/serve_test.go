@@ -1176,3 +1176,54 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 		t.Errorf("%d identities are open after the job let go, want the two that were saved", got)
 	}
 }
+
+func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpened(t *testing.T) {
+	// The standing set is opened once, as one thread's worth of however many
+	// identities the machine keeps, and every job afterwards runs on that same
+	// pool grown to its own size. The gap between two requests on one identity
+	// was worked out at opening and never revisited, so a job inherited the
+	// standing set's pace: ten identities opened for one thread came out at
+	// thirty-five seconds, and a job of fifty threads on a hundred of them could
+	// be handed a hundred divided by thirty-five identities a second — a hundred
+	// and seventy-one requests a minute — however many identities it had and
+	// whatever pause it asked for. Traced on a live run: the shortest gap
+	// between two leases of one identity was 35.0 seconds across all hundred,
+	// and threads spent sixty percent of their time queueing.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 10,
+	})
+	saved, _ := opts.saved(io.Discard)
+
+	// Opened the way the standing set is opened: one thread, ten identities.
+	standing, err := opts.dial(t.Context(), saved, 1, 10, blanktrail.DeviceDesktop, 0)
+	if err != nil {
+		t.Fatalf("opening the standing identities: %v", err)
+	}
+	t.Cleanup(func() { _ = standing.Close() })
+	standing.KeepWarm()
+	opened := standing.Cooldown()
+	if opened <= 0 {
+		t.Fatalf("the standing set was opened with no pace at all")
+	}
+
+	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	if _, _, err := warm.raiseFor(t.Context(), 2, 50, blanktrail.DeviceDesktop, 0); err != nil {
+		t.Fatalf("raising a job of fifty on two: %v", err)
+	}
+
+	want := blanktrail.DeriveCooldown(2, shortestPause, longestPause)
+	if got := standing.Cooldown(); got != want {
+		t.Errorf("the pool is paced at %s, want the job's own %s (it was opened at %s)",
+			got, want, opened)
+	}
+
+	// And a job that named a pause of its own is paced by that.
+	if _, _, err := warm.raiseFor(t.Context(), 2, 50, blanktrail.DeviceDesktop, 3*time.Second); err != nil {
+		t.Fatalf("raising a job that named its own pause: %v", err)
+	}
+	if got := standing.Cooldown(); got != 3*time.Second {
+		t.Errorf("the pool is paced at %s, want the three seconds the job named", got)
+	}
+}
