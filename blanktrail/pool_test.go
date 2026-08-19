@@ -467,6 +467,10 @@ func TestPoolRemedy_TransportErrorMarksTheEgressWithoutBurningTheChannel(t *test
 	cfg.Channels = []Channel{ch}
 	cfg.RotateAfterFailures = 2
 	cfg.MaxRetriesPerReq = 3
+	// Room to be carried past two dead addresses, which is what this is about.
+	// The default is one, because the looking is done by the tries a phrase gets
+	// rather than inside a single request.
+	cfg.AddressesPerRequest = 3
 
 	p, err := NewPool(context.Background(), cfg)
 	if err != nil {
@@ -2168,16 +2172,18 @@ func writeList(t *testing.T, path, raw string) {
 	}
 }
 
-func TestPool_HuntsFifteenAddressesForOneRequestByDefault(t *testing.T) {
-	// The budget a request gets for walking away from addresses that do not
-	// carry it, which is the one that decides what a run gets out of a large
-	// cheap list. Five was not enough: most addresses in such a list are dead,
-	// each costs about two seconds and no pause, and a job at fifty threads that
-	// gave up after five settled four queries a minute.
+func TestPool_CarriesOneRequestToOneAddressAndLeavesTheLookingToTheTries(t *testing.T) {
+	// Where the looking for an address that answers is done, which is the number
+	// that decides what a run gets out of a large cheap list.
 	//
-	// It is the pool's own default rather than the retry budget, because the two
-	// are spent on different things — one waits out a refusal at the other end,
-	// the other looks for a machine that answers at all.
+	// It used to be done inside a single request, which walked one port through
+	// fifteen addresses. That is the same looking done twice over: a phrase is
+	// already taken to thirty identities, each a fresh port with its own address,
+	// and doing it inside the request as well burns addresses fifteen at a time
+	// on one port while the rest of the pool sits idle. Measured against a
+	// reference client on the same list, which carries a request to one address
+	// and moves on: it changed address 0.2 times per result and answered 71% of
+	// its requests, against 5.7 and 29% here.
 	f := fakebt.New(t)
 	clock := newFakeClock()
 	p, err := NewPool(context.Background(), testPoolConfig(t, f, clock, 1, 1))
@@ -2186,12 +2192,8 @@ func TestPool_HuntsFifteenAddressesForOneRequestByDefault(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = p.Close() })
 
-	if got := p.hunt(); got != 15 {
-		t.Errorf("one request may be carried to %d addresses, want fifteen", got)
-	}
-	if p.hunt() <= p.maxRetries() {
-		t.Errorf("the hunt is %d against a retry budget of %d: looking for an address "+
-			"that answers must be the larger of the two", p.hunt(), p.maxRetries())
+	if got := p.hunt(); got != 1 {
+		t.Errorf("one request may be carried to %d addresses, want one", got)
 	}
 }
 
@@ -2213,12 +2215,17 @@ func TestPool_TakesAHuntBudgetTheCallerNamed(t *testing.T) {
 	}
 }
 
-func TestPoolLeaveAddress_KeepsOneThatHasAnsweredAndDropsOneThatHasNot(t *testing.T) {
+func TestPoolLeaveAddress_GivesEveryAddressTwoMissesInARow(t *testing.T) {
 	// The policy itself, where it lives. On a list where roughly one address in
-	// twelve carries anything, an address that has answered is the one thing
-	// worth having and answers every time it is asked — 60 of 60, measured — so
-	// a single miss on it is a hiccup. One that has never answered is not: a
-	// repeat through an address that has just failed answered 0 of 18.
+	// twelve carries anything, a live address answers every time it is asked —
+	// 60 of 60, measured — so one miss is a hiccup rather than a verdict, on an
+	// address that has answered here and on one that has not yet.
+	//
+	// It used to drop an address that had not answered on its first miss. An
+	// address rotated to a moment ago has not answered either, so that ejected
+	// every fresh address on its first miss, whatever it was worth: measured
+	// against a reference client on the same list, 5.7 address changes per
+	// result against its 0.2, and 29% of requests answered against its 71%.
 	f := fakebt.New(t)
 	clock := newFakeClock()
 	p, err := NewPool(context.Background(), testPoolConfig(t, f, clock, 1, 2))
@@ -2232,8 +2239,11 @@ func TestPoolLeaveAddress_KeepsOneThatHasAnsweredAndDropsOneThatHasNot(t *testin
 	proven.answered = true
 	proven.mu.Unlock()
 
+	if p.leaveAddress(unproven.num) != false {
+		t.Error("an address that has not answered yet was given up after one miss")
+	}
 	if p.leaveAddress(unproven.num) != true {
-		t.Error("an address that has never answered was kept after it failed to carry a request")
+		t.Error("an address that has not answered was kept through two misses in a row")
 	}
 	if p.leaveAddress(proven.num) != false {
 		t.Error("an address that has answered was given up after one miss")
@@ -2247,5 +2257,41 @@ func TestPoolLeaveAddress_KeepsOneThatHasAnsweredAndDropsOneThatHasNot(t *testin
 	p.attemptSucceeded(proven.num)
 	if p.leaveAddress(proven.num) != false {
 		t.Error("a miss after a success was treated as the second of a pair")
+	}
+}
+
+func TestPoolInUse_CountsTheIdentitiesInHand(t *testing.T) {
+	// What tells a pool a job is working through from a pool sitting idle. The
+	// standing set is tended while nobody is using it and left alone while
+	// somebody is, and this is the whole of how it knows which it is.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	p, err := NewPool(context.Background(), testPoolConfig(t, f, clock, 1, 3))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if got := p.InUse(); got != 0 {
+		t.Errorf("InUse=%d on a pool nobody has taken anything from, want 0", got)
+	}
+	one, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	two, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if got := p.InUse(); got != 2 {
+		t.Errorf("InUse=%d with two identities in hand, want 2", got)
+	}
+	one.Release()
+	if got := p.InUse(); got != 1 {
+		t.Errorf("InUse=%d after one was given back, want 1", got)
+	}
+	two.Release()
+	if got := p.InUse(); got != 0 {
+		t.Errorf("InUse=%d after both were given back, want 0", got)
 	}
 }

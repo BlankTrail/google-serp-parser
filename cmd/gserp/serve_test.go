@@ -1123,3 +1123,56 @@ func TestRemember_SaysNothingWhenThereIsNowhereToKeepIt(t *testing.T) {
 	// not a fault worth a panic on every failed address.
 	serveOptions{}.remember("socks5|10.0.0.9:1080", time.Now())
 }
+
+func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *testing.T) {
+	// Lowering the number of identities this machine keeps used to close them
+	// out from under a job that was running on them: ReduceTo leaves alone what
+	// is leased at that instant and closes the rest, so a job raised on a
+	// hundred went on with the thirty it happened to be holding — and nothing
+	// grows a pool a second time, so it stayed there. Measured on a live run:
+	// five and eight tenths queries a minute where a clean run of the same job
+	// did seventy-seven.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 10,
+	})
+	saved, _ := opts.saved(io.Discard)
+
+	standing, err := opts.dial(t.Context(), saved, 1, 10, blanktrail.DeviceDesktop, 0)
+	if err != nil {
+		t.Fatalf("opening the standing identities: %v", err)
+	}
+	t.Cleanup(func() { _ = standing.Close() })
+	standing.KeepWarm()
+
+	running := true
+	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, error) {
+		return opts.dial(ctx, saved, 1, want, device, 0)
+	}
+	warm.running = func() bool { return running }
+
+	if err := warm.bring(t.Context(), 2, blanktrail.DeviceDesktop); err != nil {
+		t.Fatalf("saving a smaller number while a job runs: %v", err)
+	}
+	if got := standing.Stats().Ports; got != 10 {
+		t.Errorf("%d identities are open, want the ten the job is running on", got)
+	}
+
+	// The job lets go, and what was saved is brought about.
+	running = false
+	warm.mu.Lock()
+	owed := warm.owed
+	warm.owed = nil
+	warm.mu.Unlock()
+	if owed == nil {
+		t.Fatal("the number saved while the job ran was not remembered")
+	}
+	if err := warm.bring(t.Context(), owed.want, owed.device); err != nil {
+		t.Fatalf("bringing about what was owed: %v", err)
+	}
+	if got := standing.Stats().Ports; got != 2 {
+		t.Errorf("%d identities are open after the job let go, want the two that were saved", got)
+	}
+}

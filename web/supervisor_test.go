@@ -1039,7 +1039,7 @@ func TestSupervisor_RefusesARaiseThatCameBackWithNeitherAPoolNorAReason(t *testi
 	st := testStore(t)
 	v := start(st, dialing(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
-	}), 1, 1)
+	}, nil), 1, 1)
 	t.Cleanup(func() { _ = v.Close() })
 
 	id := enqueue(t, v, "on nothing", "a")

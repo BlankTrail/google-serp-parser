@@ -120,6 +120,25 @@ type PoolConfig struct {
 	// rather than a rule.
 	NoKeepAlives bool
 
+	// OnLease, when set, is told each time an identity is handed out and how
+	// long the caller waited for it.
+	//
+	// A trace of requests alone cannot say why a pool of a hundred is quiet: a
+	// port with nothing going through it looks the same whether every thread is
+	// busy elsewhere or every thread is standing in a queue for it. This is the
+	// half that was missing.
+	OnLease func(port int, waited time.Duration)
+
+	// OnPort, when set, is told each time an identity changes underneath the
+	// callers rather than because of one of them: a new address, a reopening, a
+	// port set aside or taken back.
+	//
+	// A trace of requests cannot explain why an identity that answered in a
+	// second an hour ago spends three minutes now. What changed is not in the
+	// request: it is that the session behind the port was replaced, and that
+	// happens here.
+	OnPort func(port int, what string)
+
 	// Trace, when set, is told how every request through every port went: where
 	// it was when it stopped waiting, and what it got. It is off unless somebody
 	// asks, because the timing hooks cost a little on each request — and because
@@ -397,7 +416,7 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		cfg.MaxRetriesPerReq = 4
 	}
 	if cfg.AddressesPerRequest <= 0 {
-		cfg.AddressesPerRequest = 15
+		cfg.AddressesPerRequest = 1
 	}
 	if cfg.Spec.Browser == "" {
 		cfg.Spec = DefaultPortSpec()
@@ -750,6 +769,27 @@ func (p *Pool) ReduceTo(ctx context.Context, want int) (int, error) {
 	return len(drop), firstErr
 }
 
+// InUse is how many identities are leased right now.
+//
+// It is how a pool somebody is working through is told from a pool sitting
+// idle, and the two want opposite things done to them. A running job is the one
+// caller that holds identities for minutes at a time, so a non-zero count here
+// means a job is on this pool — and a job warms every identity it touches
+// simply by working through it, which is what the warming is for.
+func (p *Pool) InUse() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, pt := range p.ports {
+		pt.mu.Lock()
+		if pt.leased {
+			n++
+		}
+		pt.mu.Unlock()
+	}
+	return n
+}
+
 // Hot is how many ports of the standing set this pool holds.
 func (p *Pool) Hot() int {
 	p.mu.Lock()
@@ -1024,6 +1064,7 @@ func (p *Pool) AcquireSpec(ctx context.Context, name string) (*Lease, error) {
 }
 
 func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
+	asked := p.cfg.Now()
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1046,6 +1087,9 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 				// that no longer exists on the proxy.
 				p.giveBack(pt)
 				continue
+			}
+			if p.cfg.OnLease != nil {
+				p.cfg.OnLease(pt.num, p.cfg.Now().Sub(asked))
 			}
 			return &Lease{pt: pt, pool: p}, nil
 		}
@@ -1393,22 +1437,26 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	p.mu.Lock()
 	p.stats.EgressRotations++
 	p.mu.Unlock()
+	p.told(num, "changed address")
 	return nil
 }
 
 // leaveAddress records that a request did not arrive and says whether this port
 // should move to another address.
 //
-// An address that has answered under this identity is kept through one miss and
-// left on the second in a row, which is what a reference client on the same list
-// does and what the measurements say it should: a live address answers every
-// time — 60 of 60 across six of them — so a single failure on one that has
-// worked is a hiccup rather than a verdict. Handing it back for it would throw
-// away the one thing worth having on a list where roughly one address in twelve
-// carries anything at all.
+// Every address gets two consecutive misses, whether or not it has answered
+// through this identity yet. A live address answers every time — 60 of 60 across
+// six of them — so one failure is a hiccup rather than a verdict, and on a list
+// where roughly one address in twelve carries anything at all, throwing a live
+// one away for a hiccup is throwing away the only thing worth having.
 //
-// An address that has never answered is left at once. That one is not a hiccup:
-// a repeat through an address that has just failed answered 0 of 18.
+// It used to leave an address that had not answered yet at once, on the strength
+// of a repeat through a just-failed address answering 0 of 18. What that missed
+// is that an address rotated to a moment ago has not answered yet either — so
+// the rule ejected every fresh address on its first miss, whatever it was worth.
+// Measured against a reference client on the same list: it changed address 0.2
+// times per result and answered 71% of its requests, where this rule changed
+// address 5.7 times per result and answered 29%.
 //
 // The count it keeps is the port's own consecutive-failure count, so a success
 // clears it — which is what makes "twice in a row" mean twice in a row.
@@ -1420,10 +1468,17 @@ func (p *Pool) leaveAddress(num int) bool {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 	pt.failures++
-	if !pt.answered {
-		return true
-	}
 	return pt.failures >= 2
+}
+
+// told reports a change to an identity that no request asked for, so a trace
+// can line the cost of a request up against what happened to the port before
+// it. It costs nothing when nobody is listening.
+func (p *Pool) told(num int, what string) {
+	if p.cfg.OnPort == nil {
+		return
+	}
+	p.cfg.OnPort(num, what)
 }
 
 // markDeadEgress reports that an egress did not carry the request at all, so
@@ -1536,6 +1591,7 @@ func (p *Pool) reviveIfDue(ctx context.Context, pt *poolPort) error {
 	p.mu.Lock()
 	p.stats.Revivals++
 	p.mu.Unlock()
+	p.told(pt.num, "taken back")
 	return nil
 }
 
@@ -1618,6 +1674,7 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	p.stats.Renewals++
 	p.stats.ProfileRotations++
 	p.mu.Unlock()
+	p.told(pt.num, "reopened")
 	return nil
 }
 
@@ -1685,6 +1742,7 @@ func (p *Pool) exhausted(num int) {
 		p.stats.Quarantines++
 		p.mu.Unlock()
 		p.mixer.Penalise(pt.ch)
+		p.told(num, "set aside")
 	}
 }
 

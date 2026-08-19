@@ -147,6 +147,13 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	// Closed before the history, because a job it ends is written down as it
 	// lets go of it. Close waits for that.
 	sup, warm := opts.jobs(ctx, out, st)
+	// What the standing set could not know when it was built: whether a job is
+	// working through it. Everything that takes identities away waits on this
+	// answer, so a number saved mid-run is brought about when the run lets go
+	// rather than out from under it.
+	warm.mu.Lock()
+	warm.running = func() bool { _, running := sup.Running(); return running }
+	warm.mu.Unlock()
 	defer func() { _ = sup.Close() }()
 	defer func() { _ = warm.Close() }()
 
@@ -280,6 +287,7 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 			cfg := poolConfig(1, want)
 			cfg.Specs = blanktrail.SpecsFor(device)
 			cfg.Trace = o.tracer()
+			cfg.OnLease = o.leaseTracer()
 			return openPool(ctx, io.Discard, cfg)
 		}
 		return o.dial(ctx, saved, 1, want, device, 0)
@@ -315,7 +323,8 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	// alone for overrode them with. Every job written down before jobs carried
 	// sizes reads back as nought, and the size this machine was started at is the
 	// only one anybody on it has actually chosen.
-	return web.NewSupervisor(st, o.raise(saved, fromEnv, warm), ports, threads), warm
+	return web.NewSupervisorWatching(st, o.raise(saved, fromEnv, warm), ports, threads,
+		o.threadTracer()), warm
 }
 
 // deviceOr is the kind of result page asked for, and a desktop where nobody
@@ -366,6 +375,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			cfg := poolConfig(threads, ports)
 			cfg.Specs = blanktrail.SpecsFor(device)
 			cfg.Trace = o.tracer()
+			cfg.OnLease = o.leaseTracer()
 			return openPool(ctx, io.Discard, cfg)
 		}
 		return o.dial(ctx, saved, threads, ports, device, cooldown)
@@ -416,6 +426,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	// on phones is a run on more than one phone.
 	cfg.Specs = blanktrail.SpecsFor(device)
 	cfg.Trace = o.tracer()
+	cfg.OnLease = o.leaseTracer()
 	// The gap between two requests on one identity is the job's. Nought is a job
 	// that named none, and the pool then derives it from the ports and the pause
 	// range — which is the one place that number is worked out.
@@ -629,6 +640,48 @@ func (o serveOptions) tracer() func(blanktrail.RequestTrace) {
 	}
 }
 
+// threadTracer turns the -trace flag into what a run wants: a line for every
+// stage a thread passes through and how long it took.
+//
+// It is what makes a slow job readable. A thread has one place where waiting is
+// the work — waiting on an answer from the far end — so a line saying it spent
+// four seconds paused, or nine waiting for an identity, is a line pointing at
+// something to remove.
+func (o serveOptions) threadTracer() run.Watch {
+	if !o.Trace {
+		return nil
+	}
+	log := o.logger(os.Stderr)
+	return func(st run.Step) {
+		fields := []any{"thread", st.Thread, "stage", string(st.Stage),
+			"took", st.Took.Round(time.Millisecond)}
+		if st.Query != "" {
+			fields = append(fields, "query", st.Query)
+		}
+		if st.Err != nil {
+			fields = append(fields, "error", o.clean(st.Err.Error()))
+		}
+		log.Info("a thread of the run", fields...)
+	}
+}
+
+// leaseTracer turns the -trace flag into what a pool wants when it hands out an
+// identity: a line saying which one, and how long the caller stood waiting.
+//
+// A trace of requests alone cannot say why a wide pool is quiet — a port with
+// nothing going through it reads the same whether every thread is busy
+// elsewhere or every thread is queueing for it.
+func (o serveOptions) leaseTracer() func(int, time.Duration) {
+	if !o.Trace {
+		return nil
+	}
+	log := o.logger(os.Stderr)
+	return func(port int, waited time.Duration) {
+		log.Info("an identity was handed out",
+			"port", port, "waited", waited.Round(time.Millisecond))
+	}
+}
+
 func (o serveOptions) logger(w io.Writer) *slog.Logger {
 	return slog.New(&scrubbing{Handler: slog.NewTextHandler(w, nil), clean: o.clean})
 }
@@ -779,6 +832,28 @@ type warmSet struct {
 	// that did not get through is reported.
 	dial func(ctx context.Context, ports int, device string) (*blanktrail.Pool, error)
 	log  *slog.Logger
+	// running says whether a job is working through these identities. It is the
+	// supervisor's answer, wired in once the server is built, and a set nobody
+	// has wired it into is a set no job runs on.
+	running func() bool
+	// owed is a number and a kind somebody saved while a job was running, to be
+	// brought about when the job lets go. Nil is nothing owed.
+	owed *standing
+}
+
+// standing is a number of identities of one kind: what the settings page last
+// asked this machine to keep.
+type standing struct {
+	want   int
+	device string
+}
+
+// busy says whether a job is working through these identities right now.
+func (w *warmSet) busy() bool {
+	w.mu.Lock()
+	running := w.running
+	w.mu.Unlock()
+	return running != nil && running()
 }
 
 // Pool is what the set holds, for the search that answers inside a request.
@@ -816,6 +891,22 @@ func (w *warmSet) bring(ctx context.Context, want int, device string) error {
 	w.mu.Lock()
 	pool, kind, stop := w.pool, w.device, w.stop
 	w.mu.Unlock()
+
+	// A job is working through these identities, so nothing here happens now.
+	//
+	// Everything below takes ports away: a smaller number closes them, a
+	// different kind closes them all. Done underneath a running job it took a
+	// third of its identities away and left it there — measured on a live run,
+	// a job raised on a hundred went on at five and eight tenths queries a
+	// minute on the thirty it was still holding, with no way back, because
+	// nothing grows a pool a second time. What was asked for is remembered and
+	// brought about when the job lets go.
+	if pool != nil && w.busy() {
+		w.mu.Lock()
+		w.owed = &standing{want: want, device: device}
+		w.mu.Unlock()
+		return nil
+	}
 
 	if want <= 0 || (pool != nil && device != kind) {
 		if stop != nil {
@@ -879,6 +970,40 @@ func (w *warmSet) start(pool *blanktrail.Pool, device string) {
 	w.mu.Unlock()
 
 	go (&run.Warmer{Pool: pool, Log: log}).Run(ctx)
+	go w.keep(ctx)
+}
+
+// tendRound is how often the set looks to see whether it owes somebody a
+// change. It is short against how long a job runs and long against nothing.
+const tendRound = 20 * time.Second
+
+// keep brings about what a settings page asked for while a job was running.
+//
+// It is a loop rather than a hook on the job ending, because what it applies is
+// the last thing somebody asked for, and somebody may ask twice before any job
+// finishes. Reading it here means the newest answer wins and none of the older
+// ones is applied on the way.
+func (w *warmSet) keep(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(tendRound):
+		}
+		w.mu.Lock()
+		owed := w.owed
+		w.mu.Unlock()
+		if owed == nil || w.busy() {
+			continue
+		}
+		w.mu.Lock()
+		w.owed = nil
+		w.mu.Unlock()
+		if err := w.bring(ctx, owed.want, owed.device); err != nil && w.log != nil {
+			w.log.Info("the identities kept warm could not be brought to what was saved",
+				"want", owed.want, "kind", owed.device, "err", err)
+		}
+	}
 }
 
 // Close gives up the identities and stops warming them.

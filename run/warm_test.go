@@ -268,3 +268,32 @@ func TestWarmer_StartsOneWarmingASecondRatherThanAllOfThemAtOnce(t *testing.T) {
 			"cannot be started in less than %v", took.Round(time.Millisecond), gap, want)
 	}
 }
+
+func TestWarmer_StandsAsideWhileAJobIsRunning(t *testing.T) {
+	// A pool with identities in hand is a pool a job is running on, and a job
+	// warms every identity it touches by working through it. Warming alongside
+	// it is not help: the two take leases from the same set, so every identity
+	// the warmer holds is one the job is queueing for, and the warming request
+	// pays the same challenge the job's own request would have paid for a phrase
+	// somebody actually asked for.
+	pool := warmingPool(t, 4)
+
+	held, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	var warmed atomic.Int64
+	w := &Warmer{Pool: pool, warmed: func() { warmed.Add(1) }}
+	w.oneRound(t.Context(), 0)
+	if got := warmed.Load(); got != 0 {
+		t.Errorf("%d identities were warmed while a job held one of the four", got)
+	}
+
+	// And it takes the set up again the moment the job lets go.
+	held.Release()
+	w.oneRound(t.Context(), 0)
+	if got := warmed.Load(); got == 0 {
+		t.Error("nothing was warmed after the job let go of the identity it held")
+	}
+}

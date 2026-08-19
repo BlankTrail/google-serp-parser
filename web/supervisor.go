@@ -81,12 +81,15 @@ type poolFacts struct {
 type poolEngine struct {
 	pool    *blanktrail.Pool
 	threads int
+	// watch, when set, is told every stage a thread of the run passes through,
+	// so a slow job can be taken apart second by second rather than guessed at.
+	watch run.Watch
 }
 
 // Run builds a runner around the pool this job was raised. A runner is a few
 // fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
-	return (&run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink}).Run(ctx, j)
+	return (&run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch}).Run(ctx, j)
 }
 
 // Close gives up the identities this job was raised. It runs when the job has
@@ -156,7 +159,7 @@ func standing(eng engine) source {
 }
 
 // dialing makes a source that puts up a pool for each job.
-func dialing(open OpenPool) source {
+func dialing(open OpenPool, watch run.Watch) source {
 	if open == nil {
 		return source{}
 	}
@@ -175,7 +178,7 @@ func dialing(open OpenPool) source {
 		// because that number paces the job and is what the screen puts into its
 		// estimate: two answers to how wide this job runs would put a figure on the
 		// screen that no run ever matched.
-		return &poolEngine{pool: pool, threads: threads}, nil
+		return &poolEngine{pool: pool, threads: threads, watch: watch}, nil
 	}}
 }
 
@@ -234,6 +237,10 @@ type Supervisor struct {
 	ports   int
 	threads int
 
+	// watch is told every stage a thread of a running job passes through, and is
+	// nil unless somebody asked for a trace.
+	watch run.Watch
+
 	// asking is the address of the last request that went out and the job it
 	// went out for. It is kept behind a lock of its own rather than the one
 	// above: every request of every thread writes it, and taking the lock that
@@ -274,7 +281,21 @@ type Supervisor struct {
 // are the -threads and -ports flags, so a job that named nothing costs what the
 // same job costs from the command line.
 func NewSupervisor(st *store.Store, open OpenPool, ports, threads int) *Supervisor {
-	return start(st, dialing(open), ports, threads)
+	return NewSupervisorWatching(st, open, ports, threads, nil)
+}
+
+// NewSupervisorWatching is NewSupervisor with somebody told every stage a thread
+// of a running job passes through: the pause it takes, the wait for an identity,
+// the request, and the writing down.
+//
+// It is how a slow run is taken apart rather than guessed at. A thread has one
+// place where waiting is the work — waiting on an answer — and every other stage
+// is a place where waiting is a fault to be found.
+func NewSupervisorWatching(st *store.Store, open OpenPool, ports, threads int,
+	watch run.Watch) *Supervisor {
+	v := start(st, dialing(open, watch), ports, threads)
+	v.watch = watch
+	return v
 }
 
 // newSupervisor starts a worker that takes every job through the one set of
@@ -409,7 +430,7 @@ func (v *Supervisor) Reconnect(open OpenPool) error {
 	if v.src.held != nil && v.src.held != v.inUse {
 		spent = append(spent, v.src.held)
 	}
-	v.src = dialing(open)
+	v.src = dialing(open, v.watch)
 	// A job written down while there was nothing to run it on has something to
 	// run on now.
 	v.wakeUp()

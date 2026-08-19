@@ -157,6 +157,17 @@ func (w *Warmer) Run(ctx context.Context) {
 // become worth anything, and a job started inside that window ran on identities
 // the operator had been told were warm.
 func (w *Warmer) oneRound(ctx context.Context, idle time.Duration) {
+	// A pool with identities in hand is a pool a job is running on, and a job
+	// warms every identity it touches by working through it. Warming on top of
+	// that is not help: the two take leases from the same set, so every identity
+	// the warmer holds is one the job is standing in a queue for, and the
+	// warming request costs the same challenge the job's own request would have
+	// paid for a phrase somebody asked for. The set is tended while nobody is
+	// using it, and left alone while somebody is.
+	if w.Pool.InUse() > 0 {
+		return
+	}
+
 	var wg sync.WaitGroup
 	defer wg.Wait()
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/google"
@@ -144,6 +145,10 @@ type Runner struct {
 	// leaves behind everything it had established. Nil keeps the results in the
 	// report and nowhere else.
 	Sink Sink
+	// Watch, when set, is told every stage a thread passes through and how long
+	// it took, so a slow run can be taken apart second by second. Nil is a run
+	// nobody is watching, which costs nothing.
+	Watch Watch
 }
 
 // Run works through a job and reports what came of every query.
@@ -203,37 +208,47 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	var wg sync.WaitGroup
 	for w := 0; w < threads; w++ {
 		wg.Add(1)
-		go func() {
+		go func(thread int) {
 			defer wg.Done()
 			first := true
 			for i := range queue {
+				text := j.Queries[i].Text
+				began := time.Now()
 				if !first {
 					// The pause this thread owes its own last request. Taking it
 					// before the query rather than after it means a job never
 					// ends on a pause it had no request to pace, and a cancelled
 					// job leaves the query it was holding untried rather than
 					// half done.
+					paused := time.Now()
 					if err := r.Pool.Sleep(ctx, r.Pool.NextDelay()); err != nil {
 						return
 					}
+					r.step(thread, StagePause, paused, text, nil)
 				}
 				first = false
 
 				results[i].Attempted = true
+				asked := time.Now()
 				results[i].Pages, results[i].Err = take(ctx, attempt, j, j.Queries[i], pages)
+				r.step(thread, StageAsk, asked, text, results[i].Err)
 				if r.Sink != nil {
 					// The failures go to the sink as well as the successes.
 					// A query whose failure was never written down is one a
 					// job picked up again takes up again, for as long as it
 					// keeps failing.
-					if sinkErr := r.Sink.Record(ctx, results[i]); sinkErr != nil && results[i].Err == nil {
+					wrote := time.Now()
+					sinkErr := r.Sink.Record(ctx, results[i])
+					r.step(thread, StageRecord, wrote, text, sinkErr)
+					if sinkErr != nil && results[i].Err == nil {
 						// A job whose results are not being written is not a
 						// job that succeeded, whatever the walk returned.
 						results[i].Err = fmt.Errorf("run: recording %q: %w", j.Queries[i].Text, sinkErr)
 					}
 				}
+				r.step(thread, StageQuery, began, text, results[i].Err)
 			}
-		}()
+		}(w)
 	}
 
 sending:
