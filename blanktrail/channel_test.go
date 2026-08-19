@@ -5,8 +5,10 @@ package blanktrail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -224,4 +226,41 @@ func names(chs []Channel) []string {
 		out = append(out, c.Name())
 	}
 	return out
+}
+
+func TestListChannelRenew_TakesTheNextAddressInTurnRatherThanRepeatingOne(t *testing.T) {
+	// A rotation is a request for an address that is not the one just left, and
+	// the list is what it is for: an address handed out again while others have
+	// not been used at all is a list being worked like a shorter one, with the
+	// favoured few collecting the attention of the origin while the rest sit
+	// there paid for and idle.
+	const addresses = 6
+	lines := make([]string, 0, addresses)
+	for i := range addresses {
+		lines = append(lines, fmt.Sprintf("10.0.2.%d:1080", i+1))
+	}
+	ups, bad := Parse(strings.Join(lines, "\n"), "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	ch := NewListChannel("list", NewStaticRotor(ups))
+
+	// One full turn of the list hands out every address once and no address
+	// twice, which is the whole of what even means here.
+	seen := map[string]int{}
+	for range addresses {
+		eg, err := ch.Renew(context.Background(), Egress{})
+		if err != nil {
+			t.Fatalf("Renew: %v", err)
+		}
+		seen[eg.Upstream]++
+	}
+	if len(seen) != addresses {
+		t.Errorf("a full turn handed out %d of %d addresses", len(seen), addresses)
+	}
+	for at, n := range seen {
+		if n != 1 {
+			t.Errorf("%s was handed out %d times in one turn of the list", at, n)
+		}
+	}
 }

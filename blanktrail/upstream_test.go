@@ -847,3 +847,102 @@ func TestDefaultRest_IsShortEnoughForAListWhoseExitsRotate(t *testing.T) {
 			"back inside the same failure", defaultRest)
 	}
 }
+
+func TestRotorNext_SpreadsTheWorkOverTheWholeListRatherThanFavouringAny(t *testing.T) {
+	// What a rotation is for. An address handed out twice while another has not
+	// been handed out at all is a list being worked like a shorter one: the
+	// favoured addresses collect the attention of the origin, and the rest sit
+	// there paid for and idle.
+	//
+	// The check is on the counts rather than on the order, because the order is
+	// the rotor's own business — what has to hold is that after a full pass no
+	// address has been used more than one time more than any other.
+	const addresses, handouts = 10, 100
+	lines := make([]string, 0, addresses)
+	for i := range addresses {
+		lines = append(lines, fmt.Sprintf("10.0.0.%d:1080", i+1))
+	}
+	ups, bad := Parse(strings.Join(lines, "\n"), "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	r := NewStaticRotor(ups)
+
+	used := map[string]int{}
+	for range handouts {
+		u, ok := r.Next()
+		if !ok {
+			t.Fatal("the rotor ran out of addresses to hand out")
+		}
+		used[u.Key()]++
+	}
+
+	if len(used) != addresses {
+		t.Errorf("%d of %d addresses were ever handed out", len(used), addresses)
+	}
+	low, high := handouts, 0
+	for _, u := range ups {
+		n := used[u.Key()]
+		if n < low {
+			low = n
+		}
+		if n > high {
+			high = n
+		}
+	}
+	if high-low > 1 {
+		t.Errorf("the most-used address was handed out %d times and the least-used %d: "+
+			"%d handouts over %d addresses should differ by at most one",
+			high, low, handouts, addresses)
+	}
+}
+
+func TestRotorNext_KeepsSpreadingOverWhatIsLeftWhileSomeAddressesRest(t *testing.T) {
+	// A resting address is skipped, and the ones still in play have to go on
+	// sharing the work evenly between them rather than the cursor settling on
+	// whichever follows the gap.
+	const addresses, handouts = 8, 60
+	lines := make([]string, 0, addresses)
+	for i := range addresses {
+		lines = append(lines, fmt.Sprintf("10.0.1.%d:1080", i+1))
+	}
+	ups, bad := Parse(strings.Join(lines, "\n"), "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	r := NewStaticRotor(ups)
+	r.MarkDead(ups[2])
+	r.MarkDead(ups[5])
+
+	used := map[string]int{}
+	for range handouts {
+		u, ok := r.Next()
+		if !ok {
+			t.Fatal("the rotor ran out of addresses to hand out")
+		}
+		used[u.Key()]++
+	}
+
+	for _, resting := range []int{2, 5} {
+		if n := used[ups[resting].Key()]; n != 0 {
+			t.Errorf("a resting address was handed out %d times", n)
+		}
+	}
+	low, high := handouts, 0
+	for i, u := range ups {
+		if i == 2 || i == 5 {
+			continue
+		}
+		n := used[u.Key()]
+		if n < low {
+			low = n
+		}
+		if n > high {
+			high = n
+		}
+	}
+	if high-low > 1 {
+		t.Errorf("of the addresses still in play the most-used had %d handouts and "+
+			"the least-used %d, want a difference of at most one", high, low)
+	}
+}
