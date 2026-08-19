@@ -1033,12 +1033,19 @@ func (p *Pool) Cooldown() time.Duration {
 // for, and that is exactly where such a job stopped accelerating.
 //
 // So whoever takes the pool says how it is paced.
+// It sets both pauses a run takes, because they are one decision: the gap
+// before an identity may be asked again, and the gap a thread leaves between two
+// of its own queries. A job told to keep no pause that still sat out two to five
+// seconds after every query would be keeping a pause nobody asked for — measured
+// on a live run, that pause was 6529 seconds of 14520 spent on queries, which is
+// the largest thing left once the queueing is gone.
 func (p *Pool) PaceAt(d time.Duration) {
 	if d < 0 {
 		d = 0
 	}
 	p.mu.Lock()
 	p.cool = d
+	p.cfg.DelayMin, p.cfg.DelayMax = d, d
 	p.mu.Unlock()
 }
 
@@ -1046,11 +1053,14 @@ func (p *Pool) PaceAt(d time.Duration) {
 // use it to pace their own requests; a perfectly even interval is itself a
 // behavioural fingerprint.
 func (p *Pool) NextDelay() time.Duration {
-	spread := p.cfg.DelayMax - p.cfg.DelayMin
+	p.mu.Lock()
+	lo, hi := p.cfg.DelayMin, p.cfg.DelayMax
+	p.mu.Unlock()
+	spread := hi - lo
 	if spread <= 0 {
-		return p.cfg.DelayMin
+		return lo
 	}
-	return p.cfg.DelayMin + time.Duration(rand.Int63n(int64(spread)+1))
+	return lo + time.Duration(rand.Int63n(int64(spread)+1))
 }
 
 // Sleep pauses for d and returns early if ctx ends first.

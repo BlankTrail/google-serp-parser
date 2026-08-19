@@ -1220,6 +1220,11 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 		t.Errorf("the pool is paced at %s for a job that asked for no pause "+
 			"(it was opened at %s)", got, opened)
 	}
+	// And no pause means no pause anywhere: a thread that sat out two to five
+	// seconds after every query would be keeping one nobody asked for.
+	if got := standing.NextDelay(); got != 0 {
+		t.Errorf("a thread waits %s between queries on a job that asked for no pause", got)
+	}
 
 	// And a job that named a pause of its own is paced by that.
 	if _, err := raise(t.Context(), 2, 50, blanktrail.DeviceDesktop, 3*time.Second); err != nil {
@@ -1227,5 +1232,8 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 	}
 	if got := standing.Cooldown(); got != 3*time.Second {
 		t.Errorf("the pool is paced at %s, want the three seconds the job named", got)
+	}
+	if got := standing.NextDelay(); got != 3*time.Second {
+		t.Errorf("a thread waits %s between queries, want the three seconds the job named", got)
 	}
 }
