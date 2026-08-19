@@ -1396,6 +1396,36 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	return nil
 }
 
+// leaveAddress records that a request did not arrive and says whether this port
+// should move to another address.
+//
+// An address that has answered under this identity is kept through one miss and
+// left on the second in a row, which is what a reference client on the same list
+// does and what the measurements say it should: a live address answers every
+// time — 60 of 60 across six of them — so a single failure on one that has
+// worked is a hiccup rather than a verdict. Handing it back for it would throw
+// away the one thing worth having on a list where roughly one address in twelve
+// carries anything at all.
+//
+// An address that has never answered is left at once. That one is not a hiccup:
+// a repeat through an address that has just failed answered 0 of 18.
+//
+// The count it keeps is the port's own consecutive-failure count, so a success
+// clears it — which is what makes "twice in a row" mean twice in a row.
+func (p *Pool) leaveAddress(num int) bool {
+	pt := p.port(num)
+	if pt == nil {
+		return false
+	}
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	pt.failures++
+	if !pt.answered {
+		return true
+	}
+	return pt.failures >= 2
+}
+
 // markDeadEgress reports that an egress did not carry the request at all, so
 // the channel can stop handing that address out now rather than after counting.
 func (p *Pool) markDeadEgress(num int) {

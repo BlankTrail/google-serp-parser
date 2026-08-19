@@ -88,6 +88,9 @@ type remedy interface {
 	// markDeadEgress reports that the address did not carry the request at all,
 	// which is final rather than a count towards anything.
 	markDeadEgress(port int)
+	// leaveAddress records one failure to carry a request and reports whether
+	// this port should move to another address now.
+	leaveAddress(port int) bool
 	// hunt is how many addresses one request may be carried to before it gives
 	// up, which is a different budget from the retries a refused answer gets.
 	hunt() int
@@ -144,24 +147,20 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			t.trace(mark.done(t.port, attempt, resp, err))
 		}
 		if err != nil {
-			// The egress did not carry the request at all: blame it, not the
-			// origin, and leave it now rather than after two more requests
-			// through it. Measured on a live list: a repeat through an address
-			// that has just failed answered 0 of 18, while the first request
-			// after a rotation answered 3 of 15 — and an address that does
-			// answer keeps answering, 60 of 60. The port's own failure count is
-			// still kept, because it is what eventually quarantines a port
-			// nothing can save.
-			t.rem.markDeadEgress(t.port)
-			_ = t.rem.attemptFailed(t.port)
-			_ = t.rem.rotateEgress(req.Context(), t.port)
+			// The request never arrived. Whether that is the address's fault is
+			// the pool's to say: an address that has answered before is allowed
+			// one miss, and one that has never answered is simply dead.
+			if t.rem.leaveAddress(t.port) {
+				t.rem.markDeadEgress(t.port)
+				_ = t.rem.rotateEgress(req.Context(), t.port)
+			}
 			hunted++
 			if hunted >= t.rem.hunt() {
 				return nil, err
 			}
-			// No backoff here. There is nothing to wait out: the address is gone
-			// and the next one is a different machine entirely, so a pause would
-			// be time spent for nobody.
+			// No backoff here. There is nothing to wait out: either the address
+			// is gone and the next one is a different machine entirely, or it is
+			// one that works and has just hiccuped.
 			delay = 0
 			continue
 		}

@@ -71,6 +71,10 @@ type fakeRemedy struct {
 	waits          []time.Duration
 
 	markedDead int
+	// keeps says the port's address has answered before, so a first miss is a
+	// hiccup rather than a verdict.
+	keeps  bool
+	misses int
 
 	retries     int
 	rotateOnNth int // attemptFailed returns true on this failure number (0 = never)
@@ -86,8 +90,16 @@ func (r *fakeRemedy) attemptSucceeded(int)                    { r.successes++ }
 func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return nil }
 func (r *fakeRemedy) markBadEgress(int)                       { r.markedBad++ }
 func (r *fakeRemedy) markDeadEgress(int)                      { r.markedDead++ }
-func (r *fakeRemedy) exhausted(int)                           { r.exhaustedCalls++ }
-func (r *fakeRemedy) maxRetries() int                         { return r.retries }
+
+func (r *fakeRemedy) leaveAddress(int) bool {
+	r.misses++
+	if !r.keeps {
+		return true
+	}
+	return r.misses >= 2
+}
+func (r *fakeRemedy) exhausted(int)   { r.exhaustedCalls++ }
+func (r *fakeRemedy) maxRetries() int { return r.retries }
 
 func (r *fakeRemedy) hunt() int {
 	if r.addresses > 0 {
@@ -495,5 +507,60 @@ func TestLadder_StopsHuntingAtTheBudget(t *testing.T) {
 	}
 	if rem.markedDead != 3 {
 		t.Errorf("markedDead=%d, want the three the budget allowed", rem.markedDead)
+	}
+}
+
+// TestLadder_KeepsAnAddressThatHasAnsweredThroughOneMiss pins the half of the
+// rule that a live list is worth.
+//
+// Roughly one address in twelve on a large cheap list carries anything at all,
+// so an address that has answered is the one thing worth having — and it answers
+// every time it is asked: 60 of 60 across six of them, measured. A single miss
+// on such an address is a hiccup, and handing it back for it means starting the
+// search over.
+func TestLadder_KeepsAnAddressThatHasAnsweredThroughOneMiss(t *testing.T) {
+	boom := errors.New("EOF")
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		failWith(boom),
+		respond(200, nil, "data"),
+	}}
+	rem := &fakeRemedy{retries: 1, addresses: 15, keeps: true}
+	l := &ladder{rt: rt, port: 20025, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("status=%d, want the 200 the same address gave on the second ask", resp.StatusCode)
+	}
+	if rem.rotations != 0 {
+		t.Errorf("rotations=%d, want none: the address had answered before and missed once",
+			rem.rotations)
+	}
+	if rem.markedDead != 0 {
+		t.Errorf("markedDead=%d, want none: an address that works is not dead for one miss",
+			rem.markedDead)
+	}
+}
+
+// TestLadder_LeavesAnAddressThatHasAnsweredAfterTwoMissesInARow is the other
+// end of it: kept through one, left on the second, which is where a hiccup
+// stops being a hiccup.
+func TestLadder_LeavesAnAddressThatHasAnsweredAfterTwoMissesInARow(t *testing.T) {
+	boom := errors.New("EOF")
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		failWith(boom),
+		failWith(boom),
+		respond(200, nil, "data"),
+	}}
+	rem := &fakeRemedy{retries: 1, addresses: 15, keeps: true}
+	l := &ladder{rt: rt, port: 20026, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if rem.rotations != 1 {
+		t.Errorf("rotations=%d, want the one the second miss in a row calls for", rem.rotations)
 	}
 }

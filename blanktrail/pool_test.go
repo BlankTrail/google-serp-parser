@@ -2212,3 +2212,40 @@ func TestPool_TakesAHuntBudgetTheCallerNamed(t *testing.T) {
 		t.Errorf("hunt=%d, want the three that were asked for", got)
 	}
 }
+
+func TestPoolLeaveAddress_KeepsOneThatHasAnsweredAndDropsOneThatHasNot(t *testing.T) {
+	// The policy itself, where it lives. On a list where roughly one address in
+	// twelve carries anything, an address that has answered is the one thing
+	// worth having and answers every time it is asked — 60 of 60, measured — so
+	// a single miss on it is a hiccup. One that has never answered is not: a
+	// repeat through an address that has just failed answered 0 of 18.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	p, err := NewPool(context.Background(), testPoolConfig(t, f, clock, 1, 2))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	proven, unproven := p.ports[0], p.ports[1]
+	proven.mu.Lock()
+	proven.answered = true
+	proven.mu.Unlock()
+
+	if p.leaveAddress(unproven.num) != true {
+		t.Error("an address that has never answered was kept after it failed to carry a request")
+	}
+	if p.leaveAddress(proven.num) != false {
+		t.Error("an address that has answered was given up after one miss")
+	}
+	if p.leaveAddress(proven.num) != true {
+		t.Error("an address that has answered was kept through two misses in a row")
+	}
+
+	// And a success clears the count, which is what makes "twice in a row" mean
+	// twice in a row rather than twice ever.
+	p.attemptSucceeded(proven.num)
+	if p.leaveAddress(proven.num) != false {
+		t.Error("a miss after a success was treated as the second of a pair")
+	}
+}
