@@ -1209,18 +1209,20 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 	}
 
 	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
-	if _, _, err := warm.raiseFor(t.Context(), 2, 50, blanktrail.DeviceDesktop, 0); err != nil {
+	raise := opts.raise(saved, false, warm)
+
+	// A job that names no pause wants none: nought is nought, and the identities
+	// it was given are handed out as fast as they come free.
+	if _, err := raise(t.Context(), 2, 50, blanktrail.DeviceDesktop, 0); err != nil {
 		t.Fatalf("raising a job of fifty on two: %v", err)
 	}
-
-	want := blanktrail.DeriveCooldown(2, shortestPause, longestPause)
-	if got := standing.Cooldown(); got != want {
-		t.Errorf("the pool is paced at %s, want the job's own %s (it was opened at %s)",
-			got, want, opened)
+	if got := standing.Cooldown(); got != 0 {
+		t.Errorf("the pool is paced at %s for a job that asked for no pause "+
+			"(it was opened at %s)", got, opened)
 	}
 
 	// And a job that named a pause of its own is paced by that.
-	if _, _, err := warm.raiseFor(t.Context(), 2, 50, blanktrail.DeviceDesktop, 3*time.Second); err != nil {
+	if _, err := raise(t.Context(), 2, 50, blanktrail.DeviceDesktop, 3*time.Second); err != nil {
 		t.Fatalf("raising a job that named its own pause: %v", err)
 	}
 	if got := standing.Cooldown(); got != 3*time.Second {

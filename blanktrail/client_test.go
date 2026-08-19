@@ -413,3 +413,23 @@ func TestAPIError_MessageFallsBackToBody(t *testing.T) {
 }
 
 func errorsAs(err error, target any) bool { return errors.As(err, target) }
+
+func TestDefaultPortSpec_AllowsAnUpstreamThatTerminatesTLSItself(t *testing.T) {
+	// Roughly seven addresses in ten on the lists this parser is pointed at
+	// terminate TLS themselves and present their own certificate. A port that
+	// refuses them answers 526 instead of a search, so a run on such a list gets
+	// a third of what it paid for. Refusing an upstream nobody vouched for is
+	// the right default for the proxy and the wrong one here: the list is the
+	// operator's own choice, and what travels through it is a public search.
+	if !DefaultPortSpec().AllowMITMUpstream {
+		t.Error("the default spec refuses an upstream that terminates TLS itself")
+	}
+
+	body, err := json.Marshal(DefaultPortSpec().request(1, Egress{}))
+	if err != nil {
+		t.Fatalf("marshalling the request: %v", err)
+	}
+	if !strings.Contains(string(body), `"allow_mitm_upstream":true`) {
+		t.Errorf("the open request does not allow a MITM upstream: %s", body)
+	}
+}

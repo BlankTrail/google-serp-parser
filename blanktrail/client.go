@@ -176,6 +176,21 @@ type PortSpec struct {
 	// it exists for a proxy the caller already trusts and would otherwise refuse
 	// to open at all.
 	UpstreamTLSInsecure bool
+
+	// AllowMITMUpstream lets the port work through an upstream proxy that
+	// terminates TLS itself and presents its own certificate.
+	//
+	// Off, such an upstream is refused with a 526. That is the right default for
+	// a proxy nobody has vouched for — a machine that can read what it forwards
+	// is a machine that can change it. It is the wrong default for the lists
+	// this parser is pointed at: roughly seven addresses in ten on a large cheap
+	// list terminate TLS, and refusing them leaves the run with a third of what
+	// it paid for.
+	//
+	// It is a deliberate trade, and it is the same one the operator already made
+	// by choosing the list. What travels through is a search on a public engine,
+	// carried by an identity that exists to be spent.
+	AllowMITMUpstream bool
 }
 
 // DefaultPortSpec is the configuration a session-oriented scraper wants: a real
@@ -211,6 +226,12 @@ func DefaultPortSpec() PortSpec {
 		// close idle tunnels after thirty seconds while its own transport kept
 		// them for ninety, and a request handed one in between died on a
 		// connection the proxy had already let go.
+		// Seven addresses in ten on the lists this is pointed at terminate TLS
+		// themselves, and a port that refuses them answers a 526 instead of a
+		// search. Refusing an upstream nobody vouched for is the right default
+		// for the proxy and the wrong one here: the list is the operator's own
+		// choice, and what travels through it is a public search.
+		AllowMITMUpstream:     true,
 		ConnectTimeoutSeconds: 5,
 		RequestTimeoutSeconds: 30,
 		LeakGuard:             "warn",
@@ -262,6 +283,7 @@ type openPortRequest struct {
 	TimeoutSeconds        *int    `json:"timeout_seconds,omitempty"`
 	LeakGuard             string  `json:"leak_guard,omitempty"`
 	UpstreamTLSInsecure   *bool   `json:"upstream_tls_insecure,omitempty"`
+	AllowMITMUpstream     *bool   `json:"allow_mitm_upstream,omitempty"`
 }
 
 func (s PortSpec) request(port int, eg Egress) openPortRequest {
@@ -288,6 +310,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	if s.UpstreamTLSInsecure {
 		v := true
 		req.UpstreamTLSInsecure = &v
+	}
+	if s.AllowMITMUpstream {
+		v := true
+		req.AllowMITMUpstream = &v
 	}
 	if s.MaxConcurrent > 0 {
 		n := s.MaxConcurrent

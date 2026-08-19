@@ -369,6 +369,25 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 		if pool, mine, err := warm.raiseFor(ctx, ports, threads, device); err != nil {
 			return nil, err
 		} else if mine {
+			// The job's own pause, and nothing else's.
+			//
+			// A pool outlives what runs on it: the standing identities are opened
+			// once, as one thread's worth of however many this machine keeps, and
+			// every job afterwards runs on that same pool grown to its size. The
+			// gap between two requests on one identity was worked out at that
+			// opening and never revisited, so a job inherited a number describing
+			// something else — ten identities opened for one thread came out at
+			// thirty-five seconds, and a job of fifty threads on a hundred of them
+			// could be handed a hundred divided by thirty-five identities a second,
+			// a hundred and seventy-one requests a minute, whatever it asked for.
+			// Traced on that job: the shortest gap between two leases of one
+			// identity was 35.0 seconds across all hundred, and its threads spent
+			// three fifths of the run queueing for a pool that was idle.
+			//
+			// Nought is nought. A job that names no pause is a job that wants none,
+			// and deriving one for it is this program pacing a run nobody asked to
+			// have paced.
+			pool.PaceAt(cooldown)
 			return pool, nil
 		}
 		if fromEnv {
@@ -376,9 +395,19 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			cfg.Specs = blanktrail.SpecsFor(device)
 			cfg.Trace = o.tracer()
 			cfg.OnLease = o.leaseTracer()
-			return openPool(ctx, io.Discard, cfg)
+			pool, err := openPool(ctx, io.Discard, cfg)
+			if err != nil {
+				return nil, err
+			}
+			pool.PaceAt(cooldown)
+			return pool, nil
 		}
-		return o.dial(ctx, saved, threads, ports, device, cooldown)
+		pool, err := o.dial(ctx, saved, threads, ports, device, cooldown)
+		if err != nil {
+			return nil, err
+		}
+		pool.PaceAt(cooldown)
+		return pool, nil
 	}
 }
 
