@@ -90,59 +90,6 @@ func TestShrink_LeavesAPoolThatWasNeverGrownAloneAndCanBeRunAgain(t *testing.T) 
 	lease.Release()
 }
 
-func TestTake_OffersAWarmPortBeforeAColdOne(t *testing.T) {
-	// A warm port answers where a cold one waits on a challenge, so the run
-	// starts producing at once instead of a minute in. This is what "the
-	// standing ports are used first" means in the one place it can be true.
-	f := fakebt.New(t)
-	clock := newFakeClock()
-	cfg := testPoolConfig(t, f, clock, 1, 1)
-	cfg.Cooldown = time.Minute
-	pool, err := NewPool(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("opening one standing port: %v", err)
-	}
-	defer func() { _ = pool.Close() }()
-	pool.KeepWarm()
-	if err := pool.Grow(context.Background(), 3); err != nil {
-		t.Fatalf("Grow: %v", err)
-	}
-
-	// The warm port is one that has answered and is the most recently used of
-	// them, which is what it is on a real machine: the warmer has just been
-	// through it, and the ones the job opened have never answered anything. The
-	// clock is then moved past the cooldown so it is a candidate again.
-	//
-	// Now "the one that has rested longest" and "the warm one" are different
-	// ports, and only a rule that prefers the warm one picks it. Without the
-	// clock they are the same port and this test would pass on either rule.
-	warmed, err := pool.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("warming the standing port: %v", err)
-	}
-	warmedPort := warmed.Port()
-	warmed.Answered()
-	warmed.Release()
-	clock.Advance(2 * time.Minute)
-
-	pool.mu.Lock()
-	hot := pool.byNum[warmedPort]
-	pool.mu.Unlock()
-	if hot == nil || !hot.hot {
-		t.Fatalf("the fixture warmed port %d, which is not the standing one", warmedPort)
-	}
-
-	lease, err := pool.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	defer lease.Release()
-	if lease.Port() != warmedPort {
-		t.Errorf("the lease went to port %d, and the warm one is %d — the coldest was "+
-			"preferred over the warmest", lease.Port(), warmedPort)
-	}
-}
-
 func TestTake_SpreadsOntoTheColdOnesRatherThanHammeringTheWarm(t *testing.T) {
 	// Preferring the warm ones must not become "always the same ten". What stops
 	// it is the cooldown: a port that has just been used is not ready again until
@@ -233,47 +180,81 @@ func TestReduceTo_LeavesAlonePortsSomebodyIsHolding(t *testing.T) {
 	}
 }
 
-func TestTake_DoesNotTakeAStandingPortThatHasNeverAnsweredForAWarmOne(t *testing.T) {
-	// Being kept is not being warm. A standing port that has never made a
-	// request meets the same challenge a fresh one does — measured at one to
-	// three minutes against one to two seconds — so a rule that reads the
-	// standing mark as warmth hands a job the identity that costs it the
-	// minutes, which is what a machine keeping identities open was meant to
-	// avoid.
+func TestTake_OffersTheIdentityThatHasRestedLongest(t *testing.T) {
+	// The one rule a lease follows, and the reason it is the only one.
+	//
+	// It used to prefer an identity that had answered before. That is right about
+	// one request and wrong about a pool: the few that answer take every lease,
+	// cool down, and are asked again the moment they may be, while the others are
+	// never tried. Traced on a live run, twenty-one ports of forty carried every
+	// request and nineteen sat untouched for minutes — a hundred identities
+	// working like twenty.
 	f := fakebt.New(t)
 	clock := newFakeClock()
-	cfg := testPoolConfig(t, f, clock, 1, 1)
+	cfg := testPoolConfig(t, f, clock, 1, 3)
 	cfg.Cooldown = time.Minute
 	pool, err := NewPool(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("opening one standing port: %v", err)
+		t.Fatalf("opening three ports: %v", err)
 	}
 	defer func() { _ = pool.Close() }()
-	pool.KeepWarm()
-	if err := pool.Grow(context.Background(), 1); err != nil {
-		t.Fatalf("Grow: %v", err)
-	}
-	standing, grown := hotAndGrown(t, pool)
 
-	// The standing port is used and answers nothing; the grown one answers, and
-	// answers later. So "rested longest" points at the standing port and only
-	// warmth points at the grown one.
-	leaseNum(t, pool, standing).Release()
-	clock.Advance(time.Second)
-	warm := leaseNum(t, pool, grown)
-	warm.Answered()
-	warm.Release()
+	// One of them answers, and is therefore the most recently used. Under the old
+	// rule it would be handed out again at once; under this one it is last.
+	answered := leaseNum(t, pool, pool.ports[0].num)
+	answered.Answered()
+	answered.Release()
 	clock.Advance(2 * time.Minute)
 
-	next, err := pool.Acquire(context.Background())
+	// Every port is ready now, and the one that answered rested least.
+	lease, err := pool.Acquire(context.Background())
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	defer next.Release()
-	if next.Port() != grown {
-		t.Errorf("the lease went to port %d, and the one that has answered is %d — a "+
-			"standing port that has never answered was taken for a warm one",
-			next.Port(), grown)
+	defer lease.Release()
+	if lease.Port() == answered.Port() {
+		t.Errorf("the lease went straight back to the identity that had just answered; " +
+			"the other two had rested longer and neither was tried")
+	}
+}
+
+func TestTake_SpreadsOverEveryIdentityRatherThanFavouringAFew(t *testing.T) {
+	// The whole pool, not a corner of it. Six identities and twelve leases: each
+	// should carry two, because after every turn the one that has rested longest
+	// is a different one.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, f, clock, 1, 6)
+	cfg.Cooldown = time.Second
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("opening six ports: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+
+	used := map[int]int{}
+	for range 12 {
+		lease, err := pool.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("Acquire: %v", err)
+		}
+		// Some answer and some do not, which under the old rule was the whole
+		// difference and under this one is none of it.
+		if len(used)%2 == 0 {
+			lease.Answered()
+		}
+		used[lease.Port()]++
+		lease.Release()
+		clock.Advance(2 * time.Second)
+	}
+
+	if len(used) != 6 {
+		t.Errorf("%d of six identities carried anything: %v", len(used), used)
+	}
+	for port, n := range used {
+		if n != 2 {
+			t.Errorf("identity %d carried %d of twelve leases, want the even two", port, n)
+		}
 	}
 }
 
@@ -302,11 +283,11 @@ func TestStats_CountTheIdentitiesThatHaveAnswered(t *testing.T) {
 	}
 }
 
-func TestAcquireIdleHot_WarmsThePortThatHasNeverAnsweredFirst(t *testing.T) {
-	// A set just opened is entirely of ports that have never answered and is
-	// worth nothing until that changes, while a port that answered a while ago
-	// is warm already. Warming them in the order they happen to be listed leaves
-	// the cold ones cold for as long as the warm ones keep coming round.
+func TestAcquireIdleHot_WarmsThePortThatHasRestedLongest(t *testing.T) {
+	// The same rule a lease follows, for the same reason: warming that returned
+	// to whichever port it found interesting would leave the rest of the set
+	// untouched. The one that has waited longest is also the one closest to
+	// being forgotten by the far end, which is what warming is against.
 	f := fakebt.New(t)
 	clock := newFakeClock()
 	pool, err := NewPool(context.Background(), testPoolConfig(t, f, clock, 1, 2))
@@ -331,8 +312,8 @@ func TestAcquireIdleHot_WarmsThePortThatHasNeverAnsweredFirst(t *testing.T) {
 	}
 	defer got.Release()
 	if got.Port() == first {
-		t.Errorf("warming went to port %d, which has answered already, while one that "+
-			"never has was standing idle", got.Port())
+		t.Errorf("warming went to port %d, which was used a moment ago, while the other "+
+			"had rested longer", got.Port())
 	}
 }
 

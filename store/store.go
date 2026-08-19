@@ -13,6 +13,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver, which needs no C toolchain
 )
@@ -85,6 +86,19 @@ var ErrTooNew = errors.New("store: the database was written by a newer version")
 // Store is an open history.
 type Store struct {
 	db *sql.DB
+	// now is the clock the history reads when it has to judge how long ago
+	// something happened. It is a field so a test can hold time still; nothing
+	// but a test ever sets it.
+	now func() time.Time
+}
+
+// clock is the time this history reads, which is the real one unless a test has
+// said otherwise.
+func (s *Store) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // Open opens the history at path, creating it if it is not there.

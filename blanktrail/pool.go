@@ -233,20 +233,22 @@ type poolPort struct {
 	// gives the growth back when it ends, and this is what says which ports the
 	// growth was — the standing ones are never the ones given back.
 	//
-	// It used to decide which port a lease is offered first as well, and that
-	// was wrong: being kept is not being warm. A standing port that has never
-	// made a request meets the same challenge a fresh one does — measured at one
-	// to three minutes against one to two seconds — so what a lease is offered
-	// first is decided by answered below.
+	// It does not decide which port a lease is offered first. Nothing does but
+	// how long each has rested: a preference of any kind concentrates the work
+	// on a few identities and leaves the rest of the pool idle.
 	hot bool
 
 	mu sync.Mutex
 	// answered says this port has brought back an answer somebody accepted since
-	// its identity was last changed. It is what "warm" actually means: the first
-	// request on an identity meets a challenge and costs minutes, and every
-	// request after it on the same identity costs seconds. It is the pool's own
-	// word for it, said by the caller through Lease.Answered, because only the
-	// caller knows whether what came back was a page or a refusal.
+	// its identity was last changed. It is the pool's own word for it, said by
+	// the caller through Lease.Answered, because only the caller knows whether
+	// what came back was a page or a refusal.
+	//
+	// It is reported — a machine keeping identities open needs to know how many
+	// of them are worth anything — and it decides which one warming goes to
+	// next, which is the one that has never answered. It does not decide which
+	// one a lease goes to: that is how a pool ends up working like a third of
+	// itself.
 	//
 	// It is cleared wherever the identity changes, because the challenge is
 	// solved against the identity and not against the port number.
@@ -639,29 +641,44 @@ func (p *Pool) AcquireIdleHot(idle time.Duration) (*Lease, bool) {
 		return nil, false
 	}
 	now := p.cfg.Now()
-	// Never answered first, and only then the ones that have gone quiet. A set
-	// just opened is entirely of the first kind and worth nothing to anybody
-	// until that changes, while a port that answered ten minutes ago is warm
-	// already and warming it again buys nothing this round.
-	for _, cold := range []bool{true, false} {
-		for _, pt := range p.ports {
-			if !pt.hot {
-				continue
-			}
-			pt.mu.Lock()
-			free := !pt.leased && !pt.quarantined &&
-				pt.answered != cold && now.Sub(pt.lastUsed) >= idle
-			if free {
-				pt.leased = true
-				pt.lastUsed = now
-			}
-			pt.mu.Unlock()
-			if free {
-				return &Lease{pool: p, pt: pt}, true
-			}
+	// Whichever has rested longest, which is the same rule a lease follows and
+	// for the same reason: any preference concentrates the work on a few
+	// identities and leaves the rest of the set untouched. Here it also means
+	// warming goes round the set evenly instead of returning to whichever
+	// happens to be interesting — and an identity that has waited longest is
+	// exactly the one closest to being forgotten by the far end.
+	var best *poolPort
+	var bestUsed time.Time
+	for _, pt := range p.ports {
+		if !pt.hot {
+			continue
+		}
+		pt.mu.Lock()
+		free := !pt.leased && !pt.quarantined && now.Sub(pt.lastUsed) >= idle
+		last := pt.lastUsed
+		pt.mu.Unlock()
+		if !free {
+			continue
+		}
+		if best == nil || last.Before(bestUsed) {
+			best, bestUsed = pt, last
 		}
 	}
-	return nil, false
+	if best == nil {
+		return nil, false
+	}
+	best.mu.Lock()
+	// Read again under the lock this lease is taken with: between the walk above
+	// and here another thread may have taken it, and handing out a port twice is
+	// the one thing a pool must never do.
+	if best.leased || best.quarantined || now.Sub(best.lastUsed) < idle {
+		best.mu.Unlock()
+		return nil, false
+	}
+	best.leased = true
+	best.lastUsed = now
+	best.mu.Unlock()
+	return &Lease{pool: p, pt: best}, true
 }
 
 // KeepWarm declares every port this pool now holds to be a standing one, and
@@ -1070,7 +1087,6 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 	now := p.cfg.Now()
 	var best *poolPort
 	var bestUsed time.Time
-	var bestWarm bool
 	soonest := time.Duration(-1)
 	alive := 0
 
@@ -1081,7 +1097,6 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		pt.mu.Lock()
 		quarantined, leased, last := pt.quarantined, pt.leased, pt.lastUsed
 		revivals, since := pt.revivals, pt.quarantinedAt
-		answered := pt.answered
 		pt.mu.Unlock()
 		// A port that has waited out its quarantine is a candidate again. take
 		// holds p.mu and must not call the control API, so it only decides that
@@ -1094,18 +1109,24 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 			continue
 		}
 		if elapsed := now.Sub(last); elapsed >= p.cool {
-			// Warm before cold, and within each the one that has rested longest.
-			// A warm port answers in seconds where a cold one waits minutes on a
-			// challenge; the cooldown above keeps this from becoming "always the
-			// same ten". Warm is "has answered", not "is kept": a standing port
-			// that has never made a request is as cold as a fresh one, and
-			// offering it first was the whole of what a job felt when it started
-			// on a set that was still warming up.
-			switch {
-			case best == nil,
-				answered && !bestWarm,
-				answered == bestWarm && last.Before(bestUsed):
-				best, bestUsed, bestWarm = pt, last, answered
+			// The one that has rested longest, and nothing else.
+			//
+			// It used to prefer an identity that had answered before, on the
+			// strength of a measurement: a cold identity's first request costs
+			// minutes where a warm one costs seconds. What that missed is what
+			// the preference does to the rest of the pool. The few that answer
+			// take every lease, cool down, and are asked again the moment they
+			// may be — while the others are never tried at all. Traced on a live
+			// run: twenty-one ports of forty carried every request, the busiest
+			// of them asked once per cooldown, and nineteen sat untouched for
+			// minutes. A pool of a hundred was working like a pool of twenty.
+			//
+			// Longest-rested spreads the work over every identity there is,
+			// which is what a pool is for, and it is also the gentler pattern:
+			// an address asked once every hundred seconds looks less like a
+			// machine than one asked every seven.
+			if best == nil || last.Before(bestUsed) {
+				best, bestUsed = pt, last
 			}
 			continue
 		}

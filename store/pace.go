@@ -8,6 +8,20 @@ import (
 	"time"
 )
 
+// PaceWindow is how far back a speed is allowed to look.
+//
+// It is here because a speed measured over a sample alone lies after a pause. A
+// job stopped overnight and taken up again has a newest query from a minute ago
+// and an oldest from yesterday, and dividing twenty by twenty-three hours
+// reported nothing a minute for a run that was answering ten — which is what a
+// screen said while the history beside it said otherwise.
+//
+// Three minutes: long enough to hold several queries of a run of any size,
+// short enough that what it reports is what is happening rather than what was.
+// A run that has settled nothing inside it has no speed to report, and says so
+// rather than averaging across the gap.
+const PaceWindow = 3 * time.Minute
+
 // PaceSample is how many settled queries a speed is measured over.
 //
 // Few enough that the figure follows a job that speeds up or slows down, and
@@ -26,9 +40,9 @@ const PaceSample = 20
 // reader.
 //
 // Over is the span between the oldest and newest of the last PaceSample settled
-// queries, and Settled is how many fell in it. A job that has settled fewer than
-// two has no span to divide by, and says so with Known false rather than with a
-// nought that reads as "stopped".
+// queries that fall inside PaceWindow, and Settled is how many fell in it. A job
+// that has settled fewer than two of them has no span to divide by, and says so
+// with Known false rather than with a nought that reads as "stopped".
 type Pace struct {
 	Settled int
 	Over    time.Duration
@@ -77,6 +91,10 @@ func (s *Store) Pace(ctx context.Context, jobID int64) (Pace, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
+	// Anything older than the window is left out. The rows arrive newest first,
+	// so the first one too old ends the sample: everything behind it is older
+	// still.
+	cut := s.clock().Add(-PaceWindow)
 	var moments []time.Time
 	var pages []int
 	for rows.Next() {
@@ -91,6 +109,9 @@ func (s *Store) Pace(ctx context.Context, jobID int64) (Pace, error) {
 			// passed over rather than refused: a speed is worth less than a page
 			// that draws, and the rest of the sample still measures something.
 			continue
+		}
+		if at.Before(cut) {
+			break
 		}
 		moments = append(moments, at)
 		pages = append(pages, took)
