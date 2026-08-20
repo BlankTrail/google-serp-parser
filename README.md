@@ -397,6 +397,30 @@ Tests:
 go test ./...
 ```
 
+### Attribution
+
+BlankTrail credits a subscription to whoever's work brought the customer, and a
+program says which one it is by stamping an *integration key* into the running
+service — it travels in the body of the service's licence requests, never in a
+link, and it is not a secret.
+
+The downloads above are stamped with this project's key, so a subscription
+bought because of the parser is credited to it. A binary you build yourself
+carries no key and stamps nothing. Whichever key is in the build, three rules
+hold, and you can read them in [`cmd/gserp/integration.go`](cmd/gserp/integration.go):
+
+- a build with no key of its own leaves the service alone;
+- a key already stamped by another integrator is never written over;
+- nothing about any of it can stop a run — if the service refuses, the parser
+  says so once and carries on.
+
+To stamp a build with your own key:
+
+```
+go build -ldflags "-X github.com/blanktrail/google-serp-parser/internal/version.integrationKey=dk_yours" ./cmd/gserp
+```
+
+
 ---
 
 ## 📈 Performance
