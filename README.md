@@ -110,15 +110,15 @@ No Go, no build, no dependencies. One file to download and one to double-click.
 Challenge Breaker. Note its control API address (`http://127.0.0.1:8891` by
 default) and issue an API key in it.
 
-**2. Download the build for your system** from
-[Releases](https://github.com/BlankTrail/google-serp-parser/releases/latest).
+**2. Download the build for your system.** Every link here always points at
+the newest release.
 
 **Windows — one file, nothing to unpack:**
 
-| System | File |
+| System | Download |
 |---|---|
-| Windows, ordinary PC | `gserp.exe` |
-| Windows on ARM | `gserp-arm64.exe` |
+| Windows, ordinary PC | **[gserp.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp.exe)** |
+| Windows on ARM | **[gserp-arm64.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-arm64.exe)** |
 
 Put it anywhere and double-click it. Everything the program needs is inside
 that file — the pages, the icon, the lot — and it writes its history into a
@@ -126,16 +126,21 @@ that file — the pages, the icon, the lot — and it writes its history into a
 
 **Linux and macOS:**
 
-| System | File |
+| System | Download |
 |---|---|
-| Linux, ordinary PC or server | `gserp-<version>-linux-amd64.tar.gz` |
-| Linux on ARM | `gserp-<version>-linux-arm64.tar.gz` |
-| Mac with Apple silicon (M1 and later) | `gserp-<version>-macos-apple-silicon.tar.gz` |
-| Mac with an Intel processor | `gserp-<version>-macos-intel.tar.gz` |
+| Linux, ordinary PC or server | [gserp-linux-amd64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-amd64.tar.gz) |
+| Linux on ARM | [gserp-linux-arm64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-arm64.tar.gz) |
+| Mac with Apple silicon (M1 and later) | [gserp-macos-apple-silicon.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-apple-silicon.tar.gz) |
+| Mac with an Intel processor | [gserp-macos-intel.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-intel.tar.gz) |
 
 Each archive holds the program, a starter script, both READMEs and the licence.
-The zipped Windows builds are there too, for whoever wants the READMEs beside
-the program.
+Windows zips are there as well — [amd64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-amd64.zip),
+[arm64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-arm64.zip) — for whoever wants the READMEs
+beside the program.
+
+Which version a download is, is on the
+[release page](https://github.com/BlankTrail/google-serp-parser/releases/latest)
+and in `gserp version`.
 
 **3. Start it.**
 

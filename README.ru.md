@@ -112,15 +112,14 @@
 Challenge Breaker. Запомните адрес его control API (по умолчанию
 `http://127.0.0.1:8891`) и выпустите в нём API-ключ.
 
-**2. Скачайте сборку под свою систему** со страницы
-[релизов](https://github.com/BlankTrail/google-serp-parser/releases/latest).
+**2. Скачайте сборку под свою систему.** Каждая ссылка ведёт на свежий релиз.
 
 **Windows — один файл, распаковывать нечего:**
 
-| Система | Файл |
+| Система | Скачать |
 |---|---|
-| Windows, обычный ПК | `gserp.exe` |
-| Windows на ARM | `gserp-arm64.exe` |
+| Windows, обычный ПК | **[gserp.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp.exe)** |
+| Windows на ARM | **[gserp-arm64.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-arm64.exe)** |
 
 Положите куда угодно и запустите двойным щелчком. Всё, что нужно программе,
 лежит внутри этого файла — страницы, иконка, всё, — а историю она пишет в
@@ -128,15 +127,21 @@ Challenge Breaker. Запомните адрес его control API (по умо
 
 **Linux и macOS:**
 
-| Система | Файл |
+| Система | Скачать |
 |---|---|
-| Linux, обычный ПК или сервер | `gserp-<версия>-linux-amd64.tar.gz` |
-| Linux на ARM | `gserp-<версия>-linux-arm64.tar.gz` |
-| Mac на Apple silicon (M1 и новее) | `gserp-<версия>-macos-apple-silicon.tar.gz` |
-| Mac на процессоре Intel | `gserp-<версия>-macos-intel.tar.gz` |
+| Linux, обычный ПК или сервер | [gserp-linux-amd64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-amd64.tar.gz) |
+| Linux на ARM | [gserp-linux-arm64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-arm64.tar.gz) |
+| Mac на Apple silicon (M1 и новее) | [gserp-macos-apple-silicon.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-apple-silicon.tar.gz) |
+| Mac на процессоре Intel | [gserp-macos-intel.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-intel.tar.gz) |
 
 В каждом архиве — программа, скрипт запуска, оба README и лицензия. Zip-сборки
-под Windows тоже лежат — для тех, кому README нужен рядом с программой.
+под Windows тоже есть — [amd64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-amd64.zip),
+[arm64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-arm64.zip) — для тех, кому README нужен
+рядом с программой.
+
+Какая это версия — написано на
+[странице релиза](https://github.com/BlankTrail/google-serp-parser/releases/latest)
+и говорит `gserp version`.
 
 **3. Запустите.**
 
