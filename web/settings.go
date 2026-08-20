@@ -30,6 +30,7 @@ const (
 	hotField     = "hot_ports"
 	hotKindField = "hot_device"
 	wireField    = "port_protocol"
+	banField     = "ban_minutes"
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
@@ -49,6 +50,9 @@ const (
 // setting how often a list is read again thinks in minutes, and a box holding
 // nanoseconds would be filled in wrong once and blamed on the program forever.
 const refreshUnit = time.Minute
+
+// banUnit is the unit the box for how long an address is banned is labelled in.
+const banUnit = time.Minute
 
 // reachedDomains are the hosts a job cannot work without, and what the check
 // asks about. They are named one by one rather than by wildcard because a
@@ -92,7 +96,9 @@ type settingsForm struct {
 	Hot       string
 	HotDevice string
 	// Wire is how this program reaches the identities it opens: socks5 or http.
-	Wire    string
+	Wire string
+	// Ban is how long an address that failed is left out of the rotation.
+	Ban     string
 	Source  string
 	Where   string
 	Refresh string
@@ -109,6 +115,7 @@ func settingsFormOf(r *http.Request) settingsForm {
 		Hot:        strings.TrimSpace(r.FormValue(hotField)),
 		HotDevice:  strings.TrimSpace(r.FormValue(hotKindField)),
 		Wire:       strings.TrimSpace(r.FormValue(wireField)),
+		Ban:        strings.TrimSpace(r.FormValue(banField)),
 		Source:     strings.TrimSpace(r.FormValue(sourceField)),
 		Where:      strings.TrimSpace(r.FormValue(whereField)),
 		Refresh:    strings.TrimSpace(r.FormValue(refreshField)),
@@ -127,6 +134,7 @@ func formShowing(saved settings.Settings) settingsForm {
 		Hot:        strconv.Itoa(saved.HotPorts),
 		HotDevice:  saved.HotDevice,
 		Wire:       blanktrail.ProtocolOr(saved.PortProtocol),
+		Ban:        spellUnits(saved.Proxy.Ban, banUnit),
 		Source:     saved.Proxy.Kind,
 		Where:      saved.Proxy.Location,
 		Refresh:    spellUnits(saved.Proxy.Refresh, refreshUnit),
@@ -210,6 +218,7 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 			Kind:     f.Source,
 			Location: f.Where,
 			Refresh:  b.span(f.Refresh, saved.Proxy.Refresh, refreshUnit, "settings.refresh.length"),
+			Ban:      b.span(f.Ban, saved.Proxy.Ban, banUnit, "settings.ban.length"),
 		}
 	default:
 		b.complaints = append(b.complaints, "settings.source.unknown")

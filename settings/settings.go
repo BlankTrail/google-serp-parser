@@ -29,6 +29,14 @@ type ProxySource struct {
 	Kind     string        `json:"kind"`     // "file" | "url" | ""
 	Location string        `json:"location"` // path or address
 	Refresh  time.Duration `json:"refresh"`
+	// Ban is how long an address that failed is left out of the rotation.
+	//
+	// Too short and the same dead addresses are tried again inside one job; too
+	// long and a bad ten minutes takes most of the list out at once. Which is
+	// right depends on how fast the gateway's exits turn over, which is a
+	// property of the list rather than of this program. Nought is the documented
+	// default.
+	Ban time.Duration `json:"ban"`
 }
 
 // Settings is everything the interface can set.

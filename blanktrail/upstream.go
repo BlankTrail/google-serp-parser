@@ -320,10 +320,17 @@ func withKeys(ups []Upstream) []listed {
 // Measured on a live list of fifteen thousand: 14999 of them were resting at
 // once, the run was down to thirteen queries a minute, and 92 per cent of what
 // went out never arrived — because the only addresses left to hand out were the
-// ones already known bad. Five minutes is long enough that the address is not
-// tried again inside the same failure and short enough that a list cannot be
-// eaten.
-const defaultRest = 5 * time.Minute
+// ones already known bad.
+//
+// Five minutes was the answer to that, and it was too short: an address found
+// dead came back before the run had finished walking the rest of the list, so
+// the same dead addresses were tried again and again inside one job. An hour is
+// long enough to be out of the way of a run, and the ceiling below — not the
+// length of the rest — is what now keeps a list from being spent.
+//
+// It is a default rather than a rule: how fast a gateway's exits turn over is a
+// property of the list somebody bought, so the number is on the proxy screen.
+const defaultRest = time.Hour
 
 // benchShare is the most of a list that may be resting at once, as a share of
 // the addresses the list holds.

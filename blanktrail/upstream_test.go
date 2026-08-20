@@ -833,18 +833,20 @@ func TestRotor_NeverRestsTheWholeListAtOnce(t *testing.T) {
 	}
 }
 
-func TestDefaultRest_IsShortEnoughForAListWhoseExitsRotate(t *testing.T) {
-	// Six hours was a sentence passed on evidence that expires in minutes. The
-	// address is a door onto an exit that rotates behind it, so which doors work
-	// changes constantly, and a miss says something about this minute rather
-	// than about the door.
-	if defaultRest > 15*time.Minute {
-		t.Errorf("an address rests %s after one miss, which on a list whose exits "+
-			"rotate is a verdict on evidence that has expired", defaultRest)
+func TestDefaultRest_KeepsARunClearOfWhatItHasAlreadyFoundDead(t *testing.T) {
+	// Six hours was a sentence passed on evidence that expires in minutes, and
+	// five minutes was the other way over: an address found dead came back
+	// before the run had finished walking the rest of the list, so the same dead
+	// addresses were tried again and again inside one job.
+	//
+	// What keeps a list from being spent is the ceiling on the bench rather than
+	// the length of the rest, which is what lets this be an hour.
+	if defaultRest < 30*time.Minute {
+		t.Errorf("an address rests only %s, which brings it back inside the job "+
+			"that found it dead", defaultRest)
 	}
-	if defaultRest < time.Minute {
-		t.Errorf("an address rests only %s, which is short enough to be handed "+
-			"back inside the same failure", defaultRest)
+	if defaultRest > 4*time.Hour {
+		t.Errorf("an address rests %s on evidence about one minute", defaultRest)
 	}
 }
 
@@ -944,5 +946,40 @@ func TestRotorNext_KeepsSpreadingOverWhatIsLeftWhileSomeAddressesRest(t *testing
 	if high-low > 1 {
 		t.Errorf("of the addresses still in play the most-used had %d handouts and "+
 			"the least-used %d, want a difference of at most one", high, low)
+	}
+}
+
+func TestNewRotor_TakesTheLengthOfABanFromWhoeverOpensIt(t *testing.T) {
+	// The default is an hour, and how fast a gateway's exits turn over is a
+	// property of the list rather than of this program — so the number is the
+	// operator's, and the rotor has to actually keep the one it is handed.
+	ups, bad := Parse(strings.Join([]string{"1.1.1.1:1", "2.2.2.2:2"}, "\n"), "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	clock := newFakeClock()
+
+	r := NewStaticRotor(ups, WithRest(90*time.Minute), WithClock(clock.Now))
+	r.MarkDead(ups[0])
+	if got := r.RestingHere(); got != 1 {
+		t.Fatalf("%d addresses are resting, want the one found dead", got)
+	}
+
+	// An hour in, the address a ninety-minute ban covers is still out.
+	clock.Advance(time.Hour)
+	if _, ok := r.Next(); !ok {
+		t.Fatal("the rotor has nothing to hand out")
+	}
+	if got := r.RestingHere(); got != 1 {
+		t.Errorf("the address came back after an hour of a ninety-minute ban")
+	}
+
+	// And past it, back it comes.
+	clock.Advance(31 * time.Minute)
+	if _, ok := r.Next(); !ok {
+		t.Fatal("the rotor has nothing to hand out")
+	}
+	if got := r.RestingHere(); got != 0 {
+		t.Errorf("%d addresses are still resting after the ban ran out", got)
 	}
 }

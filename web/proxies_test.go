@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/settings"
@@ -283,5 +284,36 @@ func TestSaveProxies_ComplainsAboutWhatWasTypedRatherThanWritingIt(t *testing.T)
 	}
 	if after.Proxy.Kind != "" {
 		t.Errorf("a form that would not parse was written down as %+v", after.Proxy)
+	}
+}
+
+func TestSaveProxies_WritesDownHowLongAnAddressIsBanned(t *testing.T) {
+	// How fast a gateway's exits turn over is a property of the list somebody
+	// bought rather than of this program, so the length of a ban is theirs to
+	// set. A ban that is short brings the same dead addresses back inside one
+	// job, which is what a fixed five minutes did.
+	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+
+	rec := postForm(t, s, proxiesAt, url.Values{
+		"source":      {"file"},
+		"source_at":   {"C:/list.txt"},
+		"ban_minutes": {"90"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
+	}
+
+	after, err := settings.Load(path)
+	if err != nil {
+		t.Fatalf("reading the settings back: %v", err)
+	}
+	if after.Proxy.Ban != 90*time.Minute {
+		t.Errorf("an address is banned for %s, want the ninety minutes that were typed",
+			after.Proxy.Ban)
+	}
+
+	// And the box shows it back in the unit it was typed in.
+	if body := getBody(t, s, proxiesAt); !strings.Contains(body, `value="90"`) {
+		t.Error("the box does not show the ban that was saved")
 	}
 }

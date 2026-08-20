@@ -477,8 +477,14 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	if saved.Proxy.Kind != "" {
 		// The list is loaded here and reloaded on its own interval afterwards, so a
 		// list that changes during a run is a list this pool follows.
-		rotor, err := blanktrail.NewRotor(ctx, listFrom(saved.Proxy),
-			blanktrail.WithOnBench(o.remember))
+		// How long a failed address is left out is the operator's, because how
+		// fast a gateway's exits turn over is a property of the list they bought
+		// and not of this program. Nought is the documented default.
+		bench := []blanktrail.RotorOption{blanktrail.WithOnBench(o.remember)}
+		if saved.Proxy.Ban > 0 {
+			bench = append(bench, blanktrail.WithRest(saved.Proxy.Ban))
+		}
+		rotor, err := blanktrail.NewRotor(ctx, listFrom(saved.Proxy), bench...)
 		if err != nil {
 			return nil, o.scrubbed(err)
 		}
