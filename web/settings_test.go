@@ -824,14 +824,14 @@ func TestSettings_KeepsTheChooserOnTheLineWithTheBoxItFills(t *testing.T) {
 	// something under it stands a line above the ones beside it. The chooser sat
 	// under its box and pushed that whole line out of true.
 	s, _ := serverWithSettings(t, settings.Defaults())
-	body := getBody(t, s, settingsAt)
+	body := getBody(t, s, proxiesAt)
 
 	at := strings.Index(body, `name="source_at"`)
 	if at < 0 {
 		t.Fatal("there is no box for where the addresses are read from")
 	}
 	before, after := body[:at], body[at:]
-	chooser := strings.Index(after, "/settings/browse")
+	chooser := strings.Index(after, "/proxies/browse")
 	if chooser < 0 {
 		t.Fatal("nothing after the box offers to look through this machine")
 	}

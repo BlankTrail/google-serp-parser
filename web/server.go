@@ -209,6 +209,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+uploadAt, s.uploadList)
 	s.mux.HandleFunc("GET /job/{id}", s.job)
 	s.mux.HandleFunc("GET "+proxiesAt, s.proxies)
+	s.mux.HandleFunc("POST "+proxiesAt, s.saveProxies)
 	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)
 	// What the job page polls, and what its two buttons send. Both buttons are

@@ -5,9 +5,11 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
+	"github.com/blanktrail/google-serp-parser/settings"
 )
 
 // proxiesRefresh is how often the proxy screen asks to be drawn again.
@@ -72,6 +74,19 @@ type proxiesPage struct {
 	// Kinds is the breakdown, in a fixed order so two readings a minute apart do
 	// not shuffle under the reader's eye.
 	Kinds []failureRow
+
+	// Form is where the addresses come from and how the ports on them are
+	// reached, which is settled on this screen rather than in the settings.
+	//
+	// It is the same subject the figures above are about: somebody reading that
+	// a quarter of the requests never arrive is somebody about to change the
+	// list, and a reading that sent them to another screen to act on it would be
+	// a reading nobody acts on.
+	Form settingsForm
+	// Sources are the places a list of addresses can come from, in the order the
+	// page offers them, and Complaints is what was wrong with what was typed.
+	Sources    []sourceOption
+	Complaints []string
 }
 
 // failureRow is one kind of failure and how often it happened.
@@ -94,15 +109,79 @@ var failureKeys = map[blanktrail.Failure]string{
 	blanktrail.FailureOther:     "proxies.kind.other",
 }
 
-// proxies draws the reading of the pool.
+// proxies draws the reading of the pool and the settings it is a reading of.
 func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
 	view := s.proxiesOf()
+	saved, complaints := s.current()
+	view.Form = formShowing(saved)
+	view.Complaints = complaints
+	// A path chosen in the browser arrives here and fills the box, and nothing
+	// more: choosing is not saving. The reader sees what they picked standing
+	// where they would have typed it, and it is written down when they press
+	// save.
+	if chosen := r.URL.Query().Get(whereField); chosen != "" {
+		view.Form.Where = chosen
+		view.Form.Source = sourceFile
+	}
+	view.Sources = sourcesOffered(view.Form.Source)
 	view.page = s.frame(r, lang, "proxies.title", proxiesAt)
 	if view.Running {
 		view.Refresh = proxiesRefresh.Milliseconds()
 	}
 	s.render(w, r, "proxies.html", view)
+}
+
+// saveProxies writes down where the addresses come from and how the ports on
+// them are reached.
+//
+// It lays what was typed here over the settings that are saved rather than over
+// an empty form, so the boxes this screen does not show — the connection, the
+// key, the identities kept warm — are carried through untouched. Everything
+// after that is the settings page's own path: the same complaints, the same
+// order of complain, open, then write.
+func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
+	lang := s.rememberLang(w, r)
+	saved, unreadable := s.current()
+
+	form := formShowing(saved)
+	form.Source = strings.TrimSpace(r.FormValue(sourceField))
+	form.Where = strings.TrimSpace(r.FormValue(whereField))
+	form.Refresh = strings.TrimSpace(r.FormValue(refreshField))
+	form.Wire = strings.TrimSpace(r.FormValue(wireField))
+
+	next, faults := form.onto(saved)
+	if len(faults) > 0 || s.settingsPath == "" {
+		view := s.proxiesOf()
+		view.Form = form
+		view.Sources = sourcesOffered(form.Source)
+		view.Complaints = append(unreadable, faults...)
+		if s.settingsPath == "" {
+			// Nowhere to write. Saying so beats a page that takes the press and
+			// quietly forgets it at the next start.
+			view.Complaints = append(view.Complaints, "settings.opened.nothing")
+		}
+		view.page = s.frame(r, lang, "proxies.title", proxiesAt)
+		s.render(w, r, "proxies.html", view)
+		return
+	}
+	if err := s.takeIntoUse(next); err != nil {
+		s.log.Error("nothing could be opened with the settings that were just saved", "error", err)
+		view := s.proxiesOf()
+		view.Form = form
+		view.Sources = sourcesOffered(form.Source)
+		view.Complaints = []string{"settings.opened.nothing"}
+		view.page = s.frame(r, lang, "proxies.title", proxiesAt)
+		s.render(w, r, "proxies.html", view)
+		return
+	}
+	if err := settings.Save(s.settingsPath, next); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	// A page rendered into the answer to a form is a page the browser's reload
+	// button sends again, and this form changes where every later job runs.
+	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
 }
 
 // resetProxies puts the counters back to nought and shows the screen again.

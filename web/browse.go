@@ -13,7 +13,7 @@ import (
 // browseAt is where the file chooser lives. It sits under the settings because
 // that is the only thing it is for, and because it is offered by exactly the
 // servers that can save what it chooses.
-const browseAt = settingsAt + "/browse"
+const browseAt = proxiesAt + "/browse"
 
 // browseLimit is how many entries one listing shows.
 //
@@ -94,7 +94,7 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	root := s.browseRoot
 	at := startFrom(r.URL.Query().Get("at"), s.savedListPath(), root)
 	view := browseView{
-		page: s.frame(r, lang, "browse.title", settingsAt),
+		page: s.frame(r, lang, "browse.title", proxiesAt),
 		At:   shownFrom(root, at),
 		Up:   above(at, root),
 	}

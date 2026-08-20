@@ -73,7 +73,7 @@ func TestBrowse_HandsAChosenFileToTheBoxWithoutSavingIt(t *testing.T) {
 	s, path := serverWithSettings(t, saved)
 	chosen := filepath.Join(listTree(t), "proxies.txt")
 
-	body := get(t, s, settingsAt+"?"+whereField+"="+chosen).Body.String()
+	body := get(t, s, proxiesAt+"?"+whereField+"="+chosen).Body.String()
 	if !strings.Contains(body, chosen) {
 		t.Errorf("the box does not hold the file that was chosen:\n%s", body)
 	}
@@ -221,14 +221,14 @@ func TestSettings_PutsTheChooserAwayWhenTheListIsNotReadFromAFile(t *testing.T) 
 	// puts away the link written here, and renaming either on its own leaves a
 	// page where the offer never goes away.
 	script := mustAsset(t, "static/app.js")
-	for _, part := range []string{"[name=source]", "/settings/browse", `"file"`} {
+	for _, part := range []string{"[name=source]", "/proxies/browse", `"file"`} {
 		if !strings.Contains(script, part) {
 			t.Errorf("the script never names %q, so the chooser stays up whatever is chosen", part)
 		}
 	}
 
 	s, _ := serverWithSettings(t, settings.Defaults())
-	body := getBody(t, s, settingsAt)
+	body := getBody(t, s, proxiesAt)
 	if !strings.Contains(body, `name="source"`) {
 		t.Error("the page has no box saying where the addresses are read from")
 	}

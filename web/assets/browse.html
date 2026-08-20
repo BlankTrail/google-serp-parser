@@ -18,7 +18,7 @@
 {{if .Up}}<li class="folder"><a href="/settings/browse?at={{.Up}}">{{.T "browse.up"}}</a></li>{{end}}
 {{range .Folders}}<li class="folder"><a href="/settings/browse?at={{.Path}}">{{.Name}}</a></li>
 {{end}}
-{{range .Files}}<li class="list"><a href="/settings?source_at={{.Path}}">{{.Name}}</a></li>
+{{range .Files}}<li class="list"><a href="/proxies?source_at={{.Path}}">{{.Name}}</a></li>
 {{end}}
 </ul>
 

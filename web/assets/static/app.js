@@ -288,7 +288,7 @@
 	// reader has no use for and then back again.
 	function shapeSettings(root) {
 		var source = root.querySelector("[name=source]");
-		var chooser = root.querySelector('a[href="/settings/browse"]');
+		var chooser = root.querySelector('a[href="/proxies/browse"]');
 		if (!source || !chooser) {
 			return;
 		}

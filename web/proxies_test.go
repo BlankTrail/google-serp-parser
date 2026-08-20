@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
+	"github.com/blanktrail/google-serp-parser/settings"
 )
 
 func TestProxies_ShowsTheReadingOfThePoolAndBreaksTheFailuresDown(t *testing.T) {
@@ -179,5 +180,108 @@ func TestBrowserPolls_ClaimsEveryAddressThePagesPress(t *testing.T) {
 		if !claimed[p.path] {
 			t.Errorf("%s is registered and not published", p.path)
 		}
+	}
+}
+
+func TestProxies_CarriesTheSettingsTheReadingIsAbout(t *testing.T) {
+	// Where the addresses come from and how the ports on them are reached stand
+	// on this screen rather than in the settings, because they are the same
+	// subject the figures are about: somebody reading that a quarter of the
+	// requests never arrive is somebody about to change the list, and a reading
+	// that sent them to another screen to act on it would be a reading nobody
+	// acts on.
+	s, _ := serverWithSettings(t, settings.Settings{
+		ControlURL: "http://127.0.0.1:1",
+		Proxy:      settings.ProxySource{Kind: "file", Location: "C:/list.txt"},
+	})
+	body := getBody(t, s, proxiesAt)
+
+	for _, want := range []string{`name="source"`, `name="source_at"`, `name="source_refresh"`, `name="port_protocol"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the proxy screen has no %s", want)
+		}
+	}
+
+	// And the settings screen has given them up rather than showing a second
+	// copy: two boxes for one setting is two answers to what is saved.
+	settingsBody := getBody(t, s, settingsAt)
+	for _, gone := range []string{`name="source_at"`, `name="port_protocol"`} {
+		if strings.Contains(settingsBody, gone) {
+			t.Errorf("the settings screen still carries %s", gone)
+		}
+	}
+}
+
+func TestSaveProxies_WritesTheListDownAndLeavesEverythingElseAlone(t *testing.T) {
+	// The boxes this screen does not show — the connection, the key, the
+	// identities kept warm — are carried through untouched. A partial form saved
+	// over the whole settings would take the connection away from somebody who
+	// came here to change a file path, and that is the first thing anybody will
+	// do on this screen.
+	before := settings.Settings{
+		ControlURL: "http://127.0.0.1:1",
+		APIKey:     "the-key-that-must-survive",
+		HotPorts:   12,
+		HotDevice:  blanktrail.DeviceDesktop,
+	}
+	s, path := serverWithSettings(t, before)
+
+	rec := postForm(t, s, proxiesAt, url.Values{
+		"source":         {"file"},
+		"source_at":      {"C:/somewhere/list.txt"},
+		"source_refresh": {"7"},
+		"port_protocol":  {"http"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != proxiesAt {
+		t.Errorf("the save lands on %q, want %q", got, proxiesAt)
+	}
+
+	after, err := settings.Load(path)
+	if err != nil {
+		t.Fatalf("reading the settings back: %v", err)
+	}
+	if after.Proxy.Kind != "file" || after.Proxy.Location != "C:/somewhere/list.txt" {
+		t.Errorf("the list reads %+v, want the file that was typed", after.Proxy)
+	}
+	if after.PortProtocol != blanktrail.ProtocolHTTP {
+		t.Errorf("the ports are reached over %q, want the http that was chosen", after.PortProtocol)
+	}
+	if after.APIKey != before.APIKey {
+		t.Error("saving a file path took the key away")
+	}
+	if after.ControlURL != before.ControlURL {
+		t.Errorf("the connection reads %q, want the %q it was", after.ControlURL, before.ControlURL)
+	}
+	if after.HotPorts != before.HotPorts || after.HotDevice != before.HotDevice {
+		t.Errorf("the identities kept warm read %d %q, want %d %q",
+			after.HotPorts, after.HotDevice, before.HotPorts, before.HotDevice)
+	}
+}
+
+func TestSaveProxies_ComplainsAboutWhatWasTypedRatherThanWritingIt(t *testing.T) {
+	// The same order the settings screen keeps: complain, open, then write.
+	// Nothing is saved while there is anything to complain about, because
+	// settings written and refused leave the file and the machine disagreeing.
+	before := settings.Settings{ControlURL: "http://127.0.0.1:1"}
+	s, path := serverWithSettings(t, before)
+
+	rec := postForm(t, s, proxiesAt, url.Values{
+		"source":         {"file"},
+		"source_at":      {"C:/list.txt"},
+		"source_refresh": {"not a number"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d, want the screen back with the complaint on it", rec.Code)
+	}
+
+	after, err := settings.Load(path)
+	if err != nil {
+		t.Fatalf("reading the settings back: %v", err)
+	}
+	if after.Proxy.Kind != "" {
+		t.Errorf("a form that would not parse was written down as %+v", after.Proxy)
 	}
 }

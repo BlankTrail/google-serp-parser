@@ -55,48 +55,6 @@
 <p class="empty">{{.T "settings.key.keep"}}</p>
 </fieldset>
 
-<fieldset>
-<legend>{{.T "settings.source"}}</legend>
-<div class="row">
-<div class="field">
-<label for="source">{{.T "settings.source.where"}}</label>
-<select id="source" name="source">
-{{range .Sources}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{$.T .Key}}</option>
-{{end}}</select>
-</div>
-<div class="field">
-<label for="source_at">{{.T "settings.source.at"}}</label>
-{{/* The chooser stands beside the box and not under it. Boxes on one line are
-     lined up by their feet, so a box with something under it stands a line
-     higher than the ones next to it and the line reads as broken. */}}
-<span class="beside">
-<input id="source_at" name="source_at" size="34" value="{{.Form.Where}}">
-{{/* The chooser is a link rather than a button: it leaves the form to look at
-     this machine, and a form that submitted to get there would save settings
-     nobody had finished filling in. */}}
-<a href="/settings/browse">{{.T "settings.source.choose"}}</a>
-</span>
-</div>
-<div class="field">
-<label for="source_refresh">{{.T "settings.source.refresh"}}</label>
-<input id="source_refresh" name="source_refresh" type="number" min="0" value="{{.Form.Refresh}}">
-</div>
-</div>
-{{/* What a list may look like, said here rather than found out by writing one:
-     a file read and understood line by line reports nothing on this page, so a
-     list in a form this program does not read is a list that is simply
-     smaller than it looks. */}}
-<p class="empty">{{.T "settings.source.forms"}}</p>
-<ul class="notes forms">
-<li>{{.T "settings.source.form.plain"}}</li>
-<li>{{.T "settings.source.form.after"}}</li>
-<li>{{.T "settings.source.form.before"}}</li>
-<li>{{.T "settings.source.form.at"}}</li>
-</ul>
-<p class="empty">{{.T "settings.source.scheme"}}</p>
-<p class="empty">{{.T "settings.source.skipped"}}</p>
-</fieldset>
-
 {{/* The identities this machine keeps open between jobs. What it buys is
      measured: a cold identity meets a challenge on its first request and the
      answer arrives minutes later, while one that has answered recently answers
@@ -115,16 +73,8 @@
 {{range .Devices}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
 </div>
-<div class="field">
-<label for="port_protocol">{{.T "form.wire"}}</label>
-<select id="port_protocol" name="port_protocol">
-<option value="socks5"{{if eq .Form.Wire "socks5"}} selected{{end}}>SOCKS5</option>
-<option value="http"{{if eq .Form.Wire "http"}} selected{{end}}>HTTP</option>
-</select>
-</div>
 </div>
 <p class="empty">{{.T "settings.hot.why"}}</p>
-<p class="empty">{{.T "settings.wire.why"}}</p>
 </fieldset>
 
 <fieldset>
