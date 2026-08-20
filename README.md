@@ -14,6 +14,8 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 > the session through the challenge. A BlankTrail licence including **Challenge
 > Breaker** is a hard requirement, not a recommendation.
 
+![The status screen: a job in flight, what it has settled, the pool and the queue](assets/screenshots/status-en.png)
+
 ---
 
 ## 📜 Recent changes
@@ -80,6 +82,12 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
   port that never answered, a relay refusal, a wall from Google, our own
   timeout.
 
+![The proxy screen: the pool as it stands, what failed and of what kind, and the address list](assets/screenshots/proxies-en.png)
+
+*A small twenty-port demo pool on a much-used list. The failure share is what
+this list gives at this size; the figures in [Performance](#-performance) are
+from three hundred identities on a warmed pool.*
+
 ### Export and API
 
 - **CSV**, **JSON Lines**, **TXT** — results, ads and related queries.
@@ -121,8 +129,12 @@ banned.
 job, the country, the depth, and the number of threads. The form says what the
 run will cost before you start it.
 
+![The new job form: kind of job, depth, country, what to keep, and the pool it runs on](assets/screenshots/new-job-en.png)
+
 **7. Press Start.** The Status screen follows it. When it is done, download the
 results as CSV or JSON Lines from the job's own page.
+
+![A finished job: its counts, the settings it ran with, the export links and the results](assets/screenshots/job-en.png)
 
 ### Linux and macOS
 
