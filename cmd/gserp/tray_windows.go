@@ -52,6 +52,7 @@ var (
 	shell32  = windows.NewLazySystemDLL("shell32.dll")
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
+	procMessageBox           = user32.NewProc("MessageBoxW")
 	procRegisterClassEx      = user32.NewProc("RegisterClassExW")
 	procCreateWindowEx       = user32.NewProc("CreateWindowExW")
 	procDefWindowProc        = user32.NewProc("DefWindowProcW")
@@ -168,6 +169,34 @@ func hideConsole() {
 	if wnd != 0 {
 		_, _, _ = procShowWindow.Call(wnd, swHide)
 	}
+}
+
+// mbIconError is a box with the stop icon, and mbOK gives it one button.
+const (
+	mbOK            = 0x00000000
+	mbIconError     = 0x00000010
+	mbSetForeground = 0x00010000
+)
+
+// sayWhy puts a reason on the screen.
+//
+// It exists because of what a double-click does: the console is hidden the
+// moment the program takes that path, and standard error goes there. A program
+// that fails after that writes its reason into a window nobody can see and then
+// closes it by exiting — which is the same, from the reader's chair, as nothing
+// happening at all. It is the one thing this program can do that a log cannot:
+// a log is read by somebody who already knows to look for it.
+func sayWhy(reason string) {
+	title, err := windows.UTF16PtrFromString("gserp could not start")
+	if err != nil {
+		return
+	}
+	text, err := windows.UTF16PtrFromString(reason)
+	if err != nil {
+		return
+	}
+	_, _, _ = procMessageBox.Call(0, uintptr(unsafe.Pointer(text)),
+		uintptr(unsafe.Pointer(title)), mbOK|mbIconError|mbSetForeground)
 }
 
 // openInBrowser asks the system to open an address the way a link is opened.
