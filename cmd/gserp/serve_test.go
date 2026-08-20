@@ -1237,3 +1237,54 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 		t.Errorf("a thread waits %s between queries, want the three seconds the job named", got)
 	}
 }
+
+func TestListenOn_StaysOnThisMachineUnlessTheSettingsOpenItWithAPassword(t *testing.T) {
+	// The switch alone does not open anything. An interface answering a network
+	// with nothing to ask for is the settings, the queue and every result handed
+	// to whoever is on it, so a switch turned on without a password leaves the
+	// program where it was and says so.
+	locked, err := settings.LockPassword("a good enough password")
+	if err != nil {
+		t.Fatalf("LockPassword: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		asked string
+		saved settings.Settings
+		want  string
+		says  bool
+	}{
+		{"nothing asked, nothing set", defaultServeAddr, settings.Settings{}, defaultServeAddr, false},
+		{"open, with a password", defaultServeAddr,
+			settings.Settings{LANAccess: true, LANPassword: locked}, lanServeAddr, false},
+		{"open, no password", defaultServeAddr,
+			settings.Settings{LANAccess: true}, defaultServeAddr, true},
+		{"a password, switch off", defaultServeAddr,
+			settings.Settings{LANPassword: locked}, defaultServeAddr, false},
+		{"the caller named one", "127.0.0.1:9999",
+			settings.Settings{LANAccess: true, LANPassword: locked}, "127.0.0.1:9999", false},
+		{"the caller named a network one", "0.0.0.0:1234", settings.Settings{}, "0.0.0.0:1234", false},
+	} {
+		var said strings.Builder
+		if got := listenOn(tc.asked, tc.saved, &said); got != tc.want {
+			t.Errorf("%s: listening on %q, want %q", tc.name, got, tc.want)
+		}
+		if spoke := said.Len() > 0; spoke != tc.says {
+			t.Errorf("%s: said %q, want anything=%v", tc.name, said.String(), tc.says)
+		}
+	}
+}
+
+func TestLockFor_AsksForNothingWhileTheInterfaceIsOnThisMachine(t *testing.T) {
+	// A password on loopback is a lock on a door the reader is already inside.
+	locked, err := settings.LockPassword("a good enough password")
+	if err != nil {
+		t.Fatalf("LockPassword: %v", err)
+	}
+	if got := lockFor(settings.Settings{LANPassword: locked}); got != "" {
+		t.Error("the pages ask for a password while answering this machine alone")
+	}
+	if got := lockFor(settings.Settings{LANAccess: true, LANPassword: locked}); got != locked {
+		t.Error("the pages ask for nothing while answering the network")
+	}
+}

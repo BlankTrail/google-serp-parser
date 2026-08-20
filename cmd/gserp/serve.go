@@ -33,6 +33,38 @@ import (
 // answered the network would put it on every one this machine is attached to.
 const defaultServeAddr = "127.0.0.1:8080"
 
+// lanServeAddr is where it listens instead when the settings open it to the
+// network: every address this machine has, on the same port.
+const lanServeAddr = "0.0.0.0:8080"
+
+// listenOn is the address to bind, given what the caller asked for and what
+// this machine's settings say.
+//
+// A caller who named an address gets it. Nothing in a settings file should
+// quietly overrule a word on the command line — somebody who typed --addr said
+// where they wanted it, and a program that listened somewhere else would be
+// lying to them about their own instruction.
+//
+// The switch only reaches the default, and only with a password behind it. An
+// interface open to a network with nothing to ask for is the settings, the
+// queue and every result offered to whoever is on that network, so the switch
+// alone is not enough to open it: without a password the program stays on
+// loopback and says so.
+func listenOn(asked string, saved settings.Settings, out io.Writer) string {
+	if asked != defaultServeAddr {
+		return asked
+	}
+	if !saved.LANAccess {
+		return defaultServeAddr
+	}
+	if saved.LANPassword == "" {
+		_, _ = fmt.Fprintln(out,
+			"gserp: the settings open the interface to the network but hold no password for it, so it is listening on this machine only")
+		return defaultServeAddr
+	}
+	return lanServeAddr
+}
+
 // The pool a job runs on when neither the caller nor this machine's own
 // settings say otherwise. They are the run command's defaults, so a job set up
 // in the browser costs what the same job costs from the command line.
@@ -127,7 +159,10 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	// ports below are opened, which take a while: a browser opened alongside
 	// this command waits on a socket that is already there rather than being
 	// refused and shown an error page.
-	ln, err := net.Listen("tcp", opts.Addr)
+	// Read before the address is taken: where to listen is one of the things it
+	// says, and a listener already bound cannot be moved.
+	saved, _ := opts.saved(io.Discard)
+	ln, err := net.Listen("tcp", listenOn(opts.Addr, saved, out))
 	if err != nil {
 		return opts.scrubbed(err)
 	}
@@ -186,7 +221,11 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	if opts.onListen != nil {
 		opts.onListen(ln.Addr().String())
 	}
-	return pages.ServeHandler(ctx, ln, mount(pages.Handler(), programs.Handler()))
+	// Everything the browser reaches goes behind the password when the interface
+	// answers the network. The programmable half carries keys of its own and is
+	// wrapped as well: a second door into the same house is a door.
+	guarded := web.Locked(mount(pages.Handler(), programs.Handler()), lockFor(saved))
+	return pages.ServeHandler(ctx, ln, guarded)
 }
 
 // programmable builds the interface a program reads, on the history, the queue
@@ -1058,4 +1097,16 @@ func (w *warmSet) Close() error {
 		return nil
 	}
 	return pool.Close()
+}
+
+// lockFor is the password the pages ask for, or nothing when they ask for none.
+//
+// It is empty unless the interface is open to the network. On loopback the
+// person who can reach the port is the person at the machine, who has the
+// settings file and the history already.
+func lockFor(saved settings.Settings) string {
+	if !saved.LANAccess {
+		return ""
+	}
+	return saved.LANPassword
 }

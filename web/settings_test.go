@@ -951,3 +951,71 @@ func TestSaveSettings_SaysSoWhenTheWarmIdentitiesCannotBeOpened(t *testing.T) {
 		t.Errorf("the settings say %d identities are kept warm, and none could be opened", got.HotPorts)
 	}
 }
+
+func TestSaveSettings_WillNotAnswerTheNetworkWithoutAPassword(t *testing.T) {
+	// The switch is the dangerous half and the password is the whole defence,
+	// so one without the other is refused rather than saved. Without this a
+	// reader ticks a box and puts the settings, the queue and every result they
+	// have collected on the network for anyone to open.
+	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+
+	rec := postForm(t, s, settingsAt, url.Values{
+		"control_url": {"http://127.0.0.1:1"},
+		"lan_access":  {"1"},
+	})
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("the network switch was saved with no password to go with it")
+	}
+
+	after, err := settings.Load(path)
+	if err != nil {
+		t.Fatalf("reading the settings back: %v", err)
+	}
+	if after.LANAccess {
+		t.Error("the settings answer the network with no password saved")
+	}
+
+	// With a password it goes through, and what is written down is not the
+	// password.
+	rec = postForm(t, s, settingsAt, url.Values{
+		"control_url":  {"http://127.0.0.1:1"},
+		"lan_access":   {"1"},
+		"lan_password": {"a good enough password"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want the save to go through", rec.Code)
+	}
+	after, err = settings.Load(path)
+	if err != nil {
+		t.Fatalf("reading the settings back: %v", err)
+	}
+	if !after.LANAccess {
+		t.Error("the switch was not saved")
+	}
+	if after.LANPassword == "" {
+		t.Fatal("no password was written down")
+	}
+	if strings.Contains(after.LANPassword, "a good enough password") {
+		t.Error("the password itself is in the settings file")
+	}
+	if !settings.PasswordMatches(after.LANPassword, "a good enough password") {
+		t.Error("what was written down does not match the password it was made from")
+	}
+
+	// And an empty box keeps the password already saved, the way the key box
+	// does: somebody changing the port count must not unlock the interface.
+	rec = postForm(t, s, settingsAt, url.Values{
+		"control_url": {"http://127.0.0.1:1"},
+		"lan_access":  {"1"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a save that keeps the saved password", rec.Code)
+	}
+	again, err := settings.Load(path)
+	if err != nil {
+		t.Fatalf("reading the settings back: %v", err)
+	}
+	if again.LANPassword != after.LANPassword {
+		t.Error("an empty password box changed the password that was saved")
+	}
+}

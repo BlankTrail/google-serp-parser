@@ -196,6 +196,8 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 | API key | Issued in BlankTrail. Stored on this machine, never shown again |
 | Identities kept warm | Ports held open between jobs. Nought keeps none |
 | Result page | Which kind the warm identities are opened for: desktop or mobile |
+| Answer the network | Off by default — see [Running it on a server](#-running-it-on-a-server) |
+| Password | What the pages ask for from another machine |
 
 ### Proxies
 
@@ -218,6 +220,42 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 | Pages per query | Depth of pagination |
 | Country, language | Two-letter codes, e.g. `de` |
 | Deduplication | Keep everything, one row per URL, or one per host |
+
+---
+
+## 🌐 Running it on a server
+
+By default the interface answers **this machine only**: it listens on
+`127.0.0.1`, and nothing on the network can reach it. That is the right default
+because the pages carry no key of their own — they hold the settings, the queue
+and everything every job has collected, and they hand it to whoever opens them.
+
+To use the interface from another machine, open **Settings → Reaching this from
+another machine**, tick *Answer the network* and set a password. It takes effect
+at the next start, and from then on the program listens on every address this
+machine has and asks for the password before showing anything.
+
+- **It cannot be turned on without a password.** The settings refuse the switch
+  on its own, and a program started with a switch and no password stays on
+  loopback and says so in its first line.
+- **This machine is not asked.** A browser on the machine itself goes straight
+  in: a password there is a lock on a door you are already inside.
+- **The password is not encrypted in transit.** This program speaks plain HTTP,
+  so the password travels in every request and anything between can read it.
+  Use it on a network you trust, or reach the machine over a VPN or an SSH
+  tunnel.
+- What is written down is a salt and a PBKDF2-SHA256 derivation, never the
+  password. A settings file somebody photographs does not hand it over.
+
+`--addr` still wins over the setting, for the operator who wants a particular
+address:
+
+```
+gserp serve --addr 0.0.0.0:8080
+```
+
+That one opens the port without asking for anything, so put it behind something
+that does.
 
 ---
 

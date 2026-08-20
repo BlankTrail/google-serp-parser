@@ -31,6 +31,8 @@ const (
 	hotKindField = "hot_device"
 	wireField    = "port_protocol"
 	banField     = "ban_minutes"
+	lanField     = "lan_access"
+	lanKeyField  = "lan_password"
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
@@ -98,11 +100,19 @@ type settingsForm struct {
 	// Wire is how this program reaches the identities it opens: socks5 or http.
 	Wire string
 	// Ban is how long an address that failed is left out of the rotation.
-	Ban     string
-	Source  string
-	Where   string
-	Refresh string
-	Tongue  string
+	Ban string
+	// LAN says the interface answers the network rather than this machine
+	// alone, and LANPassword is what it asks for when it does. The password is
+	// empty on the way out, like the key: the page cannot show one.
+	LAN         bool
+	LANPassword string
+	// LANLocked says a password is already saved, so the page can say so
+	// without handing it over.
+	LANLocked bool
+	Source    string
+	Where     string
+	Refresh   string
+	Tongue    string
 }
 
 // settingsFormOf reads the posted settings, leaving every box as text so a box
@@ -110,16 +120,18 @@ type settingsForm struct {
 // handed back with what they typed still in it.
 func settingsFormOf(r *http.Request) settingsForm {
 	return settingsForm{
-		ControlURL: strings.TrimSpace(r.FormValue(urlField)),
-		APIKey:     strings.TrimSpace(r.FormValue(keyField)),
-		Hot:        strings.TrimSpace(r.FormValue(hotField)),
-		HotDevice:  strings.TrimSpace(r.FormValue(hotKindField)),
-		Wire:       strings.TrimSpace(r.FormValue(wireField)),
-		Ban:        strings.TrimSpace(r.FormValue(banField)),
-		Source:     strings.TrimSpace(r.FormValue(sourceField)),
-		Where:      strings.TrimSpace(r.FormValue(whereField)),
-		Refresh:    strings.TrimSpace(r.FormValue(refreshField)),
-		Tongue:     strings.TrimSpace(r.FormValue(tongueField)),
+		ControlURL:  strings.TrimSpace(r.FormValue(urlField)),
+		APIKey:      strings.TrimSpace(r.FormValue(keyField)),
+		Hot:         strings.TrimSpace(r.FormValue(hotField)),
+		HotDevice:   strings.TrimSpace(r.FormValue(hotKindField)),
+		Wire:        strings.TrimSpace(r.FormValue(wireField)),
+		Ban:         strings.TrimSpace(r.FormValue(banField)),
+		LAN:         r.FormValue(lanField) != "",
+		LANPassword: strings.TrimSpace(r.FormValue(lanKeyField)),
+		Source:      strings.TrimSpace(r.FormValue(sourceField)),
+		Where:       strings.TrimSpace(r.FormValue(whereField)),
+		Refresh:     strings.TrimSpace(r.FormValue(refreshField)),
+		Tongue:      strings.TrimSpace(r.FormValue(tongueField)),
 	}
 }
 
@@ -135,6 +147,8 @@ func formShowing(saved settings.Settings) settingsForm {
 		HotDevice:  saved.HotDevice,
 		Wire:       blanktrail.ProtocolOr(saved.PortProtocol),
 		Ban:        spellUnits(saved.Proxy.Ban, banUnit),
+		LAN:        saved.LANAccess,
+		LANLocked:  saved.LANPassword != "",
 		Source:     saved.Proxy.Kind,
 		Where:      saved.Proxy.Location,
 		Refresh:    spellUnits(saved.Proxy.Refresh, refreshUnit),
@@ -202,6 +216,24 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	// a negative or a word is a mistake.
 	next.HotPorts = b.none(f.Hot, saved.HotPorts, "settings.hot.count")
 	next.PortProtocol = blanktrail.ProtocolOr(f.Wire)
+
+	// The password, and the one rule around it: nothing is opened to the network
+	// without one. An empty box keeps the password already saved, the same way
+	// the key box does — somebody who came here to change the port count and
+	// pressed save would otherwise unlock the interface they had shut.
+	next.LANAccess = f.LAN
+	if f.LANPassword != "" {
+		locked, err := settings.LockPassword(f.LANPassword)
+		if err != nil {
+			b.complaints = append(b.complaints, "settings.lan.password.short")
+		} else {
+			next.LANPassword = locked
+		}
+	}
+	if next.LANAccess && next.LANPassword == "" {
+		b.complaints = append(b.complaints, "settings.lan.needs.password")
+		next.LANAccess = false
+	}
 	next.HotDevice = f.HotDevice
 	if next.HotDevice != "" && !blanktrail.KnownDevice(next.HotDevice) {
 		b.complaints = append(b.complaints, "settings.hot.kind")

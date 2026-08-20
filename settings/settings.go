@@ -85,9 +85,25 @@ type Settings struct {
 	// because it is the sort of thing that wants putting back without a rebuild
 	// if a service on some machine turns out to answer one and not the other.
 	// Empty is socks5.
-	PortProtocol string      `json:"port_protocol"`
-	Proxy        ProxySource `json:"proxy"`
-	Language     string      `json:"language"`
+	PortProtocol string `json:"port_protocol"`
+
+	// LANAccess opens the interface to the network this machine is on, instead
+	// of to this machine alone.
+	//
+	// It is off, and it is off because of what the interface is: the pages carry
+	// no key and ask for nothing, so a machine that answered the network by
+	// default would be handing whoever is on it the settings, the queue and
+	// everything every job has collected. On a server nobody sits at, that is
+	// exactly what is wanted — which is why it is a switch and not a rule.
+	//
+	// LANPassword is what the pages ask for once it is on: the salt and the
+	// derived key, never the password. Nothing is opened to the network without
+	// one.
+	LANAccess   bool   `json:"lan_access"`
+	LANPassword string `json:"lan_password"`
+
+	Proxy    ProxySource `json:"proxy"`
+	Language string      `json:"language"`
 }
 
 // DefaultControlURL is where the identities are asked for on a machine where

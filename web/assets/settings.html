@@ -77,6 +77,28 @@
 <p class="empty">{{.T "settings.hot.why"}}</p>
 </fieldset>
 
+{{/* Reaching the interface from another machine. It is off, and it is off
+     because of what the interface is: the pages ask for nothing, so a program
+     answering the network would hand whoever is on it the settings, the queue
+     and everything every job has collected. */}}
+<fieldset>
+<legend>{{.T "settings.lan"}}</legend>
+<div class="row">
+<div class="field">
+<label for="lan_access">
+<input id="lan_access" name="lan_access" type="checkbox" value="1"{{if .Form.LAN}} checked{{end}}>
+{{.T "settings.lan.open"}}</label>
+</div>
+<div class="field">
+<label for="lan_password">{{.T "settings.lan.password"}}</label>
+<input id="lan_password" name="lan_password" type="password" value="" autocomplete="new-password">
+</div>
+</div>
+{{if .Form.LANLocked}}<p class="empty">{{.T "settings.lan.saved"}}</p>{{end}}
+<p class="empty">{{.T "settings.lan.why"}}</p>
+<p class="empty">{{.T "settings.lan.plain"}}</p>
+</fieldset>
+
 <fieldset>
 <legend>{{.T "settings.language"}}</legend>
 <div class="field">
