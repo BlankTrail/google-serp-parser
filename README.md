@@ -25,6 +25,12 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 
 ## 📜 Recent changes
 
+- **VPN gateways held in BlankTrail** can be used instead of an address list,
+  grouped by subscription and ticked one, one subscription, or all at once,
+  each showing the round trip the service last measured to it.
+- **Threads per proxy** is a setting now. One `ip:port` or one gateway is one
+  upstream however many ports sit on it, and threads that find none free wait
+  their turn where the status screen can be seen counting them.
 - Identities are now reached over **SOCKS5**, so QUIC and far-side DNS work
   through them. HTTP is still selectable as a fallback.
 - New **Proxies** tab: live pool figures, failures broken down by kind,
@@ -63,7 +69,8 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 
 - Browser interface — no command line needed for anything.
 - **Status** screen: the job in flight, elapsed against estimated, share
-  answered, what came back instead, ports held and ports set aside, queue.
+  answered, what came back instead, ports held and ports set aside, threads
+  waiting for a free proxy, queue.
 - **Proxies** screen: addresses in the list, banned right now, ports open and
   warm; requests, attempts, failure share, address changes; failures broken
   down by kind, with counters you can zero at any moment.
@@ -78,12 +85,21 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 - Formats accepted: `host:port`, `host:port:user:password`,
   `user:password:host:port`, `user:password@host:port`. A scheme in front
   (`socks5://`, `http://`) is optional; socks5 is assumed.
+- **VPN gateways held in BlankTrail** as a third source. The program asks the
+  service what it holds and lays the configurations out by the subscription
+  they arrived with; tick one, tick a whole subscription, or tick the lot. Each
+  shows what it answered when the service last measured it — a number, or the
+  word for a gateway that did not answer, or for one nobody has measured.
 - Identities are kept **warm between jobs**: a cold identity meets a challenge
   and answers minutes later, a warm one answers in seconds.
 - A failed address is banned for a set time and comes back on its own; the ban
   never covers more than three quarters of the list, so the pool cannot run out
   of addresses to try.
 - Load is spread evenly: every address is used once before any is used twice.
+- **Threads per proxy**, one by default. A unique `ip:port` is one upstream and
+  so is one gateway, even where several ports sit on the same machine. Threads
+  that find no free upstream wait their turn rather than doubling up on one,
+  and the status screen says how many are waiting.
 - Failures counted apart, because the remedy differs — a dead address, a proxy
   port that never answered, a relay refusal, a wall from Google, our own
   timeout.
@@ -223,11 +239,13 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 | Setting | What it is |
 |---|---|
-| Address list | None, a file, or a URL |
+| Read from | Nothing, a file, a URL, or the VPN gateways held in BlankTrail |
 | Path or address | Where the list is |
 | Re-read every, minutes | How often the list is read again. Nought reads it once |
 | Ban for, minutes | How long a failed address is left out. Nought is sixty |
+| Threads per proxy | How many threads share one address or one gateway. One by default |
 | Connection to a port | SOCKS5 (default) or HTTP |
+| Gateways | Which stored configurations to use, when the source is the gateways |
 
 ### Per job
 
