@@ -13,6 +13,11 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 > shell containing no results. Results appear only after the solver has carried
 > the session through the challenge. A BlankTrail licence including **Challenge
 > Breaker** is a hard requirement, not a recommendation.
+>
+> **Challenge Breaker passes reCAPTCHA.** Counted on a live run: 721 of 821
+> challenges solved — 88 per cent — and the identity carries on working
+> afterwards, so the next request through it comes back in seconds rather than
+> meeting the wall again.
 
 ![The status screen: a job in flight, what it has settled, the pool and the queue](assets/screenshots/status-en.png)
 
@@ -28,9 +33,10 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
   none — the pool it runs on is no longer paced by the standing set's numbers.
 - A restart of the proxy service no longer bans the whole address list: a port
   that never answered is told apart from an address that failed.
-- Measured on a live 15 000-address list: **500+ queries a minute at 100
-  threads, 98% of requests answered.** Same pool, same hardware — the reference
-  test client does 227.
+- Measured on a live 15 000-address list of middling datacentre proxies:
+  **500–800 queries a minute at 100 threads, peaking above 1 300, 99% of
+  queries answered.** Same pool, same hardware — the reference test client
+  does 227.
 
 ---
 
@@ -337,20 +343,28 @@ go test ./...
 
 ## 📈 Performance
 
-Measured on a live backconnect list of 15 000 addresses, 100 threads,
-300 identities, a real job of 400 000 phrases:
+Measured on a live backconnect list of 15 000 addresses — ordinary datacentre
+proxies of middling quality, roughly one address in twelve answering at any
+moment — with 100 threads and 300 identities:
 
 | | |
 |---|---|
-| Queries a minute, sustained | **500+** |
-| Requests answered | **98%** |
-| Attempts per result | 1.19 |
+| Queries a minute, sustained | **500–800** |
+| Queries a minute, peak | **1 300+** |
+| Queries answered | **99%** |
+| Attempts on the wire per query | 1.0 |
+| Failed attempts, warmed pool | 7% |
 | Time a thread spends waiting for an identity | 0 |
 
-What these numbers actually depend on is your address list and your BlankTrail
-licence. A cold pool starts slow — every identity pays for one challenge — and
+That is the whole point of the arrangement: the list is not a good one, and it
+does not have to be. A dead address costs about two seconds and the next
+request goes through another; an identity that has answered keeps answering,
+and a challenge is paid for once rather than on every request.
+
+A cold pool starts slow — every identity pays for its one challenge — and
 climbs for the first five to ten minutes. That is the shape to expect, not a
-fault.
+fault. Beyond that, what these numbers depend on is your address list and your
+BlankTrail licence.
 
 ---
 
