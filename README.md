@@ -34,7 +34,7 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 - A restart of the proxy service no longer bans the whole address list: a port
   that never answered is told apart from an address that failed.
 - Measured on a live 15 000-address list of middling datacentre proxies:
-  **500–800 queries a minute at 100 threads, peaking above 1 300, 99% of
+  **500–800 queries a minute at 100 threads, peaking at 1 500, 99% of
   queries answered.** Same pool, same hardware — the reference test client
   does 227.
 
@@ -350,7 +350,7 @@ moment — with 100 threads and 300 identities:
 | | |
 |---|---|
 | Queries a minute, sustained | **500–800** |
-| Queries a minute, peak | **1 300+** |
+| Queries a minute, peak | **1 500** |
 | Queries answered | **99%** |
 | Attempts on the wire per query | 1.0 |
 | Failed attempts, warmed pool | 7% |
