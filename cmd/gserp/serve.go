@@ -514,7 +514,16 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	cfg.Client = client
 	cfg.CA = report.CA
 
-	if saved.Proxy.Kind != "" {
+	if saved.Proxy.Kind == settings.ProxyGateways {
+		// The gateways are asked for now rather than kept: what is behind a name
+		// lives in BlankTrail and can be changed there between one job and the
+		// next.
+		ch, err := o.gatewayChannel(ctx, client, saved)
+		if err != nil {
+			return nil, o.scrubbed(err)
+		}
+		cfg.Channels = []blanktrail.Channel{ch}
+	} else if saved.Proxy.Kind != "" {
 		// The list is loaded here and reloaded on its own interval afterwards, so a
 		// list that changes during a run is a list this pool follows.
 		// How long a failed address is left out is the operator's, because how
@@ -1110,4 +1119,49 @@ func lockFor(saved settings.Settings) string {
 		return ""
 	}
 	return saved.LANPassword
+}
+
+// gatewayChannel builds the egress channel for a job that runs on stored VPN
+// gateways.
+//
+// The names chosen are checked against what the service holds now. A name that
+// has gone is passed over and said out loud: a job started on nine of the ten
+// gateways somebody ticked is a job that runs, and one refused over the tenth is
+// an evening lost to a configuration deleted last week. Nothing to run on at all
+// is a different matter and is an error.
+func (o serveOptions) gatewayChannel(ctx context.Context, client *blanktrail.Client,
+	saved settings.Settings) (blanktrail.Channel, error) {
+	list, err := client.Gateways(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !list.Available {
+		return nil, fmt.Errorf("blanktrail: the gateways are not usable: %s", list.Reason)
+	}
+	have := map[string]bool{}
+	for _, g := range list.Gateways {
+		have[g.Name] = true
+	}
+	var chosen []string
+	gone := 0
+	for _, name := range saved.Proxy.Gateways {
+		if have[name] {
+			chosen = append(chosen, name)
+			continue
+		}
+		gone++
+	}
+	if gone > 0 {
+		o.logger(os.Stderr).Info("some chosen gateways are no longer on the service",
+			"missing", gone, "running on", len(chosen))
+	}
+	if len(chosen) == 0 {
+		return nil, errors.New("blanktrail: none of the chosen gateways are on the service any more")
+	}
+	opts := []blanktrail.RotorOption{}
+	if saved.Proxy.Ban > 0 {
+		opts = append(opts, blanktrail.WithRest(saved.Proxy.Ban))
+	}
+	rotor := blanktrail.NewStaticRotor(blanktrail.GatewayUpstreams(chosen), opts...)
+	return blanktrail.NewGatewayListChannel("gateways", rotor), nil
 }

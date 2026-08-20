@@ -34,6 +34,7 @@ const (
 	lanField     = "lan_access"
 	lanKeyField  = "lan_password"
 	perUpField   = "threads_per_upstream"
+	gatewayField = "gateway"
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
@@ -44,9 +45,10 @@ const (
 // empty one is no list at all, which is how a list is turned off: a box left
 // blank cannot mean both "unchanged" and "none".
 const (
-	sourceNone = ""
-	sourceFile = "file"
-	sourceURL  = "url"
+	sourceNone     = ""
+	sourceFile     = "file"
+	sourceURL      = "url"
+	sourceGateways = settings.ProxyGateways
 )
 
 // refreshUnit is what the one duration box on this page is read in. A person
@@ -104,6 +106,8 @@ type settingsForm struct {
 	Ban string
 	// PerUpstream is how many identities may work through one egress at once.
 	PerUpstream string
+	// Gateways are the stored VPN configurations ticked on the proxy screen.
+	Gateways []string
 	// LAN says the interface answers the network rather than this machine
 	// alone, and LANPassword is what it asks for when it does. The password is
 	// empty on the way out, like the key: the page cannot show one.
@@ -130,6 +134,7 @@ func settingsFormOf(r *http.Request) settingsForm {
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
 		Ban:         strings.TrimSpace(r.FormValue(banField)),
 		PerUpstream: strings.TrimSpace(r.FormValue(perUpField)),
+		Gateways:    ticked(r, gatewayField),
 		LAN:         r.FormValue(lanField) != "",
 		LANPassword: strings.TrimSpace(r.FormValue(lanKeyField)),
 		Source:      strings.TrimSpace(r.FormValue(sourceField)),
@@ -152,6 +157,7 @@ func formShowing(saved settings.Settings) settingsForm {
 		Wire:        blanktrail.ProtocolOr(saved.PortProtocol),
 		Ban:         spellUnits(saved.Proxy.Ban, banUnit),
 		PerUpstream: strconv.Itoa(atLeastOne(saved.ThreadsPerUpstream)),
+		Gateways:    saved.Proxy.Gateways,
 		LAN:         saved.LANAccess,
 		LANLocked:   saved.LANPassword != "",
 		Source:      saved.Proxy.Kind,
@@ -253,6 +259,14 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	switch f.Source {
 	case sourceNone:
 		next.Proxy = settings.ProxySource{}
+	case sourceGateways:
+		// A set of gateways has no location and no interval: what is behind each
+		// name lives in the service and is asked for when a job starts.
+		next.Proxy = settings.ProxySource{
+			Kind:     sourceGateways,
+			Ban:      b.span(f.Ban, saved.Proxy.Ban, banUnit, "settings.ban.length"),
+			Gateways: f.Gateways,
+		}
 	case sourceFile, sourceURL:
 		next.Proxy = settings.ProxySource{
 			Kind:     f.Source,
@@ -477,6 +491,7 @@ func sourcesOffered(current string) []sourceOption {
 		{Value: sourceNone, Key: "settings.source.none"},
 		{Value: sourceFile, Key: "settings.source.file"},
 		{Value: sourceURL, Key: "settings.source.url"},
+		{Value: sourceGateways, Key: "settings.source.gateways"},
 	}
 	for i := range offered {
 		offered[i].Current = offered[i].Value == current
@@ -586,3 +601,15 @@ func (s *Server) tongue() Lang {
 // reader is holding a page open waiting for the answer: a save that never comes
 // back is worse than one that says it could not.
 const standingGrace = 2 * time.Minute
+
+// ticked is every value of a box that may be ticked more than once.
+//
+// The form has to have been parsed for this to see anything, which the handlers
+// do by reading a value first; a box read this way and never any other would
+// come back empty on a form nobody had touched.
+func ticked(r *http.Request, name string) []string {
+	if r.Form == nil {
+		_ = r.ParseForm()
+	}
+	return append([]string(nil), r.Form[name]...)
+}

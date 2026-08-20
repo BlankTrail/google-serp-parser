@@ -87,6 +87,18 @@ type proxiesPage struct {
 	// page offers them, and Complaints is what was wrong with what was typed.
 	Sources    []sourceOption
 	Complaints []string
+
+	// OnGateways says the job runs on stored VPN configurations rather than on
+	// a list of addresses, which is what decides whether the rest of this is
+	// drawn at all.
+	OnGateways bool
+	// Groups are the configurations the service holds, by subscription, with
+	// whatever is already chosen ticked. Missing counts the ones chosen that the
+	// service no longer has, and GatewayFault is why the list could not be asked
+	// for.
+	Groups       []gatewayGroup
+	Missing      int
+	GatewayFault string
 }
 
 // failureRow is one kind of failure and how often it happened.
@@ -125,6 +137,16 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 		view.Form.Source = sourceFile
 	}
 	view.Sources = sourcesOffered(view.Form.Source)
+	view.OnGateways = view.Form.Source == sourceGateways
+	if view.OnGateways {
+		if list, err := s.askForGateways(r.Context(), saved); err != nil {
+			view.GatewayFault = "proxies.gateways.unreachable"
+		} else if !list.Available {
+			view.GatewayFault = "proxies.gateways.unavailable"
+		} else {
+			view.Groups, view.Missing = gatewaysOffered(list, saved.Proxy.Gateways)
+		}
+	}
 	view.page = s.frame(r, lang, "proxies.title", proxiesAt)
 	if view.Running {
 		view.Refresh = proxiesRefresh.Milliseconds()
@@ -151,6 +173,7 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 	form.Wire = strings.TrimSpace(r.FormValue(wireField))
 	form.Ban = strings.TrimSpace(r.FormValue(banField))
 	form.PerUpstream = strings.TrimSpace(r.FormValue(perUpField))
+	form.Gateways = ticked(r, gatewayField)
 
 	next, faults := form.onto(saved)
 	if len(faults) > 0 || s.settingsPath == "" {

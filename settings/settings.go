@@ -25,8 +25,12 @@ var ErrUnreadable = errors.New("settings: the file is there and cannot be read a
 const tailLen = 4
 
 // ProxySource is where the addresses come from and how often to look again.
+// ProxyGateways is the source kind that egresses through stored VPN gateways
+// rather than through a list of addresses.
+const ProxyGateways = "gateways"
+
 type ProxySource struct {
-	Kind     string        `json:"kind"`     // "file" | "url" | ""
+	Kind     string        `json:"kind"`     // "file" | "url" | "gateways" | ""
 	Location string        `json:"location"` // path or address
 	Refresh  time.Duration `json:"refresh"`
 	// Ban is how long an address that failed is left out of the rotation.
@@ -37,6 +41,16 @@ type ProxySource struct {
 	// property of the list rather than of this program. Nought is the documented
 	// default.
 	Ban time.Duration `json:"ban"`
+
+	// Gateways are the stored VPN configurations a job egresses through, by
+	// name, when Kind is "gateways".
+	//
+	// Names rather than the configurations themselves: what is behind a name
+	// lives in BlankTrail, is edited there, and a copy kept here would be a
+	// second answer to what a gateway is. A name that has since gone from the
+	// server is passed over with a word on the screen — a job runs on what is
+	// there rather than refusing to start over one that is not.
+	Gateways []string `json:"gateways"`
 }
 
 // Settings is everything the interface can set.

@@ -1555,7 +1555,21 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	}
 	pt.setEgress(next)
 	if next.Gateway != "" {
-		// A gateway hop is chosen at open time and cannot be swapped live.
+		// A gateway is chosen when the port is opened and cannot be swapped on a
+		// live one. Recording the new one and returning was the whole of what
+		// happened here, which left the port still going through the gateway it
+		// had just been taken off while the pool believed otherwise.
+		//
+		// Marking it broken is how a gateway is actually changed: the next
+		// acquire closes the port and opens it again on whatever the channel
+		// hands out then. It costs the identity — a reopened port is a cold one
+		// — and that cost is the reason to leave a gateway later rather than
+		// sooner, not a reason to pretend it moved.
+		pt.mu.Lock()
+		pt.broken = true
+		pt.mu.Unlock()
+		pt.base.CloseIdleConnections()
+		p.told(num, "changed gateway")
 		return nil
 	}
 	if err := p.cl.SetUpstream(ctx, num, next.Upstream); err != nil {

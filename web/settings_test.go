@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -286,7 +287,7 @@ func TestSaveSettings_HandsTheJobsAfterThisOneTheConnectionItJustWrote(t *testin
 		return asked
 	})
 	built, _ := opener.asked()
-	if built != loaded(t, path) {
+	if !reflect.DeepEqual(built, loaded(t, path)) {
 		t.Errorf("the pool was raised from %+v, and %+v was saved", built, loaded(t, path))
 	}
 	if built.ControlURL != "http://127.0.0.1:2" || built.APIKey != "keep-me" {
@@ -376,7 +377,7 @@ func TestSaveSettings_KeepsTheListInTheUnitsItWasGiven(t *testing.T) {
 	want := settings.ProxySource{
 		Kind: "url", Location: "https://example.test/list", Refresh: 15 * time.Minute,
 	}
-	if got.Proxy != want {
+	if !reflect.DeepEqual(got.Proxy, want) {
 		t.Errorf("the list is %+v, want %+v", got.Proxy, want)
 	}
 }
@@ -390,7 +391,7 @@ func TestSaveSettings_TakesNoSourceToMeanNoListRatherThanNoChange(t *testing.T) 
 	})
 	postForm(t, s, settingsAt, url.Values{"source": {""}, "source_at": {"list.txt"}})
 
-	if got := loaded(t, path); got.Proxy != (settings.ProxySource{}) {
+	if got := loaded(t, path); !reflect.DeepEqual(got.Proxy, settings.ProxySource{}) {
 		t.Errorf("the list is still %+v after being switched off", got.Proxy)
 	}
 }

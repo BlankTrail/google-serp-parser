@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestSave_AndLoadBringBackWhatWasPutIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("came back as %+v, want %+v", got, want)
 	}
 }
@@ -51,7 +52,7 @@ func TestLoad_TakesAMissingFileToMeanNothingHasBeenSetYet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load of a file that is not there: %v", err)
 	}
-	if got != Defaults() {
+	if !reflect.DeepEqual(got, Defaults()) {
 		t.Errorf("came back as %+v, want the defaults", got)
 	}
 }

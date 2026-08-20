@@ -114,6 +114,28 @@
 </select>
 </div>
 </div>
+{{/* The configurations the service holds, ticked one by one or by the
+     subscription they arrived with. They are drawn only when the saved source
+     is the gateways: this screen redraws itself every few seconds while a job
+     runs, and asking the service on every redraw would put a request behind
+     each of them. Choosing the gateways in the box above and saving is what
+     brings the list. */}}
+{{if .OnGateways}}
+{{if .GatewayFault}}<p class="empty">{{.T .GatewayFault}}</p>{{end}}
+{{range .Groups}}
+<fieldset>
+<legend>{{if .Name}}{{.Name}}{{else}}{{$.T "proxies.gateways.loose"}}{{end}} — {{.Chosen}}/{{.Offered}}</legend>
+{{range .Items}}
+<div class="field">
+<label for="gw-{{.Name}}">
+<input id="gw-{{.Name}}" name="gateway" type="checkbox" value="{{.Name}}"{{if .Chosen}} checked{{end}}>
+{{.Name}} <span class="empty">{{.Kind}}</span></label>
+</div>
+{{end}}
+</fieldset>
+{{end}}
+{{if .Missing}}<p class="empty">{{.T "proxies.gateways.missing"}} {{.Missing}}</p>{{end}}
+{{end}}
 <div class="actions">
 <button type="submit">{{.T "settings.save"}}</button>
 </div>
