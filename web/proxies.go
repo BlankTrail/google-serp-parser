@@ -65,6 +65,11 @@ type proxiesPage struct {
 	Rotations   int64
 	Quarantines int64
 	Revivals    int64
+	// Reopenings counts ports opened again on the address or gateway they
+	// already had. It stands apart from Rotations because it is the opposite
+	// reading: nothing was wrong with where the port was sending its traffic —
+	// the port, or the tunnel behind it, had stopped being there.
+	Reopenings int64
 	// Rejections counts answers that arrived and were refused as unusable. They
 	// are not failures of the pool — the request got through — and a run whose
 	// rejections climb while its failures do not is being walled rather than
@@ -280,6 +285,7 @@ func (s *Server) proxiesOf() proxiesPage {
 	view.Rotations = st.EgressRotations
 	view.Quarantines = st.Quarantines
 	view.Revivals = st.Revivals
+	view.Reopenings = st.Reopenings
 	view.Rejections = st.Rejections
 	if facts.Pool != nil {
 		view.Addresses, view.Resting = facts.Pool.Addresses()

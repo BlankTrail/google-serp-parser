@@ -2460,3 +2460,106 @@ func TestStatsWaiting_SaysHowManyAreStandingInTheQueue(t *testing.T) {
 		t.Errorf("%d callers are still counted as waiting once the queue cleared", got)
 	}
 }
+
+// gatewayPool stands a pool whose ports run through named gateways.
+func gatewayPool(t *testing.T, fake *fakebt.Server, clock *fakeClock, names ...string) *Pool {
+	t.Helper()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.Channels = []Channel{NewGatewayListChannel("gateways", NewStaticRotor(GatewayUpstreams(names)))}
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { p.Close() })
+	return p
+}
+
+func TestPool_RestartsAGatewayTunnelBeforeCondemningTheGateway(t *testing.T) {
+	// The service runs a gateway only while a port holds it, so a tunnel that
+	// has died comes back by opening a port with it again. Reaching straight for
+	// the ban walked a fifteen-gateway list down to four in under an hour, and
+	// the four that were left carried fifty threads.
+	p := gatewayPool(t, fakebt.New(t), newFakeClock(), "one", "two", "three")
+	pt := p.ports[0]
+	was := pt.egress()
+
+	if p.leaveAddress(pt.num) {
+		t.Fatal("one miss left the gateway; every address gets two")
+	}
+	if p.leaveAddress(pt.num) {
+		t.Error("two misses left the gateway rather than restarting its tunnel")
+	}
+	pt.mu.Lock()
+	broken, repair := pt.broken, pt.repair
+	pt.mu.Unlock()
+	if !broken || !repair {
+		t.Errorf("the port was not marked for reopening: broken=%v repair=%v", broken, repair)
+	}
+	if now := pt.egress(); now != was {
+		t.Errorf("the restart moved the port to %v, want the same gateway %v", now, was)
+	}
+
+	// Missing again after the restart is what condemns it: one restart per
+	// egress, or a gateway that is really gone is restarted forever.
+	if p.leaveAddress(pt.num) {
+		t.Fatal("the count did not start again after the restart")
+	}
+	if !p.leaveAddress(pt.num) {
+		t.Error("a gateway that missed again after its restart was not left")
+	}
+}
+
+func TestPool_ForgetsTheRestartOnceTheGatewayCarriesAgain(t *testing.T) {
+	// A gateway allowed one restart forever would be condemned on the next dead
+	// tunnel months later. A success is what says the tunnel is up.
+	p := gatewayPool(t, fakebt.New(t), newFakeClock(), "one", "two")
+	pt := p.ports[0]
+
+	p.leaveAddress(pt.num)
+	p.leaveAddress(pt.num) // restarted
+	p.attemptSucceeded(pt.num)
+
+	p.leaveAddress(pt.num)
+	if p.leaveAddress(pt.num) {
+		t.Error("the gateway was left rather than restarted again after it had carried a request")
+	}
+}
+
+func TestPool_ReopensAPortOnTheGatewayItAlreadyHas(t *testing.T) {
+	// The repair is "open this port again", not "give me another address". Asked
+	// the channel for the next one, every reopening would move gateway and the
+	// restart would be indistinguishable from leaving.
+	fake := fakebt.New(t)
+	p := gatewayPool(t, fake, newFakeClock(), "one", "two", "three")
+	pt := p.ports[0]
+	was := pt.egress()
+
+	p.reopenPort(pt.num)
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer l.Release()
+
+	if now := pt.egress(); now != was {
+		t.Errorf("the reopened port came back on %v, want the gateway it had, %v", now, was)
+	}
+	if got := p.Stats().Reopenings; got != 1 {
+		t.Errorf("reopenings counted %d, want 1", got)
+	}
+}
+
+func TestPool_CountsAGatewayChangeAsAnAddressChange(t *testing.T) {
+	// Uncounted, the screen reported nought address changes through a run that
+	// was changing gateway on every port — which is how a starved pool looked
+	// like an idle one.
+	p := gatewayPool(t, fakebt.New(t), newFakeClock(), "one", "two")
+	pt := p.ports[0]
+
+	if err := p.RotateEgressFor(context.Background(), pt.num); err != nil {
+		t.Fatalf("RotateEgressFor: %v", err)
+	}
+	if got := p.Stats().EgressRotations; got != 1 {
+		t.Errorf("address changes counted %d after a gateway change, want 1", got)
+	}
+}

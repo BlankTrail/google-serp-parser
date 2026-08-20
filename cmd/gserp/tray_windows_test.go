@@ -52,13 +52,42 @@ func TestTrayWindow_IsMadeAndCanBeFoundByTheClassItRegisters(t *testing.T) {
 	}
 
 	// And it is a window this program can be asked for by the name it registered.
-	// The class belongs to this program's module, so this is a question only this
-	// process can ask and only this process is meant to.
-	found, _, _ := procFindWindow.Call(uintptr(unsafe.Pointer(class)), 0)
+	//
+	// The search has to be narrowed to this process. A class name is not private
+	// to the module that registered it: FindWindow walks every top-level window
+	// in the session and answers the first of that class it meets, so a copy of
+	// this program already running in the notification area answers instead —
+	// which failed this test on a developer's machine for no fault of the code.
+	found := trayWindowOfThisProcess(t, class)
 	if found != uintptr(wnd) {
-		t.Errorf("the system finds %v under the registered class, and the window made is %v", found, wnd)
+		t.Errorf("the system finds %v of this process under the registered class, and the window made is %v", found, wnd)
 	}
 }
+
+// trayWindowOfThisProcess is the window of the given class belonging to this
+// process, or nought when there is none.
+func trayWindowOfThisProcess(t *testing.T, class *uint16) uintptr {
+	t.Helper()
+	mine := uintptr(windows.GetCurrentProcessId())
+	var prev uintptr
+	for {
+		found, _, _ := procFindWindowEx.Call(0, prev, uintptr(unsafe.Pointer(class)), 0)
+		if found == 0 {
+			return 0
+		}
+		var owner uint32
+		_, _, _ = procGetWindowThreadProcessId.Call(found, uintptr(unsafe.Pointer(&owner)))
+		if uintptr(owner) == mine {
+			return found
+		}
+		prev = found
+	}
+}
+
+var (
+	procFindWindowEx             = user32.NewProc("FindWindowExW")
+	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+)
 
 func TestTrayIcon_GoesUpInTheNotificationAreaAndComesBackDown(t *testing.T) {
 	// The window the icon talks through is invisible, so this is the only step

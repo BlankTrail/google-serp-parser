@@ -360,3 +360,13 @@ func TestSaveProxies_WritesDownHowManyThreadsOneEgressCarries(t *testing.T) {
 			after.ThreadsPerUpstream)
 	}
 }
+
+func TestProxies_ShowsHowManyPortsWereOpenedAgain(t *testing.T) {
+	// A port opened again on the address it already had is the opposite reading
+	// from a port moved to another address, and a screen that showed only the
+	// second reported nought while every port in the job was being reopened.
+	page := get(t, testServer(t), proxiesAt).Body.String()
+	if !strings.Contains(page, `id="reopenings"`) {
+		t.Error("the proxy screen never says how many ports were opened again")
+	}
+}

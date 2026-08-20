@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -77,6 +78,7 @@ type fakeRemedy struct {
 	exhaustedCalls int
 	waits          []time.Duration
 
+	reopened   int
 	markedDead int
 	// keeps says the port's address has answered before, so a first miss is a
 	// hiccup rather than a verdict.
@@ -96,6 +98,7 @@ func (r *fakeRemedy) attemptFailedStatus(port, _ int) bool    { return r.attempt
 func (r *fakeRemedy) attemptSucceeded(int)                    { r.successes++ }
 func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return nil }
 func (r *fakeRemedy) markBadEgress(int)                       { r.markedBad++ }
+func (r *fakeRemedy) reopenPort(int)                          { r.reopened++ }
 func (r *fakeRemedy) markDeadEgress(int)                      { r.markedDead++ }
 
 func (r *fakeRemedy) leaveAddress(int) bool {
@@ -623,5 +626,31 @@ func TestLadder_NamesEveryFailureItMeetsAndNoneOfTheSuccesses(t *testing.T) {
 	drainAndClose(resp)
 	if len(rem.kinds) != 0 {
 		t.Errorf("an answer that succeeded was counted as %v", rem.kinds)
+	}
+}
+
+func TestLadder_OpensAPortAgainWhenItsOwnListenerHasGone(t *testing.T) {
+	// A restart of the proxy service leaves every port in a running job with a
+	// number nothing is listening on. Nothing else in the pool ever looks at a
+	// port again on its own, so without this the job goes on dialling a socket
+	// that is not there until somebody notices — which on a live run was every
+	// port, for the rest of the run.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		func() (*http.Response, error) {
+			return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+		},
+	}}
+	rem := &fakeRemedy{retries: 3}
+	l := &ladder{rt: rt, port: 20090, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatal("a dial that failed came back as a success")
+	}
+	if rem.reopened != 1 {
+		t.Errorf("the port was asked to reopen %d times, want once", rem.reopened)
+	}
+	// And the address is still blameless: it carried nothing, so it did nothing.
+	if rem.markedDead != 0 || rem.rotations != 0 {
+		t.Errorf("the address was blamed for a port that never answered: dead=%d rotations=%d", rem.markedDead, rem.rotations)
 	}
 }

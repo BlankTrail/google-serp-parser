@@ -292,9 +292,19 @@ type poolPort struct {
 	leased      bool
 	quarantined bool
 	broken      bool // renewal closed it but could not reopen it
-	failures    int  // consecutive failed attempts; any success clears it
-	requests    int
-	strikes     int
+	// repair says the next reopening keeps the egress the port already has,
+	// rather than taking the next one the channel offers. It is what "open this
+	// port again as it is" means: a listener that has gone needs opening, not
+	// another address, and a gateway whose tunnel has died is started again by
+	// opening a port with it.
+	repair bool
+	// restarted says this port has already had its gateway restarted once for the
+	// egress it holds, so a gateway that goes on missing is condemned rather than
+	// restarted forever. Any success clears it.
+	restarted bool
+	failures  int // consecutive failed attempts; any success clears it
+	requests  int
+	strikes   int
 	// quarantinedAt is when the quarantine began, and is zero while the port is
 	// not quarantined. revivals counts how many times the port has been offered
 	// another egress to come back on.
@@ -365,6 +375,12 @@ type Stats struct {
 	EgressRotations  int64
 	Renewals         int64
 	Quarantines      int64
+
+	// Reopenings counts ports opened again as they were, keeping their egress. It
+	// is not a rotation and must not be counted as one: nothing was wrong with
+	// where the port was sending its traffic — the port itself, or the tunnel
+	// behind it, had stopped being there.
+	Reopenings int64
 
 	// Rejections counts answers a caller handed back as unusable even though the
 	// request carrying them succeeded. A run whose rejections climb while its
@@ -1567,8 +1583,16 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 		// sooner, not a reason to pretend it moved.
 		pt.mu.Lock()
 		pt.broken = true
+		pt.repair = false
+		pt.restarted = false
 		pt.mu.Unlock()
 		pt.base.CloseIdleConnections()
+		// Counted here, or the screen reports nought address changes through a
+		// run that changed gateway on every port — which is how a pool that had
+		// benched three quarters of its gateways looked idle rather than starved.
+		p.mu.Lock()
+		p.stats.EgressRotations++
+		p.mu.Unlock()
 		p.told(num, "changed gateway")
 		return nil
 	}
@@ -1592,6 +1616,26 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	p.mu.Unlock()
 	p.told(num, "changed address")
 	return nil
+}
+
+// reopenPort marks a port to be closed and opened again exactly as it is,
+// keeping the egress it holds. The next acquire does the work.
+//
+// It is the remedy for the two failures that are not the address's fault: a
+// listener on this machine that has stopped answering — which is what a restart
+// of the proxy service leaves behind, and which nothing else in the pool ever
+// looks at again — and a gateway whose tunnel has died, since the service runs
+// a gateway only while a port holds it.
+func (p *Pool) reopenPort(num int) {
+	pt := p.port(num)
+	if pt == nil {
+		return
+	}
+	pt.mu.Lock()
+	pt.broken = true
+	pt.repair = true
+	pt.mu.Unlock()
+	p.told(num, "reopening")
 }
 
 // leaveAddress records that a request did not arrive and says whether this port
@@ -1619,9 +1663,27 @@ func (p *Pool) leaveAddress(num int) bool {
 		return false
 	}
 	pt.mu.Lock()
-	defer pt.mu.Unlock()
 	pt.failures++
-	return pt.failures >= 2
+	leave := pt.failures >= 2
+	// A gateway that has stopped carrying is not an address that is gone. The
+	// service runs a gateway only while a port holds it, so a tunnel that has died
+	// comes back by opening a port with it again — and a list of fifteen gateways
+	// cannot afford to put one away for hours over a tunnel that needed opening.
+	// The restart is spent once per egress: a gateway that misses again after it
+	// is condemned like any other address.
+	restart := leave && pt.eg.Gateway != "" && !pt.restarted
+	if restart {
+		pt.restarted = true
+		pt.failures = 0
+		pt.broken = true
+		pt.repair = true
+		leave = false
+	}
+	pt.mu.Unlock()
+	if restart {
+		p.told(num, "restarting the gateway")
+	}
+	return leave
 }
 
 // told reports a change to an identity that no request asked for, so a trace
@@ -1699,6 +1761,9 @@ func (p *Pool) attemptSucceeded(num int) {
 	}
 	pt.mu.Lock()
 	pt.failures = 0
+	// The gateway is carrying again, so the one restart it is allowed is its to
+	// spend again the next time its tunnel dies.
+	pt.restarted = false
 	pt.mu.Unlock()
 }
 
@@ -1760,6 +1825,7 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 
 	pt.mu.Lock()
 	broken := pt.broken
+	repair := pt.repair
 	byCount := p.cfg.RenewAfterRequests > 0 && pt.requests >= p.cfg.RenewAfterRequests
 	byTime := p.cfg.RenewAfterInterval > 0 && now.Sub(pt.renewedAt) >= p.cfg.RenewAfterInterval
 	pt.mu.Unlock()
@@ -1770,11 +1836,17 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 		return nil
 	}
 
+	// A repair opens the port on the egress it already has. Asking the channel for
+	// the next one would answer a different address every time, which turns "this
+	// tunnel needs opening again" into "leave this gateway" and walks a short list
+	// in minutes.
 	eg := pt.egress()
-	if next, err := pt.ch.Renew(ctx, eg); err == nil {
-		eg = next
-	} else if !errors.Is(err, ErrRenewUnsupported) {
-		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: egress: %w", pt.num, err))
+	if !repair {
+		if next, err := pt.ch.Renew(ctx, eg); err == nil {
+			eg = next
+		} else if !errors.Is(err, ErrRenewUnsupported) {
+			return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: egress: %w", pt.num, err))
+		}
 	}
 
 	// Past this point the port is torn down, so every failure leaves it closed.
@@ -1821,9 +1893,16 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	pt.renewedAt = now
 	pt.session++
 	pt.answered = false
+	pt.repair = false
+	if !repair {
+		pt.restarted = false
+	}
 	pt.mu.Unlock()
 
 	p.mu.Lock()
+	if repair {
+		p.stats.Reopenings++
+	}
 	p.stats.Renewals++
 	p.stats.ProfileRotations++
 	p.mu.Unlock()

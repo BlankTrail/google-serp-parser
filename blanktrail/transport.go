@@ -97,6 +97,10 @@ type remedy interface {
 	// share of failures is read against.
 	attempted()
 	rotateEgress(ctx context.Context, port int) error
+	// reopenPort asks for the port to be opened again as it is, keeping its
+	// egress. It is the remedy for a port that is not there any more, which is
+	// nothing to do with where the port was sending its traffic.
+	reopenPort(port int)
 	markBadEgress(port int)
 	// markDeadEgress reports that the address did not carry the request at all,
 	// which is final rather than a count towards anything.
@@ -167,6 +171,13 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				// The proxy's own port did not answer, so nothing went through
 				// it and the address behind it has done nothing. Blaming it here
 				// is how one restart of the service put a whole list away.
+				//
+				// What the port does need is opening again. A listener that has
+				// gone stays gone until somebody opens it and nothing else in
+				// the pool ever looks, so without this the port fails this way
+				// for the rest of the run — and one restart of the service takes
+				// every port in the job with it.
+				t.rem.reopenPort(t.port)
 				return nil, err
 			}
 			// The request never arrived. Whether that is the address's fault is
