@@ -150,6 +150,7 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 	form.Refresh = strings.TrimSpace(r.FormValue(refreshField))
 	form.Wire = strings.TrimSpace(r.FormValue(wireField))
 	form.Ban = strings.TrimSpace(r.FormValue(banField))
+	form.PerUpstream = strings.TrimSpace(r.FormValue(perUpField))
 
 	next, faults := form.onto(saved)
 	if len(faults) > 0 || s.settingsPath == "" {

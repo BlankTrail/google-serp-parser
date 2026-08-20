@@ -2276,3 +2276,187 @@ func TestPoolInUse_CountsTheIdentitiesInHand(t *testing.T) {
 		t.Errorf("InUse=%d after both were given back, want 0", got)
 	}
 }
+
+// onOneEgress opens a pool whose ports all sit on the same address, which is
+// what a list shorter than the pool produces.
+func onOneEgress(t *testing.T, ports, atOnce int) *Pool {
+	t.Helper()
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, f, clock, 1, ports)
+	cfg.MaxPerUpstream = atOnce
+	ups, bad := Parse("10.1.1.1:1080", "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	return p
+}
+
+func TestTake_LetsOneEgressCarryOnlyAsManyIdentitiesAsItMay(t *testing.T) {
+	// The pool can hold more identities than the list has egresses — several
+	// ports opened onto one address, which is the ordinary case when a job of a
+	// hundred threads runs on thirty-two gateways. What must not happen is all
+	// of them going through one address at once: an address asked by ten threads
+	// in the same instant is an address behaving like something that is not a
+	// person.
+	p := onOneEgress(t, 4, 1)
+
+	first, _, err := p.take("")
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	if first == nil {
+		t.Fatal("nothing was handed out from a pool of four free ports")
+	}
+	second, wait, err := p.take("")
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	if second != nil {
+		t.Error("a second identity on the same address was handed out while one was in hand")
+	}
+	if wait <= 0 {
+		t.Error("the caller was told to come back at once rather than to wait for a lease")
+	}
+
+	// Given back, the address may carry one again.
+	p.giveBack(first)
+	again, _, err := p.take("")
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	if again == nil {
+		t.Error("nothing was handed out after the address was free again")
+	}
+}
+
+func TestTake_CarriesAsManyAsTheOperatorAllowed(t *testing.T) {
+	// One is the default and not the rule: somebody who knows their list says
+	// how much it carries.
+	p := onOneEgress(t, 6, 3)
+
+	var held []*poolPort
+	for i := range 3 {
+		pt, _, err := p.take("")
+		if err != nil {
+			t.Fatalf("take %d: %v", i, err)
+		}
+		if pt == nil {
+			t.Fatalf("only %d identities were handed out, want three", i)
+		}
+		held = append(held, pt)
+	}
+	if pt, _, _ := p.take(""); pt != nil {
+		t.Error("a fourth identity was handed out on an address allowed three")
+	}
+	for _, pt := range held {
+		p.giveBack(pt)
+	}
+}
+
+func TestTake_DoesNotHoldBackAPoolThatGoesOutDirectly(t *testing.T) {
+	// Every port with no proxy behind it shares one egress — this machine — so a
+	// limit applied there would let one identity work and stand the rest of the
+	// pool still for as long as the job ran.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, f, clock, 1, 3)
+	cfg.MaxPerUpstream = 1
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	for i := range 3 {
+		pt, _, err := p.take("")
+		if err != nil {
+			t.Fatalf("take %d: %v", i, err)
+		}
+		if pt == nil {
+			t.Fatalf("only %d of three direct identities were handed out", i)
+		}
+	}
+}
+
+func TestStatsWaiting_SaysHowManyAreStandingInTheQueue(t *testing.T) {
+	// A job with more threads than its list has egresses is the ordinary case
+	// for this figure, and a screen that did not show it would leave the
+	// operator to work out on their own why a pool of three hundred looks idle.
+	//
+	// It is read from inside the pause rather than from another goroutine: the
+	// gauge is up only while somebody is waiting, and a test that polled from
+	// outside would be racing a wait it had itself made instant.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, f, clock, 1, 2)
+	cfg.MaxPerUpstream = 1
+	ups, bad := Parse("10.1.1.1:1080", "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
+
+	var p *Pool
+	seen := make(chan int, 8)
+	cfg.Sleep = func(context.Context, time.Duration) error {
+		select {
+		case seen <- p.Stats().Waiting:
+		default:
+		}
+		return nil
+	}
+
+	var err error
+	p, err = NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if got := p.Stats().Waiting; got != 0 {
+		t.Fatalf("%d callers are waiting before anything was asked", got)
+	}
+
+	held, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	// The second caller finds the one address already carrying its one identity,
+	// so it waits — and while it waits the pool says one is waiting.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		if second, err := p.Acquire(ctx); err == nil {
+			second.Release()
+		}
+	}()
+
+	select {
+	case waiting := <-seen:
+		if waiting != 1 {
+			t.Errorf("the pool says %d are waiting while one is, want 1", waiting)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("nobody ever waited, so the limit did not hold anybody back")
+	}
+
+	held.Release()
+	cancel()
+
+	// And the gauge comes back down: it says what is true now, not what happened.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && p.Stats().Waiting != 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := p.Stats().Waiting; got != 0 {
+		t.Errorf("%d callers are still counted as waiting once the queue cleared", got)
+	}
+}

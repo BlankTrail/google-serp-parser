@@ -153,7 +153,15 @@ type poolView struct {
 	// differ for the first quarter of an hour of every machine's day, and that
 	// difference is the whole of what a job started in that window feels: a cold
 	// identity's first request costs minutes and a warm one's costs seconds.
-	Warm        int
+	Warm int
+	// Queueing is how many threads are standing in the queue for an egress right
+	// now, because every one they could use is already carrying as many
+	// identities as it may.
+	//
+	// It is not a fault. A job of a hundred threads on thirty-two gateways is
+	// arithmetic, and a screen that did not show this would leave the reader to
+	// work out on their own why a pool of three hundred looks idle.
+	Queueing    int
 	Rotations   int64
 	Quarantined int
 	Revived     int64
@@ -216,6 +224,7 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 		Alive:       facts.Stats.Available,
 		Ports:       facts.Stats.Ports,
 		Warm:        facts.Stats.Warm,
+		Queueing:    facts.Stats.Waiting,
 		Rotations:   facts.Stats.EgressRotations,
 		Quarantined: facts.Stats.Quarantined,
 		Revived:     facts.Stats.Revivals,

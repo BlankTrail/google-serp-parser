@@ -489,6 +489,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	}
 	cfg := poolConfig(threads, ports)
 	cfg.Spec.Protocol = saved.PortProtocol
+	cfg.MaxPerUpstream = saved.ThreadsPerUpstream
 	// Which kind of result page this job asked for. Desktop opens every port
 	// under the one default template, as this program always has; mobile hands
 	// the pool two named templates and it spreads the ports over both, so a run

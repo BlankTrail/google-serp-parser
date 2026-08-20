@@ -99,6 +99,16 @@ type Settings struct {
 	// LANPassword is what the pages ask for once it is on: the salt and the
 	// derived key, never the password. Nothing is opened to the network without
 	// one.
+	// ThreadsPerUpstream is how many identities may work through one egress at
+	// the same time. Nought is one.
+	//
+	// A pool can hold more identities than the list has egresses — several ports
+	// opened onto one address, which is what a hundred threads on thirty-two
+	// gateways comes to — and this is what stops all of them going through one
+	// address at once. Threads with nothing left to take wait their turn, and
+	// the job's screen says how many are waiting.
+	ThreadsPerUpstream int `json:"threads_per_upstream"`
+
 	LANAccess   bool   `json:"lan_access"`
 	LANPassword string `json:"lan_password"`
 

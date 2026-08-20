@@ -33,6 +33,7 @@ const (
 	banField     = "ban_minutes"
 	lanField     = "lan_access"
 	lanKeyField  = "lan_password"
+	perUpField   = "threads_per_upstream"
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
@@ -101,6 +102,8 @@ type settingsForm struct {
 	Wire string
 	// Ban is how long an address that failed is left out of the rotation.
 	Ban string
+	// PerUpstream is how many identities may work through one egress at once.
+	PerUpstream string
 	// LAN says the interface answers the network rather than this machine
 	// alone, and LANPassword is what it asks for when it does. The password is
 	// empty on the way out, like the key: the page cannot show one.
@@ -126,6 +129,7 @@ func settingsFormOf(r *http.Request) settingsForm {
 		HotDevice:   strings.TrimSpace(r.FormValue(hotKindField)),
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
 		Ban:         strings.TrimSpace(r.FormValue(banField)),
+		PerUpstream: strings.TrimSpace(r.FormValue(perUpField)),
 		LAN:         r.FormValue(lanField) != "",
 		LANPassword: strings.TrimSpace(r.FormValue(lanKeyField)),
 		Source:      strings.TrimSpace(r.FormValue(sourceField)),
@@ -142,17 +146,18 @@ func settingsFormOf(r *http.Request) settingsForm {
 // operator's screen and anything that photographs either.
 func formShowing(saved settings.Settings) settingsForm {
 	return settingsForm{
-		ControlURL: saved.ControlURL,
-		Hot:        strconv.Itoa(saved.HotPorts),
-		HotDevice:  saved.HotDevice,
-		Wire:       blanktrail.ProtocolOr(saved.PortProtocol),
-		Ban:        spellUnits(saved.Proxy.Ban, banUnit),
-		LAN:        saved.LANAccess,
-		LANLocked:  saved.LANPassword != "",
-		Source:     saved.Proxy.Kind,
-		Where:      saved.Proxy.Location,
-		Refresh:    spellUnits(saved.Proxy.Refresh, refreshUnit),
-		Tongue:     saved.Language,
+		ControlURL:  saved.ControlURL,
+		Hot:         strconv.Itoa(saved.HotPorts),
+		HotDevice:   saved.HotDevice,
+		Wire:        blanktrail.ProtocolOr(saved.PortProtocol),
+		Ban:         spellUnits(saved.Proxy.Ban, banUnit),
+		PerUpstream: strconv.Itoa(atLeastOne(saved.ThreadsPerUpstream)),
+		LAN:         saved.LANAccess,
+		LANLocked:   saved.LANPassword != "",
+		Source:      saved.Proxy.Kind,
+		Where:       saved.Proxy.Location,
+		Refresh:     spellUnits(saved.Proxy.Refresh, refreshUnit),
+		Tongue:      saved.Language,
 	}
 }
 
@@ -216,6 +221,9 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	// a negative or a word is a mistake.
 	next.HotPorts = b.none(f.Hot, saved.HotPorts, "settings.hot.count")
 	next.PortProtocol = blanktrail.ProtocolOr(f.Wire)
+	// One is the floor rather than the default alone: nought identities through
+	// an egress is a pool that hands out nothing at all.
+	next.ThreadsPerUpstream = atLeastOne(b.none(f.PerUpstream, saved.ThreadsPerUpstream, "settings.perupstream.count"))
 
 	// The password, and the one rule around it: nothing is opened to the network
 	// without one. An empty box keeps the password already saved, the same way

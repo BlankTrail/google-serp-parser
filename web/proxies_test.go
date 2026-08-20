@@ -317,3 +317,46 @@ func TestSaveProxies_WritesDownHowLongAnAddressIsBanned(t *testing.T) {
 		t.Error("the box does not show the ban that was saved")
 	}
 }
+
+func TestSaveProxies_WritesDownHowManyThreadsOneEgressCarries(t *testing.T) {
+	// A pool can hold more identities than the list has egresses, and this is
+	// what stops all of them going through one address at once. One is the
+	// floor: nought identities through an egress is a pool that hands out
+	// nothing at all.
+	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+
+	rec := postForm(t, s, proxiesAt, url.Values{
+		"source":               {"file"},
+		"source_at":            {"C:/list.txt"},
+		"threads_per_upstream": {"4"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
+	}
+	after, err := settings.Load(path)
+	if err != nil {
+		t.Fatalf("reading the settings back: %v", err)
+	}
+	if after.ThreadsPerUpstream != 4 {
+		t.Errorf("one egress carries %d threads, want the four that were typed",
+			after.ThreadsPerUpstream)
+	}
+
+	// Nought is not an answer here, and neither is a file edited by hand into
+	// one: what comes back out is one.
+	rec = postForm(t, s, proxiesAt, url.Values{
+		"source":               {"file"},
+		"source_at":            {"C:/list.txt"},
+		"threads_per_upstream": {"0"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want the save to go through", rec.Code)
+	}
+	if after, err = settings.Load(path); err != nil {
+		t.Fatalf("reading the settings back: %v", err)
+	}
+	if after.ThreadsPerUpstream != 1 {
+		t.Errorf("one egress carries %d threads after nought was typed, want one",
+			after.ThreadsPerUpstream)
+	}
+}

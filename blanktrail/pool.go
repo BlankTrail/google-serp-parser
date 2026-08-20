@@ -168,6 +168,21 @@ type PoolConfig struct {
 	// MaxRetriesPerReq is how many times the ladder retries a blocked request
 	// before handing the blocked response back (default 4).
 	MaxRetriesPerReq int
+	// MaxPerUpstream is how many identities may be working through one egress at
+	// the same time. Nought and below mean one.
+	//
+	// An egress is one address or one gateway, named by the whole of it: two
+	// ports on one machine are two egresses, because that is what the far end
+	// sees and what a rate limit there counts. The pool may hold more identities
+	// than there are egresses — several ports can be opened onto the same one —
+	// and this is what stops a job pushing all of them through it at once.
+	//
+	// One is the default, and it is the honest one: an address asked by two
+	// threads at the same instant is an address behaving like something that is
+	// not a person. An operator who knows their list can carry more, and says so
+	// here.
+	MaxPerUpstream int
+
 	// AddressesPerRequest is how many addresses one request may be carried to
 	// when they fail to carry it at all (default 15).
 	//
@@ -365,6 +380,16 @@ type Stats struct {
 	// being refused by the origin, and no amount of rotating will help it. The
 	// two read identically in a single total, which is why there is not one.
 	Failures map[Failure]int64
+
+	// Waiting counts the callers standing in the queue for an identity right
+	// now, because every egress they could use is already carrying as many as it
+	// may. It is a gauge and not a total: it says what is true this second.
+	//
+	// A job with more threads than its list has egresses is the ordinary case
+	// for this figure — thirty-two gateways and a hundred threads is not a
+	// fault, it is arithmetic — and a screen that did not show it would leave
+	// the operator to work out on their own why the pool looks idle.
+	Waiting int
 
 	// Warm counts the ports whose current identity has brought back an answer
 	// somebody accepted. It is what a machine keeping identities open has to
@@ -1167,7 +1192,10 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 		if wait <= 0 {
 			wait = 5 * time.Millisecond // every matching port is leased right now
 		}
-		if err := p.cfg.Sleep(ctx, wait); err != nil {
+		p.waiting(1)
+		err = p.cfg.Sleep(ctx, wait)
+		p.waiting(-1)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -1205,6 +1233,28 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 	soonest := time.Duration(-1)
 	alive := 0
 
+	// What each egress is already carrying. Counted first, because the answer is
+	// about the whole pool rather than about the port being looked at: two ports
+	// onto one address are one address's worth of attention, however far apart
+	// they are in this slice.
+	carrying := map[string]int{}
+	for _, pt := range p.ports {
+		pt.mu.Lock()
+		leased := pt.leased
+		pt.mu.Unlock()
+		if eg := pt.egress(); leased && !eg.IsDirect() {
+			carrying[eg.String()]++
+		}
+	}
+	atOnce := p.cfg.MaxPerUpstream
+	if atOnce < 1 {
+		atOnce = 1
+	}
+	// held says whether anything was passed over for being at its limit, so a
+	// caller that found nothing is told to wait rather than told the pool is
+	// spent.
+	held := false
+
 	for _, pt := range p.ports {
 		if specName != "" && pt.specName != specName {
 			continue
@@ -1221,6 +1271,17 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		}
 		alive++
 		if leased {
+			continue
+		}
+		// A direct egress is not counted. There is one of it — this machine —
+		// and a limit meant to stop one address carrying too much at once would,
+		// applied to it, let one identity work and stand the rest of the pool
+		// still for as long as the job ran.
+		if eg := pt.egress(); !eg.IsDirect() && carrying[eg.String()] >= atOnce {
+			// This egress is already carrying as many identities as it may. The
+			// port is free and stays free: what is busy is the address behind
+			// it.
+			held = true
 			continue
 		}
 		if elapsed := now.Sub(last); elapsed >= p.cool {
@@ -1266,6 +1327,13 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		return best, 0, nil
 	}
 	if soonest < 0 {
+		if held {
+			// Nothing is cooling and nothing is free: every egress is at its
+			// limit. There is no instant to wait for — a lease has to come back
+			// first — so this is a pause long enough not to spin and short
+			// enough not to be felt.
+			return nil, waitForAnEgress, nil
+		}
 		soonest = 0
 	}
 	return nil, soonest, nil
@@ -1820,3 +1888,20 @@ func (p *Pool) exhausted(num int) {
 func (p *Pool) maxRetries() int { return p.cfg.MaxRetriesPerReq }
 
 func (p *Pool) wait(ctx context.Context, d time.Duration) error { return p.cfg.Sleep(ctx, d) }
+
+// waitForAnEgress is how long a caller pauses when every egress is carrying as
+// many identities as it may.
+//
+// Nothing can be waited for exactly here: what frees an egress is another
+// caller giving a lease back, which happens when it happens. This is short
+// enough that the queue moves the moment one does, and long enough that a
+// hundred threads waiting on thirty-two gateways are not thirty-two thousand
+// wake-ups a second between them.
+const waitForAnEgress = 25 * time.Millisecond
+
+// waiting moves the count of callers standing in the queue.
+func (p *Pool) waiting(by int) {
+	p.mu.Lock()
+	p.stats.Waiting += by
+	p.mu.Unlock()
+}
