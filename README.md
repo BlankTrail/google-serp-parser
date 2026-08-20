@@ -157,11 +157,31 @@ and in `gserp version`.
 
 It listens on this machine only.
 
-> macOS keeps programs downloaded from the internet quarantined. If it refuses
-> to open the file, clear the mark once with
-> `xattr -d com.apple.quarantine gserp` in the unpacked folder. Windows
-> SmartScreen may warn about a program it has not seen before: *More info* →
-> *Run anyway*.
+### Windows says it protected your PC
+
+It will, and the builds here cannot stop it. SmartScreen judges a program by the
+reputation of whoever signed it, and these are unsigned: there is no certificate
+to have a reputation. Press *More info* → *Run anyway*.
+
+What you can do instead of taking that on trust is check that the file you have
+is the file that was published. Every release carries a `SHA256SUMS.txt`, and
+the sum of your copy should be in it:
+
+```
+Get-FileHash .\gserp.exe -Algorithm SHA256
+```
+
+Windows also marks anything downloaded, which is what raises the prompt. The
+mark can be cleared once, per file:
+
+```
+Unblock-File .\gserp.exe
+```
+
+> macOS keeps downloaded programs quarantined in the same way. If it refuses to
+> open the file, clear the mark once with `xattr -d com.apple.quarantine gserp`
+> in the unpacked folder. On Linux and macOS the sums are checked with
+> `sha256sum -c SHA256SUMS.txt` or `shasum -a 256 -c SHA256SUMS.txt`.
 
 **4. Open Settings** and fill in the BlankTrail address and API key. Press
 *Check the connection* — it says what it found rather than only whether it
