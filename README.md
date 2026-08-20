@@ -102,21 +102,42 @@ the button is for.*
 
 ---
 
-## 🚀 Quick start (Windows)
+## 🚀 Quick start
+
+No Go, no build, no dependencies. One file to download and one to double-click.
 
 **1. Install and start BlankTrail Proxy** with a licence that includes
 Challenge Breaker. Note its control API address (`http://127.0.0.1:8891` by
 default) and issue an API key in it.
 
-**2. Get gserp.** Either download a release build, or build it yourself:
+**2. Download the build for your system** from
+[Releases](https://github.com/BlankTrail/google-serp-parser/releases/latest)
+and unpack it anywhere:
 
-```
-go build -o gserp.exe ./cmd/gserp
-```
+| System | File |
+|---|---|
+| Windows, ordinary PC | `gserp-<version>-windows-amd64.zip` |
+| Windows on ARM | `gserp-<version>-windows-arm64.zip` |
+| Linux, ordinary PC or server | `gserp-<version>-linux-amd64.tar.gz` |
+| Linux on ARM | `gserp-<version>-linux-arm64.tar.gz` |
+| Mac with Apple silicon (M1 and later) | `gserp-<version>-macos-apple-silicon.tar.gz` |
+| Mac with an Intel processor | `gserp-<version>-macos-intel.tar.gz` |
 
-**3. Run `start.bat`.** It starts the program and opens
-`http://127.0.0.1:8080` in your browser. On a machine with no `gserp.exe` it
-builds one first, provided Go is installed.
+Each archive holds the program, the starter for that system, both READMEs and
+the licence. The program is a single file that needs nothing installed
+alongside it, and it keeps its history in a `gserp.db` next to itself.
+
+**3. Start it.**
+
+- **Windows** — double-click `start.bat`.
+- **Linux and macOS** — `./start.sh` in a terminal.
+
+Either way the program comes up and your browser opens at
+`http://127.0.0.1:8080`. It listens on this machine only.
+
+> macOS keeps programs downloaded from the internet quarantined. If it refuses
+> to open the file, clear the mark once with
+> `xattr -d com.apple.quarantine gserp` in the unpacked folder.
 
 **4. Open Settings** and fill in the BlankTrail address and API key. Press
 *Check the connection* — it says what it found rather than only whether it
@@ -137,12 +158,7 @@ results as CSV or JSON Lines from the job's own page.
 
 ![A finished job: its counts, the settings it ran with, the export links and the results](assets/screenshots/job-en.png)
 
-### Linux and macOS
-
-```
-go build -o gserp ./cmd/gserp
-./start.sh
-```
+Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ---
 
