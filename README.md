@@ -84,9 +84,10 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 
 ![The proxy screen: the pool as it stands, what failed and of what kind, and the address list](assets/screenshots/proxies-en.png)
 
-*A small twenty-port demo pool on a much-used list. The failure share is what
-this list gives at this size; the figures in [Performance](#-performance) are
-from three hundred identities on a warmed pool.*
+*Three hundred identities, warmed, on a fifteen-thousand-address list: seven
+per cent of attempts fail and nearly all of those are addresses that never
+answered. The counts were cleared a few minutes before the shot, which is what
+the button is for.*
 
 ### Export and API
 
