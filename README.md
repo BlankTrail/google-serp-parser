@@ -111,33 +111,46 @@ Challenge Breaker. Note its control API address (`http://127.0.0.1:8891` by
 default) and issue an API key in it.
 
 **2. Download the build for your system** from
-[Releases](https://github.com/BlankTrail/google-serp-parser/releases/latest)
-and unpack it anywhere:
+[Releases](https://github.com/BlankTrail/google-serp-parser/releases/latest).
+
+**Windows — one file, nothing to unpack:**
 
 | System | File |
 |---|---|
-| Windows, ordinary PC | `gserp-<version>-windows-amd64.zip` |
-| Windows on ARM | `gserp-<version>-windows-arm64.zip` |
+| Windows, ordinary PC | `gserp.exe` |
+| Windows on ARM | `gserp-arm64.exe` |
+
+Put it anywhere and double-click it. Everything the program needs is inside
+that file — the pages, the icon, the lot — and it writes its history into a
+`gserp.db` beside itself.
+
+**Linux and macOS:**
+
+| System | File |
+|---|---|
 | Linux, ordinary PC or server | `gserp-<version>-linux-amd64.tar.gz` |
 | Linux on ARM | `gserp-<version>-linux-arm64.tar.gz` |
 | Mac with Apple silicon (M1 and later) | `gserp-<version>-macos-apple-silicon.tar.gz` |
 | Mac with an Intel processor | `gserp-<version>-macos-intel.tar.gz` |
 
-Each archive holds the program, the starter for that system, both READMEs and
-the licence. The program is a single file that needs nothing installed
-alongside it, and it keeps its history in a `gserp.db` next to itself.
+Each archive holds the program, a starter script, both READMEs and the licence.
+The zipped Windows builds are there too, for whoever wants the READMEs beside
+the program.
 
 **3. Start it.**
 
-- **Windows** — double-click `start.bat`.
-- **Linux and macOS** — `./start.sh` in a terminal.
+- **Windows** — double-click `gserp.exe`. The console goes away, an icon
+  appears in the notification area, and your browser opens at
+  `http://127.0.0.1:8080`.
+- **Linux and macOS** — `./start.sh` in a terminal, or `./gserp serve`.
 
-Either way the program comes up and your browser opens at
-`http://127.0.0.1:8080`. It listens on this machine only.
+It listens on this machine only.
 
 > macOS keeps programs downloaded from the internet quarantined. If it refuses
 > to open the file, clear the mark once with
-> `xattr -d com.apple.quarantine gserp` in the unpacked folder.
+> `xattr -d com.apple.quarantine gserp` in the unpacked folder. Windows
+> SmartScreen may warn about a program it has not seen before: *More info* →
+> *Run anyway*.
 
 **4. Open Settings** and fill in the BlankTrail address and API key. Press
 *Check the connection* — it says what it found rather than only whether it
