@@ -99,6 +99,11 @@ type proxiesPage struct {
 	Groups       []gatewayGroup
 	Missing      int
 	GatewayFault string
+	// GatewayFaultAt is the address that was asked, shown beside the fault so
+	// the reader can see at once that it is the one they meant. It is empty when
+	// the service answered and simply had nothing to offer, where an address
+	// would only be noise.
+	GatewayFaultAt string
 }
 
 // failureRow is one kind of failure and how often it happened.
@@ -140,7 +145,8 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	view.OnGateways = view.Form.Source == sourceGateways
 	if view.OnGateways {
 		if list, err := s.askForGateways(r.Context(), saved); err != nil {
-			view.GatewayFault = "proxies.gateways.unreachable"
+			view.GatewayFault = gatewayFault(err)
+			view.GatewayFaultAt = saved.ControlURL
 		} else if !list.Available {
 			view.GatewayFault = "proxies.gateways.unavailable"
 		} else {

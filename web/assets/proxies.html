@@ -121,7 +121,7 @@
      each of them. Choosing the gateways in the box above and saving is what
      brings the list. */}}
 {{if .OnGateways}}
-{{if .GatewayFault}}<p class="empty">{{.T .GatewayFault}}</p>{{end}}
+{{if .GatewayFault}}<p class="empty">{{.T .GatewayFault}}{{if .GatewayFaultAt}} {{.T "proxies.gateways.asked"}} <code>{{.GatewayFaultAt}}</code>{{end}}</p>{{end}}
 {{range .Groups}}
 <fieldset>
 <legend>{{if .Name}}{{.Name}}{{else}}{{$.T "proxies.gateways.loose"}}{{end}} — {{.Chosen}}/{{.Offered}}</legend>

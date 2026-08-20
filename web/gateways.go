@@ -4,6 +4,8 @@ package web
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -113,4 +115,26 @@ func (s *Server) askForGateways(ctx context.Context, saved settings.Settings) (b
 		return blanktrail.GatewayList{}, err
 	}
 	return client.Gateways(ctx)
+}
+
+// gatewayFault names why the list could not be asked for, in the reader's
+// language.
+//
+// The four answers are four different things to go and do, which is the whole
+// reason they are told apart: a service that is not running, a key it will not
+// take, a version that has never heard of gateways, and anything else it chose
+// to say. One sentence for all of them sends the reader to check the address
+// when the address was never the problem.
+func gatewayFault(err error) string {
+	if blanktrail.IsUnauthorized(err) {
+		return "proxies.gateways.refused"
+	}
+	var answered *blanktrail.APIError
+	if errors.As(err, &answered) {
+		if answered.Status == http.StatusNotFound {
+			return "proxies.gateways.unknown"
+		}
+		return "proxies.gateways.failed"
+	}
+	return "proxies.gateways.unreachable"
 }

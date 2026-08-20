@@ -3,6 +3,8 @@
 package web
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -137,5 +139,34 @@ func TestProxies_OffersTheGatewaysAsASource(t *testing.T) {
 	}
 	if !offered {
 		t.Error("the proxy screen does not offer the gateways as a source")
+	}
+}
+
+func TestGatewayFault_TellsTheFourFailuresApart(t *testing.T) {
+	// Each of these sends the reader somewhere different: start the service,
+	// fix the key, upgrade the service, read what it said. One sentence for all
+	// four sent them to check an address that was often perfectly right.
+	for _, c := range []struct {
+		what string
+		err  error
+		want string
+	}{
+		{"nothing listening", errors.New("dial tcp 127.0.0.1:8891: connect: connection refused"), "proxies.gateways.unreachable"},
+		{"key refused", &blanktrail.APIError{Status: http.StatusUnauthorized, Path: "/api/v1/ovpn"}, "proxies.gateways.refused"},
+		{"no such endpoint", &blanktrail.APIError{Status: http.StatusNotFound, Path: "/api/v1/ovpn"}, "proxies.gateways.unknown"},
+		{"service broke", &blanktrail.APIError{Status: http.StatusInternalServerError, Path: "/api/v1/ovpn"}, "proxies.gateways.failed"},
+	} {
+		if got := gatewayFault(c.err); got != c.want {
+			t.Errorf("%s: said %q, want %q", c.what, got, c.want)
+		}
+	}
+}
+
+func TestGatewayFault_ReadsAnAnswerWrappedInAnotherError(t *testing.T) {
+	// The client wraps what the service said on its way up, and a fault read
+	// off the outermost error alone would call every one of them unreachable.
+	wrapped := fmt.Errorf("asking for gateways: %w", &blanktrail.APIError{Status: http.StatusUnauthorized})
+	if got := gatewayFault(wrapped); got != "proxies.gateways.refused" {
+		t.Errorf("a wrapped refusal read as %q", got)
 	}
 }
