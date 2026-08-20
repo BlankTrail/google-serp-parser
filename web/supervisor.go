@@ -245,6 +245,16 @@ type Supervisor struct {
 	// nil unless somebody asked for a trace.
 	watch run.Watch
 
+	// last is the identities the job that has just finished ran on, kept for
+	// reading after that job has let go of them.
+	//
+	// A stop ends a job and not the pool: the standing set goes on standing, and
+	// the counts on it are the account of what the run met — which is exactly
+	// what somebody looks at once a run has stopped going well. Reported only
+	// while there is something to report: a pool given up entirely leaves this
+	// nil, because numbers about a pool that is gone describe nothing.
+	last engine
+
 	// cleared is when the pool's counters were last put back to nought, and
 	// started is when this server came up. Together they are what the proxy
 	// screen dates its reading from, so a figure on it is never one whose
@@ -536,10 +546,17 @@ func (v *Supervisor) pool() poolFacts {
 	if eng == nil {
 		eng = v.src.held
 	}
+	if eng == nil {
+		// The job has let go. What it ran on is still there — a stop ends a job
+		// and not the standing set — and the counts on it are the account of
+		// what that run met, which is what somebody reads after a run has
+		// stopped going well.
+		eng = v.last
+	}
 	v.mu.Unlock()
 	if eng == nil {
-		// No job is running, and nothing is held between jobs. The numbers of a
-		// pool that has been given up would describe something that is gone.
+		// Nothing has run and nothing is held. The numbers of a pool that has
+		// been given up would describe something that is gone.
 		return poolFacts{}
 	}
 	return eng.Pool()
@@ -655,6 +672,7 @@ func (v *Supervisor) next() (int64, context.Context, source, bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	v.running, v.cancel = id, cancel
 	v.inUse = v.src.held
+	v.last = v.inUse
 	return id, ctx, v.src, true
 }
 
@@ -678,6 +696,7 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 	// arriving now finds a pool to give back rather than one nothing points at.
 	v.mu.Lock()
 	v.inUse = eng
+	v.last = v.inUse
 	v.mu.Unlock()
 	return eng, nil
 }

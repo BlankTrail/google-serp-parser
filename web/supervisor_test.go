@@ -1289,3 +1289,47 @@ func TestPoolEngine_ShrinksAPoolWithStandingIdentitiesAndClosesOneWithout(t *tes
 		t.Errorf("%d ports are open after the job, want the three kept warm", got)
 	}
 }
+
+func TestSupervisor_GoesOnReportingTheIdentitiesAfterTheJobHasLetGoOfThem(t *testing.T) {
+	// A stop ends a job and not the pool. The counts on the identities are the
+	// account of what the run met — how many requests failed, on what, how often
+	// an address had to be changed — and that is exactly what somebody reads
+	// once a run has stopped going well. Zeroing the screen at the moment the
+	// job stops throws away the reading at the moment it is wanted.
+	st := testStore(t)
+	eng := &heldEngine{}
+	v := start(st, dialing(nil, nil), 1, 1)
+	t.Cleanup(func() { _ = v.Close() })
+
+	// The engine a job ran on, given and then let go the way a stop lets go.
+	v.mu.Lock()
+	v.inUse, v.last = eng, eng
+	v.mu.Unlock()
+	if got := v.pool().Stats.EgressRotations; got != fakePool.Stats.EgressRotations {
+		t.Fatalf("a running job reports %d address changes, want %d",
+			got, fakePool.Stats.EgressRotations)
+	}
+
+	v.release()
+	facts := v.pool()
+	if facts.Stats.EgressRotations != fakePool.Stats.EgressRotations {
+		t.Errorf("after the job let go the screen reports %d address changes, want the "+
+			"%d the run actually made", facts.Stats.EgressRotations, fakePool.Stats.EgressRotations)
+	}
+	if facts.Stats.Ports != fakePool.Stats.Ports {
+		t.Errorf("after the job let go the screen reports %d ports, want %d",
+			facts.Stats.Ports, fakePool.Stats.Ports)
+	}
+}
+
+func TestSupervisor_ReportsNothingBeforeAnythingHasRun(t *testing.T) {
+	// Numbers about a pool that has never existed describe nothing, and a screen
+	// inventing them is a screen nobody can act on.
+	st := testStore(t)
+	v := start(st, dialing(nil, nil), 1, 1)
+	t.Cleanup(func() { _ = v.Close() })
+
+	if got := v.pool(); got.Stats.Ports != 0 || got.Stats.EgressRotations != 0 {
+		t.Errorf("a supervisor that has run nothing reports %+v", got.Stats)
+	}
+}
