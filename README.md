@@ -1,117 +1,336 @@
-# google-serp-parser
+# Google SERP Parser
 
-Open-source **Google SERP parser and rank tracker in Go** — web UI, exports,
-and a SerpApi-compatible API. Powered by [BlankTrail Proxy](https://blanktrail.com).
+Open-source **Google search results parser and rank tracker**, written in Go.
+Browser interface, CSV/JSON exports, and a SerpApi-compatible HTTP API.
+Powered by [BlankTrail Proxy](https://blanktrail.com).
 
-> **This program only works through BlankTrail Proxy.** Google serves a
-> JavaScript shell — zero results — to any plain HTTP client, no matter how many
-> proxies you put behind it. Measured, not assumed: seven client variants, both
-> direct and proxied, all returned a 91 KB shell with no results in it. A
-> BlankTrail licence that includes **Challenge Breaker** is a hard requirement.
+**Русская версия: [README.ru.md](README.ru.md)**
 
-## Status
+> ⚠️ **This program only works through BlankTrail Proxy with Challenge Breaker.**
+> Google serves a JavaScript shell — zero results — to any plain HTTP client, no
+> matter how many proxies you put behind it. This was measured, not assumed:
+> seven client variants, both direct and proxied, all came back with a 91 KB
+> shell containing no results. Results appear only after the solver has carried
+> the session through the challenge. A BlankTrail licence including **Challenge
+> Breaker** is a hard requirement, not a recommendation.
 
-**There is a programmable interface, and it is documented in
-[`docs/api.md`](docs/api.md).** `gserp serve` puts it on the same address as the
-pages, over the same history and the same queue, so a job set up by a program is
-the job the browser lists. Under `/api/v1/` a program sets a job going, watches
-it, stops it and takes it up again; two addresses stream what was captured — a
-job's results and a site's history — as one JSON object per line, so a job of a
-million rows is read a line at a time and a transfer cut short is worth every
-line before the break. A single search is answered inside the connection that
-asked for it, in this program's own shape and, at `/search`, in the shape SerpApi
-answers in: a program written against that service works after changing the base
-address and nothing else. Access is by key — `gserp key new` issues one and only
-a hash of it is stored — carried either in an `Authorization` header or, because
-somebody else's client already sends it that way, in the query string, which the
-documentation warns puts it into the access log of every proxy between you and
-the server.
+---
 
-Three things about that interface are worth knowing before writing against it.
-**`google` is the only engine**, and a request for another is refused with a 400
-that names the engine asked for and lists the ones there are, rather than quietly
-answering an image search with web results. **No advertising is handed over**,
-and the answer says how many paid placements were on the page and were not
-reported, so none of them go missing silently. And a single search does not wait
-behind the job queue — it would otherwise sit behind a job of ten thousand
-queries — but it does compete with a running job for ports and has a deadline of
-its own; a search that reaches that deadline is told so plainly rather than left
-hanging. There is no rate limiting, keys have no scopes, and a job is polled
-rather than announced.
+## 📜 Recent changes
 
-**There is a browser interface.** `gserp serve` opens it, and `start.bat` or
-`start.sh` opens it and your browser with it. A job is set up in a form, which
-says what it will cost before you start it; it then runs in front of you, stops
-on a button, carries on from exactly where it stopped on another, and downloads
-as CSV or JSON Lines from a link. Jobs queue: one runs at a time, on ports that
-stay open between them, because opening a fresh set per job costs minutes
-before the first answer.
+- Identities are now reached over **SOCKS5**, so QUIC and far-side DNS work
+  through them. HTTP is still selectable as a fallback.
+- New **Proxies** tab: live pool figures, failures broken down by kind,
+  counters you can zero for a clean measurement, and a one-press ban reset.
+- A run is paced by **its own settings**. A job that asks for no pause keeps
+  none — the pool it runs on is no longer paced by the standing set's numbers.
+- A restart of the proxy service no longer bans the whole address list: a port
+  that never answered is told apart from an address that failed.
+- Measured on a live 15 000-address list: **500+ queries a minute at 100
+  threads, 98% of requests answered.** Same pool, same hardware — the reference
+  test client does 227.
 
-**One screen shows what is happening now**: the job in flight with the time it
-has taken standing beside the time that was estimated for it, how much of what
-has been settled was refused and what came back instead, how many ports are
-held and how many have been set aside, and what is waiting its turn. It shows
-numbers and draws no conclusions from them — it never calls a run slow, because
-it does not know what you know.
+---
 
-**The connection is set up in the browser** rather than on a command line: the
-proxy address and key, how many queries run at once and how many ports each
-gets, the pause between two requests, where the list of addresses comes from
-and how often to read it again, and the language the interface answers in. A
-button tries what is in the boxes and writes nothing. Saving while a job is
-running asks which of the two prices to pay — stop that job now and take the
-settings into use at once, or let it finish on what it started on — and neither
-answer restarts the program.
+## 📚 Features
 
-**A list of any size arrives as a file.** It is read as it arrives and written
-in batches, so nothing ever holds the whole list; a list that stopped arriving
-part way leaves a job that can be seen and cannot be run, rather than one
-quietly short. A job can drop repeats as they land — the same address twice, or
-a second result from a site already seen — and says how many it dropped.
-**A job is one of three things, and they differ by what is asked rather than by
-what is written down.** Parsing is the ordinary one and the one the form starts
-on: a list of phrases in, and everything each of them came back with written
-down. A position check takes the same list and one site, and answers with the
-place that site stood at for each phrase, or that it was not in the pages taken
-— it stops walking at the page that answers, so a site on the first page costs
-one page and not the depth. An index check takes a list of addresses and answers
-whether Google holds each one. Both checks count only results that are the site
-or the page asked about, so a site's other pages never stand in for it, and
-neither of them can tell you "not found" about a line nobody reached: a line that
-was never checked is absent from the answers rather than reported as an absence.
+### Core
 
-Every page is in English and Russian, and a further language can be added with
-a file beside the program without rebuilding it — what such a file is missing
-is printed when the program starts, not shown in the browser. Tabs switch
-without reloading, and every screen is also a whole page the server draws, so
-it can be opened cold and bookmarked. Nothing is loaded from anywhere and the
-whole interface is inside the binary. With no key in the environment and no
-connection saved, the same interface still reads the history; it says so rather
-than offering a button that cannot work.
+- Three kinds of job:
+  - **Parsing** — reads each line as a phrase and saves every result.
+  - **Position check** — searches the same phrases and records where a given
+    site stands, or that it was not found.
+  - **Index check** — reads each line as an address and asks whether Google
+    holds it.
+- Organic results, ads and related queries, each exportable on its own.
+- Pagination to any depth; country and interface language per job.
+- Desktop and mobile result pages.
+- Jobs queue and run one at a time, on ports that stay open between them.
+- A job stops on a button and **carries on from exactly where it stopped**.
+- Every result is written down as it lands, so a run that dies keeps everything
+  it had established.
+- History of every job, searchable and re-exportable at any time.
 
-`gserp run` works end to end: it takes a list of queries, spreads them over
-threads, writes each result to a database as it lands, and exports what it
-found as CSV or JSON Lines. A run stopped with Ctrl+C says what is still to do
-and the command that takes it up; `gserp run -resume` finishes exactly what was
-left. `gserp run -dry-run` says what a job will cost before any of it is sent.
+### Interface
 
-Underneath: the `google` package reads result pages — organic results with
-their exact host and link form, the three ad placements, related searches —
-and classifies every response before parsing it, so a genuine empty answer is
-told apart from a challenge, a refusal, or the JavaScript shell that arrives
-with HTTP 200 and no results in it. On top of that sit the engines: pagination,
-a site's position, whether a page is indexed, and search completions. A refused
-answer is carried to another identity rather than lost, and addresses that stop
-working are replaced as the run goes, so a list accumulates the ones that work
-by using them.
+- Browser interface — no command line needed for anything.
+- **Status** screen: the job in flight, elapsed against estimated, share
+  answered, what came back instead, ports held and ports set aside, queue.
+- **Proxies** screen: addresses in the list, banned right now, ports open and
+  warm; requests, attempts, failure share, address changes; failures broken
+  down by kind, with counters you can zero at any moment.
+- Live URL of the request going out right now.
+- English and Russian, switchable in one click.
+- The screens show numbers and draw no conclusions from them. They never call a
+  run slow — they do not know what you know about your list.
 
-## Licence
+### Proxies and identities
 
-MIT. See `LICENSE`.
+- Address list from a **file or a URL**, re-read on an interval you set.
+- Formats accepted: `host:port`, `host:port:user:password`,
+  `user:password:host:port`, `user:password@host:port`. A scheme in front
+  (`socks5://`, `http://`) is optional; socks5 is assumed.
+- Identities are kept **warm between jobs**: a cold identity meets a challenge
+  and answers minutes later, a warm one answers in seconds.
+- A failed address is banned for a set time and comes back on its own; the ban
+  never covers more than three quarters of the list, so the pool cannot run out
+  of addresses to try.
+- Load is spread evenly: every address is used once before any is used twice.
+- Failures counted apart, because the remedy differs — a dead address, a proxy
+  port that never answered, a relay refusal, a wall from Google, our own
+  timeout.
 
-## Legal note
+### Export and API
 
-This tool reads publicly available search results. You are responsible for
-complying with Google's terms of service and with applicable law.
+- **CSV**, **JSON Lines**, **TXT** — results, ads and related queries.
+- Deduplication by URL or by host, or none.
+- HTTP API under `/api/v1/`: set a job going, watch it, stop it, resume it.
+- Streaming endpoints: a job's results and a site's history, one JSON object
+  per line, so a million rows read a line at a time.
+- **SerpApi-compatible** `GET /search`: a program written against that service
+  works after changing the base address and nothing else.
+- Access by key, issued with `gserp key new`; only a hash is stored.
 
-Русская версия: [README.ru.md](README.ru.md)
+---
+
+## 🚀 Quick start (Windows)
+
+**1. Install and start BlankTrail Proxy** with a licence that includes
+Challenge Breaker. Note its control API address (`http://127.0.0.1:8891` by
+default) and issue an API key in it.
+
+**2. Get gserp.** Either download a release build, or build it yourself:
+
+```
+go build -o gserp.exe ./cmd/gserp
+```
+
+**3. Run `start.bat`.** It starts the program and opens
+`http://127.0.0.1:8080` in your browser. On a machine with no `gserp.exe` it
+builds one first, provided Go is installed.
+
+**4. Open Settings** and fill in the BlankTrail address and API key. Press
+*Check the connection* — it says what it found rather than only whether it
+worked.
+
+**5. Open Proxies** and point it at your address list: a file on this machine
+or a URL. Set how often to re-read it, and how long a failed address stays
+banned.
+
+**6. Open New job**, paste your phrases or upload a `.txt`, choose the kind of
+job, the country, the depth, and the number of threads. The form says what the
+run will cost before you start it.
+
+**7. Press Start.** The Status screen follows it. When it is done, download the
+results as CSV or JSON Lines from the job's own page.
+
+### Linux and macOS
+
+```
+go build -o gserp ./cmd/gserp
+./start.sh
+```
+
+---
+
+## ⚙️ Settings
+
+### Connection
+
+| Setting | What it is |
+|---|---|
+| Control API address | Where BlankTrail answers, e.g. `http://127.0.0.1:8891` |
+| API key | Issued in BlankTrail. Stored on this machine, never shown again |
+| Identities kept warm | Ports held open between jobs. Nought keeps none |
+| Result page | Which kind the warm identities are opened for: desktop or mobile |
+
+### Proxies
+
+| Setting | What it is |
+|---|---|
+| Address list | None, a file, or a URL |
+| Path or address | Where the list is |
+| Re-read every, minutes | How often the list is read again. Nought reads it once |
+| Ban for, minutes | How long a failed address is left out. Nought is sixty |
+| Connection to a port | SOCKS5 (default) or HTTP |
+
+### Per job
+
+| Setting | What it is |
+|---|---|
+| Threads | Queries taken at once |
+| Ports per thread | Identities opened per thread. Threads × ports = pool size |
+| Tries per phrase | How many identities one phrase may be taken to |
+| Pause on one identity, seconds | Gap before an identity is asked again. **Nought means none** |
+| Pages per query | Depth of pagination |
+| Country, language | Two-letter codes, e.g. `de` |
+| Deduplication | Keep everything, one row per URL, or one per host |
+
+---
+
+## 🖥 Command line
+
+The browser interface needs none of this, but everything is scriptable.
+
+```
+gserp run [flags]        work a list of queries, saving each one as it lands
+gserp serve [flags]      serve the browser interface and the API
+gserp key new [flags]    issue an API key and print it the once it can be seen
+gserp key list [flags]   list the keys that exist, without their secrets
+gserp key revoke --id N  stop one key working
+gserp doctor [flags]     check a BlankTrail instance against an intended run
+gserp version            print the version
+```
+
+### `gserp run`
+
+| Flag | Meaning |
+|---|---|
+| `--queries` | File with one query per line; blank lines and `#` are passed over |
+| `--db` | History database to write (default `gserp.db`) |
+| `--out`, `--format` | File to export into, and `csv` or `jsonl` |
+| `--pages` | Result pages per query (default 1) |
+| `--threads`, `--ports` | Queries at once, and ports each gets |
+| `--country`, `--language` | Two-letter codes |
+| `--name` | Name to file the job under |
+| `--resume` | Take up the last unfinished job of this name |
+| `--dry-run` | Print the estimate and send nothing |
+
+### `gserp serve`
+
+| Flag | Meaning |
+|---|---|
+| `--addr` | Address to listen on (default `127.0.0.1:8080`) |
+| `--db` | History database to open |
+| `--threads`, `--ports` | Defaults for a job that names no size |
+| `--trace` | Log every request an identity makes: where it waited, what came back |
+
+### Environment
+
+| Variable | Meaning |
+|---|---|
+| `BLANKTRAIL_URL` | Control API base URL (default `http://127.0.0.1:8891`) |
+| `BLANKTRAIL_API_KEY` | API key |
+| `GSERP_PROXY_LIST_URL` | Address list to egress through; direct when unset |
+
+The key and the address list are read from the environment and are not flags: a
+key on a command line is a key in the shell history.
+
+---
+
+## 🔌 HTTP API
+
+Full reference: [`docs/api.md`](docs/api.md).
+
+Issue a key first:
+
+```
+gserp key new --name my-script
+```
+
+A single search, in this program's own shape:
+
+```
+GET /api/v1/search?q=coffee+grinder&gl=us&hl=en&num=10
+Authorization: Bearer <key>
+```
+
+The same search in SerpApi's shape:
+
+```
+GET /search?q=coffee+grinder&gl=us&hl=en&api_key=<key>
+```
+
+Jobs and streams:
+
+```
+POST /api/v1/jobs                 set a job going
+GET  /api/v1/jobs/{id}            watch it
+GET  /api/v1/jobs/{id}/results    stream what it captured, one object per line
+GET  /api/v1/history              stream a site's history the same way
+```
+
+Three things worth knowing before writing against it:
+
+- **`google` is the only engine.** A request for another is refused with a 400
+  that names what was asked for and lists what there is.
+- **No advertising is handed over.** The answer says how many paid placements
+  were on the page and were not reported, so none go missing silently.
+- **A single search does not wait behind the job queue**, but it does compete
+  with a running job for ports and has a deadline of its own.
+
+There is no rate limiting, keys have no scopes, and a job is polled rather than
+announced.
+
+---
+
+## 🏗 Building from source
+
+Go 1.24 or newer. No cgo, no build tags, no code generation:
+
+```
+git clone https://github.com/BlankTrail/google-serp-parser
+cd google-serp-parser
+go build ./cmd/gserp
+```
+
+Cross-compiling is the ordinary Go way:
+
+```
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o gserp ./cmd/gserp
+```
+
+Tests:
+
+```
+go test ./...
+```
+
+---
+
+## 📈 Performance
+
+Measured on a live backconnect list of 15 000 addresses, 100 threads,
+300 identities, a real job of 400 000 phrases:
+
+| | |
+|---|---|
+| Queries a minute, sustained | **500+** |
+| Requests answered | **98%** |
+| Attempts per result | 1.19 |
+| Time a thread spends waiting for an identity | 0 |
+
+What these numbers actually depend on is your address list and your BlankTrail
+licence. A cold pool starts slow — every identity pays for one challenge — and
+climbs for the first five to ten minutes. That is the shape to expect, not a
+fault.
+
+---
+
+## 🛠 Feedback
+
+Bugs and feature requests: please open an issue on GitHub. Include what you
+did, what happened, and what you expected — and, if the run was slow, the
+figures from the **Proxies** screen, which is what that screen is for.
+
+`gserp serve --trace` logs every request an identity makes: where it waited and
+what came back. That log is the fastest way to a diagnosis.
+
+---
+
+## ❤️ About BlankTrail
+
+This parser is open source and free. It exists because Google no longer answers
+plain HTTP clients at all, and because the piece that solves that —
+[BlankTrail Proxy](https://blanktrail.com) — is worth showing at work rather
+than describing.
+
+---
+
+## 📄 Licence
+
+MIT. See [LICENSE](LICENSE).
+
+The software is provided "as is", without warranty of any kind. You are
+responsible for how you use it, including for observing the terms of service of
+the sites you point it at and the law where you are.
