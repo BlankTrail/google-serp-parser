@@ -926,3 +926,52 @@ func TestJobState_SaysItIsReachingTheIdentitiesBeforeTheFirstAnswer(t *testing.T
 		t.Errorf("a queued job reads as %q, want waiting", got)
 	}
 }
+
+func TestNewJobForm_KeepsTheSwitchWithTheBoxesItChoosesBetweenAndAheadOfThem(t *testing.T) {
+	// Where the phrases come from stands with the two boxes it chooses between,
+	// because a switch a screen away from what it switches is one the reader has
+	// to go and find.
+	//
+	// What it may not do is move below them. The whole form is sent as parts, a
+	// browser sends them in the order they stand in the markup, and the server
+	// has to know which box to read before the first line of a file arrives —
+	// that order is what lets a list of a million lines be read as it arrives
+	// rather than held whole. Moved under the file box, uploads break in a way
+	// no small test file would show.
+	page := mustAsset(t, "new.html")
+
+	from := strings.Index(page, `name="from"`)
+	queries := strings.Index(page, `name="queries"`)
+	list := strings.Index(page, `name="list"`)
+	for name, at := range map[string]int{"from": from, "queries": queries, "list": list} {
+		if at < 0 {
+			t.Fatalf("the form has no %s box", name)
+		}
+	}
+
+	if from > queries || from > list {
+		t.Error("the switch saying where the phrases come from stands after the box " +
+			"it chooses; a file would then arrive before the server knew to read it")
+	}
+
+	// And it is beside them rather than up among the settings: nothing but the
+	// two boxes and their own note comes between.
+	if between := page[from:queries]; strings.Count(between, `<div class="field">`) > 2 {
+		t.Errorf("%d fields stand between the switch and the queries box, want it "+
+			"next to what it switches", strings.Count(between, `<div class="field">`))
+	}
+}
+
+func TestJobPage_ShowsASampleShortEnoughToRead(t *testing.T) {
+	// The page answers "is this still working, and what is it bringing back".
+	// The export beside it hands over every row, so the table is a sample and
+	// not a listing: long enough to see what is coming back, short enough that
+	// the job itself is still on the screen.
+	if rowsShown > 20 {
+		t.Errorf("the page draws %d rows, which pushes the job off the screen it "+
+			"is being watched on", rowsShown)
+	}
+	if rowsShown < 5 {
+		t.Errorf("the page draws %d rows, too few to see what is coming back", rowsShown)
+	}
+}

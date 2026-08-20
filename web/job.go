@@ -19,9 +19,10 @@ import (
 // A job of ten thousand queries holds a million rows. Nobody reads a million
 // rows in a browser, no browser lays them out quickly, and the export beside
 // them hands over every one. What the page is for is the other question — is
-// this still working, and what is it bringing back — and fifty answers that as
-// well as a million, on a screen somebody can actually see the bottom of.
-const rowsShown = 50
+// this still working, and what is it bringing back — and ten answers that as
+// well as a million, on a screen whose other half is the job itself rather than
+// a table nobody scrolls to the end of.
+const rowsShown = 10
 
 // refreshEvery is how often this page asks to be drawn again while its job is
 // moving.

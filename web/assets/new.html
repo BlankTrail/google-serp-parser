@@ -25,7 +25,6 @@
 {{range .Kinds}}<option value="{{.Value}}"{{if eq .Value $.Form.Kind}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
 </div>
-<p class="empty">{{.T "form.kind.why"}}</p>
 <ul class="notes">
 <li>{{.T "form.kind.parse.why"}}</li>
 <li>{{.T "form.kind.position.why"}}</li>
@@ -40,21 +39,6 @@
 <input id="target" name="target" value="{{.Form.Target}}">
 </div>
 <p class="empty">{{.T "form.target.why"}}</p>
-{{/* One form, and a switch saying where the phrases come from. Two forms
-     doing one thing made the reader choose between them before they knew what
-     the difference was; the switch names it. The whole form is sent as parts
-     so that a file of a million lines is read as it arrives rather than held.
-
-     The boxes stand before the list in the markup, a browser sends the parts in
-     the order they stand, and so everything needed to write the job down is
-     known before its first line arrives. That order is what the streaming rests
-     on. Nothing here needs a script. */}}
-<div class="field">
-<label for="from">{{.T "form.from"}}</label>
-<select id="from" name="from">
-{{range .Sources}}<option value="{{.Value}}"{{if eq .Value $.Form.From}} selected{{end}}>{{$.T .Label}}</option>
-{{end}}</select>
-</div>
 <div class="row">
 <div class="field">
 <label for="pages">{{.T "form.pages"}}</label>
@@ -137,6 +121,23 @@
 </ul>
 <p class="empty">{{.T "form.pool.why"}}</p>
 </fieldset>
+{{/* One form, and a switch saying where the phrases come from. Two forms
+     doing one thing made the reader choose between them before they knew what
+     the difference was; the switch names it. The whole form is sent as parts so
+     that a file of a million lines is read as it arrives rather than held.
+
+     It stands here, with the two boxes it chooses between, rather than among
+     the settings above: a switch a screen away from what it switches is one the
+     reader has to go and find. What it may not do is move below them — a
+     browser sends the parts in the order they stand, and the server has to know
+     which box to read before the first line of a file arrives. That order is
+     what the streaming rests on. Nothing here needs a script. */}}
+<div class="field">
+<label for="from">{{.T "form.from"}}</label>
+<select id="from" name="from">
+{{range .Sources}}<option value="{{.Value}}"{{if eq .Value $.Form.From}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
 <div class="field">
 <label for="queries">{{.T "form.queries"}}</label>
 <textarea id="queries" name="queries" rows="12">{{.Form.Queries}}</textarea>
