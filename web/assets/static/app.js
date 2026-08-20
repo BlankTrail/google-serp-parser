@@ -299,6 +299,62 @@
 		apply();
 	}
 
+	// Ticking two-and-thirty boxes one at a time to use a whole subscription is
+	// not a choice being made, it is a chore standing in front of one. A pair of
+	// buttons over the list does the whole of it, and a pair in each legend does
+	// one subscription, which is the unit somebody actually bought.
+	//
+	// The count in the legend is rewritten as the ticks move. Left alone it goes
+	// on reporting what was saved, so a reader who has just ticked everything is
+	// told nought are chosen and reasonably concludes the button did nothing.
+	function ticksIn(root) {
+		return root ? root.querySelectorAll("input[name=gateway]") : [];
+	}
+
+	function retally(root) {
+		var groups = root.querySelectorAll("fieldset[data-gateways]");
+		for (var i = 0; i < groups.length; i++) {
+			var tally = groups[i].querySelector("[data-tally]");
+			if (!tally) {
+				continue;
+			}
+			var boxes = ticksIn(groups[i]);
+			var chosen = 0;
+			for (var j = 0; j < boxes.length; j++) {
+				if (boxes[j].checked) {
+					chosen++;
+				}
+			}
+			tally.textContent = chosen + "/" + boxes.length;
+		}
+	}
+
+	function tick(root, on) {
+		var boxes = ticksIn(root);
+		for (var i = 0; i < boxes.length; i++) {
+			boxes[i].checked = on;
+		}
+	}
+
+	document.addEventListener("click", function (event) {
+		var pressed = event.target.closest ? event.target.closest("[data-tick]") : null;
+		if (!pressed) {
+			return;
+		}
+		var within = pressed.closest("fieldset[data-gateways]") || document.querySelector(".scrolls");
+		if (!within) {
+			return;
+		}
+		tick(within, pressed.getAttribute("data-tick") === "all");
+		retally(document);
+	});
+
+	document.addEventListener("change", function (event) {
+		if (event.target && event.target.name === "gateway") {
+			retally(document);
+		}
+	});
+
 	shape(document);
 	shapeSettings(document);
 

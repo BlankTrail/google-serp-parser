@@ -521,6 +521,66 @@ tbody tr:last-child td {
 	margin: 0;
 }
 
+/* A list long enough to scroll past the button that saves it.
+
+   Thirty-two gateways draw a page the reader has to travel to the end of to
+   press save, and the counts they came to read are off the top by then. Boxed,
+   the form stays the size of a form; a short list keeps its own height, because
+   this is a ceiling and not a height. */
+.scrolls {
+	display: flex;
+	flex-direction: column;
+	gap: 0.85rem;
+	max-height: 26rem;
+	overflow-y: auto;
+	padding-right: 0.35rem;
+}
+
+/* The pair that ticks a whole list or a whole subscription. Drawn as words
+   rather than as buttons: the only button on this form that commits anything is
+   the one that saves, and two more of that weight beside it would read as three
+   ways to finish. */
+.ticks {
+	display: flex;
+	gap: 0.75rem;
+	margin: 0;
+}
+
+.ticks button,
+legend button {
+	background: none;
+	border: 0;
+	color: var(--ink);
+	cursor: pointer;
+	font: inherit;
+	font-size: var(--small);
+	padding: 0;
+	text-decoration: underline;
+	text-decoration-color: var(--hairline);
+	text-underline-offset: 0.2em;
+}
+
+legend button {
+	margin-left: 0.5rem;
+}
+
+/* One gateway to a line: the tick, the name, and what it answered when it was
+   last measured pushed to the right so a column of numbers reads down. */
+.scrolls label {
+	align-items: baseline;
+	display: flex;
+	gap: 0.5rem;
+}
+
+/* This page has no red and wants none: a gateway that did not answer says so
+   in words, in the same grey as the number beside it. */
+.ping {
+	color: var(--quiet);
+	font-size: var(--small);
+	font-variant-numeric: tabular-nums;
+	margin-left: auto;
+}
+
 /* What a field is worth saying about, one point to a line.
 
    A hint that is three sentences of prose is a hint the reader has to hold all

@@ -103,6 +103,19 @@ type Gateway struct {
 	Via     string // gateway this one routes its own outbound through
 	Running bool
 	Ports   int // how many proxy ports currently use it
+	Ping    GatewayPing
+}
+
+// GatewayPing is the last round trip the service measured to a gateway.
+//
+// Three states, and they are three different things to know: never measured is
+// not slow, and unreachable is not nought. The service says so by what it sends
+// — no ping at all until somebody measures, and a measurement that carries the
+// time it was taken but no number when the gateway did not answer.
+type GatewayPing struct {
+	Tried    bool
+	Answered bool
+	MS       int
 }
 
 // GatewayList is the result of listing gateway configs.
@@ -125,6 +138,10 @@ func (c *Client) Gateways(ctx context.Context) (GatewayList, error) {
 				Running bool `json:"running"`
 				Ports   int  `json:"ports"`
 			} `json:"tunnel"`
+			Ping *struct {
+				MS *int   `json:"ms"`
+				At string `json:"at"`
+			} `json:"ping"`
 		} `json:"configs"`
 		Available bool   `json:"available"`
 		Reason    string `json:"reason"`
@@ -137,6 +154,12 @@ func (c *Client) Gateways(ctx context.Context) (GatewayList, error) {
 		g := Gateway{Name: cfg.Name, Kind: cfg.Kind, Remote: cfg.Remote, Via: cfg.Via}
 		if cfg.Tunnel != nil {
 			g.Running, g.Ports = cfg.Tunnel.Running, cfg.Tunnel.Ports
+		}
+		if cfg.Ping != nil {
+			g.Ping.Tried = true
+			if cfg.Ping.MS != nil {
+				g.Ping.Answered, g.Ping.MS = true, *cfg.Ping.MS
+			}
 		}
 		list.Gateways = append(list.Gateways, g)
 	}

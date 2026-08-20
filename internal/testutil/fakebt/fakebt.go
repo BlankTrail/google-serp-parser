@@ -37,6 +37,12 @@ type Gateway struct {
 	Via     string
 	Running bool
 	Ports   int
+	// PingMS is the round trip the service last measured, and Pinged whether it
+	// measured at all. Pinged with a nought PingMS is the gateway that was tried
+	// and did not answer, which the real service sends as a measurement with a
+	// time and no number.
+	Pinged bool
+	PingMS int
 }
 
 // Recorded is one request the fake saw.
@@ -295,6 +301,13 @@ func (s *Server) serveGateways(w http.ResponseWriter) {
 		}
 		if g.Running {
 			entry["tunnel"] = map[string]any{"running": true, "ports": g.Ports}
+		}
+		if g.Pinged {
+			ping := map[string]any{"at": "2026-08-14T00:00:00Z"}
+			if g.PingMS > 0 {
+				ping["ms"] = g.PingMS
+			}
+			entry["ping"] = ping
 		}
 		configs = append(configs, entry)
 	}

@@ -19,9 +19,13 @@ type gatewayChoice struct {
 	// Kind is what it speaks — vless, openvpn, shadowsocks — and Ping is the
 	// last round trip the service measured, in milliseconds. Nought means it has
 	// not been measured, which is not the same as instant.
-	Kind   string
+	Kind string
+	// Ping is the round trip in milliseconds and Timed says there is one to
+	// show. Tried without Timed is a gateway that was measured and did not
+	// answer, which is worth saying out loud rather than drawing as nought.
 	Ping   int
 	Timed  bool
+	Tried  bool
 	Chosen bool
 }
 
@@ -75,7 +79,14 @@ func gatewaysOffered(list blanktrail.GatewayList, chosen []string) ([]gatewayGro
 			byName[sub] = group
 			order = append(order, sub)
 		}
-		item := gatewayChoice{Name: g.Name, Kind: g.Kind, Chosen: want[g.Name]}
+		item := gatewayChoice{
+			Name:   g.Name,
+			Kind:   g.Kind,
+			Ping:   g.Ping.MS,
+			Timed:  g.Ping.Answered,
+			Tried:  g.Ping.Tried,
+			Chosen: want[g.Name],
+		}
 		if item.Chosen {
 			found++
 			group.Chosen++

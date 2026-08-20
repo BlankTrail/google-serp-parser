@@ -122,17 +122,28 @@
      brings the list. */}}
 {{if .OnGateways}}
 {{if .GatewayFault}}<p class="empty">{{.T .GatewayFault}}{{if .GatewayFaultAt}} {{.T "proxies.gateways.asked"}} <code>{{.GatewayFaultAt}}</code>{{end}}</p>{{end}}
+{{if .Groups}}
+<p class="ticks"><button type="button" data-tick="all">{{.T "proxies.gateways.all"}}</button>
+<button type="button" data-tick="none">{{.T "proxies.gateways.none"}}</button></p>
+<div class="scrolls">
 {{range .Groups}}
-<fieldset>
-<legend>{{if .Name}}{{.Name}}{{else}}{{$.T "proxies.gateways.loose"}}{{end}} — {{.Chosen}}/{{.Offered}}</legend>
+<fieldset data-gateways>
+<legend>{{if .Name}}{{.Name}}{{else}}{{$.T "proxies.gateways.loose"}}{{end}} — <span data-tally>{{.Chosen}}/{{.Offered}}</span>
+<button type="button" data-tick="all">{{$.T "proxies.gateways.all"}}</button>
+<button type="button" data-tick="none">{{$.T "proxies.gateways.none"}}</button></legend>
 {{range .Items}}
 <div class="field">
 <label for="gw-{{.Name}}">
 <input id="gw-{{.Name}}" name="gateway" type="checkbox" value="{{.Name}}"{{if .Chosen}} checked{{end}}>
-{{.Name}} <span class="empty">{{.Kind}}</span></label>
+{{.Name}} <span class="empty">{{.Kind}}</span>
+{{if .Timed}}<span class="ping">{{.Ping}} {{$.T "proxies.gateways.ping.ms"}}</span>
+{{else if .Tried}}<span class="ping">{{$.T "proxies.gateways.ping.gone"}}</span>
+{{else}}<span class="ping empty">{{$.T "proxies.gateways.ping.never"}}</span>{{end}}</label>
 </div>
 {{end}}
 </fieldset>
+{{end}}
+</div>
 {{end}}
 {{if .Missing}}<p class="empty">{{.T "proxies.gateways.missing"}} {{.Missing}}</p>{{end}}
 {{end}}

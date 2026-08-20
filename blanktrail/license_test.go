@@ -130,3 +130,30 @@ func TestTestEgress_ReturnsPerCheckVerdicts(t *testing.T) {
 		t.Errorf("http check OK=false, detail=%q", got.Detail)
 	}
 }
+
+func TestGateways_ReadsAMeasurementApartFromNoMeasurement(t *testing.T) {
+	// The service sends no ping at all until somebody measures, and a
+	// measurement carrying the time it was taken but no number when the gateway
+	// did not answer. Reading a missing number as nought would report the
+	// slowest gateways as the fastest.
+	c, f := newTestClient(t)
+	f.SetGateways([]fakebt.Gateway{
+		{Name: "Sub.Answered", Kind: "vless", Pinged: true, PingMS: 256},
+		{Name: "Sub.Silent", Kind: "vless", Pinged: true},
+		{Name: "Sub.Untried", Kind: "vless"},
+	})
+	list, err := c.Gateways(context.Background())
+	if err != nil {
+		t.Fatalf("Gateways: %v", err)
+	}
+	want := map[string]GatewayPing{
+		"Sub.Answered": {Tried: true, Answered: true, MS: 256},
+		"Sub.Silent":   {Tried: true},
+		"Sub.Untried":  {},
+	}
+	for _, g := range list.Gateways {
+		if got := g.Ping; got != want[g.Name] {
+			t.Errorf("%s: ping %+v, want %+v", g.Name, got, want[g.Name])
+		}
+	}
+}

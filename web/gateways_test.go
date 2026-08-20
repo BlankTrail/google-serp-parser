@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 	"github.com/blanktrail/google-serp-parser/settings"
 )
 
@@ -168,5 +171,93 @@ func TestGatewayFault_ReadsAnAnswerWrappedInAnotherError(t *testing.T) {
 	wrapped := fmt.Errorf("asking for gateways: %w", &blanktrail.APIError{Status: http.StatusUnauthorized})
 	if got := gatewayFault(wrapped); got != "proxies.gateways.refused" {
 		t.Errorf("a wrapped refusal read as %q", got)
+	}
+}
+
+func TestGatewaysOffered_CarriesTheThreePingStatesApart(t *testing.T) {
+	// Never measured is not slow and unreachable is not nought. Drawing either
+	// of them as a number would be the screen inventing a measurement nobody
+	// took.
+	list := blanktrail.GatewayList{Available: true, Gateways: []blanktrail.Gateway{
+		{Name: "Sub.Answered", Kind: "vless", Ping: blanktrail.GatewayPing{Tried: true, Answered: true, MS: 77}},
+		{Name: "Sub.Silent", Kind: "vless", Ping: blanktrail.GatewayPing{Tried: true}},
+		{Name: "Sub.Untried", Kind: "vless"},
+	}}
+	groups, _ := gatewaysOffered(list, nil)
+	if len(groups) != 1 {
+		t.Fatalf("groups: %d, want 1", len(groups))
+	}
+	got := map[string]gatewayChoice{}
+	for _, item := range groups[0].Items {
+		got[item.Name] = item
+	}
+	if c := got["Sub.Answered"]; !c.Timed || !c.Tried || c.Ping != 77 {
+		t.Errorf("a measured gateway came through as %+v", c)
+	}
+	if c := got["Sub.Silent"]; c.Timed || !c.Tried {
+		t.Errorf("a gateway that did not answer came through as %+v", c)
+	}
+	if c := got["Sub.Untried"]; c.Timed || c.Tried {
+		t.Errorf("a gateway nobody measured came through as %+v", c)
+	}
+}
+
+// gatewayScreen draws the proxies page against a service holding gws.
+func gatewayScreen(t *testing.T, gws []fakebt.Gateway, chosen []string) string {
+	t.Helper()
+	f := fakebt.New(t)
+	f.SetGateways(gws)
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := settings.Save(path, settings.Settings{
+		ControlURL: f.URL(), APIKey: f.Key(),
+		Proxy: settings.ProxySource{Kind: settings.ProxyGateways, Gateways: chosen},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	s, err := New(Config{Store: testStore(t), Logger: quiet(), SettingsPath: path})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return get(t, s, proxiesAt).Body.String()
+}
+
+func TestProxies_DrawsALongGatewayListInSomethingThatScrolls(t *testing.T) {
+	// Two-and-thirty gateways down the page put the button that saves them past
+	// the end of it, and the counts the reader came for off the top. The box is
+	// what keeps the form the size of a form, and the ticking of a whole
+	// subscription is what keeps it from being thirty-two decisions.
+	var gws []fakebt.Gateway
+	for i := 0; i < 32; i++ {
+		gws = append(gws, fakebt.Gateway{Name: fmt.Sprintf("Sub.Gate-%02d", i), Kind: "vless"})
+	}
+	page := gatewayScreen(t, gws, nil)
+	for _, want := range []string{`class="scrolls"`, `class="ticks"`, `data-tally`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page carries no %s, so the list is a page-long column of boxes", want)
+		}
+	}
+	// One pair over the whole list and one in the single subscription's legend:
+	// counting them is what tells the two apart, since either pair alone would
+	// satisfy a test that only asked whether the words appear anywhere.
+	for _, tick := range []string{`data-tick="all"`, `data-tick="none"`} {
+		if n := strings.Count(page, tick); n != 2 {
+			t.Errorf("%s appears %d times, want one over the list and one in the legend", tick, n)
+		}
+	}
+}
+
+func TestProxies_SaysWhatEachGatewayAnsweredWhenItWasMeasured(t *testing.T) {
+	// A number, a word for the ones that did not answer, and a word for the ones
+	// nobody has measured. Drawing the last two as numbers would be the screen
+	// reporting a measurement that was never taken.
+	page := gatewayScreen(t, []fakebt.Gateway{
+		{Name: "Sub.Quick", Kind: "vless", Pinged: true, PingMS: 77},
+		{Name: "Sub.Silent", Kind: "vless", Pinged: true},
+		{Name: "Sub.Untried", Kind: "vless"},
+	}, nil)
+	for _, want := range []string{"77 ms", "did not answer", "not measured"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page never says %q", want)
+		}
 	}
 }
