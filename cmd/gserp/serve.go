@@ -162,6 +162,22 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	// Read before the address is taken: where to listen is one of the things it
 	// says, and a listener already bound cannot be moved.
 	saved, _ := opts.saved(io.Discard)
+
+	// Which developer's work brought the user here, told to the service once a
+	// run. In the background and on its own timer: it has nothing to do with
+	// parsing, the service may be slow to answer or not there at all, and a
+	// program that made somebody wait on its own attribution would deserve
+	// none.
+	if saved.ControlURL != "" && saved.APIKey != "" {
+		if client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey); err == nil {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), stampPatience)
+				defer cancel()
+				stampIntegration(ctx, client, opts.logger(os.Stderr))
+			}()
+		}
+	}
+
 	ln, err := net.Listen("tcp", listenOn(opts.Addr, saved, out))
 	if err != nil {
 		return opts.scrubbed(err)
@@ -1165,3 +1181,8 @@ func (o serveOptions) gatewayChannel(ctx context.Context, client *blanktrail.Cli
 	rotor := blanktrail.NewStaticRotor(blanktrail.GatewayUpstreams(chosen), opts...)
 	return blanktrail.NewGatewayListChannel("gateways", rotor), nil
 }
+
+// stampPatience is how long the one attribution request is given. It is short
+// on purpose: nothing waits on it, and a service that is not answering has
+// something more pressing wrong with it than this.
+const stampPatience = 10 * time.Second

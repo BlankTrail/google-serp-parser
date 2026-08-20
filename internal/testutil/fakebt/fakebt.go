@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -74,6 +75,10 @@ type Server struct {
 	fails       map[string][]failure
 	seen        []Recorded
 	nextPort    int
+
+	// integrationKey is the developer's key a program has stamped in, which is
+	// how the service is told whose work brought the user.
+	integrationKey string
 }
 
 // New starts a fake control API and registers its shutdown with t.
@@ -240,6 +245,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.serveOpen(w, body)
 	case "/api/v1/ports/close":
 		s.serveClose(w, body)
+	case "/api/v1/settings/integration-key":
+		s.serveIntegrationKey(w, r, body)
 	case "/api/v1/upstream/test":
 		writeJSON(w, http.StatusOK, map[string]any{
 			"http": map[string]any{"ok": true, "detail": "direct"},
@@ -497,4 +504,41 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// serveIntegrationKey answers the developer's key and takes a new one, the way
+// the service does: a PUT of the empty string clears it.
+func (s *Server) serveIntegrationKey(w http.ResponseWriter, r *http.Request, body []byte) {
+	if r.Method == http.MethodPut {
+		var in struct {
+			IntegrationKey string `json:"integration_key"`
+		}
+		if err := json.Unmarshal(body, &in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad body"})
+			return
+		}
+		s.mu.Lock()
+		s.integrationKey = strings.TrimSpace(in.IntegrationKey)
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	s.mu.Lock()
+	key := s.integrationKey
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"integration_key": key, "set": key != ""})
+}
+
+// IntegrationKey is what a test reads to see what a program stamped in, and
+// SetIntegrationKey is how a test says somebody else got there first.
+func (s *Server) IntegrationKey() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.integrationKey
+}
+
+func (s *Server) SetIntegrationKey(key string) {
+	s.mu.Lock()
+	s.integrationKey = key
+	s.mu.Unlock()
 }
