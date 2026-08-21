@@ -62,6 +62,29 @@ func DeriveCooldown(portsPerThread int, delayMin, delayMax time.Duration) time.D
 	return time.Duration(portsPerThread) * mid
 }
 
+// LeaseTrace is one identity being handed to a caller, for whoever is
+// measuring.
+//
+// Warm and Requests are what make the trace answer the question it is usually
+// opened for: what more ports per thread actually buy. The first request on an
+// identity costs one to three minutes and every one after it costs one to two
+// seconds, so a run whose leases are mostly cold is a run paying that first
+// price over and over — and the way to see that is to count the leases that
+// went to an identity which had never answered.
+type LeaseTrace struct {
+	Port int
+	// Waited is how long the caller stood in the queue for this identity.
+	Waited time.Duration
+	// Warm says the identity had already brought back an answer somebody
+	// accepted, and Requests is how many requests it has served since its
+	// identity last changed.
+	Warm     bool
+	Requests int
+	// Ports is how many identities the pool holds, so a line read on its own
+	// says what it is a lease out of.
+	Ports int
+}
+
 // PoolConfig configures a pool of worker ports.
 type PoolConfig struct {
 	// Client is the control-API client. Required.
@@ -127,7 +150,7 @@ type PoolConfig struct {
 	// port with nothing going through it looks the same whether every thread is
 	// busy elsewhere or every thread is standing in a queue for it. This is the
 	// half that was missing.
-	OnLease func(port int, waited time.Duration)
+	OnLease func(LeaseTrace)
 
 	// OnPort, when set, is told each time an identity changes underneath the
 	// callers rather than because of one of them: a new address, a reopening, a
@@ -1235,7 +1258,16 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 				continue
 			}
 			if p.cfg.OnLease != nil {
-				p.cfg.OnLease(pt.num, p.cfg.Now().Sub(asked))
+				pt.mu.Lock()
+				warm, served := pt.answered, pt.requests
+				pt.mu.Unlock()
+				p.cfg.OnLease(LeaseTrace{
+					Port:     pt.num,
+					Waited:   p.cfg.Now().Sub(asked),
+					Warm:     warm,
+					Requests: served,
+					Ports:    p.Size(),
+				})
 			}
 			return &Lease{pt: pt, pool: p}, nil
 		}

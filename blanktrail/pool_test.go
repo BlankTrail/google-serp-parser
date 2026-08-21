@@ -2701,3 +2701,60 @@ func TestPool_ChangesAPortsIdentityOnceItsTimeIsUp(t *testing.T) {
 		t.Errorf("the lease is on port %d, want the port that was renewed, %d", l.Port(), num)
 	}
 }
+
+func TestPool_TellsATraceWhetherTheIdentityItHandedOutHadEverAnswered(t *testing.T) {
+	// The whole point of tracing leases is the question of what another port per
+	// thread buys, and that turns on one thing: was this identity one that had
+	// already answered, or one about to pay a first request of one to three
+	// minutes. A trace that says only which port was handed out cannot tell
+	// those apart, and the two look identical in every other field.
+	var seen []LeaseTrace
+	cfg := testPoolConfig(t, fakebt.New(t), newFakeClock(), 1, 2)
+	cfg.OnLease = func(l LeaseTrace) { seen = append(seen, l) }
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+	p.PaceAt(0)
+
+	cold, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("first Acquire: %v", err)
+	}
+	cold.Answered()
+	first := cold.Port()
+	cold.Release()
+
+	// The same identity again, now that it has answered.
+	for range 4 {
+		l, err := p.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("Acquire: %v", err)
+		}
+		got := l.Port()
+		l.Release()
+		if got == first {
+			break
+		}
+	}
+
+	if len(seen) < 2 {
+		t.Fatalf("the trace saw %d leases, want at least two", len(seen))
+	}
+	if seen[0].Warm {
+		t.Error("the first lease of a fresh pool was traced as warm")
+	}
+	var warmed bool
+	for _, l := range seen[1:] {
+		if l.Port == first && l.Warm {
+			warmed = true
+		}
+	}
+	if !warmed {
+		t.Error("an identity that had answered was never traced as warm, so the trace cannot tell the two prices apart")
+	}
+	if seen[0].Ports != 2 {
+		t.Errorf("a lease says it is one of %d identities, want 2", seen[0].Ports)
+	}
+}

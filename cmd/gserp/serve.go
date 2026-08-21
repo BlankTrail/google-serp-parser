@@ -776,14 +776,23 @@ func (o serveOptions) threadTracer() run.Watch {
 // A trace of requests alone cannot say why a wide pool is quiet — a port with
 // nothing going through it reads the same whether every thread is busy
 // elsewhere or every thread is queueing for it.
-func (o serveOptions) leaseTracer() func(int, time.Duration) {
+func (o serveOptions) leaseTracer() func(blanktrail.LeaseTrace) {
 	if !o.Trace {
 		return nil
 	}
 	log := o.logger(os.Stderr)
-	return func(port int, waited time.Duration) {
+	return func(l blanktrail.LeaseTrace) {
+		// warm and served are the two the measurement turns on: a lease to an
+		// identity that has never answered is about to pay one to three minutes,
+		// and one to an identity that has answered is about to cost a second or
+		// two. Counting them apart is how "what does another port per thread
+		// buy" stops being an argument and becomes a number.
 		log.Info("an identity was handed out",
-			"port", port, "waited", waited.Round(time.Millisecond))
+			"port", l.Port,
+			"waited", l.Waited.Round(time.Millisecond),
+			"warm", l.Warm,
+			"served", l.Requests,
+			"of", l.Ports)
 	}
 }
 
