@@ -372,7 +372,7 @@ func (p page) T(key string) string { return p.Lang.T(key) }
 // thing: a job's own page is titled after that job and stands under the list of
 // jobs, and a screen that lit no tab would tell the reader they had left the
 // program.
-func (s *Server) frame(r *http.Request, lang Lang, title, under string) page {
+func (s *Server) frame(lang Lang, title, under string) page {
 	p := page{Lang: lang, Title: title, Tabs: tabsFor(under)}
 	if s.settingsPath != "" {
 		p.Settings = &tabLink{Key: "settings.title", URL: settingsAt, Current: under == settingsAt}
@@ -393,7 +393,7 @@ func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	view := jobsPage{page: s.frame(r, lang, "jobs.title", jobsAt), Jobs: jobs}
+	view := jobsPage{page: s.frame(lang, "jobs.title", jobsAt), Jobs: jobs}
 	// Asked for again only while something on it can come back different. A list
 	// where every job has finished reads the same in the morning, and asking
 	// every few seconds until then is knocking on a door with nobody behind it.

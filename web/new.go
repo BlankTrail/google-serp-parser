@@ -495,7 +495,7 @@ func sources() []jobSource {
 func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 	form jobForm, complaints []string) {
 	s.render(w, r, "new.html", newPage{
-		page:       s.frame(r, lang, "new.title", newAt),
+		page:       s.frame(lang, "new.title", newAt),
 		Form:       form,
 		Complaints: complaints,
 		Kinds:      kinds(),

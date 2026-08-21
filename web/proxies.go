@@ -176,7 +176,7 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 			view.Taken = taken.Format("15:04")
 		}
 	}
-	view.page = s.frame(r, lang, "proxies.title", proxiesAt)
+	view.page = s.frame(lang, "proxies.title", proxiesAt)
 	if view.Running {
 		view.Refresh = proxiesRefresh.Milliseconds()
 	}
@@ -216,7 +216,7 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 			// quietly forgets it at the next start.
 			view.Complaints = append(view.Complaints, "settings.opened.nothing")
 		}
-		view.page = s.frame(r, lang, "proxies.title", proxiesAt)
+		view.page = s.frame(lang, "proxies.title", proxiesAt)
 		s.render(w, r, "proxies.html", view)
 		return
 	}
@@ -226,7 +226,7 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 		view.Form = form
 		view.Sources = sourcesOffered(form.Source)
 		view.Complaints = []string{"settings.opened.nothing"}
-		view.page = s.frame(r, lang, "proxies.title", proxiesAt)
+		view.page = s.frame(lang, "proxies.title", proxiesAt)
 		s.render(w, r, "proxies.html", view)
 		return
 	}

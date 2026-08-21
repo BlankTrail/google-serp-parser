@@ -519,7 +519,7 @@ var severityKeys = map[blanktrail.Severity]string{
 // showSettings draws the page, filling in the parts of it that are the same
 // however the reader got here.
 func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, lang Lang, view settingsView) {
-	view.page = s.frame(r, lang, "settings.title", settingsAt)
+	view.page = s.frame(lang, "settings.title", settingsAt)
 	view.Sources = sourcesOffered(view.Form.Source)
 	view.Devices = devicesOffered(view.Form.HotDevice)
 	view.Tongues = tonguesOffered(view.Form.Tongue)
