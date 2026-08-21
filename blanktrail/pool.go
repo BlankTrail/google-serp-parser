@@ -678,7 +678,28 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 		if specNames[i] != "" {
 			spec = specByName(p.cfg.Specs, specNames[i])
 		}
+		// The egress can refuse the port, and then another number is no remedy:
+		// the remedy is another egress. Each one that refuses is left behind and
+		// remembered, so a channel that hands the same dead gateway back — which
+		// is what a channel with one gateway does, since a bench never holds all
+		// of them — ends the search instead of restarting it.
+		//
+		// Measured on a live service: fourteen of fifteen chosen gateways
+		// answered "xray gw … exited during startup" at once. Giving up on the
+		// first of them opened no pool at all on a service that had a working
+		// gateway all along.
+		refused := map[string]error{}
 		num, err := p.openOne(ctx, used, spec, eg)
+		for err != nil && errors.Is(err, ErrEgressRefused) {
+			refused[eg.String()] = err
+			ch.MarkDead(eg)
+			next, ok := ch.Next()
+			if !ok || refused[next.String()] != nil {
+				return fmt.Errorf("blanktrail: channel %q has no egress left that will carry a port: %w", ch.Name(), err)
+			}
+			eg = next
+			num, err = p.openOne(ctx, used, spec, eg)
+		}
 		if err != nil {
 			return err
 		}
@@ -998,6 +1019,10 @@ func (p *Pool) openOne(ctx context.Context, used map[int]bool, spec PortSpec, eg
 		}
 
 		if _, err := p.cl.OpenPort(ctx, num, spec, eg); err != nil {
+			if egressRefused(err, eg) {
+				// Another number would be refused exactly as this one was.
+				return 0, fmt.Errorf("%w: %w", ErrEgressRefused, err)
+			}
 			if !numberTaken(err) {
 				return 0, fmt.Errorf("blanktrail: open port %d: %w", num, err)
 			}
@@ -1088,6 +1113,35 @@ func numberTaken(err error) bool {
 		return false
 	}
 	return apiErr.Status == http.StatusConflict
+}
+
+// ErrEgressRefused is returned when a port could not be opened because of where
+// it was to send its traffic, rather than because of its number.
+var ErrEgressRefused = errors.New("blanktrail: the egress refused the port")
+
+// egressRefused reports whether a refusal was about the egress rather than the
+// number.
+//
+// The service answers both with 409, and the two want opposite remedies: a
+// number that is taken wants another number, and a gateway that will not start
+// wants another gateway. Read as the first, a dead gateway makes the pool walk
+// its whole range of port numbers reopening on the same dead thing, and give up
+// saying the numbers were taken — measured on a live service where fourteen of
+// fifteen gateways answered "exited during startup", and no pool would open at
+// all.
+//
+// It is told apart by the name rather than by the words: the service says which
+// gateway it could not start, and that name is one this program asked for, so
+// nothing here depends on the wording of an English sentence.
+func egressRefused(err error, eg Egress) bool {
+	if eg.Gateway == "" {
+		return false
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict {
+		return false
+	}
+	return strings.Contains(apiErr.Message, eg.Gateway) || strings.Contains(apiErr.Body, eg.Gateway)
 }
 
 // portAttempts is how many port numbers one open may work through. It is also

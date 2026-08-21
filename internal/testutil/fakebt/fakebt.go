@@ -6,6 +6,7 @@ package fakebt
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -70,17 +71,19 @@ type Server struct {
 	ts  *httptest.Server
 	key string
 
-	mu          sync.Mutex
-	license     License
-	gateways    []Gateway
-	ca          []byte
-	ports       map[int]string // port -> upstream
-	profiles    map[int]Profile
-	rotates     map[int]int
-	rotateDrift bool
-	fails       map[string][]failure
-	seen        []Recorded
-	nextPort    int
+	mu       sync.Mutex
+	license  License
+	gateways []Gateway
+	ca       []byte
+	ports    map[int]string // port -> upstream
+	// deadGateways are the ones whose tunnel will not start.
+	deadGateways map[string]bool
+	profiles     map[int]Profile
+	rotates      map[int]int
+	rotateDrift  bool
+	fails        map[string][]failure
+	seen         []Recorded
+	nextPort     int
 
 	// integrationKey is the developer's key a program has stamped in, which is
 	// how the service is told whose work brought the user.
@@ -204,6 +207,17 @@ func (s *Server) RotateCount(port int) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.rotates[port]
+}
+
+// RefuseGateway makes the fake answer an open on this gateway the way the real
+// service answers one whose tunnel will not start: 409, with the gateway named.
+func (s *Server) RefuseGateway(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.deadGateways == nil {
+		s.deadGateways = map[string]bool{}
+	}
+	s.deadGateways[name] = true
 }
 
 // Requests returns every request the fake has seen, in order.
@@ -381,6 +395,7 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 		Port     int     `json:"port"`
 		Protocol string  `json:"protocol"`
 		Upstream *string `json:"upstream"`
+		Gateway  string  `json:"upstream_gateway"`
 		Browser  string  `json:"browser"`
 		OS       string  `json:"os"`
 	}
@@ -393,6 +408,15 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 	if _, busy := s.ports[req.Port]; busy {
 		s.mu.Unlock()
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "port already open"})
+		return
+	}
+	// A gateway that will not start, answered the way the real service answers
+	// it: the same 409 as a taken port number, with the gateway named in it.
+	if req.Gateway != "" && s.deadGateways[req.Gateway] {
+		s.mu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": fmt.Sprintf("upstream gateway %q: xray gw %q: exited during startup (exit status 0xffffffff); stderr: ", req.Gateway, req.Gateway),
+		})
 		return
 	}
 	up := ""

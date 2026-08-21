@@ -2758,3 +2758,47 @@ func TestPool_TellsATraceWhetherTheIdentityItHandedOutHadEverAnswered(t *testing
 		t.Errorf("a lease says it is one of %d identities, want 2", seen[0].Ports)
 	}
 }
+
+func TestPool_OpensOnAnotherGatewayWhenOneWillNotStart(t *testing.T) {
+	// Measured on a live service: fourteen of fifteen chosen gateways answered
+	// "xray gw … exited during startup", and the service says it with the same
+	// 409 it uses for a port number that is taken. Read as a number, the pool
+	// walked its whole range of numbers reopening on the same dead gateway and
+	// gave up saying the numbers were taken — so no pool opened at all, on a
+	// service that had a working gateway all along.
+	fake := fakebt.New(t)
+	fake.RefuseGateway("dead-one")
+	fake.RefuseGateway("dead-two")
+
+	cfg := testPoolConfig(t, fake, newFakeClock(), 1, 1)
+	cfg.Channels = []Channel{NewGatewayListChannel("gateways",
+		NewStaticRotor(GatewayUpstreams([]string{"dead-one", "dead-two", "alive"})))}
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("the pool did not open although one gateway works: %v", err)
+	}
+	defer p.Close()
+
+	if got := p.ports[0].egress().Gateway; got != "alive" {
+		t.Errorf("the port opened on %q, want the gateway that starts", got)
+	}
+}
+
+func TestPool_SaysWhenNoGatewayWillCarryAPort(t *testing.T) {
+	// And when none of them will start, the reason has to be the one the service
+	// gave. "The port numbers were taken" sent the reader to look at a range
+	// that was never the trouble.
+	fake := fakebt.New(t)
+	fake.RefuseGateway("dead-one")
+
+	cfg := testPoolConfig(t, fake, newFakeClock(), 1, 1)
+	cfg.Channels = []Channel{NewGatewayListChannel("gateways",
+		NewStaticRotor(GatewayUpstreams([]string{"dead-one"})))}
+	_, err := NewPool(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("a pool opened on a gateway that will not start")
+	}
+	if !strings.Contains(err.Error(), "exited during startup") {
+		t.Errorf("the failure reads %q, and never says what the service said", err)
+	}
+}
