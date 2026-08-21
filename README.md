@@ -417,7 +417,7 @@ announced.
 
 ## 🏗 Building from source
 
-Go 1.24 or newer. No cgo, no build tags, no code generation:
+Go 1.26 or newer. No cgo, no build tags, no code generation:
 
 ```
 git clone https://github.com/BlankTrail/google-serp-parser
