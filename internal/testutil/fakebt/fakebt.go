@@ -220,6 +220,14 @@ func (s *Server) RefuseGateway(name string) {
 	s.deadGateways[name] = true
 }
 
+// AllowGateway undoes RefuseGateway: the tunnel starts again, which is what
+// every gateway that refused on a live service did when asked later.
+func (s *Server) AllowGateway(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.deadGateways, name)
+}
+
 // Requests returns every request the fake has seen, in order.
 func (s *Server) Requests() []Recorded {
 	s.mu.Lock()

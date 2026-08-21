@@ -8,7 +8,9 @@ import (
 	"context"
 	"io"
 	"os"
+	"sort"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,15 +41,17 @@ const slowEnoughToBeAChallenge = 10 * time.Second
 // The case for it is that an identity asked less often lasts longer before
 // Google challenges it, so a thread with several ports and a pause between
 // requests gets more answers out of each identity than a thread hammering one.
-// The case against is that identities go cold: an identity that rests is an
-// identity that pays one to three minutes on its next request, and a pool of
-// many rarely-used identities pays that over and over.
+// The case against is that identities go cold: an identity that rests pays one
+// to three minutes on its next request, and a pool of many rarely-used
+// identities pays that over and over.
 //
-// Both are plausible and they point opposite ways, so this measures the first
-// half directly: one identity, warmed, then asked at a fixed gap until it is
-// challenged or the budget runs out. Repeated at several gaps, on a fresh
-// identity each time — a challenge in one arm would otherwise be inherited by
-// the next.
+// Every arm runs at the same time, on its own identity, through one gateway —
+// so all of them share one exit address, and share it in the same condition at
+// every moment. Run one after another they would not: the first arm would meet
+// a fresh address and the last one an address that had already carried
+// everything before it, and a difference between them would say as much about
+// the address as about the pace. Running together, what differs between the
+// arms is the gap and nothing else.
 //
 // Nothing here is asserted. It reports, and the numbers decide.
 func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
@@ -64,80 +68,130 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 	gaps := gapsAsked(t)
 	budget := budgetAsked(t)
 
-	// Long enough for every arm plus the cold start each of them opens with.
-	var patience time.Duration
+	// The arms run together, so the measurement is as long as its slowest arm —
+	// plus room for the cold start each identity opens with.
+	var longest time.Duration
 	for _, gap := range gaps {
-		patience += time.Duration(budget)*(gap+30*time.Second) + 5*time.Minute
+		if gap > longest {
+			longest = gap
+		}
 	}
+	patience := time.Duration(budget)*(longest+30*time.Second) + 20*time.Minute
 	ctx, cancel := context.WithTimeout(t.Context(), patience)
 	defer cancel()
 
-	// One identity per arm and a few in reserve: an address from the list can be
-	// dead, and a dead one answers nothing at any pace.
+	// One identity per arm and a few in reserve: an address can be dead, and a
+	// dead one answers nothing at any pace.
 	pool, err := o.dial(ctx, saved, 1, len(gaps)+4, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening the identities: %v", o.clean(err.Error()))
 	}
 	defer func() { _ = pool.Close() }()
 
-	t.Logf("gaps: %v, budget: %d requests an arm", gaps, budget)
+	t.Logf("gaps: %v, budget: %d requests an arm, every arm at once", gaps, budget)
+
+	// Warmed together, for the reason they are run together: an identity warmed
+	// a quarter of an hour before another is an identity of a different age.
+	type held struct {
+		lease *blanktrail.Lease
+		sess  *google.Session
+	}
+	warm := make([]held, len(gaps))
+	var warming sync.WaitGroup
+	var say sync.Mutex
+	for i := range gaps {
+		warming.Add(1)
+		go func(i int) {
+			defer warming.Done()
+			l, s := warmed(ctx, t, &say, o, pool)
+			warm[i] = held{lease: l, sess: s}
+		}(i)
+	}
+	warming.Wait()
+
 	type arm struct {
-		gap       time.Duration
+		gap  time.Duration
+		port int
+		// egress is where this arm's identity sends its traffic. Printed because
+		// an arm is only about the pace when the address is its own: six arms
+		// behind one address measure that address, and the first run of this
+		// measurement proved it — every arm died inside a minute whatever its
+		// gap, because what was walled was the exit.
+		egress    string
 		answered  int
 		challenge time.Duration
 		died      string
+		ran       time.Duration
 	}
-	var arms []arm
+	arms := make([]arm, len(gaps))
 
-	for _, gap := range gaps {
-		lease, sess := warmed(ctx, t, o, pool)
-		if lease == nil {
+	var running sync.WaitGroup
+	for i, gap := range gaps {
+		if warm[i].lease == nil {
+			say.Lock()
 			t.Errorf("gap %v: no identity answered a first request, so this arm measures nothing", gap)
+			say.Unlock()
 			continue
 		}
-		a := arm{gap: gap}
-		t.Logf("gap %v — port %d", gap, lease.Port())
-		for i := range budget {
-			if gap > 0 {
-				select {
-				case <-ctx.Done():
-				case <-time.After(gap):
+		arms[i] = arm{gap: gap, port: warm[i].lease.Port(), egress: warm[i].lease.Egress().String()}
+		running.Add(1)
+		go func(i int, gap time.Duration, h held) {
+			defer running.Done()
+			defer h.lease.Release()
+			began := time.Now()
+			for n := range budget {
+				if gap > 0 {
+					select {
+					case <-ctx.Done():
+					case <-time.After(gap):
+					}
+				}
+				if ctx.Err() != nil {
+					break
+				}
+				started := time.Now()
+				// A different phrase per arm as well as per request: several
+				// identities behind one address asking the same words in the
+				// same second is a pattern of its own, and not the one being
+				// measured.
+				serp, err := h.sess.Search(ctx, google.Query{
+					Text: phraseFor(n*len(gaps) + i), Country: "us", Language: "en"})
+				took := time.Since(started)
+				say.Lock()
+				switch {
+				case err != nil:
+					arms[i].died = o.clean(err.Error())
+					t.Logf("gap %-4v port %d request %3d: failed after %v — %s",
+						gap, h.lease.Port(), n+1, took.Round(time.Millisecond), arms[i].died)
+				case took >= slowEnoughToBeAChallenge:
+					arms[i].challenge = took
+					t.Logf("gap %-4v port %d request %3d: %v — a challenge, after %d quick answers",
+						gap, h.lease.Port(), n+1, took.Round(time.Millisecond), arms[i].answered)
+				default:
+					arms[i].answered++
+					t.Logf("gap %-4v port %d request %3d: %v — %d results",
+						gap, h.lease.Port(), n+1, took.Round(time.Millisecond), len(serp.Results))
+				}
+				done := arms[i].challenge > 0 || arms[i].died != ""
+				say.Unlock()
+				if done {
+					break
 				}
 			}
-			// A break inside that select would leave the select and go straight
-			// on to another request, which is how a measurement runs past its own
-			// deadline printing timeouts.
-			if ctx.Err() != nil {
-				t.Logf("  out of time after %d quick answers", a.answered)
-				break
-			}
-			started := time.Now()
-			serp, err := sess.Search(ctx, google.Query{
-				Text: phraseFor(i), Country: "us", Language: "en"})
-			took := time.Since(started)
-			switch {
-			case err != nil:
-				a.died = o.clean(err.Error())
-				t.Logf("  request %d after %v: failed — %s", i+1, took.Round(time.Millisecond), a.died)
-			case took >= slowEnoughToBeAChallenge:
-				a.challenge = took
-				t.Logf("  request %d: %v — a challenge, after %d quick answers",
-					i+1, took.Round(time.Millisecond), a.answered)
-			default:
-				a.answered++
-				t.Logf("  request %d: %v — %d results", i+1, took.Round(time.Millisecond), len(serp.Results))
-			}
-			if a.challenge > 0 || a.died != "" {
-				break
-			}
-		}
-		lease.Release()
-		arms = append(arms, a)
+			say.Lock()
+			arms[i].ran = time.Since(began)
+			say.Unlock()
+		}(i, gap, warm[i])
 	}
+	running.Wait()
 
+	sort.SliceStable(arms, func(a, b int) bool { return arms[a].gap < arms[b].gap })
 	t.Log("")
-	t.Log("gap between requests | quick answers before a challenge | what ended the arm")
+	t.Log("gap    port   egress                          quick answers   arm lasted   what ended it")
 	for _, a := range arms {
+		if a.port == 0 {
+			continue
+		}
 		ended := "the budget ran out"
 		switch {
 		case a.died != "":
@@ -145,7 +199,7 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 		case a.challenge > 0:
 			ended = "a challenge, " + a.challenge.Round(time.Second).String()
 		}
-		t.Logf("%-20v | %-32d | %s", a.gap, a.answered, ended)
+		t.Logf("%-6v %-6d %-31s %-15d %-12v %s", a.gap, a.port, a.egress, a.answered, a.ran.Round(time.Second), ended)
 	}
 	t.Log("")
 	t.Log("If the quick answers climb with the gap, resting an identity buys requests")
@@ -157,38 +211,47 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 // warmed takes identities until one answers, and hands back that identity and
 // the session over it. What is measured is what happens after this, because a
 // first request is the cold start every arm pays alike.
-func warmed(ctx context.Context, t *testing.T, o serveOptions, pool *blanktrail.Pool) (*blanktrail.Lease, *google.Session) {
+func warmed(ctx context.Context, t *testing.T, say *sync.Mutex, o serveOptions, pool *blanktrail.Pool) (*blanktrail.Lease, *google.Session) {
 	t.Helper()
 	for tried := 1; tried <= 5; tried++ {
 		l, err := pool.Acquire(ctx)
 		if err != nil {
-			t.Fatalf("taking an identity: %v", o.clean(err.Error()))
+			say.Lock()
+			t.Errorf("taking an identity: %v", o.clean(err.Error()))
+			say.Unlock()
+			return nil, nil
 		}
 		s := google.NewSession(l.Client().Transport)
 		s.Client.Timeout = l.Client().Timeout
 		started := time.Now()
 		if _, err := s.Search(ctx, google.Query{Text: "weather", Country: "us", Language: "en"}); err != nil {
-			t.Logf("  warming: an identity failed after %v: %s",
+			say.Lock()
+			t.Logf("  warming port %d: failed after %v — %s", l.Port(),
 				time.Since(started).Round(time.Millisecond), o.clean(err.Error()))
+			say.Unlock()
 			_ = l.Reject(ctx)
 			l.Release()
 			continue
 		}
 		l.Answered()
-		t.Logf("  warmed in %v", time.Since(started).Round(time.Millisecond))
+		say.Lock()
+		t.Logf("  warmed port %d in %v", l.Port(), time.Since(started).Round(time.Millisecond))
+		say.Unlock()
 		return l, s
 	}
 	return nil, nil
 }
 
-// phraseFor is an ordinary one-word query, and a different one each time: the
-// same phrase asked twice may be answered from something other than a search.
+// phraseFor is an ordinary query, and a different one each time: the same
+// phrase asked twice may be answered from something other than a search.
 func phraseFor(i int) string {
 	words := []string{
 		"weather", "recipes", "dictionary", "train times", "calculator",
 		"news", "maps", "translate", "hardware store", "opening hours",
 		"football scores", "flight status", "currency", "postcode", "pharmacy",
 		"bus timetable", "cinema", "library", "car hire", "dentist",
+		"coffee near me", "petrol prices", "tax return", "bank holidays", "tide times",
+		"museum tickets", "vet", "locksmith", "plumber", "hotel deals",
 	}
 	return words[i%len(words)]
 }

@@ -417,3 +417,17 @@ func TestProxies_SavesHowOftenAPortChangesItsIdentity(t *testing.T) {
 		t.Errorf("nought in the box was kept as %v", after.RenewEvery)
 	}
 }
+
+func TestProxies_ShowsTheGatewaysThatWouldNotCarryAPort(t *testing.T) {
+	// The screen is where an operator finds out; without this the only sign of
+	// fourteen dead gateways is a pool smaller than they asked for.
+	page := get(t, testServer(t), proxiesAt).Body.String()
+	if !strings.Contains(page, `id="reopenings"`) {
+		t.Fatal("the proxy screen is not the page this test thinks it is")
+	}
+	// Nothing refused, so nothing is drawn: a heading over an empty table reads
+	// as a fault of its own.
+	if strings.Contains(page, "Would not carry a port") {
+		t.Error("the screen draws the refusals heading when nothing refused")
+	}
+}
