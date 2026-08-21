@@ -222,10 +222,17 @@ func TestTrace_SaysWhereARequestWasWhenItStopped(t *testing.T) {
 		t.Error("the trace gives the request no duration at all")
 	}
 	// In order, and every stage reached: a request that got an answer went
-	// through all of them, and a zero anywhere would mean a stage this trace
-	// cannot see.
-	if tr.Connect <= 0 || tr.TLS < tr.Connect || tr.Wrote < tr.TLS ||
-		tr.FirstByte < tr.Wrote || tr.Total < tr.FirstByte {
+	// through all of them.
+	//
+	// The connection is allowed to have taken no measurable time. It is made to
+	// a listener on this machine, and on a clock that ticks in whole
+	// milliseconds — Windows — that dial lands inside a single tick often
+	// enough to fail this test on one run in ten. What a nought there means is
+	// "faster than the clock", not "this stage never happened": every stage
+	// after it is measured from the same start, so an out-of-order reading would
+	// still be caught.
+	if tr.Connect < 0 || tr.TLS < tr.Connect || tr.Wrote < tr.TLS ||
+		tr.FirstByte < tr.Wrote || tr.Total < tr.FirstByte || tr.TLS <= 0 {
 		t.Errorf("the stages are not in order or one is missing: connect=%v tls=%v "+
 			"wrote=%v firstByte=%v total=%v", tr.Connect, tr.TLS, tr.Wrote, tr.FirstByte, tr.Total)
 	}

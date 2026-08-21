@@ -74,9 +74,14 @@ type Estimate struct {
 	// results ran out costs less.
 	Searches int
 	// Warmups is the home-page visit a session pays before its first search. It
-	// is one per port the work reaches rather than one per query, because the
-	// session is kept for as long as the identity it belongs to, and a job with
-	// fewer queries than ports never reaches the rest of them.
+	// is one per port rather than one per query, because the session is kept for
+	// as long as the identity it belongs to, and a job with fewer queries than
+	// ports never reaches the rest of them.
+	//
+	// It is a ceiling on that visit and not a promise of it: a lease goes to an
+	// identity that has answered before one that never has, so a job with more
+	// ports than threads keeps returning to the same few and may never touch the
+	// rest. What it quotes is the pool it was given.
 	Warmups int
 	// Requests is what the two above add up to: what will actually leave the
 	// machine in the best case. Report.Requests counts something else — the

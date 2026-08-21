@@ -2850,3 +2850,50 @@ func TestPool_RemembersWhichGatewaysWouldNotCarryAPortAndForgetsThemWhenTheyDo(t
 		t.Errorf("a gateway that carried a port is still on the list: %+v", left)
 	}
 }
+
+func TestLease_RejectLeavesTheIdentityColdAgain(t *testing.T) {
+	// A lease goes to an identity that has answered before one that never has,
+	// so what counts as having answered decides where the next request goes. A
+	// refusal is the caller saying this was not an answer — left marked warm, a
+	// refused identity becomes the preferred one for the retry, which is the
+	// opposite of what the retry is for.
+	//
+	// Caught on a build server and not here: a cooldown between two leases hides
+	// it, and every test in this package that touches a refusal has one.
+	f := fakebt.New(t)
+	p, err := NewPool(context.Background(), testPoolConfig(t, f, newFakeClock(), 1, 2))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+	p.PaceAt(0)
+
+	lease, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	lease.Answered()
+	if warm := p.Stats().Warm; warm != 1 {
+		t.Fatalf("%d identities count as warm after one answered, want 1", warm)
+	}
+
+	if err := lease.Reject(context.Background()); err != nil {
+		t.Fatalf("Reject: %v", err)
+	}
+	if warm := p.Stats().Warm; warm != 0 {
+		t.Errorf("%d identities still count as warm after the answer was refused", warm)
+	}
+	refused := lease.Port()
+	lease.Release()
+
+	// And the next lease is not sent back to it in preference to the one that
+	// has never been tried.
+	next, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("second Acquire: %v", err)
+	}
+	defer next.Release()
+	if next.Port() == refused {
+		t.Error("the lease went back to the identity that had just been refused")
+	}
+}

@@ -204,11 +204,16 @@ func TestEstimate_MatchesWhatACleanRunActuallyCosts(t *testing.T) {
 	if got := o.searches.Load(); got != int64(est.Searches) {
 		t.Errorf("%d searches, estimated %d", got, est.Searches)
 	}
-	if got := o.homes.Load(); got != int64(est.Warmups) {
-		t.Errorf("%d visits to the front page, estimated %d", got, est.Warmups)
+	// The front-page visits are a ceiling rather than a count. A lease goes to an
+	// identity that has answered before one that never has, so a job with more
+	// ports than threads may never touch the spare ones — how many it does touch
+	// depends on which thread reaches the pool first, and a test that pinned an
+	// exact number would be pinning the scheduler.
+	if got := o.homes.Load(); got > int64(est.Warmups) {
+		t.Errorf("%d visits to the front page, and the estimate allowed for %d", got, est.Warmups)
 	}
-	if got := o.searches.Load() + o.homes.Load(); got != int64(est.Requests) {
-		t.Errorf("%d requests left the machine, estimated %d", got, est.Requests)
+	if got := o.searches.Load() + o.homes.Load(); got > int64(est.Requests) {
+		t.Errorf("%d requests left the machine, and the estimate allowed for %d", got, est.Requests)
 	}
 }
 

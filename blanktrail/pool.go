@@ -1758,6 +1758,14 @@ func (l *Lease) Reject(ctx context.Context) error {
 	p.stats.Rejections++
 	p.mu.Unlock()
 
+	// The identity has stopped bringing back answers, which is the whole of what
+	// being warm means. Left standing, the mark makes a refused identity the
+	// preferred one for the retry — the opposite of what a retry is for, and it
+	// is the caller who has just said this was not an answer.
+	l.pt.mu.Lock()
+	l.pt.answered = false
+	l.pt.mu.Unlock()
+
 	p.markBadEgress(num)
 	if !p.attemptFailed(num) {
 		return nil
