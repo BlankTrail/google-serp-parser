@@ -181,20 +181,38 @@ func TestServer_RemembersNothingWhenNobodyHasChosen(t *testing.T) {
 	}
 }
 
-func TestServer_OffersTheOtherLanguageWithoutLosingThePage(t *testing.T) {
-	// The switch is a link, so it names where it goes. Naming the site root
-	// instead would send whoever clicked it back to the beginning and lose
-	// whatever they were looking at.
-	body := get(t, testServer(t), "/?lang=ru&limit=5").Body.String()
-
-	// The two halves are looked for apart because the ampersand joining them in
-	// a link is written as an entity, and a test searching for the raw query
-	// string would fail on a page that is perfectly correct.
-	if !strings.Contains(body, "lang=en") {
-		t.Errorf("the page does not offer the other language:\n%s", body)
+func TestServer_ChoosesTheLanguageInTheSettingsAndNotAlongTheTop(t *testing.T) {
+	// The strip along the top carried the choice on every screen, for a press
+	// most readers make once and never again. It is made where the rest of the
+	// machine is set up now.
+	s := testServer(t)
+	body := get(t, s, "/").Body.String()
+	if strings.Contains(body, `class="langs"`) {
+		t.Errorf("the language is still offered along the top:\n%s", body)
 	}
-	if !strings.Contains(body, "limit=5") {
-		t.Errorf("the switch throws away the rest of the address:\n%s", body)
+
+	// Asking for a language in the address still works — it is how a reader who
+	// cannot read this page reaches one they can, and how the choice they saved
+	// is carried.
+	if body := get(t, s, "/?lang=ru").Body.String(); !strings.Contains(body, `<html lang="ru"`) {
+		t.Error("a page asked for in another language came back in English")
+	}
+
+	// And every language is offered where the choice is made. It takes a server
+	// that has somewhere to write settings: one that has not offers no settings
+	// page at all, which is right and is not what this is about.
+	kept, err := New(Config{
+		Store: testStore(t), Logger: quiet(),
+		SettingsPath: filepath.Join(t.TempDir(), "settings.json"),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	page := get(t, kept, settingsAt).Body.String()
+	for _, want := range []string{`name="language"`, "Русский", "English"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the settings do not offer %q", want)
+		}
 	}
 }
 

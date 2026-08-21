@@ -29,9 +29,6 @@
 <nav class="pages" id="tabs" aria-label="{{.T "nav.pages"}}">
 {{range .Tabs}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}
 {{end}}</nav>
-<nav class="langs" aria-label="{{.T "nav.language"}}">
-{{range .Langs}}{{if .Current}}<span aria-current="true">{{.Name}}</span>{{else}}<a href="{{.URL}}">{{.Name}}</a>{{end}}
-{{end}}</nav>
 {{/* Setting the machine up stands beside the screens rather than among them,
      and outside the strip of tabs on purpose: the script takes a press over
      only inside that strip, so this one is an ordinary link to an ordinary

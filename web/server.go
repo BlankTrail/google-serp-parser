@@ -348,8 +348,6 @@ type page struct {
 	// Title is the key of the page's name, not the name itself: the layout
 	// translates it like every other phrase.
 	Title string
-	// Langs is the switcher, offering this same address in each language.
-	Langs []langLink
 	// Tabs is the header, with the screen being read already marked.
 	Tabs []tabLink
 	// Settings is the way to the settings, or nil on a server that keeps none.
@@ -375,7 +373,7 @@ func (p page) T(key string) string { return p.Lang.T(key) }
 // jobs, and a screen that lit no tab would tell the reader they had left the
 // program.
 func (s *Server) frame(r *http.Request, lang Lang, title, under string) page {
-	p := page{Lang: lang, Title: title, Langs: switcher(r, lang), Tabs: tabsFor(under)}
+	p := page{Lang: lang, Title: title, Tabs: tabsFor(under)}
 	if s.settingsPath != "" {
 		p.Settings = &tabLink{Key: "settings.title", URL: settingsAt, Current: under == settingsAt}
 	}

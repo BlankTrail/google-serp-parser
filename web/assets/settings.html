@@ -103,9 +103,13 @@
 <legend>{{.T "settings.language"}}</legend>
 <div class="field">
 <label for="language">{{.T "settings.language"}}</label>
-{{/* Each language is offered by the name it calls itself, exactly as the
-     switcher in the header offers it: whoever is choosing may not be able to
-     read the page they are choosing on. */}}
+{{/* Each language is offered by the name it calls itself: whoever is choosing
+     may not be able to read the page they are choosing on, so "Русский" is the
+     word that finds them and not whatever this page calls it today.
+
+     This is the only place the choice is made. It stood in the strip along the
+     top as well, where it was two words of furniture on every screen for a
+     press most readers make once. */}}
 <select id="language" name="language">
 {{range .Tongues}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{if .Name}}{{.Name}}{{else}}{{$.T .Key}}{{end}}</option>
 {{end}}</select>

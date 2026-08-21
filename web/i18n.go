@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -829,30 +828,6 @@ func writeLang(w http.ResponseWriter, lang Lang) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-}
-
-// langLink is one language as the switcher offers it.
-type langLink struct {
-	Name    string
-	URL     string
-	Current bool
-}
-
-// switcher offers every language at the address being read right now.
-//
-// The rest of the address is carried across, because switching language is not
-// a request to go somewhere else, and a switch that returns the reader to the
-// front page loses whatever they were looking at.
-func switcher(r *http.Request, now Lang) []langLink {
-	langs := Languages()
-	links := make([]langLink, 0, len(langs))
-	for _, l := range langs {
-		q := r.URL.Query()
-		q.Set(langQuery, string(l))
-		at := url.URL{Path: r.URL.Path, RawQuery: q.Encode()}
-		links = append(links, langLink{Name: l.Name(), URL: at.String(), Current: l == now})
-	}
-	return links
 }
 
 // texts is everything the interface can say right now, and in which languages.

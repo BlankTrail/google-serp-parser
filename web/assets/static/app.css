@@ -91,20 +91,8 @@ header {
 	text-decoration-color: var(--ink);
 }
 
-.langs {
-	display: flex;
-	font-size: var(--small);
-	gap: 0.75rem;
-}
-
-/* The language being read is shown and not offered: a switch that leads back
-   to where the reader already is reads as a switch that does nothing. */
-.langs span {
-	color: var(--quiet);
-}
-
-/* Setting the machine up is not one of the screens, so it is set at the size of
-   the switcher beside it rather than at the size of the tabs. */
+/* Setting the machine up is not one of the screens, so it is set smaller than
+   the strip of tabs beside it. */
 .tools {
 	display: flex;
 	font-size: var(--small);

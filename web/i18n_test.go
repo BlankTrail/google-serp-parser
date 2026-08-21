@@ -254,8 +254,8 @@ func TestLoadTranslations_AddsALanguageNobodyBuiltIn(t *testing.T) {
 		t.Errorf("T(%q)=%q, want what the file says", spokenKey, got)
 	}
 
-	// The switcher is the only way a reader reaches it, so a language missing
-	// from there is a language nobody can ask for.
+	// The settings page is the only way a reader reaches it, so a language
+	// missing from there is a language nobody can ask for.
 	langs := Languages()
 	if !slices.Contains(langs, langDE) {
 		t.Fatalf("Languages()=%v, want the added language among them", langs)
@@ -263,15 +263,14 @@ func TestLoadTranslations_AddsALanguageNobodyBuiltIn(t *testing.T) {
 	if want := []Lang{LangEN, LangRU, langDE}; !slices.Equal(langs, want) {
 		t.Errorf("Languages()=%v, want the built-in ones first and the file's after: %v", langs, want)
 	}
-	offered := switcher(httptest.NewRequest(http.MethodGet, "/", nil), LangEN)
-	if !slices.ContainsFunc(offered, func(l langLink) bool {
-		return l.Name == "Deutsch" && strings.Contains(l.URL, "lang=de")
+	offered := tonguesOffered("")
+	if !slices.ContainsFunc(offered, func(o tongueOption) bool {
+		return o.Name == "Deutsch" && o.Value == "de"
 	}) {
-		t.Errorf("the switcher offers %+v, want the added language under the name it calls itself", offered)
+		t.Errorf("the settings offer %+v, want the added language under the name it calls itself", offered)
 	}
 
-	// Asking for it has to work as well, or the link in the switcher leads back
-	// to English.
+	// Asking for it has to work as well, or choosing it leads back to English.
 	if got := pickLang(httptest.NewRequest(http.MethodGet, "/?lang=de", nil)); got != langDE {
 		t.Errorf("pickLang=%q, want the added language", got)
 	}
@@ -560,8 +559,8 @@ func TestLoadTranslations_SaysWhatTheDirectoryHoldsNowAndNotWhatItHeld(t *testin
 }
 
 func TestLanguages_CannotBeReorderedByWhoeverAsksForIt(t *testing.T) {
-	// The switcher is built from this list, and a caller sorting its own copy
-	// would otherwise reorder the switcher for every reader afterwards.
+	// The settings page is built from this list, and a caller sorting its own
+	// copy would otherwise reorder the choice for every reader afterwards.
 	first := Languages()
 	first[0], first[1] = first[1], first[0]
 	if Languages()[0] != LangEN {
@@ -570,7 +569,7 @@ func TestLanguages_CannotBeReorderedByWhoeverAsksForIt(t *testing.T) {
 }
 
 func TestLoadTranslations_OffersALanguageThatDoesNotNameItselfByItsCode(t *testing.T) {
-	// The switcher is read by somebody who cannot read the page they are on. A
+	// The choice is read by somebody who cannot read the page they are on. A
 	// file that never says what its language is called leaves the code, which
 	// is what its reader would have typed to ask for it, and not the name of
 	// some other language.
