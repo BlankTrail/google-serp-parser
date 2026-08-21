@@ -17,6 +17,30 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 )
 
+// countingTLSOrigin is a TLS origin that answers "ok" and adds one to conns for
+// every connection opened to it, so a test can tell reuse from a fresh dial.
+//
+// It is built unstarted and started by hand because the counter has to be in
+// place before anything is served. httptest.NewTLSServer starts accepting
+// inside the constructor, and the accept loop reads Config.ConnState — so a
+// counter attached to the server it returns is written while that loop reads
+// it. The counts would come out right often enough to look fine; what fails is
+// the race detector, and it fails the whole package.
+func countingTLSOrigin(t *testing.T, conns *atomic.Int64) *httptest.Server {
+	t.Helper()
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	origin.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	origin.StartTLS()
+	t.Cleanup(origin.Close)
+	return origin
+}
+
 // TestRotateEgress_DoesNotCarryAConnectionOverToTheNewIdentity is about the one
 // thing an egress rotation must leave behind: the connections that were open
 // through the address it just left.
@@ -37,15 +61,7 @@ import (
 // connection is a second request that went through the abandoned address.
 func TestRotateEgress_DoesNotCarryAConnectionOverToTheNewIdentity(t *testing.T) {
 	var conns atomic.Int64
-	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "ok")
-	}))
-	origin.Config.ConnState = func(_ net.Conn, state http.ConnState) {
-		if state == http.StateNew {
-			conns.Add(1)
-		}
-	}
-	t.Cleanup(origin.Close)
+	origin := countingTLSOrigin(t, &conns)
 
 	pool, port := poolOnAStandIn(t, origin.Listener.Addr().String())
 
@@ -229,15 +245,7 @@ func TestTrace_SaysWhereARequestWasWhenItStopped(t *testing.T) {
 // one per request did.
 func TestNoKeepAlives_GivesEveryRequestAConnectionOfItsOwn(t *testing.T) {
 	var conns atomic.Int64
-	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "ok")
-	}))
-	origin.Config.ConnState = func(_ net.Conn, state http.ConnState) {
-		if state == http.StateNew {
-			conns.Add(1)
-		}
-	}
-	t.Cleanup(origin.Close)
+	origin := countingTLSOrigin(t, &conns)
 
 	pool, _ := poolOnAStandIn(t, origin.Listener.Addr().String(), func(cfg *PoolConfig) {
 		cfg.NoKeepAlives = true
