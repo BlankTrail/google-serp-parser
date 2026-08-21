@@ -109,6 +109,14 @@ type proxiesPage struct {
 	// the service answered and simply had nothing to offer, where an address
 	// would only be noise.
 	GatewayFaultAt string
+	// Taken is when the list on the screen came from the service, so the refresh
+	// button has something to say for itself. Empty when no list was read.
+	Taken string
+	// Chosen and Offered are the whole list's tally, which the header carries so
+	// a reader who has scrolled away from the groups still knows how many of
+	// them they have ticked.
+	Chosen  int
+	Offered int
 }
 
 // failureRow is one kind of failure and how often it happened.
@@ -149,13 +157,18 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	view.Sources = sourcesOffered(view.Form.Source)
 	view.OnGateways = view.Form.Source == sourceGateways
 	if view.OnGateways {
-		if list, err := s.askForGateways(r.Context(), saved); err != nil {
+		if list, taken, err := s.askForGateways(r.Context(), saved, false); err != nil {
 			view.GatewayFault = gatewayFault(err)
 			view.GatewayFaultAt = saved.ControlURL
 		} else if !list.Available {
 			view.GatewayFault = "proxies.gateways.unavailable"
 		} else {
 			view.Groups, view.Missing = gatewaysOffered(list, saved.Proxy.Gateways)
+			for _, g := range view.Groups {
+				view.Chosen += g.Chosen
+				view.Offered += g.Offered
+			}
+			view.Taken = taken.Format("15:04")
 		}
 	}
 	view.page = s.frame(r, lang, "proxies.title", proxiesAt)

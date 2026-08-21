@@ -157,7 +157,10 @@ func (c *Client) Gateways(ctx context.Context) (GatewayList, error) {
 		}
 		if cfg.Ping != nil {
 			g.Ping.Tried = true
-			if cfg.Ping.MS != nil {
+			// Nought is how the service says it has no measurement, not that a
+			// tunnel answered instantly. Read as a number it draws every
+			// unmeasured gateway as the fastest one on the list.
+			if cfg.Ping.MS != nil && *cfg.Ping.MS > 0 {
 				g.Ping.Answered, g.Ping.MS = true, *cfg.Ping.MS
 			}
 		}

@@ -74,6 +74,7 @@
 {{if .Complaints}}<ul class="notes">
 {{range .Complaints}}<li>{{$.T .}}</li>
 {{end}}</ul>{{end}}
+<form id="gateways-afresh" method="post" action="/proxies/gateways"></form>
 <form method="post" action="/proxies">
 <div class="row">
 <div class="field">
@@ -124,8 +125,20 @@
 {{if .OnGateways}}
 {{if .GatewayFault}}<p class="empty">{{.T .GatewayFault}}{{if .GatewayFaultAt}} {{.T "proxies.gateways.asked"}} <code>{{.GatewayFaultAt}}</code>{{end}}</p>{{end}}
 {{if .Groups}}
-<p class="ticks"><button type="button" data-tick="all">{{.T "proxies.gateways.all"}}</button>
-<button type="button" data-tick="none">{{.T "proxies.gateways.none"}}</button></p>
+{{/* The list stands as its own band with a header: without one, the pair of
+     words that ticks it sat directly under the last input of the form above and
+     read as that input's own. The header says what the box holds, what has been
+     chosen out of it, and carries the three things that act on it. */}}
+<div class="band">
+<div class="band-head">
+<span class="band-name">{{.T "proxies.gateways.title"}} <span class="empty" data-chosen>{{.Chosen}}/{{.Offered}}</span></span>
+<span class="band-acts">
+{{if .Taken}}<span class="empty">{{.T "proxies.gateways.taken"}} {{.Taken}}</span>{{end}}
+<button type="submit" form="gateways-afresh">{{.T "proxies.gateways.refresh"}}</button>
+<button type="button" data-tick="all">{{.T "proxies.gateways.all"}}</button>
+<button type="button" data-tick="none">{{.T "proxies.gateways.none"}}</button>
+</span>
+</div>
 <div class="scrolls">
 {{range .Groups}}
 <fieldset data-gateways>
@@ -144,6 +157,7 @@
 {{end}}
 </fieldset>
 {{end}}
+</div>
 </div>
 {{end}}
 {{if .Missing}}<p class="empty">{{.T "proxies.gateways.missing"}} {{.Missing}}</p>{{end}}

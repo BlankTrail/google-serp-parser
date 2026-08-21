@@ -103,6 +103,10 @@ type Server struct {
 	// settingsPath is the file the connection is kept in, and empty on a server
 	// that keeps none.
 	settingsPath string
+	// gateways is the last list of VPN configurations the service gave, so that
+	// a screen redrawing itself every few seconds does not ask again behind
+	// every redraw.
+	gateways gatewaysHeld
 	// connect opens what jobs run on. It is the caller's Connect, wrapped in what
 	// the supervisor takes, so that everything below this line talks about the
 	// same thing whether it came from a pool or from a stand-in.
@@ -210,6 +214,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /job/{id}", s.job)
 	s.mux.HandleFunc("GET "+proxiesAt, s.proxies)
 	s.mux.HandleFunc("POST "+proxiesAt, s.saveProxies)
+	s.mux.HandleFunc("POST "+gatewaysAt, s.refreshGateways)
 	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)
 	// What the job page polls, and what its two buttons send. Both buttons are

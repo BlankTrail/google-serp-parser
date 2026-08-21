@@ -313,6 +313,19 @@
 
 	function retally(root) {
 		var groups = root.querySelectorAll("fieldset[data-gateways]");
+		// The header carries the whole list's tally, and a reader who has
+		// scrolled away from the groups has only that to read.
+		var whole = root.querySelector("[data-chosen]");
+		if (whole) {
+			var all = ticksIn(root);
+			var ticked = 0;
+			for (var k = 0; k < all.length; k++) {
+				if (all[k].checked) {
+					ticked++;
+				}
+			}
+			whole.textContent = ticked + "/" + all.length;
+		}
 		for (var i = 0; i < groups.length; i++) {
 			var tally = groups[i].querySelector("[data-tally]");
 			if (!tally) {

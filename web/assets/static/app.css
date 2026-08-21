@@ -536,17 +536,50 @@ tbody tr:last-child td {
 	padding-right: 0.35rem;
 }
 
-/* The pair that ticks a whole list or a whole subscription. Drawn as words
-   rather than as buttons: the only button on this form that commits anything is
-   the one that saves, and two more of that weight beside it would read as three
-   ways to finish. */
-.ticks {
+/* A part of a form that is a list rather than a field, with a header of its
+   own.
+
+   Without one, the words that tick the list sat directly under the last input
+   above them and read as that input's own — and the list itself began with no
+   line saying what it was. The header names it, carries its tally, and gathers
+   the things that act on it at the far end, where a heading's actions go. */
+.band {
 	display: flex;
-	gap: 0.75rem;
-	margin: 0;
+	flex-direction: column;
+	gap: 0.6rem;
+	/* Stands away from the fields above it and from the button below: pressed
+	   up against the save, the list read as something the button belonged to. */
+	margin: 0.9rem 0 1.1rem;
 }
 
-.ticks button,
+.band-head {
+	align-items: baseline;
+	border-bottom: var(--hairline-width) solid var(--hairline);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+	justify-content: space-between;
+	padding-bottom: 0.5rem;
+}
+
+.band-name {
+	color: var(--quiet);
+	font-size: var(--small);
+}
+
+/* The actions sit together and stay together as the line wraps, so a narrow
+   window puts them on their own row rather than stranding one of them. */
+.band-acts {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.9rem;
+}
+
+/* Words rather than buttons: the only button on this form that commits anything
+   is the one that saves, and three more of that weight beside it would read as
+   four ways to finish. */
+.band-acts button,
 legend button {
 	background: none;
 	border: 0;

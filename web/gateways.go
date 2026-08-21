@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/blanktrail"
 	"github.com/blanktrail/google-serp-parser/settings"
@@ -114,18 +116,50 @@ func gatewaysOffered(list blanktrail.GatewayList, chosen []string) ([]gatewayGro
 	return groups, len(chosen) - found
 }
 
-// askForGateways reads what the service holds, using the connection that is
-// saved.
+// gatewaysHeldFor is how long the list the service gave is drawn again without
+// asking for it afresh.
 //
-// It is asked for only when the saved source is the gateways: the screen redraws
-// itself every few seconds while a job runs, and a page that asked on every
-// redraw would put a request to the service behind every one of them.
-func (s *Server) askForGateways(ctx context.Context, saved settings.Settings) (blanktrail.GatewayList, error) {
+// The screen redraws itself every few seconds while a job runs, and a page that
+// asked on every redraw would put a request to the service behind every one of
+// them. What the service holds changes when somebody adds a configuration or
+// measures the tunnels, which is not something that happens between two redraws
+// — and when it is, the refresh button is the way to say so.
+const gatewaysHeldFor = 2 * time.Minute
+
+// gatewaysHeld is the last list the service gave and when it gave it.
+type gatewaysHeld struct {
+	mu    sync.Mutex
+	list  blanktrail.GatewayList
+	taken time.Time
+}
+
+// askForGateways reads what the service holds, using the connection that is
+// saved, and hands back when the reading was taken.
+//
+// afresh is the refresh button: it asks the service whatever is held, so a
+// reader who has just added a configuration or measured the tunnels sees that
+// rather than the answer from two minutes ago.
+func (s *Server) askForGateways(ctx context.Context, saved settings.Settings, afresh bool) (blanktrail.GatewayList, time.Time, error) {
+	now := time.Now()
+	s.gateways.mu.Lock()
+	held, taken := s.gateways.list, s.gateways.taken
+	s.gateways.mu.Unlock()
+	if !afresh && !taken.IsZero() && now.Sub(taken) < gatewaysHeldFor {
+		return held, taken, nil
+	}
+
 	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 	if err != nil {
-		return blanktrail.GatewayList{}, err
+		return blanktrail.GatewayList{}, time.Time{}, err
 	}
-	return client.Gateways(ctx)
+	list, err := client.Gateways(ctx)
+	if err != nil {
+		return blanktrail.GatewayList{}, time.Time{}, err
+	}
+	s.gateways.mu.Lock()
+	s.gateways.list, s.gateways.taken = list, now
+	s.gateways.mu.Unlock()
+	return list, now, nil
 }
 
 // gatewayFault names why the list could not be asked for, in the reader's
@@ -148,4 +182,22 @@ func gatewayFault(err error) string {
 		return "proxies.gateways.failed"
 	}
 	return "proxies.gateways.unreachable"
+}
+
+// refreshGateways asks the service for its configurations again and shows the
+// screen.
+//
+// The list is held for a couple of minutes so that a screen redrawing itself
+// while a job runs does not ask behind every redraw. That is right until the
+// reader has just added a configuration or measured the tunnels, and this is
+// how they say so — which is also why it is a press and not a link: it changes
+// what the program has, even though it changes nothing the program keeps.
+func (s *Server) refreshGateways(w http.ResponseWriter, r *http.Request) {
+	saved, _ := s.current()
+	if saved.ControlURL != "" {
+		// The fault, if there is one, is drawn on the screen this redirects to:
+		// asking again is not a thing that can fail differently from drawing.
+		_, _, _ = s.askForGateways(r.Context(), saved, true)
+	}
+	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
 }

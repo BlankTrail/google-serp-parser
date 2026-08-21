@@ -231,7 +231,7 @@ func TestProxies_DrawsALongGatewayListInSomethingThatScrolls(t *testing.T) {
 		gws = append(gws, fakebt.Gateway{Name: fmt.Sprintf("Sub.Gate-%02d", i), Kind: "vless"})
 	}
 	page := gatewayScreen(t, gws, nil)
-	for _, want := range []string{`class="scrolls"`, `class="ticks"`, `data-tally`} {
+	for _, want := range []string{`class="scrolls"`, `class="band-head"`, `data-tally`, `data-chosen`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the page carries no %s, so the list is a page-long column of boxes", want)
 		}
@@ -259,5 +259,52 @@ func TestProxies_SaysWhatEachGatewayAnsweredWhenItWasMeasured(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("the page never says %q", want)
 		}
+	}
+}
+
+func TestProxies_OffersToReadTheGatewayListAgain(t *testing.T) {
+	// What the service holds changes when somebody adds a configuration or
+	// measures the tunnels. The page holds its reading for a couple of minutes
+	// so a screen that redraws itself does not ask behind every redraw, which
+	// leaves the reader needing a way to say "ask now".
+	page := gatewayScreen(t, []fakebt.Gateway{{Name: "Sub.One", Kind: "vless"}}, nil)
+	if !strings.Contains(page, `action="/proxies/gateways"`) {
+		t.Error("the page offers no way to read the list again")
+	}
+	// The button stands inside the settings form's layout, so it has to belong
+	// to a form of its own: a form inside a form is not markup a browser keeps.
+	if !strings.Contains(page, `form="gateways-afresh"`) {
+		t.Error("the refresh button is not tied to a form of its own")
+	}
+}
+
+func TestProxies_ReadsTheListAgainWhenAskedTo(t *testing.T) {
+	// Pressing it has to reach the service, not redraw what was already held.
+	f := fakebt.New(t)
+	f.SetGateways([]fakebt.Gateway{{Name: "Sub.One", Kind: "vless"}})
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := settings.Save(path, settings.Settings{
+		ControlURL: f.URL(), APIKey: f.Key(),
+		Proxy: settings.ProxySource{Kind: settings.ProxyGateways},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	s, err := New(Config{Store: testStore(t), Logger: quiet(), SettingsPath: path})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	get(t, s, proxiesAt) // the first drawing reads the list and holds it
+
+	// A configuration added at the service is not on the held reading.
+	f.SetGateways([]fakebt.Gateway{{Name: "Sub.One", Kind: "vless"}, {Name: "Sub.Two", Kind: "vless"}})
+	if page := get(t, s, proxiesAt).Body.String(); strings.Contains(page, "Sub.Two") {
+		t.Fatal("the page asked the service again on a redraw, which is what holding the list is for")
+	}
+
+	if rec := postForm(t, s, gatewaysAt, url.Values{}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("pressing refresh answered %d, want a redirect back to the screen", rec.Code)
+	}
+	if page := get(t, s, proxiesAt).Body.String(); !strings.Contains(page, "Sub.Two") {
+		t.Error("the list was not read again after the press")
 	}
 }

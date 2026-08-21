@@ -139,7 +139,8 @@ func TestGateways_ReadsAMeasurementApartFromNoMeasurement(t *testing.T) {
 	c, f := newTestClient(t)
 	f.SetGateways([]fakebt.Gateway{
 		{Name: "Sub.Answered", Kind: "vless", Pinged: true, PingMS: 256},
-		{Name: "Sub.Silent", Kind: "vless", Pinged: true},
+		{Name: "Sub.Nought", Kind: "vless", Pinged: true, PingMS: 0},
+		{Name: "Sub.Silent", Kind: "vless", Pinged: true, PingMS: -1},
 		{Name: "Sub.Untried", Kind: "vless"},
 	})
 	list, err := c.Gateways(context.Background())
@@ -148,8 +149,13 @@ func TestGateways_ReadsAMeasurementApartFromNoMeasurement(t *testing.T) {
 	}
 	want := map[string]GatewayPing{
 		"Sub.Answered": {Tried: true, Answered: true, MS: 256},
-		"Sub.Silent":   {Tried: true},
-		"Sub.Untried":  {},
+		// Nought is the service saying it holds no measurement, not a tunnel
+		// that answered instantly. Read as a number it draws every unmeasured
+		// gateway as the fastest on the list — which is what the screen showed:
+		// two-and-thirty gateways, every one of them "0 мс".
+		"Sub.Nought":  {Tried: true},
+		"Sub.Silent":  {Tried: true},
+		"Sub.Untried": {},
 	}
 	for _, g := range list.Gateways {
 		if got := g.Ping; got != want[g.Name] {

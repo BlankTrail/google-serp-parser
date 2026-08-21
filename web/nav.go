@@ -7,11 +7,12 @@ package web
 // the next shift, and each is written down once here: the routes answer these,
 // the header offers these, and a handler says which of them it stands under.
 const (
-	stateAt   = "/"
-	jobsAt    = "/jobs"
-	newAt     = "/new"
-	proxiesAt = "/proxies"
-	historyAt = "/history"
+	stateAt    = "/"
+	jobsAt     = "/jobs"
+	gatewaysAt = "/proxies/gateways"
+	newAt      = "/new"
+	proxiesAt  = "/proxies"
+	historyAt  = "/history"
 )
 
 // What the script works on, named here because the markup and the script have
