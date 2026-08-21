@@ -146,6 +146,11 @@ type jobPage struct {
 	Formats   []string
 	CanStop   bool
 	CanResume bool
+	// CanRetry offers the failed queries back. It stands apart from CanResume
+	// because a job can have nothing pending and thousands failed — which is
+	// what a pool that went away leaves behind — and that job has no other way
+	// back into the queue.
+	CanRetry bool
 }
 
 // job draws one job and everything a reader can do with it.
@@ -247,6 +252,8 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		// queries it holds are a fraction of a list, and nothing will run them.
 		CanResume: s.sup != nil && sum.PlanReady &&
 			!at.Running && !at.Queued && !at.Finished && at.Pending > 0,
+		CanRetry: s.sup != nil && sum.PlanReady &&
+			!at.Running && !at.Queued && at.Failed > 0,
 	})
 }
 

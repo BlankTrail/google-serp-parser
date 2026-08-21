@@ -431,3 +431,29 @@ func (s *Store) FinishJob(ctx context.Context, jobID int64) error {
 	}
 	return nil
 }
+
+// TryFailedAgain puts a job's failed queries back into its queue and says how
+// many it moved.
+//
+// A failure is written down so that a resume does not ask the same dead thing
+// forever, which is right while the failures are the queries' own. It is wrong
+// when they are not: a pool that went away fails every query it is asked for,
+// as fast as the list can be walked, and what is left is a job with nothing
+// pending — nothing to resume, and twenty thousand phrases nobody ever asked.
+//
+// So this is a thing the reader asks for and never something that happens on
+// its own. What was gathered stays: only the state and the message go back, and
+// the pages a failed query never produced were never written.
+func (s *Store) TryFailedAgain(ctx context.Context, jobID int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE queries SET state = 'pending', err = '', settled_at = ''
+		 WHERE job_id = ? AND state = 'failed'`, jobID)
+	if err != nil {
+		return 0, fmt.Errorf("store: queueing the failed queries of job %d again: %w", jobID, err)
+	}
+	moved, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store: counting what job %d took back: %w", jobID, err)
+	}
+	return moved, nil
+}

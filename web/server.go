@@ -264,6 +264,7 @@ var browserPolls = []poll{
 	{http.MethodGet, "/api/progress", func(s *Server) http.HandlerFunc { return s.apiProgress }},
 	{http.MethodPost, "/api/stop", func(s *Server) http.HandlerFunc { return s.apiStop }},
 	{http.MethodPost, "/api/resume", func(s *Server) http.HandlerFunc { return s.apiResume }},
+	{http.MethodPost, "/api/retry", func(s *Server) http.HandlerFunc { return s.apiRetry }},
 	{http.MethodPost, "/api/delete", func(s *Server) http.HandlerFunc { return s.apiDelete }},
 	{http.MethodPost, "/api/reshape", func(s *Server) http.HandlerFunc { return s.apiReshape }},
 	// Both are presses rather than links: a browser walking one would wipe

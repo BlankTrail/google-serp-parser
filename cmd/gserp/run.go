@@ -193,6 +193,11 @@ func poolConfig(threads, ports int) blanktrail.PoolConfig {
 		DelayMin:       shortestPause,
 		DelayMax:       longestPause,
 		ReviveAfter:    time.Minute,
+		// A job waits for an identity rather than spending a query on not having
+		// one. Nobody is holding the line on a job the way a caller of the search
+		// API is, and a phrase refused for want of a port is a phrase that has to
+		// be found and asked again by hand.
+		WaitForIdentity: true,
 		// A fresh connection for every request, and the reason is measured. The
 		// connection this program keeps alive ends at the proxy on this machine,
 		// not at the address the work actually travels through — so it goes on

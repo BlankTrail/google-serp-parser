@@ -3,6 +3,8 @@
 package web
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -973,5 +975,39 @@ func TestJobPage_ShowsASampleShortEnoughToRead(t *testing.T) {
 	}
 	if rowsShown < 5 {
 		t.Errorf("the page draws %d rows, too few to see what is coming back", rowsShown)
+	}
+}
+
+func TestJobPage_OffersTheFailedQueriesBackWhenNothingIsPending(t *testing.T) {
+	// A job that failed every query has nothing pending, so "carry on" is not
+	// offered — and without a button of its own the screen offers nothing at
+	// all, which is what a pool that went away leaves behind.
+	s := testServerWithSupervisor(t)
+	ctx := context.Background()
+	id, err := s.store.CreateJob(ctx, store.JobSpec{Name: "starved"}, []string{"one", "two"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	for _, ord := range []int{0, 1} {
+		if err := s.store.Record(ctx, id, store.QueryOutcome{Ordinal: ord, Err: errors.New("blanktrail: every candidate port is quarantined")}); err != nil {
+			t.Fatalf("recording a failure: %v", err)
+		}
+	}
+
+	page := get(t, s, fmt.Sprintf("/job/%d", id)).Body.String()
+	if !strings.Contains(page, `action="/api/retry"`) {
+		t.Error("a job whose every query failed offers no way to ask them again")
+	}
+
+	// And pressing it puts them back, so the job has something to run.
+	if rec := postForm(t, s, "/api/retry", url.Values{"job": {strconv.FormatInt(id, 10)}}); rec.Code >= 400 {
+		t.Fatalf("pressing it answered %d: %s", rec.Code, rec.Body.String())
+	}
+	sum, err := s.store.Progress(ctx, id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Pending != 2 {
+		t.Errorf("%d queries are pending after the press, want both back", sum.Pending)
 	}
 }

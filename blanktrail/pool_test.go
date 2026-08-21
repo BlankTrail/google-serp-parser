@@ -2563,3 +2563,94 @@ func TestPool_CountsAGatewayChangeAsAnAddressChange(t *testing.T) {
 		t.Errorf("address changes counted %d after a gateway change, want 1", got)
 	}
 }
+
+func TestPool_QueuesForAnIdentityRatherThanRefusingWhenEveryPortIsSetAside(t *testing.T) {
+	// A pool with everything set aside almost always has something to give
+	// shortly: a quarantined port is revived after its wait, and a gateway put
+	// away comes back when its ban runs out. Refusing instead is how a run spent
+	// twenty-five thousand phrases on a pool whose gateways would have come
+	// back — every one of them written down as "every candidate port is
+	// quarantined".
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fakebt.New(t), clock, 1, 1)
+	cfg.WaitForIdentity = true
+	cfg.ReviveAfter = time.Minute
+
+	queued := make(chan int, 16)
+	var pool *Pool
+	cfg.Sleep = func(ctx context.Context, d time.Duration) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Read while the caller is in the queue: that is the only moment the
+		// gauge the screen shows can be seen standing up.
+		select {
+		case queued <- pool.Stats().Waiting:
+		default:
+		}
+		clock.Advance(d)
+		return nil
+	}
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	pool = p
+	defer p.Close()
+
+	pt := p.ports[0]
+	pt.mu.Lock()
+	pt.quarantined = true
+	pt.quarantinedAt = clock.Now()
+	pt.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		l, err := p.Acquire(context.Background())
+		if err == nil {
+			l.Release()
+		}
+		done <- err
+	}()
+
+	// It is in the queue rather than back with an error.
+	select {
+	case waiting := <-queued:
+		if waiting < 1 {
+			t.Errorf("the queue holds %d callers while one is standing in it", waiting)
+		}
+	case err := <-done:
+		t.Fatalf("the acquire came back with %v instead of queueing", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the acquire neither queued nor came back")
+	}
+
+	// And it comes back the moment there is something to come back to.
+	pt.mu.Lock()
+	pt.quarantined = false
+	pt.mu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("the queued acquire ended with %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the acquire stayed in the queue after a port came back")
+	}
+}
+
+func TestPool_DoesNotQueueOnAPoolThatIsClosed(t *testing.T) {
+	// Nothing is coming to a closed pool, and a job being stopped would hang on
+	// its own shutdown waiting for it.
+	cfg := testPoolConfig(t, fakebt.New(t), newFakeClock(), 1, 1)
+	cfg.WaitForIdentity = true
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	p.Close()
+
+	if _, err := p.Acquire(context.Background()); !errors.Is(err, ErrPoolExhausted) {
+		t.Errorf("a closed pool answered %v, want it to say there is nothing left", err)
+	}
+}

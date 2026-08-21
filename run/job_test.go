@@ -625,3 +625,33 @@ func TestRunner_AParseJobIsUnchangedByTheChecksExisting(t *testing.T) {
 		}
 	}
 }
+
+func TestRunner_StopsWhenThePoolHasNothingLeftInsteadOfSpendingTheList(t *testing.T) {
+	// A pool with nothing to give answers every acquire the same way, at the
+	// speed of a refusal. Writing those down as failures spends the whole list
+	// in the time it takes to walk it and leaves a job with nothing pending —
+	// which is a job with no way back. Measured on a live run: 24 787 queries
+	// turned into failures by a service that had gone away, and no button left
+	// on the screen to carry the job on with.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2)
+	f.Pool.Close() // every acquire from here answers ErrPoolExhausted
+
+	sink := &recordingSink{}
+	queries := usQueries(200)
+	r := &Runner{Pool: f.Pool, Threads: 4, Sink: sink}
+	rep := r.Run(context.Background(), Job{Queries: queries, Pages: 1})
+
+	if !rep.Starved {
+		t.Error("the report does not say the run stopped for want of an identity")
+	}
+	if rep.Failed != 0 {
+		t.Errorf("%d queries were written down as failed, and none of them was asked", rep.Failed)
+	}
+	if rep.Untried != len(queries) {
+		t.Errorf("Untried=%d, want all %d left for the next run", rep.Untried, len(queries))
+	}
+	if got := len(sink.ordinals()); got != 0 {
+		t.Errorf("the sink was told about %d queries that were never asked", got)
+	}
+}

@@ -128,6 +128,21 @@ func (s *Server) apiResume(w http.ResponseWriter, r *http.Request) {
 	s.pressed(w, r, func(v *Supervisor, jobID int64) error { return v.Resume(jobID) })
 }
 
+// apiRetry puts a job's failed queries back into its queue and runs it again.
+//
+// It is a button of its own rather than something resume does quietly. Resume
+// means "carry on with what is left", and a reader who presses it does not
+// expect twenty thousand phrases that were already answered with a failure to
+// be asked all over again. Which of the two they want is theirs to say.
+func (s *Server) apiRetry(w http.ResponseWriter, r *http.Request) {
+	s.pressed(w, r, func(v *Supervisor, jobID int64) error {
+		if _, err := s.store.TryFailedAgain(r.Context(), jobID); err != nil {
+			return err
+		}
+		return v.Resume(jobID)
+	})
+}
+
 // apiDelete removes a job and everything it gathered.
 //
 // It is a press of its own rather than one more thing pressed does, because it

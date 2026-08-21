@@ -45,7 +45,7 @@
 {{/* Each button is a form that sends itself, by post. Nothing here needs a
      script, and a stop behind a link is a stop anything walking the pages can
      carry out on somebody else's run. */}}
-{{if or .CanStop .CanResume}}
+{{if or .CanStop .CanResume .CanRetry}}
 <div class="actions">
 {{if .CanStop}}
 <form method="post" action="/api/stop">
@@ -57,6 +57,12 @@
 <form method="post" action="/api/resume">
 <input type="hidden" name="job" value="{{.Progress.ID}}">
 <button type="submit">{{.T "job.resume"}}</button>
+</form>
+{{end}}
+{{if .CanRetry}}
+<form method="post" action="/api/retry">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<button type="submit">{{.T "job.retry"}}</button>
 </form>
 {{end}}
 </div>

@@ -168,6 +168,18 @@ type PoolConfig struct {
 	// MaxRetriesPerReq is how many times the ladder retries a blocked request
 	// before handing the blocked response back (default 4).
 	MaxRetriesPerReq int
+	// WaitForIdentity makes an acquire queue for an identity instead of refusing
+	// when every port is set aside. A pool that has nothing to give right now
+	// almost always has something to give shortly: a quarantined port is revived
+	// after its wait, and an address or gateway put away comes back off the bench
+	// when its ban runs out.
+	//
+	// It is off by default because a request somebody is waiting on cannot hang:
+	// the search API has to answer "no identity" while the caller is still there.
+	// A job is the other case, and the case this exists for — refusing a query is
+	// how a run once turned twenty-five thousand phrases into failures in the
+	// minutes it took to walk them, on a pool whose gateways would have come back.
+	WaitForIdentity bool
 	// MaxPerUpstream is how many identities may be working through one egress at
 	// the same time. Nought and below mean one.
 	//
@@ -1183,7 +1195,21 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 		}
 		pt, wait, err := p.take(specName)
 		if err != nil {
-			return nil, err
+			// A closed pool is never waited for: there is nothing coming, and a
+			// job being stopped would hang on its own shutdown.
+			if !p.cfg.WaitForIdentity || !errors.Is(err, ErrPoolExhausted) || p.isClosed() {
+				return nil, err
+			}
+			// Everything is set aside for now. Queue rather than refuse: the
+			// caller counts in Waiting while it does, so a pool that looks idle
+			// on the screen is showing why.
+			p.waiting(1)
+			err = p.cfg.Sleep(ctx, p.setAsideWait())
+			p.waiting(-1)
+			if err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if pt != nil {
 			if err := p.reviveIfDue(ctx, pt); err != nil {
@@ -1215,6 +1241,25 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 			return nil, err
 		}
 	}
+}
+
+// setAsideWait is how long an acquire waits before looking again at a pool
+// whose ports are all set aside.
+//
+// It is the revival wait, because that is the soonest anything can change: a
+// quarantined port is offered another egress once it has waited that long. Held
+// to a floor and a ceiling so that a pool configured with a very short revival
+// does not turn the queue into a spin, and one configured with a very long
+// revival still notices a ban running out.
+func (p *Pool) setAsideWait() time.Duration {
+	d := p.cfg.ReviveAfter
+	if d < time.Second {
+		return time.Second
+	}
+	if d > 15*time.Second {
+		return 15 * time.Second
+	}
+	return d
 }
 
 // hasSpec reports whether any port in the pool carries this template name.

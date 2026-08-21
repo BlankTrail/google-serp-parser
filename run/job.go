@@ -122,6 +122,12 @@ type Report struct {
 	Done    int
 	Failed  int
 	Untried int
+	// Starved says the run stopped because the pool had no identity left to
+	// give, rather than because it ran out of queries. What is left is untried
+	// and still pending: a query nobody could ask is not a query that failed,
+	// and writing it down as one spends the whole list in the minutes it takes
+	// to walk it and leaves nothing to pick up again.
+	Starved bool
 	// Requests is how many times this job took an identity from the pool: one
 	// for every query, however deep it was taken, and one more for every further
 	// identity a refused page was carried to. It is the difference between two
@@ -205,6 +211,12 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 		Asking: j.Asking}
 
 	queue := make(chan int)
+	// Closed once, by whichever thread first finds the pool empty. Every thread
+	// watches it, and so does the hand-out below: with fifty threads reading one
+	// queue, a stop that only stopped the thread that noticed would let the
+	// other forty-nine walk the rest of the list at the speed of a refusal.
+	starved := make(chan struct{})
+	var starveOnce sync.Once
 	var wg sync.WaitGroup
 	for w := 0; w < threads; w++ {
 		wg.Add(1)
@@ -231,6 +243,20 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 				results[i].Attempted = true
 				asked := time.Now()
 				results[i].Pages, results[i].Err = take(ctx, attempt, j, j.Queries[i], pages)
+				if errors.Is(results[i].Err, blanktrail.ErrPoolExhausted) {
+					// There was nothing to ask through. That is the pool's
+					// condition and not this query's, so the query is left as it
+					// was found — untried, and pending in whatever is writing the
+					// history — and the run stops rather than spending the rest
+					// of the list on an empty pool. Measured on a live run: a
+					// service that went away turned 24 787 queries into failures
+					// in the time it took to walk them, and a job with nothing
+					// left pending is a job with nothing to resume.
+					results[i].Attempted = false
+					results[i].Err = nil
+					starveOnce.Do(func() { close(starved) })
+					return
+				}
 				r.step(thread, StageAsk, asked, text, results[i].Err)
 				if r.Sink != nil {
 					// The failures go to the sink as well as the successes.
@@ -261,6 +287,13 @@ sending:
 			break sending
 		}
 		select {
+		case <-starved:
+			// The pool has nothing to give. Everything still in hand stays
+			// untried.
+			break sending
+		default:
+		}
+		select {
 		case <-ctx.Done():
 			// Threads stop taking work once ctx ends, so without this the last
 			// send would wait for a reader that is never coming.
@@ -272,6 +305,11 @@ sending:
 	wg.Wait()
 
 	rep := Report{Results: results, Requests: r.Pool.Stats().Requests - before}
+	select {
+	case <-starved:
+		rep.Starved = true
+	default:
+	}
 	for i := range results {
 		switch {
 		case !results[i].Attempted:

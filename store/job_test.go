@@ -737,3 +737,46 @@ func TestCreateJob_LeavesAJobThatNamedNoRetryLimitNamingNone(t *testing.T) {
 		t.Errorf("tries=%d, want the nought that says the job named none", got[0].Tries)
 	}
 }
+
+func TestTryFailedAgain_PutsTheFailuresBackInTheQueueAndLeavesTheRest(t *testing.T) {
+	// A pool that goes away fails every query it is asked for, as fast as the
+	// list can be walked. What that leaves is a job with nothing pending — and
+	// so nothing to resume — while thousands of phrases were never really asked.
+	// Measured on a live run: 24 787 of them, every one recorded as "every
+	// candidate port is quarantined".
+	s := testStore(t)
+	ctx := context.Background()
+	id, err := s.CreateJob(ctx, JobSpec{Name: "starved"}, []string{"one", "two", "three"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.Record(ctx, id, QueryOutcome{Ordinal: 0}); err != nil {
+		t.Fatalf("recording the one that answered: %v", err)
+	}
+	if err := s.Record(ctx, id, QueryOutcome{Ordinal: 1, Err: errors.New("blanktrail: every candidate port is quarantined")}); err != nil {
+		t.Fatalf("recording the one that failed: %v", err)
+	}
+
+	moved, err := s.TryFailedAgain(ctx, id)
+	if err != nil {
+		t.Fatalf("TryFailedAgain: %v", err)
+	}
+	if moved != 1 {
+		t.Errorf("took back %d queries, want the one that failed", moved)
+	}
+
+	sum, err := s.Progress(ctx, id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Failed != 0 {
+		t.Errorf("%d queries are still failed after being taken back", sum.Failed)
+	}
+	if sum.Pending != 2 {
+		t.Errorf("%d queries are pending, want the untried one and the one taken back", sum.Pending)
+	}
+	// What answered stays answered: this is not a way to ask a whole job again.
+	if sum.Done != 1 {
+		t.Errorf("%d queries are done, want the one that answered left alone", sum.Done)
+	}
+}
