@@ -25,6 +25,10 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 
 ## 📜 Recent changes
 
+- A lease goes to an identity that has **answered before**, and never waits for
+  one. Measured at ten threads for twenty minutes an arm, at the same minute:
+  three ports a thread answered 259 against 164 for one port, and 154 against 54
+  in the second half, once the identities were warm.
 - A port can be told to **change identity every N minutes**: a fresh
   fingerprint and an empty cookie jar. Nought never does, which suits a long
   address list; choosing the gateways offers ten minutes, because a dozen
@@ -111,6 +115,10 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
   never covers more than three quarters of the list, so the pool cannot run out
   of addresses to try.
 - Load is spread evenly: every address is used once before any is used twice.
+- **Threads per proxy**, one by default — and worth raising to two or three on a
+  long address list, where the spare identities are asked less often and last
+  longer. On a short list of gateways it is the other way: more identities
+  behind one exit is more for that exit to answer for.
 - **Threads per proxy**, one by default. A unique `ip:port` is one upstream and
   so is one gateway, even where several ports sit on the same machine. Threads
   that find no free upstream wait their turn rather than doubling up on one,
