@@ -166,10 +166,23 @@ const DefaultControlURL = "http://127.0.0.1:8891/"
 // switched off look as though it could.
 const DefaultBan = time.Hour
 
+// DefaultRenew is how often a port is opened again to change the identity it
+// wears, on a machine where nobody has said otherwise.
+//
+// An hour. An identity held for as long as it works is right on a long list of
+// addresses, where a port meets a different address every few requests anyway —
+// but "for as long as it works" turned out to mean "until somebody notices",
+// and nobody watches a run at four in the morning. An hour is far longer than
+// the forty-odd requests an identity answers before it is challenged, so it
+// costs almost nothing on a busy pool and catches the identity that has been
+// sitting in a corner of a large one.
+const DefaultRenew = time.Hour
+
 // Defaults are what a program that has never been configured runs on.
 func Defaults() Settings {
 	return Settings{
 		ControlURL: DefaultControlURL,
+		RenewEvery: DefaultRenew,
 		Proxy:      ProxySource{Ban: DefaultBan},
 	}
 }

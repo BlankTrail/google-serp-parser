@@ -273,7 +273,7 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 | Re-read every, minutes | How often the list is read again. Nought reads it once |
 | Ban for, minutes | How long a failed address is left out. Nought leaves nobody out; sixty is where a fresh install starts |
 | Threads per proxy | How many threads share one address or one gateway. One by default |
-| Change identity every, minutes | How often a port is opened again with a fresh fingerprint and an empty jar. Nought never does; choosing the gateways offers ten |
+| Change identity every, minutes | How often a port is opened again with a fresh fingerprint and an empty jar. Sixty by default, nought never does, and choosing the gateways offers ten |
 | Connection to a port | SOCKS5 (default) or HTTP |
 | Gateways | Which stored configurations to use, when the source is the gateways |
 
@@ -282,9 +282,9 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 | Setting | What it is |
 |---|---|
 | Threads | Queries taken at once |
-| Ports per thread | Identities opened per thread. Threads × ports = pool size |
+| Ports per thread | Identities opened per thread. Threads × ports = pool size. Three by default, which is what measured fastest |
 | Tries per phrase | How many identities one phrase may be taken to |
-| Pause on one identity, seconds | Gap before an identity is asked again. **Nought means none** |
+| Pause on one identity, seconds | Gap before an identity is asked again. Five by default: an identity asked every two seconds answered twelve requests before it was challenged, one asked every five around forty. **Nought means none** |
 | Pages per query | Depth of pagination |
 | Country, language | Two-letter codes, e.g. `de` |
 | Deduplication | Keep everything, one row per URL, or one per host |

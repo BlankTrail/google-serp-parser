@@ -74,10 +74,25 @@ type jobForm struct {
 // defaultCooldown is the pause the form offers between two requests on one
 // identity, in seconds.
 //
-// Two, which is what this program kept machine-wide before the pause belonged to
-// the job: short enough that a pool of any size is not waiting on it, long
-// enough that one identity is not asking twice in the same breath.
-const defaultCooldown = 2
+// Five, and the number is measured. An identity asked every two seconds
+// answered twelve requests before Google challenged it; one asked every five
+// answered around forty. Above five the measurement could not tell the arms
+// apart — 39, 42, 77 and 40 at five, ten, fifteen and thirty seconds — so five
+// is where the buying stops and the waiting starts.
+const defaultCooldown = 5
+
+// defaultPortsPerThread is how many identities the form offers a thread.
+//
+// Three, so that a five-second gap on each identity still lets a thread ask
+// something every second or two. Measured at ten threads for twenty minutes an
+// arm, both arms at the same minute, on a live list: three ports a thread
+// answered 259 against 164 for one port, and 154 against 54 in the second half
+// once the identities were warm.
+//
+// It is three rather than more because every identity is bought twice — once in
+// the minutes its first request costs, and again in the addresses it holds out
+// of the pool while it is unproven.
+const defaultPortsPerThread = 3
 
 // defaultTries is what the form offers when nobody has said otherwise. It is
 // the run layer's own number, spelled here so the box a reader sees and the
@@ -126,7 +141,7 @@ func blankForm() jobForm {
 		Device:   blanktrail.DeviceDesktop,
 		Pages:    1,
 		Threads:  2,
-		Ports:    6,
+		Ports:    defaultPortsPerThread,
 		Tries:    defaultTries,
 		Cooldown: defaultCooldown,
 		// Everything the parser reads, because that is what somebody who has not

@@ -380,10 +380,19 @@
 		if (!renew) {
 			return;
 		}
+		// Only while the box still holds what the server drew. A number the
+		// reader typed is theirs, and the offer is for somebody who has not
+		// thought about this box at all — which, now that the machine's own
+		// default is an hour, is most people who reach for the gateways.
+		var drawn = renew.value;
 		source.addEventListener("change", function () {
-			if (source.value === "gateways" && Number(renew.value) === 0) {
+			if (source.value === "gateways" && renew.value === drawn) {
 				renew.value = "10";
 			}
+		});
+		renew.addEventListener("input", function () {
+			// Typed in, so it is no longer what was drawn and the offer is off.
+			drawn = null;
 		});
 	}
 

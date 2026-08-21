@@ -177,3 +177,28 @@ func TestDefaults_StartWithAnHourOfBanAndKeepAnExplicitNought(t *testing.T) {
 		t.Errorf("a nought that was saved came back as %v", back.Proxy.Ban)
 	}
 }
+
+func TestDefaults_ChangeAnIdentityOnceAnHourUnlessSaidOtherwise(t *testing.T) {
+	// An identity held for as long as it works is right until "as long as it
+	// works" means "until somebody notices", and nobody watches a run at four in
+	// the morning. An hour is far longer than the forty-odd requests an identity
+	// answers before it is challenged, so it costs a busy pool nothing and
+	// catches the identity sitting in the corner of a large one.
+	if got := Defaults().RenewEvery; got != time.Hour {
+		t.Errorf("a machine nobody has configured changes identity every %v, want an hour", got)
+	}
+
+	// And nought stays nought: somebody who wants an identity held for as long
+	// as it works can still say so.
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := Save(path, Settings{ControlURL: "http://127.0.0.1:8891", RenewEvery: 0}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	back, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if back.RenewEvery != 0 {
+		t.Errorf("a nought that was saved came back as %v", back.RenewEvery)
+	}
+}

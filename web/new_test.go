@@ -807,3 +807,23 @@ func TestNewForm_AsksForTheDesktopPageUnlessSomebodySaysOtherwise(t *testing.T) 
 		t.Errorf("the form starts on something other than the desktop page:\n%s", body)
 	}
 }
+
+func TestNewJob_OffersTheNumbersThatWereMeasured(t *testing.T) {
+	// Three identities a thread and five seconds between two requests on one of
+	// them. Both are measured and both are in the code's own comments: an
+	// identity asked every two seconds answered twelve requests before it was
+	// challenged and one asked every five answered around forty, and three ports
+	// a thread out-ran one by 259 answers to 164 over twenty minutes.
+	//
+	// A default nobody meets is a default that does not matter, so this checks
+	// the page a reader actually opens rather than the struct behind it.
+	page := get(t, testServer(t), "/new").Body.String()
+	for _, want := range []string{
+		`id="ports" name="ports" type="number" min="1" value="3"`,
+		`id="cooldown" name="cooldown" type="number" min="0" value="5"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the new-job form does not offer %s", want)
+		}
+	}
+}
