@@ -2802,3 +2802,51 @@ func TestPool_SaysWhenNoGatewayWillCarryAPort(t *testing.T) {
 		t.Errorf("the failure reads %q, and never says what the service said", err)
 	}
 }
+
+func TestPool_RemembersWhichGatewaysWouldNotCarryAPortAndForgetsThemWhenTheyDo(t *testing.T) {
+	// A gateway that is stepped over leaves no other sign: the job runs on what
+	// is left and the pool is simply smaller than was asked for. On a live
+	// service fourteen of fifteen refused at once and the screen said nothing at
+	// all, which read as a slow run rather than as a service with one gateway.
+	fake := fakebt.New(t)
+	fake.RefuseGateway("dead-one")
+
+	cfg := testPoolConfig(t, fake, newFakeClock(), 1, 1)
+	cfg.Channels = []Channel{NewGatewayListChannel("gateways",
+		NewStaticRotor(GatewayUpstreams([]string{"dead-one", "alive"})))}
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	refused := p.Refused()
+	if len(refused) != 1 {
+		t.Fatalf("the pool remembers %d refusals, want the one gateway that would not start: %+v", len(refused), refused)
+	}
+	if refused[0].Name != "dead-one" {
+		t.Errorf("it remembers %q, want the gateway that refused", refused[0].Name)
+	}
+	if !strings.Contains(refused[0].Why, "exited during startup") {
+		t.Errorf("it remembers the reason as %q, and never says what the service said", refused[0].Why)
+	}
+	// The service's sentence and not this program's plumbing around it: the cell
+	// on the screen is narrow, and "blanktrail: /api/v1/ports/open -> HTTP 409"
+	// spends all of it before the reason starts.
+	if strings.Contains(refused[0].Why, "/api/v1/") {
+		t.Errorf("the reason carries the request that carried it: %q", refused[0].Why)
+	}
+
+	// And it is forgotten the moment that gateway carries a port, because the
+	// screen is a reading of what is true now and these come back on their own:
+	// on the live service every one of the fourteen that refused inside an hour
+	// started when it was asked again.
+	fake.AllowGateway("dead-one")
+	cfg.Channels[0].(interface{ ReleaseAll() int }).ReleaseAll()
+	if err := p.Grow(context.Background(), 1); err != nil {
+		t.Fatalf("Grow: %v", err)
+	}
+	if left := p.Refused(); len(left) != 0 {
+		t.Errorf("a gateway that carried a port is still on the list: %+v", left)
+	}
+}

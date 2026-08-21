@@ -177,6 +177,24 @@ func formShowing(saved settings.Settings) settingsForm {
 	}
 }
 
+// keptOr is what the form said, or what was saved when the form said nothing.
+// It is how a box that is off the screen keeps its value.
+func keptOr(said, saved string) string {
+	if strings.TrimSpace(said) != "" {
+		return said
+	}
+	return saved
+}
+
+// keptGateways is keptOr for the ticks: a form that carried none keeps the ones
+// already saved.
+func keptGateways(said, saved []string) []string {
+	if len(said) > 0 {
+		return said
+	}
+	return saved
+}
+
 // spellUnits writes a stored duration back into the box it was typed in.
 func spellUnits(d, unit time.Duration) string { return strconv.FormatInt(int64(d/unit), 10) }
 
@@ -273,19 +291,30 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	case sourceNone:
 		next.Proxy = settings.ProxySource{}
 	case sourceGateways:
-		// A set of gateways has no location and no interval: what is behind each
-		// name lives in the service and is asked for when a job starts.
+		// A set of gateways runs on no location and no interval: what is behind
+		// each name lives in the service and is asked for when a job starts.
+		//
+		// Both are carried through all the same. Dropped, a reader who tried the
+		// gateways for an afternoon came back to an empty box and had to find
+		// their list's address again — and the box is not even on the screen
+		// while the gateways are chosen, so nothing they can see says it is
+		// about to be forgotten.
 		next.Proxy = settings.ProxySource{
 			Kind:     sourceGateways,
 			Ban:      b.span(f.Ban, saved.Proxy.Ban, banUnit, "settings.ban.length"),
 			Gateways: f.Gateways,
+			Location: keptOr(f.Where, saved.Proxy.Location),
+			Refresh:  saved.Proxy.Refresh,
 		}
 	case sourceFile, sourceURL:
+		// And the gateways ticked are kept for the same reason, in the other
+		// direction: two-and-thirty boxes are not something to tick twice.
 		next.Proxy = settings.ProxySource{
 			Kind:     f.Source,
 			Location: f.Where,
 			Refresh:  b.span(f.Refresh, saved.Proxy.Refresh, refreshUnit, "settings.refresh.length"),
 			Ban:      b.span(f.Ban, saved.Proxy.Ban, banUnit, "settings.ban.length"),
+			Gateways: keptGateways(f.Gateways, saved.Proxy.Gateways),
 		}
 	default:
 		b.complaints = append(b.complaints, "settings.source.unknown")

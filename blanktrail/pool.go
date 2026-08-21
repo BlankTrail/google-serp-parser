@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -372,8 +373,10 @@ type Pool struct {
 	host  string
 	cool  time.Duration
 
-	mu        sync.Mutex
-	ports     []*poolPort
+	mu    sync.Mutex
+	ports []*poolPort
+	// refused is every egress that would not carry a port, by name.
+	refused   map[string]EgressRefusal
 	byNum     map[int]*poolPort
 	closed    bool // set inside closeOnce.Do; renewIfDue checks it before reopening a port
 	closeOnce sync.Once
@@ -692,6 +695,7 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 		num, err := p.openOne(ctx, used, spec, eg)
 		for err != nil && errors.Is(err, ErrEgressRefused) {
 			refused[eg.String()] = err
+			p.refusedEgress(eg, err)
 			ch.MarkDead(eg)
 			next, ok := ch.Next()
 			if !ok || refused[next.String()] != nil {
@@ -1029,6 +1033,7 @@ func (p *Pool) openOne(ctx context.Context, used map[int]bool, spec PortSpec, eg
 			lastTaken = err
 			continue
 		}
+		p.carriedAPort(eg)
 		return num, nil
 	}
 	return 0, fmt.Errorf("blanktrail: %d port numbers in a row were already taken, the last with: %w",
@@ -1118,6 +1123,80 @@ func numberTaken(err error) bool {
 // ErrEgressRefused is returned when a port could not be opened because of where
 // it was to send its traffic, rather than because of its number.
 var ErrEgressRefused = errors.New("blanktrail: the egress refused the port")
+
+// EgressRefusal is one egress that would not carry a port, and what the service
+// said about it.
+//
+// It is kept and shown because there is nothing else to see it by: a gateway
+// whose tunnel will not start is stepped over, the job runs on the ones that do,
+// and the only sign left is a pool smaller than the operator asked for. On a
+// live service fourteen of fifteen refused at once, and the screen said nothing
+// at all — it looked like a slow run rather than a service with one gateway
+// left.
+type EgressRefusal struct {
+	// Name is the gateway, or the address for a list.
+	Name string
+	// Why is what the service answered, as it answered it. The reason belongs to
+	// the service and paraphrasing it here would lose the one detail that tells
+	// somebody which of their gateways to look at.
+	Why string
+	// At is when it was last refused.
+	At time.Time
+}
+
+// refusedEgress records an egress that would not carry a port.
+func (p *Pool) refusedEgress(eg Egress, err error) {
+	name := eg.Gateway
+	if name == "" {
+		name = eg.String()
+	}
+	var apiErr *APIError
+	why := err.Error()
+	if errors.As(err, &apiErr) && apiErr.Message != "" {
+		why = apiErr.Message
+	}
+	p.mu.Lock()
+	if p.refused == nil {
+		p.refused = map[string]EgressRefusal{}
+	}
+	p.refused[name] = EgressRefusal{Name: name, Why: why, At: p.cfg.Now()}
+	p.mu.Unlock()
+}
+
+// carriedAPort forgets an egress that has now carried one, so the screen shows
+// what is true rather than what was true once. A gateway whose tunnel would not
+// start is the sort of thing that comes back on its own — measured on a live
+// service, fourteen that refused inside an hour all started when asked again.
+func (p *Pool) carriedAPort(eg Egress) {
+	name := eg.Gateway
+	if name == "" {
+		name = eg.String()
+	}
+	p.mu.Lock()
+	delete(p.refused, name)
+	p.mu.Unlock()
+}
+
+// Refused is every egress that would not carry a port, newest reason kept, in
+// name order.
+func (p *Pool) Refused() []EgressRefusal {
+	p.mu.Lock()
+	out := make([]EgressRefusal, 0, len(p.refused))
+	for _, r := range p.refused {
+		out = append(out, r)
+	}
+	p.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// ForgetRefused drops what is remembered about egresses that would not carry a
+// port, so a reading can be started again.
+func (p *Pool) ForgetRefused() {
+	p.mu.Lock()
+	p.refused = nil
+	p.mu.Unlock()
+}
 
 // egressRefused reports whether a refusal was about the egress rather than the
 // number.
@@ -1993,6 +2072,9 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: close: %w", pt.num, err))
 	}
 	if _, err := p.cl.OpenPort(ctx, pt.num, pt.spec, eg); err != nil {
+		if egressRefused(err, eg) {
+			p.refusedEgress(eg, err)
+		}
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: reopen: %w", pt.num, err))
 	}
 
@@ -2006,6 +2088,8 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 		cancel()
 		return fmt.Errorf("blanktrail: renew port %d: pool closed during renewal", pt.num)
 	}
+
+	p.carriedAPort(eg)
 
 	// Rotating after reopening guarantees a different fingerprint even if the
 	// proxy handed back the same one on open.

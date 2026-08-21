@@ -51,6 +51,22 @@
      failure goes on resting: that is not a record of what happened but what is
      true now, and throwing the pool back into addresses it has already found
      dead would make the next reading worse than the one it replaced. */}}
+{{if .Refused}}
+{{/* The gateways that would not carry a port. Drawn as a table rather than a
+     sentence because the reason belongs to the service and is worth reading
+     whole: it names which of them to go and look at. */}}
+<h2>{{.T "proxies.refused"}}</h2>
+<table class="rows">
+<thead><tr><th>{{.T "proxies.refused.name"}}</th><th>{{.T "proxies.refused.why"}}</th></tr></thead>
+<tbody>
+{{range .Refused}}
+<tr><td>{{.Name}}</td><td class="empty">{{.Why}}</td></tr>
+{{end}}
+</tbody>
+</table>
+<p class="empty">{{.T "proxies.refused.why.note"}}</p>
+{{end}}
+
 <div class="actions">
 <form method="post" action="/api/proxies/reset">
 <button type="submit">{{.T "proxies.reset"}}</button>

@@ -292,8 +292,21 @@
 		if (!source || !chooser) {
 			return;
 		}
+		// The box for where a list is read from, and the link that browses for
+		// one. Neither means anything while the gateways are chosen: what is
+		// behind a gateway lives in the service, and a box asking for a path
+		// beside it reads as a thing left unfilled.
+		//
+		// Hidden rather than emptied — the value goes on travelling with the
+		// form, so switching to the gateways and back finds the address where it
+		// was left.
+		var where = root.querySelector("[name=source_at]");
+		var whereField = where && where.closest(".field");
 		var apply = function () {
 			chooser.hidden = source.value !== "file";
+			if (whereField) {
+				whereField.hidden = source.value === "gateways" || source.value === "";
+			}
 		};
 		source.addEventListener("change", apply);
 		apply();

@@ -65,6 +65,11 @@ type proxiesPage struct {
 	Rotations   int64
 	Quarantines int64
 	Revivals    int64
+	// Refused are the gateways that would not carry a port at all, with what the
+	// service said about each. Nothing else on this screen shows them: a gateway
+	// whose tunnel will not start is stepped over, the job runs on what is left,
+	// and the only sign is a pool smaller than was asked for.
+	Refused []blanktrail.EgressRefusal
 	// Reopenings counts ports opened again on the address or gateway they
 	// already had. It stands apart from Rotations because it is the opposite
 	// reading: nothing was wrong with where the port was sending its traffic —
@@ -303,6 +308,7 @@ func (s *Server) proxiesOf() proxiesPage {
 	view.Rejections = st.Rejections
 	if facts.Pool != nil {
 		view.Addresses, view.Resting = facts.Pool.Addresses()
+		view.Refused = facts.Pool.Refused()
 	}
 
 	for _, kind := range blanktrail.Failures {
