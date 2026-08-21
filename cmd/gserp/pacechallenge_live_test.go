@@ -24,6 +24,11 @@ import (
 const (
 	envPaceGaps   = "GSERP_LIVE_PACE_GAPS"
 	envPaceBudget = "GSERP_LIVE_PACE_BUDGET"
+	// envPacePorts is how many identities to open. The default is an arm each
+	// and a few in reserve, which is enough on a list where most addresses
+	// answer. On one where most do not, the arms hunt through the same few ports
+	// and three of six found nothing — so the pool is worth widening by hand.
+	envPacePorts = "GSERP_LIVE_PACE_PORTS"
 )
 
 // slowEnoughToBeAChallenge is where a request stops looking like an answer and
@@ -86,13 +91,21 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 
 	// One identity per arm and a few in reserve: an address can be dead, and a
 	// dead one answers nothing at any pace.
-	pool, err := o.dial(ctx, saved, 1, len(gaps)+4, blanktrail.DeviceDesktop, 0)
+	ports := len(gaps) + 4
+	if raw := os.Getenv(envPacePorts); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < len(gaps) {
+			t.Fatalf("%s: %q is not a number of identities, and there must be at least one an arm", envPacePorts, raw)
+		}
+		ports = n
+	}
+	pool, err := o.dial(ctx, saved, 1, ports, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening the identities: %v", o.clean(err.Error()))
 	}
 	defer func() { _ = pool.Close() }()
 
-	t.Logf("gaps: %v, budget: %d requests an arm, every arm at once", gaps, budget)
+	t.Logf("gaps: %v, budget: %d requests an arm, %d identities, every arm at once", gaps, budget, ports)
 
 	// Warmed together, for the reason they are run together: an identity warmed
 	// a quarter of an hour before another is an identity of a different age.
@@ -237,7 +250,12 @@ func warmed(ctx context.Context, t *testing.T, say *sync.Mutex, o serveOptions, 
 			t.Logf("  warming port %d: failed after %v — %s", l.Port(),
 				time.Since(started).Round(time.Millisecond), o.clean(err.Error()))
 			say.Unlock()
-			_ = l.Reject(ctx)
+			// Straight to another address rather than through the pool's own
+			// counting: a rejection moves a port only after three failures in a
+			// row, so hunting for a live address on a list where most are dead
+			// went round the same few addresses and three arms of six never
+			// found one at all.
+			_ = pool.RotateEgressFor(ctx, l.Port())
 			l.Release()
 			continue
 		}

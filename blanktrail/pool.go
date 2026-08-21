@@ -315,10 +315,10 @@ type poolPort struct {
 	// what came back was a page or a refusal.
 	//
 	// It is reported — a machine keeping identities open needs to know how many
-	// of them are worth anything — and it decides which one warming goes to
-	// next, which is the one that has never answered. It does not decide which
-	// one a lease goes to: that is how a pool ends up working like a third of
-	// itself.
+	// of them are worth anything — it decides which one warming goes to next,
+	// which is the one that has never answered, and it decides which free port a
+	// lease goes to when there is a choice. Nothing waits for it: a cold port is
+	// taken the moment no proven one is free.
 	//
 	// It is cleared wherever the identity changes, because the challenge is
 	// solved against the identity and not against the port number.
@@ -1462,8 +1462,10 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 	defer p.mu.Unlock()
 
 	now := p.cfg.Now()
-	var best *poolPort
-	var bestUsed time.Time
+	// best is the coldest candidate and proven the one that has answered.
+	// Proven wins when there is one free, and nothing ever waits for it.
+	var best, proven *poolPort
+	var bestUsed, provenUsed time.Time
 	soonest := time.Duration(-1)
 	alive := 0
 
@@ -1519,23 +1521,49 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 			continue
 		}
 		if elapsed := now.Sub(last); elapsed >= p.cool {
-			// The one that has rested longest, and nothing else.
+			// An identity that has answered, if one is free; otherwise the one
+			// that has rested longest.
 			//
-			// It used to prefer an identity that had answered before, on the
-			// strength of a measurement: a cold identity's first request costs
-			// minutes where a warm one costs seconds. What that missed is what
-			// the preference does to the rest of the pool. The few that answer
-			// take every lease, cool down, and are asked again the moment they
-			// may be — while the others are never tried at all. Traced on a live
-			// run: twenty-one ports of forty carried every request, the busiest
-			// of them asked once per cooldown, and nineteen sat untouched for
-			// minutes. A pool of a hundred was working like a pool of twenty.
+			// Both halves are measured. What a proven identity is worth: the
+			// first request on one costs one to three minutes and every one
+			// after it costs one to two seconds. What spreading over the
+			// unproven ones costs, measured on a live list at five threads for
+			// twenty minutes an arm, at the same minute, one port a thread
+			// against three:
 			//
-			// Longest-rested spreads the work over every identity there is,
-			// which is what a pool is for, and it is also the gentler pattern:
-			// an address asked once every hundred seconds looks less like a
-			// machine than one asked every seven.
-			if best == nil || last.Before(bestUsed) {
+			//	ports  answered  last half  failed  mean wait
+			//	1      96        59         325     3.5s
+			//	3      67        42         459     0s
+			//
+			// Three identities a thread lost, and lost in the second half as
+			// well, so it was not the warming. Nothing waited — the wait was
+			// nought — and the requests took the same time either way. What
+			// differed was where the requests went: three times the ports meant
+			// three times the addresses in play, on a list where about one in
+			// twelve carries anything, and the even spread went on feeding the
+			// unproven ones.
+			//
+			// The preference was here before and was taken out on a trace where
+			// twenty-one ports of forty carried every request while nineteen sat
+			// idle. What made that a fault was the pace, not the preference: the
+			// busiest could be asked only once per cooldown, and the cooldown
+			// was thirty-five seconds inherited from a set opened for one
+			// thread. That number is gone — a job paces its own pool now, and a
+			// job that asks for no pause keeps none.
+			//
+			// Nothing waits for a proven identity. A cold one is taken the
+			// moment no proven one is free, which is every lease at the start of
+			// a run and every lease under load, so the rest of the pool is a
+			// reserve rather than a queue.
+			//
+			// Within each of the two, longest-rested still: an address asked
+			// once every hundred seconds looks less like a machine than one
+			// asked every seven.
+			if pt.answered {
+				if proven == nil || last.Before(provenUsed) {
+					proven, provenUsed = pt, last
+				}
+			} else if best == nil || last.Before(bestUsed) {
 				best, bestUsed = pt, last
 			}
 			continue
@@ -1553,6 +1581,9 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 			return nil, 0, fmt.Errorf("%w: spec %q", ErrPoolExhausted, specName)
 		}
 		return nil, 0, ErrPoolExhausted
+	}
+	if proven != nil {
+		best = proven
 	}
 	if best != nil {
 		best.mu.Lock()

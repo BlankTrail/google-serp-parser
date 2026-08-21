@@ -180,15 +180,20 @@ func TestReduceTo_LeavesAlonePortsSomebodyIsHolding(t *testing.T) {
 	}
 }
 
-func TestTake_OffersTheIdentityThatHasRestedLongest(t *testing.T) {
-	// The one rule a lease follows, and the reason it is the only one.
+func TestTake_OffersAnIdentityThatHasAnsweredBeforeOneThatNeverHas(t *testing.T) {
+	// The one rule a lease follows, and it was the other way round until it was
+	// measured. A live list at five threads for twenty minutes an arm, at the
+	// same minute, one port a thread against three:
 	//
-	// It used to prefer an identity that had answered before. That is right about
-	// one request and wrong about a pool: the few that answer take every lease,
-	// cool down, and are asked again the moment they may be, while the others are
-	// never tried. Traced on a live run, twenty-one ports of forty carried every
-	// request and nineteen sat untouched for minutes — a hundred identities
-	// working like twenty.
+	//	ports  answered  last half  failed  mean wait
+	//	1      96        59         325     3.5s
+	//	3      67        42         459     0s
+	//
+	// Three identities a thread lost, and lost in the second half too, so it was
+	// not the warming they cost. Nothing waited and the requests took the same
+	// time; what differed was that three times the ports put three times the
+	// addresses in play on a list where about one in twelve carries anything,
+	// and an even spread went on feeding the unproven ones.
 	f := fakebt.New(t)
 	clock := newFakeClock()
 	cfg := testPoolConfig(t, f, clock, 1, 3)
@@ -199,29 +204,75 @@ func TestTake_OffersTheIdentityThatHasRestedLongest(t *testing.T) {
 	}
 	defer func() { _ = pool.Close() }()
 
-	// One of them answers, and is therefore the most recently used. Under the old
-	// rule it would be handed out again at once; under this one it is last.
+	// One of them answers, and is therefore the most recently used. The other
+	// two have rested longer and neither has ever answered.
 	answered := leaseNum(t, pool, pool.ports[0].num)
 	answered.Answered()
 	answered.Release()
 	clock.Advance(2 * time.Minute)
 
-	// Every port is ready now, and the one that answered rested least.
 	lease, err := pool.Acquire(context.Background())
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
 	defer lease.Release()
-	if lease.Port() == answered.Port() {
-		t.Errorf("the lease went straight back to the identity that had just answered; " +
-			"the other two had rested longer and neither was tried")
+	if lease.Port() != answered.Port() {
+		t.Errorf("the lease went to port %d, want the one that has answered, %d — "+
+			"a first request on a fresh identity costs one to three minutes",
+			lease.Port(), answered.Port())
 	}
 }
 
-func TestTake_SpreadsOverEveryIdentityRatherThanFavouringAFew(t *testing.T) {
-	// The whole pool, not a corner of it. Six identities and twelve leases: each
-	// should carry two, because after every turn the one that has rested longest
-	// is a different one.
+func TestTake_TakesAnUnprovenIdentityRatherThanWaitForAProvenOne(t *testing.T) {
+	// Nothing waits for a proven identity. Queueing behind the few that have
+	// answered is the fault this preference was taken out for once before, on a
+	// trace where twenty-one ports of forty carried every request; what made
+	// that a fault was a thirty-five second cooldown inherited from a set opened
+	// for one thread, and that number is gone.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, f, clock, 1, 2)
+	pool, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("opening two ports: %v", err)
+	}
+	defer func() { _ = pool.Close() }()
+	pool.PaceAt(0)
+
+	proven := leaseNum(t, pool, pool.ports[0].num)
+	proven.Answered()
+	proven.Release()
+
+	first, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("first Acquire: %v", err)
+	}
+	defer first.Release()
+	if first.Port() != proven.Port() {
+		t.Fatalf("the first lease went to %d, want the proven port %d", first.Port(), proven.Port())
+	}
+
+	// The proven one is busy, so the next lease takes the other rather than
+	// standing in a queue for it.
+	second, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("second Acquire: %v", err)
+	}
+	defer second.Release()
+	if second.Port() == proven.Port() {
+		t.Fatal("both leases went to the same identity")
+	}
+}
+
+func TestTake_SpreadsOverEveryIdentityThatHasAnswered(t *testing.T) {
+	// The whole of what has been proven, not a corner of it. Six identities that
+	// have all answered and twelve leases: each should carry two, because among
+	// the proven ones the rule is still the one that has rested longest.
+	//
+	// This is what keeps the preference from becoming its old fault. It chooses
+	// between proven and unproven; it does not choose a favourite among the
+	// proven, and an address asked once every hundred seconds looks less like a
+	// machine than one asked every seven.
 	f := fakebt.New(t)
 	clock := newFakeClock()
 	cfg := testPoolConfig(t, f, clock, 1, 6)
@@ -231,17 +282,17 @@ func TestTake_SpreadsOverEveryIdentityRatherThanFavouringAFew(t *testing.T) {
 		t.Fatalf("opening six ports: %v", err)
 	}
 	defer func() { _ = pool.Close() }()
+	for _, pt := range pool.ports {
+		pt.mu.Lock()
+		pt.answered = true
+		pt.mu.Unlock()
+	}
 
 	used := map[int]int{}
 	for range 12 {
 		lease, err := pool.Acquire(context.Background())
 		if err != nil {
 			t.Fatalf("Acquire: %v", err)
-		}
-		// Some answer and some do not, which under the old rule was the whole
-		// difference and under this one is none of it.
-		if len(used)%2 == 0 {
-			lease.Answered()
 		}
 		used[lease.Port()]++
 		lease.Release()
