@@ -25,6 +25,12 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 
 ## 📜 Recent changes
 
+- A job **waits for an identity** rather than spending a query on not having
+  one. A pool with everything set aside almost always has something to give
+  shortly, and the screen counts who is queueing.
+- A port whose listener has gone is **opened again**, and a gateway whose tunnel
+  has died is restarted before it is left. Neither used to happen: a restart of
+  the proxy service took every port in the job with it.
 - **VPN gateways held in BlankTrail** can be used instead of an address list,
   grouped by subscription and ticked one, one subscription, or all at once,
   each showing the round trip the service last measured to it.
@@ -72,8 +78,13 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
   answered, what came back instead, ports held and ports set aside, threads
   waiting for a free proxy, queue.
 - **Proxies** screen: addresses in the list, banned right now, ports open and
-  warm; requests, attempts, failure share, address changes; failures broken
-  down by kind, with counters you can zero at any moment.
+  warm; requests, attempts, failure share, address changes, ports opened again;
+  failures broken down by kind, with counters you can zero at any moment.
+- The gateway list is read once and held for a couple of minutes, with a
+  **Refresh** that asks the service again — for when a configuration has just
+  been added or the tunnels have just been measured.
+- A job that failed can be told to **try the failed queries again**, which is
+  not the same button as carrying on with what is left.
 - Live URL of the request going out right now.
 - English and Russian, switchable in one click.
 - The screens show numbers and draw no conclusions from them. They never call a
@@ -103,6 +114,12 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 - Failures counted apart, because the remedy differs — a dead address, a proxy
   port that never answered, a relay refusal, a wall from Google, our own
   timeout.
+- A port the proxy service is no longer listening on is opened again, and a
+  gateway whose tunnel has died is restarted on the same gateway before being
+  left: the service runs a gateway only while a port holds it.
+- Nothing is spent on an empty pool. A job with no identity to take queues for
+  one instead of writing the query down as failed, so a service that goes away
+  costs the time it is away and not the rest of the list.
 
 ![The proxy screen: the pool as it stands, what failed and of what kind, and the address list](assets/screenshots/proxies-en.png)
 
