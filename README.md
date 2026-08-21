@@ -271,7 +271,7 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 | Read from | Nothing, a file, a URL, or the VPN gateways held in BlankTrail |
 | Path or address | Where the list is |
 | Re-read every, minutes | How often the list is read again. Nought reads it once |
-| Ban for, minutes | How long a failed address is left out. Nought is sixty |
+| Ban for, minutes | How long a failed address is left out. Nought leaves nobody out; sixty is where a fresh install starts |
 | Threads per proxy | How many threads share one address or one gateway. One by default |
 | Change identity every, minutes | How often a port is opened again with a fresh fingerprint and an empty jar. Nought never does; choosing the gateways offers ten |
 | Connection to a port | SOCKS5 (default) or HTTP |

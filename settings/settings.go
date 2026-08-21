@@ -157,9 +157,21 @@ type Settings struct {
 // have, and one they cannot check without leaving the page.
 const DefaultControlURL = "http://127.0.0.1:8891/"
 
+// DefaultBan is how long an address that failed is left out of the rotation on
+// a machine where nobody has said otherwise.
+//
+// It is a default and nothing more: what the box says is what an address waits,
+// and nought there means no wait at all. The two used to be the same number —
+// an empty box was read as an hour — which made the one setting that cannot be
+// switched off look as though it could.
+const DefaultBan = time.Hour
+
 // Defaults are what a program that has never been configured runs on.
 func Defaults() Settings {
-	return Settings{ControlURL: DefaultControlURL}
+	return Settings{
+		ControlURL: DefaultControlURL,
+		Proxy:      ProxySource{Ban: DefaultBan},
+	}
 }
 
 // Load reads the settings, or the defaults when there is no file yet.

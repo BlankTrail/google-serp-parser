@@ -547,9 +547,9 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 		// fast a gateway's exits turn over is a property of the list they bought
 		// and not of this program. Nought is the documented default.
 		bench := []blanktrail.RotorOption{blanktrail.WithOnBench(o.remember)}
-		if saved.Proxy.Ban > 0 {
-			bench = append(bench, blanktrail.WithRest(saved.Proxy.Ban))
-		}
+		// Passed as it stands, nought included: nought is an operator saying no
+		// address is ever put away, not an operator saying nothing.
+		bench = append(bench, blanktrail.WithRest(saved.Proxy.Ban))
 		rotor, err := blanktrail.NewRotor(ctx, listFrom(saved.Proxy), bench...)
 		if err != nil {
 			return nil, o.scrubbed(err)
@@ -1185,9 +1185,7 @@ func (o serveOptions) gatewayChannel(ctx context.Context, client *blanktrail.Cli
 		return nil, errors.New("blanktrail: none of the chosen gateways are on the service any more")
 	}
 	opts := []blanktrail.RotorOption{}
-	if saved.Proxy.Ban > 0 {
-		opts = append(opts, blanktrail.WithRest(saved.Proxy.Ban))
-	}
+	opts = append(opts, blanktrail.WithRest(saved.Proxy.Ban))
 	rotor := blanktrail.NewStaticRotor(blanktrail.GatewayUpstreams(chosen), opts...)
 	return blanktrail.NewGatewayListChannel("gateways", rotor), nil
 }

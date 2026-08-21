@@ -154,3 +154,26 @@ func TestRedacted_LeavesEverythingElseAlone(t *testing.T) {
 		t.Errorf("redacting changed something other than the key: %+v", got)
 	}
 }
+
+func TestDefaults_StartWithAnHourOfBanAndKeepAnExplicitNought(t *testing.T) {
+	// The number in the box is what an address waits, and nought there is an
+	// operator saying no address is ever put away. That is only possible if the
+	// default lives in the defaults rather than in the reading of a nought — the
+	// two used to be one number, and the setting that cannot be switched off
+	// looked as though it could.
+	if got := Defaults().Proxy.Ban; got != time.Hour {
+		t.Errorf("a machine nobody has configured bans for %v, want an hour", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := Save(path, Settings{ControlURL: "http://127.0.0.1:8891", Proxy: ProxySource{Kind: "url", Ban: 0}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	back, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if back.Proxy.Ban != 0 {
+		t.Errorf("a nought that was saved came back as %v", back.Proxy.Ban)
+	}
+}

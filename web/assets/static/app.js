@@ -92,7 +92,55 @@
 
 	// watch begins whatever the screen now on the page says to follow, and
 	// abandons whatever the screen before it had begun.
+	// Whether the reader is in the middle of filling something in.
+	//
+	// Every screen that follows something asks for itself again every few seconds
+	// and puts back what the server drew — which is the whole point while a job
+	// runs, and a nuisance on the same page's form: a number half typed is a
+	// number the next redraw throws away, and on a three-second interval that is
+	// most of them.
+	//
+	// So a screen with a box being filled in is left alone until it is not. Two
+	// things count as filling in: something on the page has the reader's
+	// attention, and something on it has been changed since it was drawn. The
+	// second outlasts the first, because a reader who types a number and then
+	// looks away to read the hint under it has not finished.
+	//
+	// It is cleared when the form is sent, which is the moment what they typed
+	// stops being theirs alone and becomes what the server holds.
+	var edited = false;
+
+	function editing() {
+		if (edited) {
+			return true;
+		}
+		var here = document.activeElement;
+		if (!here || !here.closest) {
+			return false;
+		}
+		if (!here.closest("#" + screenAt)) {
+			return false;
+		}
+		var kind = here.tagName;
+		return kind === "INPUT" || kind === "SELECT" || kind === "TEXTAREA";
+	}
+
+	document.addEventListener("input", function (event) {
+		if (event.target && event.target.closest && event.target.closest("#" + screenAt)) {
+			edited = true;
+		}
+	});
+	document.addEventListener("change", function (event) {
+		if (event.target && event.target.closest && event.target.closest("#" + screenAt)) {
+			edited = true;
+		}
+	});
+	document.addEventListener("submit", function () {
+		edited = false;
+	});
+
 	function watch() {
+		edited = false;
 		showing++;
 		// The screen that was here may have left a way to be woken. It belongs to a
 		// screen that is gone, and a screen with nothing to follow leaves none.
@@ -138,6 +186,12 @@
 			// sees. What it costs is that the figures are stale for as long as the
 			// tab is away, which is put right the instant it comes back.
 			if (document.hidden) {
+				return;
+			}
+			// Somebody is filling something in. Come back later rather than
+			// drawing over what they have typed.
+			if (editing()) {
+				later();
 				return;
 			}
 			fetched(window.location.href).then(function (html) {

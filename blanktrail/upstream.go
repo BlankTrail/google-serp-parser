@@ -355,11 +355,18 @@ func WithOnBench(fn func(key string, since time.Time)) RotorOption {
 
 // WithRest sets how long a benched address rests. Zero or less keeps the
 // default.
+// WithRest sets how long an address waits after it is put away, and nought
+// means it is never put away at all.
+//
+// Nought is an answer rather than a blank: an operator who says none wants the
+// whole list in play at every moment, and a caller who says nothing keeps the
+// default. A negative is neither, and is read as none.
 func WithRest(d time.Duration) RotorOption {
 	return func(r *Rotor) {
-		if d > 0 {
-			r.rest = d
+		if d < 0 {
+			d = 0
 		}
+		r.rest = d
 	}
 }
 
@@ -564,6 +571,14 @@ func (r *Rotor) MarkDead(u Upstream) {
 
 // bench puts an address away for its rest. Called with the lock held.
 func (r *Rotor) bench(key string) {
+	if r.rest <= 0 {
+		// No rest was asked for, so nothing is ever put away: an address that
+		// failed is offered again with the rest of them. It is a choice somebody
+		// makes about their own list, and a bench of no length would otherwise
+		// mean "put away until the next sweep", which is a different thing said
+		// by accident.
+		return
+	}
 	if _, resting := r.benched[key]; resting {
 		return
 	}

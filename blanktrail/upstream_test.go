@@ -388,23 +388,35 @@ func TestRotor_HandsOutTheLongestRestedWhenEveryAddressIsBenched(t *testing.T) {
 	}
 }
 
-func TestRotor_AnOptionCarryingNothingLeavesTheDefaultInPlace(t *testing.T) {
-	// Options come from configuration, where a field left unset is the common
-	// case and must mean "as it comes", not "no rest at all" or "no clock".
+func TestRotor_ANoughtRestIsNoRestAndANilClockLeavesTheDefault(t *testing.T) {
+	// Nought used to mean "as it comes", on the reasoning that options are read
+	// from configuration where an unset field is nought. That reasoning has
+	// moved: the settings carry the default themselves now, so a nought reaching
+	// here is somebody who typed one — an operator saying no address is ever put
+	// away — and reading it as an hour made the one setting that can be switched
+	// off look as though it could not.
+	//
+	// A nil clock is the other case and unchanged: nothing was said, so the
+	// rotor keeps its own.
 	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
 	r := NewStaticRotor(ups, WithRest(0), WithClock(nil))
 
 	for i := 0; i < 3; i++ {
 		r.MarkBad(ups[0])
 	}
+	seen := map[string]bool{}
 	for i := 0; i < 4; i++ {
 		u, ok := r.Next()
 		if !ok {
 			t.Fatal("Next reported an empty list")
 		}
-		if u.Key() == ups[0].Key() {
-			t.Fatal("the benched address came back at once, so the rest was set to zero")
-		}
+		seen[u.Key()] = true
+	}
+	if !seen[ups[0].Key()] {
+		t.Error("the address that failed was put away although no rest was asked for")
+	}
+	if resting := r.RestingHere(); resting != 0 {
+		t.Errorf("%d addresses are resting although the rest is nought", resting)
 	}
 }
 
@@ -981,5 +993,34 @@ func TestNewRotor_TakesTheLengthOfABanFromWhoeverOpensIt(t *testing.T) {
 	}
 	if got := r.RestingHere(); got != 0 {
 		t.Errorf("%d addresses are still resting after the ban ran out", got)
+	}
+}
+
+func TestRotor_WithNoRestNothingIsEverPutAway(t *testing.T) {
+	// Nought minutes of ban is an operator saying the whole list stays in play.
+	// A bench of no length would mean "put away until the next sweep" instead,
+	// which is a different thing said by accident.
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	r := NewStaticRotor(ups, WithRest(0))
+	first, ok := r.Next()
+	if !ok {
+		t.Fatal("a fresh rotor handed out nothing")
+	}
+	r.MarkDead(first)
+
+	if resting := r.RestingHere(); resting != 0 {
+		t.Errorf("%d addresses are resting although the rest is nought", resting)
+	}
+	// And it is still offered: two addresses, and both of them come round.
+	seen := map[string]bool{}
+	for range 4 {
+		u, ok := r.Next()
+		if !ok {
+			t.Fatal("the rotor ran out although nothing was put away")
+		}
+		seen[u.Key()] = true
+	}
+	if len(seen) != 2 {
+		t.Errorf("%d of two addresses were offered after one was marked dead", len(seen))
 	}
 }
