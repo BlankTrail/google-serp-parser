@@ -298,6 +298,16 @@ sending:
 			// Threads stop taking work once ctx ends, so without this the last
 			// send would wait for a reader that is never coming.
 			break sending
+		case <-starved:
+			// The same reason, for the same kind of reader that is never
+			// coming. The check above cannot stand in for this one: it reads
+			// starved at an instant, and what matters is the window after it.
+			// Every thread can find the pool empty and return between that
+			// check and this send — they all do, when the pool was empty before
+			// the job began — and then nothing is left reading the queue, ctx
+			// is not done, and a send with no way out waits for ever. The run
+			// hangs where it was meant to stop and say it had starved.
+			break sending
 		case queue <- i:
 		}
 	}
