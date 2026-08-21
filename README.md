@@ -437,6 +437,32 @@ Tests:
 go test ./...
 ```
 
+With [`just`](https://github.com/casey/just) installed, `just --list` shows the
+same things under shorter names: `just build`, `just test`, `just lint`.
+
+### Reproducing a release
+
+The published builds are made by [`scripts/dist.sh`](scripts/dist.sh), which is
+what the release workflow runs — there is no separate recipe kept somewhere
+only CI can see. To build the same artefacts yourself:
+
+```
+git checkout v0.1.0
+./scripts/dist.sh 0.1.0
+cd dist && sha256sum -c SHA256SUMS.txt
+```
+
+The sums are checked from inside `dist/` because the file names in them carry
+no directory — which is what lets the same file check a release you downloaded
+into a folder of your own.
+
+Binaries are built with `-trimpath`, so they carry no trace of the machine that
+built them and two people building one tag get one file. The archives are not
+byte-for-byte reproducible — they record the moment they were packed — so
+compare the binaries inside them rather than the archives. Your build will
+differ from the published one in one way on purpose: it carries no integration
+key, which the next section explains.
+
 ### Attribution
 
 BlankTrail credits a subscription to whoever's work brought the customer, and a
@@ -459,6 +485,10 @@ To stamp a build with your own key:
 ```
 go build -ldflags "-X github.com/blanktrail/google-serp-parser/internal/version.integrationKey=dk_yours" ./cmd/gserp
 ```
+
+`scripts/dist.sh` reads the same key from `GSERP_INTEGRATION_KEY`, and stamps
+nothing when it is unset — which is what a build made by anybody but this
+project does, here and in a fork's own release workflow.
 
 
 ---

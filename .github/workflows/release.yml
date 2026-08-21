@@ -1,0 +1,88 @@
+name: release
+
+# A tag is what releases. Pushing v1.2.3 builds every artefact, checks the
+# version it stamped, and opens a draft release with the files attached; the
+# notes are written by hand and the draft published by hand. Until it is
+# published nothing moves: the "releases/latest/download/…" links the README
+# hands out go on pointing at the previous release rather than at a half-made
+# one.
+#
+# A release that fails halfway is re-run from the Actions page, which repeats it
+# against the same tag. There is deliberately no manual trigger taking a version
+# by hand: it would check out a branch while naming a tag, and the two would
+# quietly stop being the same tree.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # A tag does not run the ci workflow, which watches branches. Releasing a
+      # tree nobody tested is how a broken build reaches the download links, so
+      # the tests run here too.
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+      - name: Work out the version
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      - name: Build the artefacts
+        env:
+          # Set as a repository variable, not written here. A fork has none, so
+          # a fork's builds stamp nothing — which is the rule the README states
+          # and the behaviour anybody building from source should get.
+          GSERP_INTEGRATION_KEY: ${{ vars.GSERP_INTEGRATION_KEY }}
+        run: ./scripts/dist.sh '${{ steps.version.outputs.version }}'
+
+      # The one mistake this whole arrangement exists to prevent: artefacts that
+      # were built without the version being stamped into them, so every binary
+      # in the release calls itself 0.1.0-dev. Ask the binary, do not assume.
+      - name: Check the binary knows its own version
+        run: |
+          tar xzf dist/gserp-linux-amd64.tar.gz -C /tmp
+          got="$(/tmp/gserp-linux-amd64/gserp version)"
+          want="gserp ${{ steps.version.outputs.version }}"
+          if [ "$got" != "$want" ]; then
+            echo "the build reports '$got', the tag says '$want'" >&2
+            exit 1
+          fi
+          echo "$got"
+
+      # dist/ holds exactly what is published and nothing else, so the files go
+      # up by the directory rather than by a list kept in step with the script
+      # that makes them.
+      #
+      # A re-run finds the release it made last time and replaces the files
+      # rather than failing on a name already taken, so recovering from a
+      # half-finished run is pressing the button again. Notes already written
+      # into the draft survive: this never rewrites them.
+      - name: Open the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "the release exists already — replacing its files"
+            gh release upload "$GITHUB_REF_NAME" --clobber dist/*
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --verify-tag \
+              --title 'gserp ${{ steps.version.outputs.version }}' \
+              --notes 'Draft. Write the notes here, then publish.' \
+              dist/*
+          fi
