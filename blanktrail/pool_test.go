@@ -2654,3 +2654,50 @@ func TestPool_DoesNotQueueOnAPoolThatIsClosed(t *testing.T) {
 		t.Errorf("a closed pool answered %v, want it to say there is nothing left", err)
 	}
 }
+
+func TestPool_ChangesAPortsIdentityOnceItsTimeIsUp(t *testing.T) {
+	// A short list of gateways is a dozen identities held for hours, which is a
+	// dozen an origin comes to know — and what it does about that is a challenge
+	// on every request. This is the stage that stops it: the port is opened
+	// again, which is the only way there is to an empty cookie jar.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	cfg.RenewAfterInterval = 10 * time.Minute
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+
+	num := p.ports[0].num
+	before := p.Stats().Renewals
+
+	// Not yet: a renewal that came early would spend a warm identity for
+	// nothing, which is the whole reason this is a setting and not a rule.
+	clock.Advance(9 * time.Minute)
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	l.Release()
+	if got := p.Stats().Renewals; got != before {
+		t.Errorf("the identity changed after nine minutes of a ten-minute setting (%d renewals)", got-before)
+	}
+
+	clock.Advance(2 * time.Minute)
+	l, err = p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire after the time was up: %v", err)
+	}
+	defer l.Release()
+	if got := p.Stats().Renewals; got != before+1 {
+		t.Errorf("renewals went from %d to %d, want one change of identity", before, got)
+	}
+	if got := p.Stats().ProfileRotations; got < 1 {
+		t.Error("the port came back on the fingerprint it had, so nothing about the identity changed")
+	}
+	if l.Port() != num {
+		t.Errorf("the lease is on port %d, want the port that was renewed, %d", l.Port(), num)
+	}
+}

@@ -1288,3 +1288,26 @@ func TestLockFor_AsksForNothingWhileTheInterfaceIsOnThisMachine(t *testing.T) {
 		t.Error("the pages ask for nothing while answering the network")
 	}
 }
+
+func TestDial_CarriesHowOftenAPortChangesIdentityIntoThePool(t *testing.T) {
+	// The setting is worth nothing until it reaches the pool, and this is the
+	// one place the two are joined. A pool built without it holds every identity
+	// for as long as the job runs — which on a dozen gateways is a dozen
+	// identities an origin comes to know.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{
+		ControlURL: fake.URL(), APIKey: fake.Key(), RenewEvery: 10 * time.Minute,
+	})
+	saved, _ := opts.saved(io.Discard)
+
+	pool, err := opts.dial(t.Context(), saved, 1, 2, blanktrail.DeviceDesktop, 0)
+	if err != nil {
+		t.Fatalf("opening the identities: %v", err)
+	}
+	t.Cleanup(func() { _ = pool.Close() })
+
+	if got := pool.RenewEvery(); got != 10*time.Minute {
+		t.Errorf("the pool changes identity every %v, want the ten minutes that were saved", got)
+	}
+}

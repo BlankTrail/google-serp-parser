@@ -197,6 +197,7 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 	form.Wire = strings.TrimSpace(r.FormValue(wireField))
 	form.Ban = strings.TrimSpace(r.FormValue(banField))
 	form.PerUpstream = strings.TrimSpace(r.FormValue(perUpField))
+	form.Renew = strings.TrimSpace(r.FormValue(renewField))
 	form.Gateways = ticked(r, gatewayField)
 
 	next, faults := form.onto(saved)

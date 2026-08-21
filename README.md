@@ -25,6 +25,10 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 
 ## 📜 Recent changes
 
+- A port can be told to **change identity every N minutes**: a fresh
+  fingerprint and an empty cookie jar. Nought never does, which suits a long
+  address list; choosing the gateways offers ten minutes, because a dozen
+  identities held for hours become a dozen an origin knows.
 - A job **waits for an identity** rather than spending a query on not having
   one. A pool with everything set aside almost always has something to give
   shortly, and the screen counts who is queueing.
@@ -261,6 +265,7 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 | Re-read every, minutes | How often the list is read again. Nought reads it once |
 | Ban for, minutes | How long a failed address is left out. Nought is sixty |
 | Threads per proxy | How many threads share one address or one gateway. One by default |
+| Change identity every, minutes | How often a port is opened again with a fresh fingerprint and an empty jar. Nought never does; choosing the gateways offers ten |
 | Connection to a port | SOCKS5 (default) or HTTP |
 | Gateways | Which stored configurations to use, when the source is the gateways |
 

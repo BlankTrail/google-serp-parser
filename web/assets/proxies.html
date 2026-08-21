@@ -109,6 +109,10 @@
 <input id="threads_per_upstream" name="threads_per_upstream" type="number" min="1" value="{{.Form.PerUpstream}}">
 </div>
 <div class="field">
+<label for="renew_minutes">{{.T "settings.renew"}}</label>
+<input id="renew_minutes" name="renew_minutes" type="number" min="0" value="{{.Form.Renew}}">
+</div>
+<div class="field">
 <label for="port_protocol">{{.T "form.wire"}}</label>
 <select id="port_protocol" name="port_protocol">
 <option value="socks5"{{if eq .Form.Wire "socks5"}} selected{{end}}>SOCKS5</option>
@@ -168,6 +172,7 @@
 </form>
 <p class="empty">{{.T "settings.perupstream.why"}}</p>
 <p class="empty">{{.T "settings.ban.why"}}</p>
+<p class="empty">{{.T "settings.renew.why"}}</p>
 <p class="empty">{{.T "settings.wire.why"}}</p>
 {{/* What a list may look like, said here rather than found out by writing one:
      a file read and understood line by line reports nothing on this page, so a

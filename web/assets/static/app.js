@@ -297,6 +297,27 @@
 		};
 		source.addEventListener("change", apply);
 		apply();
+
+		// Choosing the gateways offers ten minutes between changes of identity.
+		//
+		// A long list of addresses wants none: a port there meets a different
+		// address every few requests anyway, and changing identity throws away a
+		// warm one that cost minutes to make. A dozen gateways held for hours are
+		// a dozen identities an origin comes to know, and what it does about that
+		// is a challenge on every request.
+		//
+		// It is offered rather than applied: the box is filled in, in front of
+		// the reader, and only when it says never — a number somebody chose is
+		// theirs, and nothing here is saved until they press save.
+		var renew = root.querySelector("[name=renew_minutes]");
+		if (!renew) {
+			return;
+		}
+		source.addEventListener("change", function () {
+			if (source.value === "gateways" && Number(renew.value) === 0) {
+				renew.value = "10";
+			}
+		});
 	}
 
 	// Ticking two-and-thirty boxes one at a time to use a whole subscription is

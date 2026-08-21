@@ -1108,6 +1108,14 @@ func (p *Pool) Cooldown() time.Duration {
 	return p.cool
 }
 
+// RenewEvery is how often a port is opened again to change the identity it
+// wears, and nought when it never is.
+//
+// It is readable because it travels from a saved setting through the program to
+// here, and a caller that could not read it back could only trust that the trip
+// worked.
+func (p *Pool) RenewEvery() time.Duration { return p.cfg.RenewAfterInterval }
+
 // PaceAt sets the gap this pool keeps between two requests on one identity.
 //
 // A pool outlives the thing running on it: the standing set is opened once, as

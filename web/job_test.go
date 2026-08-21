@@ -1011,3 +1011,44 @@ func TestJobPage_OffersTheFailedQueriesBackWhenNothingIsPending(t *testing.T) {
 		t.Errorf("%d queries are pending after the press, want both back", sum.Pending)
 	}
 }
+
+func TestJobPage_KeepsAskingAfterTheFailedQueriesAreTakenBack(t *testing.T) {
+	// The page asks itself again only while the job can answer differently, and
+	// a job stamped finished never can. Taking its failures back leaves work in
+	// front of it, so the stamp has to come off with them — left standing, the
+	// job ran on behind a screen that sat still until the tab was reloaded.
+	s := testServerWithSupervisor(t)
+	ctx := context.Background()
+	id, err := s.store.CreateJob(ctx, store.JobSpec{Name: "starved"}, []string{"one", "two"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	for _, ord := range []int{0, 1} {
+		if err := s.store.Record(ctx, id, store.QueryOutcome{Ordinal: ord, Err: errors.New("blanktrail: every candidate port is quarantined")}); err != nil {
+			t.Fatalf("recording a failure: %v", err)
+		}
+	}
+	if err := s.store.FinishJob(ctx, id); err != nil {
+		t.Fatalf("FinishJob: %v", err)
+	}
+
+	if _, err := s.store.TryFailedAgain(ctx, id); err != nil {
+		t.Fatalf("TryFailedAgain: %v", err)
+	}
+	sum, err := s.store.Progress(ctx, id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Finished {
+		t.Fatal("the job is still stamped finished after its failures were taken back")
+	}
+	// Which is what the page reads to decide whether to keep asking.
+	if !s.progress(sum).Watch && (s.progress(sum).Running || s.progress(sum).Queued) {
+		t.Error("a job that is running again is not being watched")
+	}
+	// And it offers the way to carry on rather than nothing at all.
+	page := get(t, s, fmt.Sprintf("/job/%d", id)).Body.String()
+	if !strings.Contains(page, `action="/api/resume"`) {
+		t.Error("a job with work back in front of it offers no way to carry on")
+	}
+}

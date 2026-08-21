@@ -779,4 +779,10 @@ func TestTryFailedAgain_PutsTheFailuresBackInTheQueueAndLeavesTheRest(t *testing
 	if sum.Done != 1 {
 		t.Errorf("%d queries are done, want the one that answered left alone", sum.Done)
 	}
+	// And the job is no longer done. The stamp is read by more than the word on
+	// the screen: it is what tells the page whether to ask again while the job
+	// runs, so a job left stamped ran on behind a screen that sat still.
+	if sum.Finished {
+		t.Error("the job is still stamped finished with work back in front of it")
+	}
 }

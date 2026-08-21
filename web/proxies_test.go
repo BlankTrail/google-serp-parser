@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -368,5 +369,51 @@ func TestProxies_ShowsHowManyPortsWereOpenedAgain(t *testing.T) {
 	page := get(t, testServer(t), proxiesAt).Body.String()
 	if !strings.Contains(page, `id="reopenings"`) {
 		t.Error("the proxy screen never says how many ports were opened again")
+	}
+}
+
+func TestProxies_SavesHowOftenAPortChangesItsIdentity(t *testing.T) {
+	// The box is in minutes and what is kept is a duration: saved as minutes it
+	// would be read back as nanoseconds and a run would change identity ten
+	// million times a second, or never.
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := settings.Save(path, settings.Settings{ControlURL: "http://127.0.0.1:8891", APIKey: "k"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	s, err := New(Config{Store: testStore(t), Logger: quiet(), SettingsPath: path})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := postForm(t, s, proxiesAt, url.Values{
+		"source":               {"gateways"},
+		"ban_minutes":          {"10"},
+		"threads_per_upstream": {"10"},
+		"renew_minutes":        {"10"},
+		"port_protocol":        {"socks5"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving answered %d: %s", rec.Code, rec.Body.String())
+	}
+	after, err := settings.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if after.RenewEvery != 10*time.Minute {
+		t.Errorf("kept %v between changes of identity, want ten minutes", after.RenewEvery)
+	}
+	// And nought is an answer: it is how "hold this identity for as long as it
+	// works" is said, and it is what a long address list wants.
+	if rec := postForm(t, s, proxiesAt, url.Values{
+		"source": {"url"}, "source_at": {"http://example.test/list"}, "renew_minutes": {"0"},
+		"ban_minutes": {"10"}, "threads_per_upstream": {"1"}, "port_protocol": {"socks5"},
+	}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving nought answered %d", rec.Code)
+	}
+	if after, err = settings.Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if after.RenewEvery != 0 {
+		t.Errorf("nought in the box was kept as %v", after.RenewEvery)
 	}
 }

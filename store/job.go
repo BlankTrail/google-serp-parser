@@ -445,7 +445,13 @@ func (s *Store) FinishJob(ctx context.Context, jobID int64) error {
 // its own. What was gathered stays: only the state and the message go back, and
 // the pages a failed query never produced were never written.
 func (s *Store) TryFailedAgain(ctx context.Context, jobID int64) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: begin taking back the failures of job %d: %w", jobID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
 		`UPDATE queries SET state = 'pending', err = '', settled_at = ''
 		 WHERE job_id = ? AND state = 'failed'`, jobID)
 	if err != nil {
@@ -454,6 +460,19 @@ func (s *Store) TryFailedAgain(ctx context.Context, jobID int64) (int64, error) 
 	moved, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("store: counting what job %d took back: %w", jobID, err)
+	}
+	// A job with work in front of it is not a job that is done, and the stamp
+	// saying otherwise is read by more than the word on the screen: it is what
+	// tells the page whether to ask again while the job runs. Left standing, the
+	// job ran on and the screen sat still until somebody reloaded the tab.
+	if moved > 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE jobs SET finished_at = NULL WHERE id = ?`, jobID); err != nil {
+			return 0, fmt.Errorf("store: taking the finish off job %d: %w", jobID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: committing what job %d took back: %w", jobID, err)
 	}
 	return moved, nil
 }
