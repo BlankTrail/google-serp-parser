@@ -431,3 +431,58 @@ func TestProxies_ShowsTheGatewaysThatWouldNotCarryAPort(t *testing.T) {
 		t.Error("the screen draws the refusals heading when nothing refused")
 	}
 }
+
+func TestProxies_KeepsTheAddressOfAListWhileTheGatewaysAreChosen(t *testing.T) {
+	// The box is off the screen while the gateways are chosen, so nothing the
+	// reader can see says the address is about to be forgotten. Dropped, an
+	// afternoon on the gateways cost them their list's address — which on a
+	// bought list is not something they can retype from memory.
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := settings.Save(path, settings.Settings{
+		ControlURL: "http://127.0.0.1:8891", APIKey: "k",
+		Proxy: settings.ProxySource{
+			Kind: "url", Location: "https://example.test/list.txt",
+			Refresh: 30 * time.Minute, Ban: 10 * time.Minute,
+		},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	s, err := New(Config{Store: testStore(t), Logger: quiet(), SettingsPath: path})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Over to the gateways, with the address box carrying nothing.
+	if rec := postForm(t, s, proxiesAt, url.Values{
+		"source": {"gateways"}, "source_at": {""}, "gateway": {"Sub.One"},
+		"ban_minutes": {"10"}, "threads_per_upstream": {"1"}, "port_protocol": {"socks5"},
+	}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving the gateways answered %d", rec.Code)
+	}
+	after, err := settings.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if after.Proxy.Location != "https://example.test/list.txt" {
+		t.Errorf("the address of the list is %q after choosing the gateways", after.Proxy.Location)
+	}
+	if after.Proxy.Refresh != 30*time.Minute {
+		t.Errorf("how often the list is read again is %v after choosing the gateways", after.Proxy.Refresh)
+	}
+
+	// And back again, with the ticks carrying nothing: they are kept for the
+	// same reason, two-and-thirty boxes being no small thing to tick twice.
+	if rec := postForm(t, s, proxiesAt, url.Values{
+		"source": {"url"}, "source_at": {"https://example.test/list.txt"},
+		"source_refresh": {"30"}, "ban_minutes": {"10"},
+		"threads_per_upstream": {"1"}, "port_protocol": {"socks5"},
+	}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving the list answered %d", rec.Code)
+	}
+	if after, err = settings.Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(after.Proxy.Gateways) != 1 || after.Proxy.Gateways[0] != "Sub.One" {
+		t.Errorf("the gateways ticked are %v after going back to a list", after.Proxy.Gateways)
+	}
+}

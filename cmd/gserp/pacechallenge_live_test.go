@@ -35,6 +35,10 @@ const (
 // second, so nothing turns on where exactly the line is drawn.
 const slowEnoughToBeAChallenge = 10 * time.Second
 
+// warmingTries is how many identities one arm may work through to find one that
+// answers a first request.
+const warmingTries = 30
+
 // TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge answers the one
 // question that decides whether more than one port per thread is worth having.
 //
@@ -213,7 +217,11 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 // first request is the cold start every arm pays alike.
 func warmed(ctx context.Context, t *testing.T, say *sync.Mutex, o serveOptions, pool *blanktrail.Pool) (*blanktrail.Lease, *google.Session) {
 	t.Helper()
-	for tried := 1; tried <= 5; tried++ {
+	// Enough tries to find a live address on a list where most are not. Measured
+	// on this one: roughly one address in twelve carries anything, so five tries
+	// leave two arms in three with no identity at all — which is an hour spent
+	// measuring nothing.
+	for tried := 1; tried <= warmingTries; tried++ {
 		l, err := pool.Acquire(ctx)
 		if err != nil {
 			say.Lock()
