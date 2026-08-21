@@ -1118,7 +1118,9 @@ func TestRemember_WritesDownAnAddressAsItIsFoundDead(t *testing.T) {
 	}
 }
 
-func TestRemember_SaysNothingWhenThereIsNowhereToKeepIt(t *testing.T) {
+// The test body asserts nothing and takes no *testing.T for that reason: what
+// it pins is that the call returns at all. A panic here fails the test.
+func TestRemember_SaysNothingWhenThereIsNowhereToKeepIt(_ *testing.T) {
 	// A command exercised without a history has nowhere to write, and that is
 	// not a fault worth a panic on every failed address.
 	serveOptions{}.remember("socks5|10.0.0.9:1080", time.Now())

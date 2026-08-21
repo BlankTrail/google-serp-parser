@@ -57,14 +57,6 @@ func (s *Store) Rest(ctx context.Context, key string, since time.Time) error {
 	return nil
 }
 
-// ForgetRestsBefore drops the records of rests that began before the given
-// moment.
-//
-// Without it the table grows for the life of the machine: a list of fifteen
-// thousand addresses cycled through for a month leaves a row for every one that
-// ever failed, and the rests among them expired long ago. The caller names the
-// moment because how long a rest lasts is the pool's business, not this
-// table's.
 // ForgetAllRests drops every rest written down.
 //
 // It is what a release of the whole bench has to do as well as clearing it in
@@ -79,6 +71,14 @@ func (s *Store) ForgetAllRests(ctx context.Context) error {
 	return nil
 }
 
+// ForgetRestsBefore drops the records of rests that began before the given
+// moment.
+//
+// Without it the table grows for the life of the machine: a list of fifteen
+// thousand addresses cycled through for a month leaves a row for every one that
+// ever failed, and the rests among them expired long ago. The caller names the
+// moment because how long a rest lasts is the pool's business, not this
+// table's.
 func (s *Store) ForgetRestsBefore(ctx context.Context, cut time.Time) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM rested_upstreams WHERE since < ?`,
 		cut.UTC().Format(time.RFC3339Nano))

@@ -274,10 +274,13 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 // The hooks fire on the transport's own goroutines, and the request they belong
 // to is over before done is called, so the fields are written before they are
 // read and no lock is needed between them.
+// The stages are kept as the moments they happened rather than as durations
+// from the start: one subtraction at the end turns a moment into a duration,
+// and a stage that never happened is a zero moment, which is how "it did not
+// get that far" is told from "it took no time".
 type stopwatch struct {
 	began                             time.Time
 	reused                            bool
-	connect, tls, wrote, firstByte    time.Duration
 	connectAt, tlsAt, wroteAt, byteAt time.Time
 }
 

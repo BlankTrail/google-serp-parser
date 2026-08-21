@@ -317,25 +317,6 @@ func TestAcquireIdleHot_WarmsThePortThatHasRestedLongest(t *testing.T) {
 	}
 }
 
-// hotAndGrown names the standing port and the one a Grow added, for a pool of
-// exactly one of each.
-func hotAndGrown(t *testing.T, p *Pool) (standing, grown int) {
-	t.Helper()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, pt := range p.ports {
-		if pt.hot {
-			standing = pt.num
-			continue
-		}
-		grown = pt.num
-	}
-	if standing == 0 || grown == 0 {
-		t.Fatalf("the fixture holds standing %d and grown %d, want one of each", standing, grown)
-	}
-	return standing, grown
-}
-
 // leaseNum takes leases until the wanted port comes up, holding the others so
 // none of them can come up twice, and gives those back before it returns.
 func leaseNum(t *testing.T, p *Pool, num int) *Lease {

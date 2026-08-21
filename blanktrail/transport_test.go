@@ -575,13 +575,13 @@ func TestLadder_LeavesAnAddressThatHasAnsweredAfterTwoMissesInARow(t *testing.T)
 	}
 }
 
-func (f *fakeRemedy) attempted() { f.attempts++ }
+func (r *fakeRemedy) attempted() { r.attempts++ }
 
-func (f *fakeRemedy) failed(kind Failure) {
-	if f.kinds == nil {
-		f.kinds = map[Failure]int{}
+func (r *fakeRemedy) failed(kind Failure) {
+	if r.kinds == nil {
+		r.kinds = map[Failure]int{}
 	}
-	f.kinds[kind]++
+	r.kinds[kind]++
 }
 
 func TestLadder_NamesEveryFailureItMeetsAndNoneOfTheSuccesses(t *testing.T) {

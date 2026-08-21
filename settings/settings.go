@@ -24,11 +24,11 @@ var ErrUnreadable = errors.New("settings: the file is there and cannot be read a
 // set. Four characters name a key and are useless as one.
 const tailLen = 4
 
-// ProxySource is where the addresses come from and how often to look again.
 // ProxyGateways is the source kind that egresses through stored VPN gateways
 // rather than through a list of addresses.
 const ProxyGateways = "gateways"
 
+// ProxySource is where the addresses come from and how often to look again.
 type ProxySource struct {
 	Kind     string        `json:"kind"`     // "file" | "url" | "gateways" | ""
 	Location string        `json:"location"` // path or address

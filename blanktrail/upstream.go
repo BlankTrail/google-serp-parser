@@ -629,7 +629,7 @@ func (r *Rotor) Resting() map[string]time.Time {
 	return out
 }
 
-// Resting counts the addresses this list holds that are on the bench.
+// RestingHere counts the addresses this list holds that are on the bench.
 //
 // It is not len(Resting()): a rest is kept for an address the current list does
 // not hold, because the list may be reloaded from a source that has it again,

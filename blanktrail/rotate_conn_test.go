@@ -224,8 +224,8 @@ func TestTrace_SaysWhereARequestWasWhenItStopped(t *testing.T) {
 	// In order, and every stage reached: a request that got an answer went
 	// through all of them, and a zero anywhere would mean a stage this trace
 	// cannot see.
-	if !(tr.Connect > 0 && tr.TLS >= tr.Connect && tr.Wrote >= tr.TLS &&
-		tr.FirstByte >= tr.Wrote && tr.Total >= tr.FirstByte) {
+	if tr.Connect <= 0 || tr.TLS < tr.Connect || tr.Wrote < tr.TLS ||
+		tr.FirstByte < tr.Wrote || tr.Total < tr.FirstByte {
 		t.Errorf("the stages are not in order or one is missing: connect=%v tls=%v "+
 			"wrote=%v firstByte=%v total=%v", tr.Connect, tr.TLS, tr.Wrote, tr.FirstByte, tr.Total)
 	}

@@ -5,7 +5,6 @@ package blanktrail
 import (
 	"context"
 	"fmt"
-	"time"
 )
 
 // gatewayScheme marks a rotor entry that names a stored VPN gateway rather than
@@ -88,16 +87,8 @@ func (c *gatewayChannel) Len() int        { return c.rotor.Len() }
 func (c *gatewayChannel) Resting() int    { return c.rotor.RestingHere() }
 func (c *gatewayChannel) ReleaseAll() int { return c.rotor.ReleaseAll() }
 
-// gatewayRest is how long a gateway that failed is left out.
-//
-// It is the ban the operator set, the same as an address gets. What differs is
-// what leaving one costs: a gateway cannot be swapped on a live port, so moving
-// to another means closing the port and opening it again, and the identity
-// behind it starts cold. That is a reason to be slower to give up on a gateway,
-// not a reason to keep using one that does not carry anything.
-func gatewayRest(ban time.Duration) time.Duration {
-	if ban <= 0 {
-		return defaultRest
-	}
-	return ban
-}
+// How long a gateway that failed is left out is not decided here. It is the
+// rotor's rest, set by whoever builds the rotor from the ban the operator
+// chose, and WithRest already keeps the default when that ban is nought — so a
+// gateway rests exactly as long as an address does. A second answer to the
+// question lived here for a while, was never called, and is not missed.

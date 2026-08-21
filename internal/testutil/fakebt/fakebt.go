@@ -567,13 +567,15 @@ func (s *Server) serveIntegrationKey(w http.ResponseWriter, r *http.Request, bod
 }
 
 // IntegrationKey is what a test reads to see what a program stamped in, and
-// SetIntegrationKey is how a test says somebody else got there first.
+// IntegrationKey reports what the service has been stamped with, so a test can
+// check what the program wrote — or that it wrote nothing.
 func (s *Server) IntegrationKey() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.integrationKey
 }
 
+// SetIntegrationKey is how a test says somebody else got there first.
 func (s *Server) SetIntegrationKey(key string) {
 	s.mu.Lock()
 	s.integrationKey = key

@@ -87,10 +87,10 @@ func failureOf(err error, status int) Failure {
 		}
 		return FailureTransport
 	}
-	switch {
-	case status == relayRefused:
+	switch status {
+	case relayRefused:
 		return FailureRelay
-	case status == http.StatusTooManyRequests, status == http.StatusFound, status == http.StatusMovedPermanently:
+	case http.StatusTooManyRequests, http.StatusFound, http.StatusMovedPermanently:
 		return FailureWall
 	default:
 		return FailureOther
