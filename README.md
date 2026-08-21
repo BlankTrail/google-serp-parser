@@ -1,12 +1,14 @@
 # Google SERP Parser
 
-Open-source **Google search results parser and rank tracker**, written in Go.
-Browser interface, CSV/JSON exports, and a SerpApi-compatible HTTP API.
-Powered by [BlankTrail Proxy](https://blanktrail.com).
+Free and open-source **Google search results parser and rank tracker**, written
+in Go. Scrapes Google SERPs through your own proxies or through **VPN gateways**,
+checks whether a page is **indexed**, and tracks where a site ranks. Browser
+interface, CSV/JSON exports, and a SerpApi-compatible HTTP API. Powered by
+[BlankTrail Proxy](https://blanktrail.com).
 
 **Русская версия: [README.ru.md](README.ru.md)**
 
-> ⚠️ **This program only works through BlankTrail Proxy with Challenge Breaker.**
+> ⚠️ **This program only works through [BlankTrail Proxy](https://blanktrail.com) with [Challenge Breaker](https://blanktrail.com/#features).**
 > Google serves a JavaScript shell — zero results — to any plain HTTP client, no
 > matter how many proxies you put behind it. This was measured, not assumed:
 > seven client variants, both direct and proxied, all came back with a 91 KB
@@ -14,7 +16,7 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 > the session through the challenge. A BlankTrail licence including **Challenge
 > Breaker** is a hard requirement, not a recommendation.
 >
-> **Challenge Breaker passes reCAPTCHA.** Counted on a live run: 721 of 821
+> **[Challenge Breaker](https://blanktrail.com/#features) passes reCAPTCHA.** Counted on a live run: 721 of 821
 > challenges solved — 88 per cent — and the identity carries on working
 > afterwards, so the next request through it comes back in seconds rather than
 > meeting the wall again.
@@ -135,10 +137,17 @@ Powered by [BlankTrail Proxy](https://blanktrail.com).
 
 ![The proxy screen: the pool as it stands, what failed and of what kind, and the address list](assets/screenshots/proxies-en.png)
 
-*Three hundred identities, warmed, on a fifteen-thousand-address list: seven
-per cent of attempts fail and nearly all of those are addresses that never
-answered. The counts were cleared a few minutes before the shot, which is what
-the button is for.*
+*Three hundred identities on a fifteen-thousand-address list, a hundred of them
+warm: a fifth of the attempts fail and 99 per cent of those are addresses that
+carried nothing at all. That is what a datacentre list looks like from the
+inside, and it is why the failures are counted apart — nothing there is Google
+refusing, and nothing there would be mended by trying more politely.*
+
+Choosing the gateways instead puts the subscription's own configurations on the
+same screen, grouped by subscription, each with the round trip the service last
+measured to it:
+
+![The proxy screen reading VPN gateways: the configurations a subscription carries, by subscription, with what each last answered](assets/screenshots/proxies-gateways-en.png)
 
 ### Export and API
 
@@ -157,8 +166,8 @@ the button is for.*
 
 No Go, no build, no dependencies. One file to download and one to double-click.
 
-**1. Install and start BlankTrail Proxy** with a licence that includes
-Challenge Breaker. Note its control API address (`http://127.0.0.1:8891` by
+**1. Install and start [BlankTrail Proxy](https://blanktrail.com)** with a licence that includes
+[Challenge Breaker](https://blanktrail.com/#features). Note its control API address (`http://127.0.0.1:8891` by
 default) and issue an API key in it.
 
 **2. Download the build for your system.** Every link here always points at
@@ -232,20 +241,37 @@ Unblock-File .\gserp.exe
 *Check the connection* — it says what it found rather than only whether it
 worked.
 
-**5. Open Proxies** and point it at your address list: a file on this machine
-or a URL. Set how often to re-read it, and how long a failed address stays
-banned.
+**5. Open Proxies** and say where the exits come from. There are three
+sources, and everything about them lives on this one screen:
 
-**6. Open New job**, paste your phrases or upload a `.txt`, choose the kind of
-job, the country, the depth, and the number of threads. The form says what the
-run will cost before you start it.
+- **a file on this machine** — one `host:port` a line, with or without a user
+  and password;
+- **a URL** — the same list fetched from your provider, re-read on the interval
+  you set;
+- **VPN gateways held in BlankTrail** — the configurations your subscription
+  carries, laid out by subscription and ticked one, one subscription, or all at
+  once, each showing the round trip last measured to it.
+
+The same screen sets how long a failed address stays out, how many threads may
+share one address or gateway, whether ports are reached over SOCKS5 or HTTP, and
+how often a port changes identity. It also reads the pool while a job runs:
+addresses banned right now, ports open and warm, and what failed, by kind.
+
+**6. Open New job**, paste your phrases or upload a `.txt`, and choose what to
+do with them: parse the results, check where a site ranks, or check whether
+Google holds an address at all. Then the country, the depth and the number of
+threads. The form says what the run will cost before you start it.
 
 ![The new job form: kind of job, depth, country, what to keep, and the pool it runs on](assets/screenshots/new-job-en.png)
 
 **7. Press Start.** The Status screen follows it. When it is done, download the
 results as CSV or JSON Lines from the job's own page.
 
-![A finished job: its counts, the settings it ran with, the export links and the results](assets/screenshots/job-en.png)
+![A job in flight: its counts, the settings it is running with, the export links and the newest results](assets/screenshots/job-en.png)
+
+The interface speaks English and Russian. The language is chosen on the Settings
+screen, in the same place as the connection, the identities kept warm, and
+whether the pages answer the network.
 
 Prefer to build it yourself? See [Building from source](#-building-from-source).
 
@@ -263,6 +289,7 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 | Result page | Which kind the warm identities are opened for: desktop or mobile |
 | Answer the network | Off by default — see [Running it on a server](#-running-it-on-a-server) |
 | Password | What the pages ask for from another machine |
+| Interface language | English or Russian. Chosen here, and nowhere else |
 
 ### Proxies
 
