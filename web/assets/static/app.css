@@ -77,9 +77,15 @@ header {
 	text-decoration: none;
 }
 
+/* The strip comes apart onto a second line rather than holding its own width:
+   a row that will not narrow is a row the whole page has to make room for, and
+   five tabs kept side by side pushed a 320px window eighty-two pixels out. A
+   tab is how the reader leaves this screen, so none of them is put where the
+   page has to be dragged sideways to reach it. */
 .pages {
 	display: flex;
-	gap: 1rem;
+	flex-wrap: wrap;
+	gap: 0.35rem 1rem;
 	margin-right: auto;
 }
 

@@ -527,3 +527,35 @@ func TestLayout_StandsASettingAboveItsValueWhenTheyCannotStandSideBySide(t *test
 			"a value left to its content is a value one letter wide, because it breaks anywhere", width)
 	}
 }
+
+func TestLayout_KeepsAWindowFromHavingToBeDraggedSideways(t *testing.T) {
+	// Two things on these pages are wider than a narrow window: the strip of
+	// tabs, and a table of results. Neither may push the page out, because a
+	// page that scrolls sideways hides the right-hand half of every screen at
+	// once — measured at 320px, the strip alone put the whole page 82 pixels
+	// past the edge.
+	//
+	// They give way differently, and both ways are here so that neither is
+	// quietly dropped: the strip comes apart onto a second line, since a tab
+	// nobody can reach is a screen nobody can leave; the table scrolls inside
+	// its own card, since rows read across and wrapping them would not make
+	// them readable.
+	decls := stylesheet(t)
+	has := func(selector, property, value string) bool {
+		for _, d := range decls {
+			if d.Selector == selector && d.Property == property && d.Value == value {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !has(".pages", "display", "flex") || !has(".pages", "flex-wrap", "wrap") {
+		t.Error("the strip of tabs is held on one line whatever the width is, " +
+			"so a window too narrow for it is a window that has to be dragged sideways")
+	}
+	if !has(".card > table", "overflow-x", "auto") {
+		t.Error("a table wider than the card it stands in pushes the page out " +
+			"rather than scrolling within itself")
+	}
+}
