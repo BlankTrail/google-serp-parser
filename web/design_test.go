@@ -432,3 +432,41 @@ func TestLayout_NamesTheProductInTheHeaderOfEveryPage(t *testing.T) {
 		}
 	}
 }
+
+func TestLayout_LaysTheJobSettingsOutUnderOneNameSoNoValueIsCrushed(t *testing.T) {
+	// The list of how a job was set up was laid out twice: once under the class
+	// it carries, and once as "the dl inside the settings card". The second won
+	// on specificity and pinned the first column to the width its content asked
+	// for, which left the value beside it whatever remained. Below about 860px
+	// that was eighteen pixels, and "Parsing" came down the page a letter to a
+	// line. Nothing reported it — the page rendered, and the stylesheet was
+	// valid.
+	//
+	// So: one element is laid out under one name, and a grid that puts a list
+	// into columns says the least width a column may have, so a window too
+	// narrow for two gets one instead of two crushed ones.
+	decls := stylesheet(t)
+
+	var byTheCard []declaration
+	var columns []declaration
+	for _, d := range decls {
+		if strings.HasPrefix(d.Selector, ".settings ") {
+			byTheCard = append(byTheCard, d)
+		}
+		if d.Property == "grid-template-columns" && d.Selector == ".settings-list" {
+			columns = append(columns, d)
+		}
+	}
+
+	if len(byTheCard) > 0 {
+		t.Errorf("the settings card styles what is inside it by where it sits rather than by what it is, "+
+			"which is how one list came to be laid out by two rules: %v", byTheCard)
+	}
+	if len(columns) != 1 {
+		t.Fatalf("the job settings are given columns by %d rules, want exactly one: %v", len(columns), columns)
+	}
+	if value := columns[0].Value; !strings.Contains(value, "auto-fit") || !strings.Contains(value, "minmax(") {
+		t.Errorf("the job settings are laid out %q, which fixes the columns whatever the width is; "+
+			"they are meant to be asked for with auto-fit and a minmax that says when one no longer fits", value)
+	}
+}

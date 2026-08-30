@@ -336,16 +336,31 @@ legend {
 	gap: 0.25rem;
 }
 
-/* How a job was set up: a label and its value, one setting to a line.
+/* How a job was set up: a label and its value, one setting to a line, in as
+   many columns as the card has room for.
 
    Each pair is wrapped in a block of its own, because a bare dl lays its terms
    and its values out as separate runs — a value that is empty collapses, and
    the labels above and below it close up into one line reading as a single
-   setting with two names. That is exactly what this looked like. */
+   setting with two names. That is exactly what this looked like.
+
+   The columns are asked for rather than imposed: two of them while both can
+   hold a label and its value, one across the whole card when they cannot.
+   Pinning a column to its content is what this used to do, from a second rule
+   that named the same list by the card around it — the labels took the width
+   they wanted whatever the window was, and below about 860px the value beside
+   them had nothing left and came down the page a letter to a line. One list is
+   laid out under one name.
+
+   The least width a column may have is asked for as min(24rem, 100%) rather
+   than as 24rem, because a floor taller than the card is a floor the card
+   cannot stand on: below about 420px the row would keep its 24rem and hang
+   over the edge of the window. */
 .settings-list {
 	display: grid;
-	gap: 0.35rem 1rem;
-	margin: 0 0 1rem;
+	gap: 0.4rem 1.5rem;
+	grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+	margin: 0;
 }
 
 .settings-list > div {
@@ -638,22 +653,6 @@ legend button {
 
 .forms li::before {
 	content: none;
-}
-
-.settings dl {
-	display: grid;
-	gap: 0.4rem 1.5rem;
-	grid-template-columns: max-content 1fr;
-	margin: 0;
-}
-
-.settings dt {
-	color: var(--quiet);
-	font-size: var(--small);
-}
-
-.settings dd {
-	margin: 0;
 }
 
 .estimate dl {
