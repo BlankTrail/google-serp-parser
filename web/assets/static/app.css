@@ -363,19 +363,34 @@ legend {
 	margin: 0;
 }
 
+/* A setting and its value stand side by side while there is room for both, and
+   one above the other when there is not.
+
+   The pair is allowed to come apart onto two lines rather than being held in
+   columns, and the value names the width it needs to fall back to — the same
+   8rem the label claims, because neither half of a setting is worth less than
+   the other. Held in columns, the value got whatever the label left: the label
+   took the width its own text asked for at every window, and since a value may
+   break at any letter (below), what remained at 320px was one glyph a line. */
 .settings-list > div {
 	align-items: baseline;
-	display: grid;
-	gap: 1rem;
-	grid-template-columns: minmax(8rem, 14rem) 1fr;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.15rem 1rem;
 }
 
 .settings-list dt {
 	color: var(--quiet);
+	flex: 0 1 14rem;
 	font-size: var(--small);
 }
 
+/* A value is an address as often as it is a word, and an address that cannot
+   break is an address that pushes the card sideways. It breaks anywhere, which
+   is also why the width above is stated rather than left to the longest run of
+   letters in it. */
 .settings-list dd {
+	flex: 1 1 8rem;
 	margin: 0;
 	overflow-wrap: anywhere;
 }

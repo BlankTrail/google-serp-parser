@@ -470,3 +470,60 @@ func TestLayout_LaysTheJobSettingsOutUnderOneNameSoNoValueIsCrushed(t *testing.T
 			"they are meant to be asked for with auto-fit and a minmax that says when one no longer fits", value)
 	}
 }
+
+func TestLayout_StandsASettingAboveItsValueWhenTheyCannotStandSideBySide(t *testing.T) {
+	// One setting is a label and its value. Held in columns, the value got
+	// whatever the label left: the label took the width its own text asked for
+	// at every window, and a value may break at any letter — that is how an
+	// address as long as a query is kept from pushing the card sideways — so at
+	// 320px what remained of the value was one glyph a line.
+	//
+	// So the pair is allowed to come apart onto two lines, and the value states
+	// the width it needs before it gives way. Measured on /job/1: the two stand
+	// side by side down to a row of 370px and one above the other from 365px,
+	// each on a single line either way.
+	decls := stylesheet(t)
+
+	var wraps bool
+	var pinned []declaration
+	var basis string
+	for _, d := range decls {
+		switch d.Selector {
+		case ".settings-list > div":
+			if d.Property == "flex-wrap" && d.Value == "wrap" {
+				wraps = true
+			}
+			if d.Property == "grid-template-columns" {
+				pinned = append(pinned, d)
+			}
+		case ".settings-list dd":
+			if d.Property == "flex" {
+				basis = d.Value
+			}
+		}
+	}
+
+	if !wraps {
+		t.Error("a setting and its value are held on one line whatever the width is, " +
+			"so the narrower of the two is squeezed rather than moved under the other")
+	}
+	if len(pinned) > 0 {
+		t.Errorf("the pair is laid out in columns that cannot give way: %v", pinned)
+	}
+	if basis == "" {
+		t.Fatal("the value of a setting names no width of its own, so it is worth whatever the label leaves")
+	}
+	fields := strings.Fields(basis)
+	width := resolved(decls, fields[len(fields)-1])
+	unit := ""
+	for _, suffix := range []string{"rem", "px"} {
+		if strings.HasSuffix(width, suffix) {
+			unit = suffix
+		}
+	}
+	size, err := strconv.ParseFloat(strings.TrimSuffix(width, unit), 64)
+	if unit == "" || err != nil || size <= 0 {
+		t.Errorf("the value of a setting falls back to %q, which is not a width; "+
+			"a value left to its content is a value one letter wide, because it breaks anywhere", width)
+	}
+}
