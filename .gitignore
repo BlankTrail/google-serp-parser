@@ -20,6 +20,14 @@
 *.db
 *.db-wal
 *.db-shm
+# A database put aside before something risky is still a database, and the rule
+# above does not catch it: a copy is named after the day it was taken and no
+# longer ends in .db.
+*.db.bak*
+# What the program writes when it is started as a service rather than from a
+# console. It lands in the directory the service was started from, which on a
+# developer machine is this one.
+*.log
 
 # local config and secrets
 /config.yaml
