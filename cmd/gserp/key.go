@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/store"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // keyOptions is everything a key command was asked to do.

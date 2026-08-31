@@ -18,8 +18,8 @@ import (
 
 	"golang.org/x/net/proxy"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/google"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
 )
 
 // TestSideBySide_LiveTheSameAddressesThroughTheProductAndPastIt takes the

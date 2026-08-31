@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/export"
-	"github.com/blanktrail/google-serp-parser/store"
+	"github.com/blanktrail/google-serp-parser/internal/export"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // Run this with -count=1. Nothing a live run depends on is an input Go can see,

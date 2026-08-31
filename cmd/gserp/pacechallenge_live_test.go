@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/google"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
 )
 
 // envPaceGaps and envPaceBudget let the operator set the arms of the

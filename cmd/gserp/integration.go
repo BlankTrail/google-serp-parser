@@ -5,7 +5,7 @@ package main
 import (
 	"context"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/version"
 )
 

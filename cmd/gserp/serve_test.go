@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/settings"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
-	"github.com/blanktrail/google-serp-parser/settings"
-	"github.com/blanktrail/google-serp-parser/store"
-	"github.com/blanktrail/google-serp-parser/web"
+	"github.com/blanktrail/google-serp-parser/internal/web"
 )
 
 // listeningAt reads back the address the command says to open.

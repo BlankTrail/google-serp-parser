@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/google"
-	"github.com/blanktrail/google-serp-parser/run"
-	"github.com/blanktrail/google-serp-parser/settings"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/settings"
 )
 
 // TestGatewayLoad_LiveWhetherWidthIsWhatIsFailing asks one question: does the

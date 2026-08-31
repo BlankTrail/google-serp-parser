@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/export"
-	"github.com/blanktrail/google-serp-parser/google"
-	"github.com/blanktrail/google-serp-parser/run"
-	"github.com/blanktrail/google-serp-parser/store"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/export"
+	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // The control address, the key and the address list are read from the

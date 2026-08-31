@@ -20,12 +20,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/api"
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/run"
-	"github.com/blanktrail/google-serp-parser/settings"
-	"github.com/blanktrail/google-serp-parser/store"
-	"github.com/blanktrail/google-serp-parser/web"
+	"github.com/blanktrail/google-serp-parser/internal/api"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/settings"
+	"github.com/blanktrail/google-serp-parser/internal/store"
+	"github.com/blanktrail/google-serp-parser/internal/web"
 )
 
 // defaultServeAddr is where the interface listens when the caller names no

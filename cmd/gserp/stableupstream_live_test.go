@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/google"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
 )
 
 // TestStableUpstream_LiveWhetherAnAddressThatWorksKeepsWorking is the control

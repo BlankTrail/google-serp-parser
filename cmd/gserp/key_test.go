@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/blanktrail/google-serp-parser/store"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // keysAt opens a history of the test's own, so that what the command did can be

@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
-	"github.com/blanktrail/google-serp-parser/google"
-	"github.com/blanktrail/google-serp-parser/run"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/run"
 )
 
 // TestAttemptCost_LiveWhereTheMinutesGo reports what one attempt through one

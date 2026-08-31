@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/blanktrail/google-serp-parser/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 )
 
 // doctorOptions is everything the check needs to know about the intended run.
