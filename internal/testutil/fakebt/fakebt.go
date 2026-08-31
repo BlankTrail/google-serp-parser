@@ -251,7 +251,17 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	if r.Header.Get("X-API-Key") != s.key {
+	// The service leaves this one door open, and so does the fake: /api/v1/health
+	// answers whatever key it is shown, including none. That is what makes it
+	// usable as the question "are you there at all", which is a different
+	// question from "will you have me", and the two have different answers to
+	// give the reader.
+	//
+	// A fake stricter than the thing it stands in for is worse than no fake: it
+	// held the branch that names a refused key green for months while nothing
+	// could reach that branch in the field, because in the field the refusal
+	// arrives at the NEXT call, not this one.
+	if r.URL.Path != "/api/v1/health" && r.Header.Get("X-API-Key") != s.key {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}

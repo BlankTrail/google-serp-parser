@@ -95,14 +95,8 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 	var rep Report
 
 	if err := c.Health(ctx); err != nil {
-		if IsUnauthorized(err) {
-			rep.Findings = append(rep.Findings, Finding{
-				ID:       "unauthorized",
-				Severity: SeverityFail,
-				Title:    "BlankTrail rejected the API key",
-				Detail:   err.Error(),
-				Action:   "Copy the current key from BlankTrail → Settings → API key and paste it into the connection settings.",
-			})
+		if f, ok := refusedKey(err); ok {
+			rep.Findings = append(rep.Findings, f)
 			return rep
 		}
 		rep.Findings = append(rep.Findings, Finding{
@@ -117,6 +111,10 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 
 	lic, err := c.LicenseStatus(ctx)
 	if err != nil {
+		if f, ok := refusedKey(err); ok {
+			rep.Findings = append(rep.Findings, f)
+			return rep
+		}
 		rep.Findings = append(rep.Findings, Finding{
 			ID:       "license_inactive",
 			Severity: SeverityFail,
@@ -144,6 +142,10 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 
 	gws, err := c.Gateways(ctx)
 	if err != nil {
+		if f, ok := refusedKey(err); ok {
+			rep.Findings = append(rep.Findings, f)
+			return rep
+		}
 		rep.Findings = append(rep.Findings, Finding{
 			ID:       "gateways",
 			Severity: SeverityWarn,
@@ -166,6 +168,10 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 
 	pool, err := c.FetchCAPool(ctx)
 	if err != nil {
+		if f, ok := refusedKey(err); ok {
+			rep.Findings = append(rep.Findings, f)
+			return rep
+		}
 		rep.Findings = append(rep.Findings, Finding{
 			ID:       "ca",
 			Severity: SeverityFail,
@@ -178,6 +184,30 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 	}
 
 	return rep
+}
+
+// refusedKey turns a control-API refusal into the one finding that names it,
+// whichever call met the refusal.
+//
+// Every call in the check but the first carries the key, so a key the service
+// will not take is not something one of them can own: it is the answer to give
+// wherever it turns up. It used to be read at the first call alone — the health
+// endpoint — and that endpoint answers everybody, key or no key, because it is
+// how a caller asks whether the service is running at all. So the refusal
+// always arrived one call later and was read as whatever that call was about:
+// a reader with a wrong key was told the licence could not be read and sent to
+// look at a licence that was in order.
+func refusedKey(err error) (Finding, bool) {
+	if !IsUnauthorized(err) {
+		return Finding{}, false
+	}
+	return Finding{
+		ID:       "unauthorized",
+		Severity: SeverityFail,
+		Title:    "BlankTrail rejected the API key",
+		Detail:   err.Error(),
+		Action:   "Copy the current key from BlankTrail → Settings → API key and paste it into the connection settings.",
+	}, true
 }
 
 func challengeBreakerFinding(lic LicenseStatus, ports int) []Finding {

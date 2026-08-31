@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -63,16 +64,55 @@ func TestPreflight_UnreachableStopsEarly(t *testing.T) {
 }
 
 func TestPreflight_WrongKey(t *testing.T) {
+	// The service answers its health endpoint without a key and refuses
+	// everything else, so a rejected key is not what the first call finds — it
+	// is what the second one does. A reader given "could not read the licence
+	// status" goes and looks at a licence that is fine; two support rounds were
+	// spent that way. The key is what is wrong and the key is what this has to
+	// say.
 	fake := fakebt.New(t)
 	c, _ := NewClient(fake.URL(), "wrong")
 
 	rep := Preflight(context.Background(), c, PreflightInput{Ports: 1})
 
-	if _, ok := rep.Find("unauthorized"); !ok {
+	if _, ok := rep.Find("license_inactive"); ok {
+		t.Errorf("a rejected key is reported as a licence fault: %+v", rep.Findings)
+	}
+	f, ok := rep.Find("unauthorized")
+	if !ok {
 		t.Fatalf("no \"unauthorized\" finding; got %+v", rep.Findings)
+	}
+	if f.Severity != SeverityFail {
+		t.Errorf("severity=%v, want Fail", f.Severity)
+	}
+	if !strings.Contains(strings.ToLower(f.Action), "key") {
+		t.Errorf("Action=%q, want it to send the reader to the API key", f.Action)
 	}
 	if rep.OK() {
 		t.Error("Report.OK()=true with a rejected API key")
+	}
+}
+
+func TestPreflight_KeyRefusedLaterIsStillAboutTheKey(t *testing.T) {
+	// A key can stop being taken part-way through the check — revoked while it
+	// runs, or accepted by one endpoint and not another. Whichever call meets
+	// the refusal, the answer to give is the same one, so the reading of a 401
+	// belongs to the check and not to whichever call happened to be first.
+	for _, at := range []string{"/api/v1/license/status", "/api/v1/ovpn", "/api/v1/ca"} {
+		t.Run(at, func(t *testing.T) {
+			c, fake := newTestClient(t)
+			fake.SetCA(genTestCA(t))
+			fake.FailNext(at, http.StatusUnauthorized, `{"error":"authentication required"}`)
+
+			rep := Preflight(context.Background(), c, PreflightInput{Ports: 1})
+
+			if _, ok := rep.Find("unauthorized"); !ok {
+				t.Fatalf("a 401 from %s is not read as a refused key; got %+v", at, rep.Findings)
+			}
+			if rep.OK() {
+				t.Error("Report.OK()=true after the key was refused")
+			}
+		})
 	}
 }
 

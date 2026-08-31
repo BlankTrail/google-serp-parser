@@ -10,27 +10,52 @@ import (
 	"testing"
 )
 
-func TestFake_HealthRequiresKey(t *testing.T) {
+func TestFake_LeavesOpenTheOneDoorTheServiceLeavesOpen(t *testing.T) {
+	// The service refuses by default and makes one exception this fake is ever
+	// asked for: /api/v1/health answers whatever key it is shown, including
+	// none, because it is how a caller asks whether the service is running at
+	// all — a question that has to have an answer when the key is exactly what
+	// is wrong.
+	//
+	// This test used to assert the opposite, and it is what kept a dead branch
+	// green: the check that names a refused key read the refusal off this
+	// endpoint, which in the field never refuses anybody. The refusal arrived
+	// one call later and was reported as a licence that could not be read, and
+	// a customer with a live licence was sent to look at it twice.
+	//
+	// A fake stricter than the thing it stands in for hides exactly this class
+	// of fault, so the asymmetry is written down here rather than left to
+	// whoever next edits the routing.
 	s := New(t)
 
-	resp, err := http.Get(s.URL() + "/api/v1/health")
-	if err != nil {
-		t.Fatalf("get health: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("health without key: status=%d, want 401", resp.StatusCode)
+	status := func(path string, withKey bool) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, s.URL()+path, nil)
+		if err != nil {
+			t.Fatalf("request %s: %v", path, err)
+		}
+		if withKey {
+			req.Header.Set("X-API-Key", s.Key())
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("get %s: %v", path, err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
 	}
 
-	req, _ := http.NewRequest(http.MethodGet, s.URL()+"/api/v1/health", nil)
-	req.Header.Set("X-API-Key", s.Key())
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("get health with key: %v", err)
+	if got := status("/api/v1/health", false); got != http.StatusOK {
+		t.Errorf("health without a key: status=%d, want 200 — the service answers it to anybody", got)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("health with key: status=%d, want 200", resp.StatusCode)
+	if got := status("/api/v1/health", true); got != http.StatusOK {
+		t.Errorf("health with a key: status=%d, want 200", got)
+	}
+	if got := status("/api/v1/license/status", false); got != http.StatusUnauthorized {
+		t.Errorf("the licence without a key: status=%d, want 401 — everything but health is refused", got)
+	}
+	if got := status("/api/v1/license/status", true); got != http.StatusOK {
+		t.Errorf("the licence with a key: status=%d, want 200", got)
 	}
 }
 
