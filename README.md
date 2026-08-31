@@ -8,20 +8,256 @@ interface, CSV/JSON exports, and a SerpApi-compatible HTTP API. Powered by
 
 **Русская версия: [README.ru.md](README.ru.md)**
 
-> ⚠️ **This program only works through [BlankTrail Proxy](https://blanktrail.com) with [Challenge Breaker](https://blanktrail.com/#features).**
-> Google serves a JavaScript shell — zero results — to any plain HTTP client, no
-> matter how many proxies you put behind it. This was measured, not assumed:
-> seven client variants, both direct and proxied, all came back with a 91 KB
-> shell containing no results. Results appear only after the solver has carried
-> the session through the challenge. A BlankTrail licence including **Challenge
-> Breaker** is a hard requirement, not a recommendation.
->
-> **[Challenge Breaker](https://blanktrail.com/#features) passes reCAPTCHA.** Counted on a live run: 721 of 821
-> challenges solved — 88 per cent — and the identity carries on working
-> afterwards, so the next request through it comes back in seconds rather than
-> meeting the wall again.
+> ⚠️ **This program only works through [BlankTrail Proxy](https://blanktrail.com) with [Challenge Breaker](https://blanktrail.com/#features)** — a hard
+> requirement, not a recommendation. **The solver passes reCAPTCHA:** 721 of 821
+> challenges solved on a live run, 88 per cent, and the identity carries on
+> working afterwards. Everything else is set up in this program, not in that one.
 
 ![The status screen: a job in flight, what it has settled, the pool and the queue](assets/screenshots/status-en.png)
+
+---
+
+## 🚀 Quick start
+
+This is the whole road from nothing to a finished job. Everything below it is
+reference; this part is what you do.
+
+Two programs are involved and **only one of them is configured**.
+[BlankTrail Proxy](https://blanktrail.com) carries the sessions through Google's
+challenge; this parser drives it. Nothing is set up on the BlankTrail side — no
+proxy list, no ports, no profiles, no gateways chosen there. It has to be
+running, and it has to hand over one key. The address list, the identities, the
+threads, the jobs and the exports all live in this program's own screens.
+
+No Go, no build, no dependencies. One file to download and one to double-click.
+
+### 1. Start BlankTrail Proxy and copy its key
+
+Install [BlankTrail Proxy](https://blanktrail.com) with a licence that includes
+[Challenge Breaker](https://blanktrail.com/#features), and start it. Then take
+two things from it:
+
+- **the control API address** — `http://127.0.0.1:8891` unless you have moved
+  it;
+- **the API key** — *Settings → API key* in BlankTrail. Issue one if there is
+  none yet.
+
+That is all it is asked for. You do **not** create ports there, you do **not**
+paste your proxy list there, and you do **not** tick VPN configurations there:
+the parser opens and closes ports through the control API itself, points each
+one at the address or gateway it chose, and closes them again when the job ends.
+Its CA certificate is fetched by the parser without anybody having to export it.
+
+Leave BlankTrail running while you work. If it is stopped, the parser says so in
+as many words rather than failing quietly.
+
+> Why it cannot be done without it: Google serves no parsable results to a plain
+> HTTP client at all. This was measured, not assumed: seven client variants,
+> direct and proxied, all came back with a 91 KB JavaScript shell holding no
+> results. Results appear only after the solver has carried the session through
+> the challenge.
+
+### 2. Download the build for your system
+
+Every link here always points at the newest release.
+
+**Windows — one file, nothing to unpack:**
+
+| System | Download |
+|---|---|
+| Windows, ordinary PC | **[gserp.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp.exe)** |
+| Windows on ARM | **[gserp-arm64.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-arm64.exe)** |
+
+Put it anywhere and double-click it. Everything the program needs is inside
+that file — the pages, the icon, the lot — and it writes its history into a
+`gserp.db` beside itself. Put it in a folder of its own: that database, and the
+settings file next to it, are the program's whole state.
+
+**Linux and macOS:**
+
+| System | Download |
+|---|---|
+| Linux, ordinary PC or server | [gserp-linux-amd64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-amd64.tar.gz) |
+| Linux on ARM | [gserp-linux-arm64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-arm64.tar.gz) |
+| Mac with Apple silicon (M1 and later) | [gserp-macos-apple-silicon.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-apple-silicon.tar.gz) |
+| Mac with an Intel processor | [gserp-macos-intel.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-intel.tar.gz) |
+
+Each archive holds the program, a starter script, both READMEs and the licence.
+Windows zips are there as well — [amd64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-amd64.zip),
+[arm64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-arm64.zip) — for whoever wants the READMEs
+beside the program.
+
+Which version a download is, is on the
+[release page](https://github.com/BlankTrail/google-serp-parser/releases/latest)
+and in `gserp version`.
+
+### 3. Start it
+
+- **Windows** — double-click `gserp.exe`. The console goes away, an icon
+  appears in the notification area, and your browser opens at
+  `http://127.0.0.1:8080`. The icon is how you close it again.
+- **Linux and macOS** — `./start.sh` in a terminal, or `./gserp serve`, then
+  open `http://127.0.0.1:8080` yourself.
+
+It listens on this machine only. Reaching it from another one is a setting, and
+it is off until you turn it on — see
+[Running it on a server](#-running-it-on-a-server).
+
+### Windows says it protected your PC
+
+It will, and the builds here cannot stop it. SmartScreen judges a program by the
+reputation of whoever signed it, and these are unsigned: there is no certificate
+to have a reputation. Press *More info* → *Run anyway*.
+
+What you can do instead of taking that on trust is check that the file you have
+is the file that was published. Every release carries a `SHA256SUMS.txt`, and
+the sum of your copy should be in it:
+
+```
+Get-FileHash .\gserp.exe -Algorithm SHA256
+```
+
+Windows also marks anything downloaded, which is what raises the prompt. The
+mark can be cleared once, per file:
+
+```
+Unblock-File .\gserp.exe
+```
+
+> macOS keeps downloaded programs quarantined in the same way. If it refuses to
+> open the file, clear the mark once with `xattr -d com.apple.quarantine gserp`
+> in the unpacked folder. On Linux and macOS the sums are checked with
+> `sha256sum -c SHA256SUMS.txt` or `shasum -a 256 -c SHA256SUMS.txt`.
+
+### 4. Settings: point it at BlankTrail
+
+Open **Settings** — the link at the right-hand end of the strip of tabs. Fill in
+the two things from step 1:
+
+- **Control API address** — `http://127.0.0.1:8891`;
+- **API key** — paste it. It is kept on this machine and never shown again;
+  afterwards the screen shows only its last characters, so you can tell one key
+  from another without the key being readable over a shoulder.
+
+Then press **Check the connection**. It says what it found rather than only
+whether it worked, and each answer is a different thing to go and do:
+
+| What it says | What it means |
+|---|---|
+| *BlankTrail is not answering* | The service is not running, or not on that address |
+| *BlankTrail rejected the API key* | The key is wrong or has been reissued. Copy it again from *Settings → API key* |
+| *The BlankTrail licence is not activated* | The licence really is the problem — activate it in the dashboard |
+| *Challenge Breaker is not included in this tariff* | The plan has no solver, and without one Google answers with a challenge page instead of data |
+| *Challenge Breaker is entitled but switched off* | The plan includes it, but no solver processes are configured |
+| *More ports than Challenge Breaker processes* | The run will work and will be slower: challenges queue |
+| Nothing to report | The connection works |
+
+The rest of this screen can be left alone on a first run:
+
+| Setting | What it is |
+|---|---|
+| Identities kept warm | Ports held open between jobs, so the next job does not start cold. Nought keeps none |
+| Result page | Which kind those warm identities are opened for: desktop or mobile |
+| Reaching this from another machine | Off by default. Turning it on asks for a password |
+| Interface language | English or Russian. Chosen here and nowhere else |
+
+### 5. Proxies: say where the exits come from
+
+Open **Proxies**. This one screen holds every setting about identities, and the
+live state of the pool while a job runs.
+
+**Read from** chooses the source, and there are three:
+
+- **A file on this machine** — one address a line. All of these are read:
+
+  ```
+  host:port
+  host:port:user:password
+  user:password:host:port
+  user:password@host:port
+  ```
+
+  A scheme in front (`socks5://`, `http://`) is optional and `socks5` is
+  assumed. Blank lines, and lines starting with `#`, `//` or `;`, are skipped —
+  so a list can carry comments.
+
+- **An address** — the same list fetched from your provider over HTTP and
+  re-read on the interval you set, which is how a rotating list stays current
+  without anybody pasting it again.
+
+- **VPN gateways stored in BlankTrail** — the configurations your subscription
+  already carries. They appear grouped by subscription with the round trip last
+  measured to each, and you tick one, a whole subscription, or all of them at
+  once. This is where gateways are chosen; nothing is chosen on the BlankTrail
+  side. *Refresh* asks the service for the list again and re-measures.
+
+The same screen sets how the pool behaves:
+
+| Setting | What it does | Start with |
+|---|---|---|
+| Re-read every, minutes | How often a list at a URL is read again | 30 |
+| Ban for, minutes | How long an address that failed is left out. Nought leaves nobody out | 60 |
+| Threads per proxy | How many threads may share one address or one gateway at a time | 1 for a long list, more for a short one |
+| Change identity every, minutes | How often a port is opened again with a fresh fingerprint and an empty cookie jar | 60; nought never, and gateways offer 10 |
+| Connection to a port | SOCKS5 carries UDP, so QUIC and far-side DNS work. HTTP is the fallback | SOCKS5 |
+
+While a job runs, the top of the screen reads the pool: addresses in the list,
+banned right now, ports open, of them warm, and in quarantine — then requests,
+attempts on the wire, the share that failed, and failures broken down by kind,
+so an address that never answered is told apart from Google refusing. *Clear the
+counts* starts a fresh measurement; *Clear the ban* puts every address back into
+rotation after a restart or an outage that was not their fault.
+
+### 6. New job: the first run
+
+Open **New job**. The form is one screen and it says what the run will cost
+before you start it.
+
+| Field | What to put in it |
+|---|---|
+| Name | Anything you will recognise in the history |
+| Kind of job | **Parsing** — collect the results. **Position check** — where one site stands for each phrase. **Index check** — whether Google holds an address at all |
+| Site to look for | Only for a position check: the domain whose place you want |
+| Where the phrases come from | Paste them, one per line, or upload a `.txt` |
+| What to keep of each result | Organic results, ads, related queries — each can be kept or left |
+| Country, language | Two-letter codes, e.g. `de`, `en` |
+| Pages per query | Depth of pagination. One page is the first ten results |
+| Result page | Desktop or mobile |
+| Dropping duplicates | Keep everything, one row per URL, or one per host |
+| Threads | How many phrases are taken at once |
+| Ports per thread | Identities opened per thread. Threads × ports is the size of the pool. Three by default, which measured fastest |
+| Tries per phrase | How many identities one phrase may be carried to before it is called failed |
+| Pause on one identity, seconds | The gap before an identity is asked again. Five by default — an identity asked every two seconds answered a dozen requests before it was challenged, one asked every five around forty. Nought means nought |
+
+The line under the form says what pool the job will run on and what it will
+cost. Read it once before pressing anything: threads × ports is how many
+identities BlankTrail will be asked to open, and that number wants to fit both
+your address list and your Challenge Breaker process count.
+
+![The new job form: kind of job, depth, country, what to keep, and the pool it runs on](assets/screenshots/new-job-en.png)
+
+**Press Start.**
+
+### 7. While it runs, and when it is done
+
+The **Status** screen follows the job: queries done and left, the current URL,
+queries and pages a minute, the pool behind it and how many threads are waiting
+for an identity. The job can be stopped on a button and carried on from where it
+stopped.
+
+The first minutes are the slow ones. Every identity pays for one challenge the
+first time it is used, so a cold pool climbs for five to ten minutes and then
+settles — a run that starts slowly is not a run that is broken.
+
+When it is done, the job's own page holds the counts, the settings it ran with,
+and the results, with **CSV** and **JSON Lines** links beside them. A job that
+ended with failures can be told to try the failed phrases again rather than
+started over.
+
+![A job in flight: its counts, the settings it is running with, the export links and the newest results](assets/screenshots/job-en.png)
+
+Prefer to build it yourself? See [Building from source](#-building-from-source).
+
 
 ---
 
@@ -159,121 +395,6 @@ measured to it:
 - **SerpApi-compatible** `GET /search`: a program written against that service
   works after changing the base address and nothing else.
 - Access by key, issued with `gserp key new`; only a hash is stored.
-
----
-
-## 🚀 Quick start
-
-No Go, no build, no dependencies. One file to download and one to double-click.
-
-**1. Install and start [BlankTrail Proxy](https://blanktrail.com)** with a licence that includes
-[Challenge Breaker](https://blanktrail.com/#features). Note its control API address (`http://127.0.0.1:8891` by
-default) and issue an API key in it.
-
-**2. Download the build for your system.** Every link here always points at
-the newest release.
-
-**Windows — one file, nothing to unpack:**
-
-| System | Download |
-|---|---|
-| Windows, ordinary PC | **[gserp.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp.exe)** |
-| Windows on ARM | **[gserp-arm64.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-arm64.exe)** |
-
-Put it anywhere and double-click it. Everything the program needs is inside
-that file — the pages, the icon, the lot — and it writes its history into a
-`gserp.db` beside itself.
-
-**Linux and macOS:**
-
-| System | Download |
-|---|---|
-| Linux, ordinary PC or server | [gserp-linux-amd64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-amd64.tar.gz) |
-| Linux on ARM | [gserp-linux-arm64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-arm64.tar.gz) |
-| Mac with Apple silicon (M1 and later) | [gserp-macos-apple-silicon.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-apple-silicon.tar.gz) |
-| Mac with an Intel processor | [gserp-macos-intel.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-intel.tar.gz) |
-
-Each archive holds the program, a starter script, both READMEs and the licence.
-Windows zips are there as well — [amd64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-amd64.zip),
-[arm64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-arm64.zip) — for whoever wants the READMEs
-beside the program.
-
-Which version a download is, is on the
-[release page](https://github.com/BlankTrail/google-serp-parser/releases/latest)
-and in `gserp version`.
-
-**3. Start it.**
-
-- **Windows** — double-click `gserp.exe`. The console goes away, an icon
-  appears in the notification area, and your browser opens at
-  `http://127.0.0.1:8080`.
-- **Linux and macOS** — `./start.sh` in a terminal, or `./gserp serve`.
-
-It listens on this machine only.
-
-### Windows says it protected your PC
-
-It will, and the builds here cannot stop it. SmartScreen judges a program by the
-reputation of whoever signed it, and these are unsigned: there is no certificate
-to have a reputation. Press *More info* → *Run anyway*.
-
-What you can do instead of taking that on trust is check that the file you have
-is the file that was published. Every release carries a `SHA256SUMS.txt`, and
-the sum of your copy should be in it:
-
-```
-Get-FileHash .\gserp.exe -Algorithm SHA256
-```
-
-Windows also marks anything downloaded, which is what raises the prompt. The
-mark can be cleared once, per file:
-
-```
-Unblock-File .\gserp.exe
-```
-
-> macOS keeps downloaded programs quarantined in the same way. If it refuses to
-> open the file, clear the mark once with `xattr -d com.apple.quarantine gserp`
-> in the unpacked folder. On Linux and macOS the sums are checked with
-> `sha256sum -c SHA256SUMS.txt` or `shasum -a 256 -c SHA256SUMS.txt`.
-
-**4. Open Settings** and fill in the BlankTrail address and API key. Press
-*Check the connection* — it says what it found rather than only whether it
-worked.
-
-**5. Open Proxies** and say where the exits come from. There are three
-sources, and everything about them lives on this one screen:
-
-- **a file on this machine** — one `host:port` a line, with or without a user
-  and password;
-- **a URL** — the same list fetched from your provider, re-read on the interval
-  you set;
-- **VPN gateways held in BlankTrail** — the configurations your subscription
-  carries, laid out by subscription and ticked one, one subscription, or all at
-  once, each showing the round trip last measured to it.
-
-The same screen sets how long a failed address stays out, how many threads may
-share one address or gateway, whether ports are reached over SOCKS5 or HTTP, and
-how often a port changes identity. It also reads the pool while a job runs:
-addresses banned right now, ports open and warm, and what failed, by kind.
-
-**6. Open New job**, paste your phrases or upload a `.txt`, and choose what to
-do with them: parse the results, check where a site ranks, or check whether
-Google holds an address at all. Then the country, the depth and the number of
-threads. The form says what the run will cost before you start it.
-
-![The new job form: kind of job, depth, country, what to keep, and the pool it runs on](assets/screenshots/new-job-en.png)
-
-**7. Press Start.** The Status screen follows it. When it is done, download the
-results as CSV or JSON Lines from the job's own page.
-
-![A job in flight: its counts, the settings it is running with, the export links and the newest results](assets/screenshots/job-en.png)
-
-The interface speaks English and Russian. The language is chosen on the Settings
-screen, in the same place as the connection, the identities kept warm, and
-whether the pages answer the network.
-
-Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ---
 
