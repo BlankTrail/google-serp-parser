@@ -96,6 +96,18 @@
      which. */}}
 <form method="post" action="/api/reshape" class="fields">
 <input type="hidden" name="job" value="{{.Progress.ID}}">
+{{/* Which exits the next run of this job goes out through. It is here rather
+     than only on the form that sets a job up, because the answer changes: a
+     list that was refused all afternoon is a job to point somewhere else and
+     carry on, not a job to set up again. */}}
+{{if .Job.Profiles}}<div class="row">
+<div class="field">
+<label for="profile">{{.T "form.profile"}}</label>
+<select id="profile" name="profile">
+{{range .Job.Profiles}}<option value="{{.ID}}"{{if .Current}} selected{{end}}>{{.Name}}{{if .Default}} — {{$.T "proxies.profile.default"}}{{end}}</option>
+{{end}}</select>
+</div>
+</div>{{end}}
 <div class="row">
 <div class="field">
 <label for="threads">{{.T "form.threads"}}</label>

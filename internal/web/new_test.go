@@ -827,3 +827,96 @@ func TestNewJob_OffersTheNumbersThatWereMeasured(t *testing.T) {
 		}
 	}
 }
+
+func TestNewJob_FilesTheProfileTheFormChose(t *testing.T) {
+	// Which exits a job goes out through is the job's own now, so the form that
+	// sets one up has to ask. A form that dropped the answer would file every
+	// job against the default and say nothing, which is what every job did
+	// before profiles existed and is exactly what this replaces.
+	s := testServerWithSupervisor(t)
+	ctx := t.Context()
+	if _, err := s.store.CreateProfile(ctx, store.Profile{Name: "the default one"}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	other, err := s.store.CreateProfile(ctx, store.Profile{Name: "the other one"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	// It is offered on the form, marked where the job would go without a choice.
+	page := get(t, s, newAt).Body.String()
+	if want := LangEN.T("form.profile"); !strings.Contains(page, want) {
+		t.Errorf("the form does not ask which profile: %q is not on it", want)
+	}
+	if !strings.Contains(page, "the other one") {
+		t.Error("the form does not offer every profile there is")
+	}
+
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name": {"through the other one"}, "queries": {"a"}, "pages": {"1"},
+		"profile": {strconv.FormatInt(other, 10)},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("starting gave %d, want a redirect: %s", rec.Code, rec.Body)
+	}
+	jobs, err := s.store.Jobs(ctx, 0)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("%d jobs, want the one just started", len(jobs))
+	}
+	if jobs[0].ProfileID != other {
+		t.Errorf("the job runs through profile %d, want the %d that was chosen", jobs[0].ProfileID, other)
+	}
+}
+
+func TestJobPage_PointsAJobAtAnotherProfile(t *testing.T) {
+	// The answer changes after a job is written down: a list that was refused
+	// all afternoon is a job to point somewhere else and carry on, not a job to
+	// set up again. It reaches the job the way the numbers beside it do — what
+	// is written is what the next raise reads, so a job in flight keeps the pool
+	// it already has.
+	s := testServerWithSupervisor(t)
+	ctx := t.Context()
+	first, err := s.store.CreateProfile(ctx, store.Profile{Name: "first"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	second, err := s.store.CreateProfile(ctx, store.Profile{Name: "second"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	id, err := s.store.CreateJob(ctx, store.JobSpec{
+		Name: "nightly", Pages: 1, ProfileID: first,
+	}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	if page := get(t, s, jobPath(id)).Body.String(); !strings.Contains(page, LangEN.T("form.profile")) {
+		t.Error("the job's own page does not offer to change the profile")
+	}
+
+	rec := postForm(t, s, "/api/reshape", url.Values{
+		"job":     {strconv.FormatInt(id, 10)},
+		"profile": {strconv.FormatInt(second, 10)},
+		"threads": {"2"}, "ports": {"3"}, "tries": {"4"}, "cooldown": {"5"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving gave %d, want a redirect: %s", rec.Code, rec.Body)
+	}
+	sum, err := s.store.Progress(ctx, id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.ProfileID != second {
+		t.Errorf("the job runs through profile %d, want the %d it was pointed at", sum.ProfileID, second)
+	}
+	// And the numbers beside it went through the same press, because a save that
+	// wrote one of the two would be a save the reader cannot tell apart.
+	if sum.Threads != 2 || sum.Ports != 3 || sum.Tries != 4 || sum.Cooldown != 5*time.Second {
+		t.Errorf("the pool reads %d threads, %d ports, %d tries, %v pause",
+			sum.Threads, sum.Ports, sum.Tries, sum.Cooldown)
+	}
+}

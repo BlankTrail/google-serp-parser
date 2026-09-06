@@ -49,6 +49,10 @@ type jobForm struct {
 	// because that is the unit a person setting it thinks in. Nought is a job
 	// that named none, and the pool then works one out from its own size.
 	Cooldown int
+	// Profile is the proxy profile this job goes out through. Nought is a job
+	// that named none and runs on whichever is default, which is what a form
+	// offering no profiles at all can only mean.
+	Profile int64
 	// Keep is what each result of this job keeps, as the names the boxes carry,
 	// and Chose says the choice was on the form at all.
 	//
@@ -382,19 +386,20 @@ func (f jobForm) parse() ([]string, []string) {
 // spec is the job as the history will file it.
 func (f jobForm) spec() store.JobSpec {
 	return store.JobSpec{
-		Name:     strings.TrimSpace(f.Name),
-		Kind:     f.Kind,
-		Target:   strings.TrimSpace(f.Target),
-		UniqueBy: f.filter(),
-		Pages:    f.depth(),
-		Country:  f.Country,
-		Language: f.Language,
-		Device:   f.Device,
-		Ports:    f.Ports,
-		Threads:  f.Threads,
-		Tries:    f.Tries,
-		Cooldown: time.Duration(f.Cooldown) * time.Second,
-		Fields:   store.FieldsOf(f.Keep),
+		Name:      strings.TrimSpace(f.Name),
+		Kind:      f.Kind,
+		Target:    strings.TrimSpace(f.Target),
+		UniqueBy:  f.filter(),
+		Pages:     f.depth(),
+		Country:   f.Country,
+		Language:  f.Language,
+		Device:    f.Device,
+		Ports:     f.Ports,
+		Threads:   f.Threads,
+		Tries:     f.Tries,
+		Cooldown:  time.Duration(f.Cooldown) * time.Second,
+		ProfileID: f.Profile,
+		Fields:    store.FieldsOf(f.Keep),
 	}
 }
 
@@ -419,6 +424,7 @@ func formOf(r *http.Request) jobForm {
 		Ports:    atoi("ports"),
 		Tries:    atoi("tries"),
 		Cooldown: atoi("cooldown"),
+		Profile:  atoi64(r, profileField),
 		From:     strings.TrimSpace(r.FormValue(fromField)),
 		Keep:     r.Form["keep"],
 		Chose:    r.FormValue(choseField) != "",
@@ -446,6 +452,41 @@ type newPage struct {
 	// was on the form.
 	Keeps []jobField
 	Chose string
+	// Profiles are the named sets of exits to choose between, the default one
+	// first and marked. A machine with one profile still gets the list: it is
+	// where the reader learns that the choice exists at all, and that the exits
+	// are set on the proxies screen rather than here.
+	Profiles []profileChoice
+}
+
+// profileChoice is one profile as the form offers it.
+type profileChoice struct {
+	ID      int64
+	Name    string
+	Default bool
+	Current bool
+}
+
+// atoi64 reads a number a form sent, and nought for anything it cannot read. A
+// profile that will not parse is a job that names none, which is the answer a
+// form with no profile box gives as well.
+func atoi64(r former, name string) int64 {
+	n, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue(name)), 10, 64)
+	return n
+}
+
+// profilesOffered is every profile, with the one this form names marked — or
+// the default one when it names none, because that is the one the job would run
+// through.
+func profilesOffered(all []store.Profile, named int64) []profileChoice {
+	out := make([]profileChoice, 0, len(all))
+	for _, p := range all {
+		out = append(out, profileChoice{
+			ID: p.ID, Name: p.Name, Default: p.Default,
+			Current: p.ID == named || (named == 0 && p.Default),
+		})
+	}
+	return out
 }
 
 // jobField is one part of a result, as the form offers it.
@@ -494,6 +535,19 @@ func sources() []jobSource {
 // page a refused upload lands on is the page a refused form lands on.
 func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 	form jobForm, complaints []string) {
+	// The profiles are read here rather than passed in, because every way onto
+	// this page goes through this function and a list read on one of them would
+	// be a list missing from the others. A history that cannot be asked leaves
+	// the choice off the form, which is a form that names no profile — and a job
+	// naming none runs on the default, which is what it would have done anyway.
+	var offered []store.Profile
+	if s.store != nil {
+		if all, err := s.store.Profiles(r.Context()); err == nil {
+			offered = all
+		} else {
+			s.log.Error("the proxy profiles could not be read for the form", "error", err)
+		}
+	}
 	s.render(w, r, "new.html", newPage{
 		page:       s.frame(lang, "new.title", newAt),
 		Form:       form,
@@ -504,6 +558,7 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		Sources:    sources(),
 		Keeps:      keeps(form),
 		Chose:      choseField,
+		Profiles:   profilesOffered(offered, form.Profile),
 	})
 }
 

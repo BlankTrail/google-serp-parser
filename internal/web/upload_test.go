@@ -980,6 +980,10 @@ func TestUpload_SetsUpTheSameJobAsTheDoorBesideIt(t *testing.T) {
 		"pages":    "3",
 		"tries":    "7",
 		"cooldown": "11",
+		// A number rather than a profile that exists: what is under test is
+		// whether the box survives the door, and the column holds whatever it is
+		// given — a job naming a profile that is gone runs on the default.
+		"profile": "7",
 		"threads":  "13",
 		"ports":    "2",
 	}
@@ -1011,6 +1015,7 @@ func TestUpload_SetsUpTheSameJobAsTheDoorBesideIt(t *testing.T) {
 		{"pages", through.Pages, filed.Pages},
 		{"tries", through.Tries, filed.Tries},
 		{"cooldown", through.Cooldown, filed.Cooldown},
+		{"profile", through.ProfileID, filed.ProfileID},
 		{"threads", through.Threads, filed.Threads},
 		{"ports", through.Ports, filed.Ports},
 	} {

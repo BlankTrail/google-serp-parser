@@ -79,6 +79,11 @@ type jobSetup struct {
 	Ports   int
 	Threads int
 	Tries   int
+	// Profiles are the sets of exits this job could go out through, the one it
+	// names marked. Changing it is the same press as the numbers beside it and
+	// reaches the job the same way: what is written is what the next raise
+	// reads, so a job in flight keeps the pool it already has.
+	Profiles []profileChoice
 	// Pause is how long one identity rests between two requests, in seconds,
 	// which is the unit the box is filled in.
 	Pause int
@@ -219,6 +224,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Country:     sum.Country,
 			Language:    sum.Language,
 			Device:      device,
+			Profiles:    profilesOffered(s.profilesFor(r), sum.ProfileID),
 			Ports:       sum.Ports,
 			Threads:     sum.Threads,
 			Tries:       sum.Tries,
@@ -328,6 +334,19 @@ func (s *Server) apiReshape(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// The profile is written first and on its own call: it is a different
+	// question from how hard the job is run, and the two are refused for
+	// different reasons — a finished job cannot be reshaped, and a job pointed
+	// at a profile that has gone falls back to the default rather than refusing.
+	// A form that sent no profile box at all leaves it where it is.
+	if named := strings.TrimSpace(r.FormValue(profileField)); named != "" {
+		want, _ := strconv.ParseInt(named, 10, 64)
+		if err := s.store.SetJobProfile(r.Context(), id, want); err != nil &&
+			!errors.Is(err, store.ErrNoJob) {
+			s.fail(w, r, err)
+			return
+		}
+	}
 	err = s.store.Reshape(r.Context(), id,
 		countOf(r.FormValue("ports")), countOf(r.FormValue("threads")), countOf(r.FormValue("tries")),
 		time.Duration(countOf(r.FormValue("cooldown")))*time.Second)
@@ -382,4 +401,22 @@ func reshapedSaid(word string) string {
 		return "job.reshape.finished"
 	}
 	return ""
+}
+
+// profilesFor is every proxy profile, and nothing at all when they cannot be
+// read.
+//
+// Nothing rather than a failure: the list is one box on a page about a job, and
+// a page that refused to draw because that box could not be filled would take
+// the counts, the settings and the results away over it.
+func (s *Server) profilesFor(r *http.Request) []store.Profile {
+	if s.store == nil {
+		return nil
+	}
+	all, err := s.store.Profiles(r.Context())
+	if err != nil {
+		s.log.Error("the proxy profiles could not be read", "error", err)
+		return nil
+	}
+	return all
 }

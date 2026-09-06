@@ -254,6 +254,8 @@ func (f jobForm) carrying(box, value string) jobForm {
 		f.Tries, _ = strconv.Atoi(value)
 	case "cooldown":
 		f.Cooldown, _ = strconv.Atoi(value)
+	case profileField:
+		f.Profile, _ = strconv.ParseInt(value, 10, 64)
 	case "threads":
 		f.Threads, _ = strconv.Atoi(value)
 	case "ports":
