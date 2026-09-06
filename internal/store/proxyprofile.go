@@ -234,6 +234,39 @@ func (s *Store) CreateProfile(ctx context.Context, p Profile) (int64, error) {
 	return id, nil
 }
 
+// CarryProxySettings writes the first profile and says whether it wrote one.
+//
+// It is how a machine that has been running since before profiles existed keeps
+// the exits it was already set up with: the list, the ban and the gateways were
+// in the settings file, the database knew nothing of them, and carrying them
+// over on the first start is what makes the change invisible to whoever was
+// using it.
+//
+// It does nothing when there is a profile already, so it can run at every start
+// and writes on exactly one of them. That is the whole of the guard — no marker
+// column, no version to keep in step: the profiles are the marker, and the last
+// one cannot be deleted, so "none at all" only ever means "this has not been
+// carried yet".
+//
+// A second program racing it on the same database loses on the name index and
+// is answered as though the profile were already there, which it is.
+func (s *Store) CarryProxySettings(ctx context.Context, p Profile) (bool, error) {
+	var have int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM proxy_profiles`).Scan(&have); err != nil {
+		return false, fmt.Errorf("store: counting the proxy profiles: %w", err)
+	}
+	if have > 0 {
+		return false, nil
+	}
+	if _, err := s.CreateProfile(ctx, p); err != nil {
+		if errors.Is(err, ErrProfileName) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // SaveProfile writes an edited profile back over itself.
 func (s *Store) SaveProfile(ctx context.Context, p Profile) error {
 	if strings.TrimSpace(p.Name) == "" {

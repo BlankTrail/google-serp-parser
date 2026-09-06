@@ -260,3 +260,75 @@ func TestSetJobProfile_PointsAJobSomewhereElse(t *testing.T) {
 		t.Errorf("pointing a job that is not there gave %v, want ErrNoJob", err)
 	}
 }
+
+func TestCarryProxySettings_WritesOneProfileAndThenLeavesItAlone(t *testing.T) {
+	// A machine that has been running since before profiles existed keeps its
+	// exits in the settings file. This carries them over on one start and does
+	// nothing on every start after it — including after the operator has edited
+	// the profile, which is the case that matters: carrying twice would put the
+	// old settings back over their work.
+	s := testStore(t)
+	ctx := context.Background()
+
+	made, err := s.CarryProxySettings(ctx, aProfile("Default"))
+	if err != nil {
+		t.Fatalf("CarryProxySettings: %v", err)
+	}
+	if !made {
+		t.Fatal("nothing was carried into an empty database")
+	}
+	carried, err := s.DefaultProfile(ctx)
+	if err != nil {
+		t.Fatalf("DefaultProfile: %v", err)
+	}
+	if carried.Location != "https://example.com/proxies.txt" || carried.Ban != time.Hour {
+		t.Errorf("carried %+v, want the settings it was given", carried)
+	}
+
+	edited := carried
+	edited.Location = "https://example.com/better.txt"
+	if err := s.SaveProfile(ctx, edited); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	again, err := s.CarryProxySettings(ctx, aProfile("Default"))
+	if err != nil {
+		t.Fatalf("CarryProxySettings a second time: %v", err)
+	}
+	if again {
+		t.Error("the settings were carried a second time, over what the operator had edited")
+	}
+	after, err := s.DefaultProfile(ctx)
+	if err != nil {
+		t.Fatalf("DefaultProfile: %v", err)
+	}
+	if after.Location != "https://example.com/better.txt" {
+		t.Errorf("the profile reads %q, want the edit to have survived the second start", after.Location)
+	}
+	all, err := s.Profiles(ctx)
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("%d profiles after two starts, want one", len(all))
+	}
+
+	// And after it has been renamed, which is the case the name alone cannot
+	// answer: the guard is that there are profiles at all, not that this one is
+	// still called what it was called when it was carried. Without that, every
+	// start after a rename would leave another Default behind it.
+	renamed := after
+	renamed.Name = "datacentre"
+	if err := s.SaveProfile(ctx, renamed); err != nil {
+		t.Fatalf("SaveProfile after renaming: %v", err)
+	}
+	if _, err := s.CarryProxySettings(ctx, aProfile("Default")); err != nil {
+		t.Fatalf("CarryProxySettings after renaming: %v", err)
+	}
+	all, err = s.Profiles(ctx)
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	if len(all) != 1 {
+		t.Errorf("%d profiles after the carried one was renamed, want one: a start after a rename carried the settings again", len(all))
+	}
+}

@@ -1313,3 +1313,46 @@ func TestDial_CarriesHowOftenAPortChangesIdentityIntoThePool(t *testing.T) {
 		t.Errorf("the pool changes identity every %v, want the ten minutes that were saved", got)
 	}
 }
+
+func TestTheFirstProfile_CarriesTheSettingsFileAndFallsBackToTheDefaults(t *testing.T) {
+	// The first profile is what every job runs through until somebody makes
+	// another, so where it comes from decides what a machine does the day it is
+	// upgraded. From the settings file, when there is one: the operator set that
+	// list and that ban, and a profile that quietly held something else would be
+	// this program changing their exits without saying so.
+	set := settings.Settings{
+		ThreadsPerUpstream: 3,
+		RenewEvery:         10 * time.Minute,
+		PortProtocol:       "http",
+		Proxy: settings.ProxySource{
+			Kind: settings.ProxyGateways, Location: "ignored for gateways",
+			Refresh: 30 * time.Minute, Ban: 20 * time.Minute,
+			Gateways: []string{"nl-one", "de-two"},
+		},
+	}
+	got := theFirstProfile(set, true)
+	if got.Name != firstProfileName || !got.Default {
+		t.Errorf("the carried profile is %q, default=%v, want %q and the default",
+			got.Name, got.Default, firstProfileName)
+	}
+	if got.Kind != settings.ProxyGateways || got.Refresh != 30*time.Minute ||
+		got.Ban != 20*time.Minute || got.ThreadsPerUpstream != 3 ||
+		got.RenewEvery != 10*time.Minute || got.Protocol != "http" {
+		t.Errorf("carried %+v, want the settings it was handed", got)
+	}
+	if len(got.Gateways) != 2 || got.Gateways[0] != "nl-one" {
+		t.Errorf("the ticked gateways came over as %q, want both in order", got.Gateways)
+	}
+
+	// And from the program's own defaults when there is no file. Nought ban and
+	// nought renewal are real answers meaning "never", so a fresh install made
+	// of zeroes would be one nobody set up that way.
+	fresh := theFirstProfile(settings.Settings{}, false)
+	if fresh.Ban != settings.DefaultBan || fresh.RenewEvery != settings.DefaultRenew {
+		t.Errorf("a fresh install starts on ban=%v renew=%v, want %v and %v",
+			fresh.Ban, fresh.RenewEvery, settings.DefaultBan, settings.DefaultRenew)
+	}
+	if !fresh.Default {
+		t.Error("the profile a fresh install starts with is not the default one")
+	}
+}

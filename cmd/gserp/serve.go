@@ -161,7 +161,19 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	// refused and shown an error page.
 	// Read before the address is taken: where to listen is one of the things it
 	// says, and a listener already bound cannot be moved.
-	saved, _ := opts.saved(io.Discard)
+	saved, hadSettings := opts.saved(io.Discard)
+
+	// The exits this machine was already set up with, carried into the profile
+	// a job now names. It writes on one start and does nothing on every one
+	// after it; a failure here is not worth refusing to serve over, because the
+	// screen that lists the profiles can make one.
+	if made, err := st.CarryProxySettings(ctx, theFirstProfile(saved, hadSettings)); err != nil {
+		_, _ = fmt.Fprintf(out, "the proxy settings could not be carried into a profile: %s\n",
+			opts.clean(err.Error()))
+	} else if made {
+		_, _ = fmt.Fprintf(out, "the proxy settings were carried into a profile called %q\n",
+			firstProfileName)
+	}
 
 	// Which developer's work brought the user here, told to the service once a
 	// run. In the background and on its own timer: it has nothing to do with
@@ -655,6 +667,42 @@ func (o serveOptions) saved(out io.Writer) (settings.Settings, bool) {
 		return settings.Settings{}, false
 	}
 	return s, true
+}
+
+// firstProfileName is what the profile carried out of the settings file is
+// called.
+//
+// A word rather than a sentence, and the same word in both languages: it is
+// data and not a label, it is written once and read forever after, and a name
+// translated at the moment it was written would be the wrong language for
+// whoever changes the interface to the other one tomorrow. It is theirs to
+// rename.
+const firstProfileName = "Default"
+
+// theFirstProfile is the settings file's own exits, as a profile.
+//
+// A machine that has been running since before profiles existed keeps its list,
+// its ban and its gateways in that file, so those are what the first profile is
+// made of. A machine with no settings file at all — a fresh install — gets one
+// made of the program's own defaults instead of one made of zeroes: nought ban
+// and nought renewal are real answers that mean never, and a fresh install
+// that quietly chose them would be a fresh install nobody set up that way.
+func theFirstProfile(saved settings.Settings, hadSettings bool) store.Profile {
+	if !hadSettings {
+		saved = settings.Defaults()
+	}
+	return store.Profile{
+		Name:               firstProfileName,
+		Kind:               saved.Proxy.Kind,
+		Location:           saved.Proxy.Location,
+		Refresh:            saved.Proxy.Refresh,
+		Ban:                saved.Proxy.Ban,
+		ThreadsPerUpstream: saved.ThreadsPerUpstream,
+		RenewEvery:         saved.RenewEvery,
+		Protocol:           saved.PortProtocol,
+		Gateways:           saved.Proxy.Gateways,
+		Default:            true,
+	}
 }
 
 // settingsPath is the file the connection is kept in: beside the history rather
