@@ -19,7 +19,11 @@
 {{range .Profiles}}<tr>
 <td>{{.Name}}{{if .Default}} — {{$.T "proxies.profile.default"}}{{end}}</td>
 <td>{{$.T .Source}}{{if .Where}} · {{.Where}}{{end}}{{if .Gateways}} · {{.Gateways}}{{end}}</td>
-<td>
+{{/* The presses stand in a row rather than in a column: each is a form of its
+     own — a press that carried the form below it would save whatever happened
+     to be typed in the boxes — and three forms one under another turn a table
+     of two profiles into half a screen. */}}
+<td><div class="deeds">
 {{if not .Editing}}<a href="/proxies?profile={{.ID}}">{{$.T "proxies.profile.open"}}</a>{{end}}
 {{if not .Default}}
 <form method="post" action="/proxies/default">
@@ -31,7 +35,7 @@
 <button type="submit">{{$.T "proxies.profile.delete"}}</button>
 </form>
 {{end}}
-</td>
+</div></td>
 </tr>
 {{end}}</tbody>
 </table>

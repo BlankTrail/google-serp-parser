@@ -534,6 +534,17 @@ tbody tr:last-child td {
 	border-bottom: 0;
 }
 
+/* What can be done to the row it stands in, side by side. Each press is a form
+   of its own — one carrying the form below it would save whatever was typed in
+   those boxes — and forms are blocks, so without this a table of two profiles
+   is half a screen of stacked buttons. */
+.deeds {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
 /* Counts read down the column, so they are aligned on their last digit. */
 .count {
 	font-variant-numeric: tabular-nums;
