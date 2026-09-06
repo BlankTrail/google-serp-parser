@@ -103,6 +103,14 @@ It listens on this machine only. Reaching it from another one is a setting, and
 it is off until you turn it on — see
 [Running it on a server](#-running-it-on-a-server).
 
+On a machine nothing has been run on yet it opens on a **quick start**: the
+connection, the exits and the first job, each with the fields that matter named
+and a press that leads to the screen it happens on. Every step is read off the
+machine, so anything already set up is already ticked. It can be skipped, and it
+stays in the header afterwards.
+
+![The quick start: the connection, the exits and the first job, each with what it is for and the fields that matter](assets/screenshots/guide-en.png)
+
 ### Windows says it protected your PC
 
 It will, and the builds here cannot stop it. SmartScreen judges a program by the
@@ -274,6 +282,30 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ## 📜 Recent changes
 
+- **A light interface, and a dark one by choice.** The interface is light, and
+  the dark is a press in the header that is remembered. It used to follow
+  whatever the machine round the browser said at the time, so an operator on a
+  dark desktop had no way of reading this program in the light.
+- **The connection is on every screen.** The header says what this program last
+  learned about BlankTrail — connected, not answering, key refused, licence
+  inactive — and where that is something to act on, a banner above the screen
+  leads straight to the settings. It is asked in the background, so no page ever
+  waits on a network to be drawn.
+- **A job with no way out says so.** The profile written on the first start
+  comes from settings that named nothing, so a fresh machine sent every request
+  from its own address and no screen said as much. There is a banner now, and
+  its press opens that profile's own boxes.
+- **What a job has collected** is a count on its own screen, beside the counts of
+  queries: ten thousand queries done says nothing about how much there is.
+- **A quick start** on a machine nothing has been run on, with the fields that
+  matter named and a press to the screen each step happens on.
+- **An address lookup is carried to another identity.** Two thirds of the
+  addresses Google hides were still not coming back. The lookups went out with
+  one attempt through one identity, and a whole page's links share one, so a
+  dead proxy lost every link on that page together. Measured on a live list:
+  every single failure was the address dropping the connection, and none of them
+  was Google. Three identities now, and one that carries nothing is put out of
+  the rotation.
 - **Proxy profiles.** A profile is a named set of exits, and a job names one when
   it is set up. Two lists no longer mean editing one screen between two runs, and
   a finished job can say which exits it went out through. A machine being
@@ -358,8 +390,16 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   been added or the tunnels have just been measured.
 - A job that failed can be told to **try the failed queries again**, which is
   not the same button as carrying on with what is left.
+- A **quick start** for a machine nothing has been run on: the connection, the
+  exits and the first job, each read off the machine so what is already done is
+  already ticked.
+- What this program last learned about **BlankTrail** in the header of every
+  screen, and a banner with one press where it is something to act on.
 - Live URL of the request going out right now.
-- English and Russian, switchable in one click.
+- **Light by default, dark by choice** — a press in the header, remembered per
+  browser.
+- English and Russian: what the browser asks for, or whichever is chosen in the
+  settings.
 - The screens show numbers and draw no conclusions from them. They never call a
   run slow — they do not know what you know about your list.
 
