@@ -1052,3 +1052,27 @@ func TestJobPage_KeepsAskingAfterTheFailedQueriesAreTakenBack(t *testing.T) {
 		t.Error("a job with work back in front of it offers no way to carry on")
 	}
 }
+
+func TestJobPage_CountsWhatTheJobHasCollected(t *testing.T) {
+	// The counts beside this one count queries, and a query may bring back a
+	// hundred results or none. The figure somebody watching a run is waiting on
+	// is the second one: a job is run to collect something, and "four queries
+	// done" says nothing about how much of it there is.
+	//
+	// It is compared against the store rather than against the number the
+	// fixture wrote, so a page reading one count and working the rest out from
+	// it is caught here.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 9, 4, 2)
+
+	collected, err := s.store.ResultCount(t.Context(), id)
+	if err != nil {
+		t.Fatalf("ResultCount: %v", err)
+	}
+	if collected == 0 {
+		t.Fatal("the seeded job collected nothing, so this test would pass over an empty page")
+	}
+	if got := shown(t, get(t, s, jobPath(id)).Body.String(), "count-collected"); got != strconv.Itoa(collected) {
+		t.Errorf("the page shows %q collected, and the store holds %d", got, collected)
+	}
+}

@@ -109,6 +109,9 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// The index on the page a result belongs to, which the fourteenth step
+		// brought.
+		`DROP INDEX IF EXISTS results_by_page`,
 		// The profiles and the column naming one, which the thirteenth step
 		// brought. The column has to go too: SQLite has no "add column if it is
 		// not there", so a second walk of the path over a database that kept it

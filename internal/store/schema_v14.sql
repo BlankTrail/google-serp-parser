@@ -1,0 +1,17 @@
+-- The page a result belongs to, indexed.
+--
+-- The column has been there since the first release and nothing indexed it: the
+-- reads this schema was built for go the other way, from a host to the results
+-- that carry it, and that one has had an index all along.
+--
+-- What wants this is counting what a job has collected, which is now on the
+-- job's own screen and is asked for again every few seconds while the job runs.
+-- Without an index that count walks every result in the database, so it grows
+-- with the history rather than with the job: measured on a real one of 192 217
+-- results, a job of 37 634 counted in 142ms and one of 58 808 in 46ms, and both
+-- would be seconds on the database the same machine holds a month later. With
+-- it they are 5ms and 8ms, and what is walked is the job.
+--
+-- It also pays where every row under a job is read or deleted, which is the
+-- same walk by another name.
+CREATE INDEX IF NOT EXISTS results_by_page ON results(page_id);

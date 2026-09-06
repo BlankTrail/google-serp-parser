@@ -21,6 +21,13 @@
      other job would be a number asking to be explained, and there would be
      nothing to explain. */}}
 {{if .Filtering}}<div class="metric"><dt class="label">{{.T "jobs.dropped"}}</dt><dd class="figure" id="count-dropped">{{.Progress.Dropped}}</dd></div>{{end}}
+{{/* What the job has actually collected. It stands among the counts of queries
+     rather than under the table of results, because it is the figure somebody
+     watching a run is waiting on: a job is run to collect something, and
+     "eleven thousand queries done" says nothing about how much of it there is.
+     It is counted afresh with every redraw of this page, like every other
+     number on it, so it and the rows below it are never from two moments. */}}
+<div class="metric"><dt class="label">{{.T "jobs.collected"}}</dt><dd class="figure" id="count-collected">{{.Collected}}</dd></div>
 {{/* How fast it is going now, measured over the last few queries that settled
      rather than averaged over the whole run: on a job that spent its first hour
      crawling, an average answers wrongly for the rest of the day. */}}

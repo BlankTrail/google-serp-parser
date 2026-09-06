@@ -341,3 +341,60 @@ func TestJobs_ANonPositiveLimitStillReturnsSomething(t *testing.T) {
 		t.Error("a zero limit returned nothing at all")
 	}
 }
+
+func TestResultCount_CountsWhatOneJobCollectedAndNothingElse(t *testing.T) {
+	// The count is read off a walk that starts at the results and climbs to the
+	// job, which is exactly the walk that has no index unless one is built for
+	// it — and the failure of getting it wrong is silent: a number that is right
+	// on a machine with one job and wrong on every machine with two.
+	st := testStore(t)
+	ctx := context.Background()
+
+	mine := jobWithResults(t, st, "mine", 3)
+	theirs := jobWithResults(t, st, "theirs", 5)
+
+	for _, one := range []struct {
+		job  int64
+		want int
+	}{{mine, 3}, {theirs, 5}} {
+		got, err := st.ResultCount(ctx, one.job)
+		if err != nil {
+			t.Fatalf("ResultCount: %v", err)
+		}
+		if got != one.want {
+			t.Errorf("job %d counted %d results, want %d", one.job, got, one.want)
+		}
+	}
+
+	// And a job that has run nothing counts nothing rather than failing to read.
+	bare, err := st.CreateJob(ctx, JobSpec{Name: "bare", Pages: 1}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if got, err := st.ResultCount(ctx, bare); err != nil || got != 0 {
+		t.Errorf("a job that has collected nothing counted %d (%v), want 0", got, err)
+	}
+}
+
+// jobWithResults writes one job whose single query came back with the given
+// number of results.
+func jobWithResults(t *testing.T, st *Store, name string, results int) int64 {
+	t.Helper()
+	ctx := context.Background()
+	id, err := st.CreateJob(ctx, JobSpec{Name: name, Pages: 1}, []string{"one"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	found := make([]google.Result, results)
+	for i := range found {
+		found[i] = google.Result{Position: i + 1, URL: fmt.Sprintf("https://%s.test/%d", name, i)}
+	}
+	err = st.Record(ctx, id, QueryOutcome{
+		Ordinal: 0,
+		Pages:   []google.SERP{{Origin: "https://www.google.com", Results: found}},
+	})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	return id
+}

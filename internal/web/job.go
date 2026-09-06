@@ -103,6 +103,14 @@ type jobPage struct {
 	Progress progressJSON
 	// State is the key of what to call the job's state, not the word itself.
 	State string
+	// Collected is how many results this job has written down.
+	//
+	// It is not one of the counts above it and does not come from the same read:
+	// those count queries, one row each, and this counts what those queries
+	// brought back, of which one may hold a hundred. It is the figure an operator
+	// is actually waiting on — a job is run to collect something, and "eleven
+	// thousand queries done" says nothing about how much of it there is.
+	Collected int
 	// Reshaped is the key of what to say about a change that has just been made,
 	// and empty when the reader did not arrive from one.
 	Reshaped string
@@ -194,6 +202,11 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	collected, err := s.store.ResultCount(r.Context(), sum.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	at := s.progress(sum)
 	// A kind the catalogue has no word for is not drawn as a search. It is a job
 	// nothing here can describe, and naming it wrongly is worse than the key.
@@ -234,6 +247,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		},
 		Progress:   at,
 		State:      stateOf(at, sum.PlanReady),
+		Collected:  collected,
 		Reshaped:   reshapedSaid(r.URL.Query().Get(reshapedField)),
 		Rows:       rows,
 		Standings:  standings,
