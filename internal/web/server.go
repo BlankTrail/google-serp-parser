@@ -243,6 +243,11 @@ func (s *Server) routes() {
 	// A page that took a connection and dropped it is worse than no page: the
 	// reader has no way of telling the two apart until the next restart.
 	if s.settingsPath != "" {
+		// The quick start goes with them: it is about setting the machine up, it
+		// writes the one thing it writes into the same file, and a server that
+		// keeps no settings has nothing to walk anybody through.
+		s.mux.HandleFunc("GET "+guideAt, s.guide)
+		s.mux.HandleFunc("POST "+guideSkipAt, s.skipGuide)
 		s.mux.HandleFunc("GET "+settingsAt, s.settingsPage)
 		s.mux.HandleFunc("POST "+settingsAt, s.saveSettings)
 		s.mux.HandleFunc("POST "+checkAt, s.checkConnection)
@@ -375,6 +380,11 @@ type page struct {
 	// They stand beside the screens rather than among them: a tab is a place the
 	// work is watched from, and this is where the machine is set up.
 	Settings *tabLink
+	// Guide is the way back to the quick start, and stands beside the settings
+	// for the same reason. It is offered on every screen rather than on the
+	// first afternoon alone: whoever put it aside then is the same person who
+	// wants it a week later, setting the second machine up.
+	Guide *tabLink
 	// Refresh is how often this screen asks the server to draw it again, in the
 	// milliseconds a browser counts in, and nought when nothing on it is going to
 	// come back different. Whether a screen is worth watching is a decision, so
@@ -427,6 +437,7 @@ func (s *Server) frame(r *http.Request, lang Lang, title, under string) page {
 	if s.settingsPath != "" {
 		p.Settings = &tabLink{Key: "settings.title", URL: settingsAt, Current: under == settingsAt}
 	}
+	p.Guide = s.guideOffered(under)
 	return p
 }
 

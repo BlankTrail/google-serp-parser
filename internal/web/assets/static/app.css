@@ -711,6 +711,55 @@ legend button {
 	margin-left: auto;
 }
 
+/* One step of the quick start: what it is, what it is for, the boxes worth
+   knowing about before they are met, and the way to the screen it happens on.
+   The card spaces its own parts, so nothing inside it carries a margin. */
+.step {
+	display: flex;
+	flex-direction: column;
+	gap: 0.6rem;
+}
+
+.step h2,
+.step p {
+	margin: 0;
+}
+
+/* The name of a step leads it. Everywhere else on these screens a card's
+   heading is a quiet label over figures that are the point; here the heading is
+   the point and the sentence under it is the explanation, so the two swap
+   weights. */
+.step h2 {
+	color: var(--ink);
+	font-size: 1.05rem;
+	font-weight: 600;
+}
+
+/* The name of the step and whether it is done, on one line, the state pushed to
+   the far end so a column of them reads down. */
+.step-head {
+	align-items: baseline;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem 1rem;
+	justify-content: space-between;
+}
+
+/* What is still to do is set in the text colour and what is done in the quiet
+   one, so the eye lands on the steps that are left — which is the only question
+   this page is ever asked. No colour is spent on it: this is the same
+   difference the header uses to mark the screen being read, and it is the one
+   a reader who cannot tell two half-tones apart can still see. */
+.step-todo {
+	color: var(--ink);
+	font-size: var(--small);
+}
+
+.step-done {
+	color: var(--quiet);
+	font-size: var(--small);
+}
+
 /* What a field is worth saying about, one point to a line.
 
    A hint that is three sentences of prose is a hint the reader has to hold all

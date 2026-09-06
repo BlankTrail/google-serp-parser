@@ -52,6 +52,7 @@
      that keeps no settings has no connection of its own to report on. */}}
 {{if .Link}}<span class="reach">BlankTrail: {{.T .Link}}</span>{{end}}
 <a href="{{.Theme.URL}}">{{.T .Theme.Key}}</a>
+{{with .Guide}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}{{end}}
 {{with .Settings}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}{{end}}
 </nav>
 </header>

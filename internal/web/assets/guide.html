@@ -1,0 +1,45 @@
+{{define "main"}}
+<h1>{{.T "guide.title"}}</h1>
+
+{{/* What this page is, in one line. A guide that opens with three paragraphs
+     about itself is a guide nobody reaches the first step of. */}}
+<p class="empty">{{.T "guide.lead"}}</p>
+
+{{/* Each step is a card: what it is, what it is for, the boxes worth knowing
+     about before they are met, and the press that leads to the screen where it
+     is done — the same screen it would be done on afterwards, so what is
+     learned here is the program rather than the guide.
+
+     Whether a step is done is read from the machine every time this page is
+     drawn. It is a word and not a tick or a colour: the reader who cannot tell
+     green from grey reads the word, and so does everybody else. */}}
+{{range .Steps}}
+<section class="card step">
+<div class="step-head">
+<h2>{{$.T .Key}}</h2>
+<span class="{{if .Done}}step-done{{else}}step-todo{{end}}">{{if .Done}}{{$.T "guide.done"}}{{else}}{{$.T "guide.todo"}}{{end}}</span>
+</div>
+<p>{{$.T .Why}}</p>
+<ul class="notes">
+{{range .Notes}}<li>{{$.T .}}</li>
+{{end}}</ul>
+<p class="export"><a href="{{.URL}}">{{$.T .Press}}</a></p>
+</section>
+{{end}}
+
+{{/* The way out. It is a form and not a link because it writes something down,
+     and a link that changed what is on this machine is a link anything walking
+     these pages would pull — the guide would be gone before its reader ever saw
+     it.
+
+     It is offered while there is anything left to do. A machine where every
+     step is done is told so instead: there is nothing here to skip, and the
+     program has already stopped opening on this page. */}}
+{{if .Ready}}
+<p class="empty">{{.T "guide.ready"}}</p>
+{{else}}
+<form method="post" action="/start/skip" class="actions">
+<button type="submit">{{.T "guide.skip"}}</button>
+</form>
+{{end}}
+{{end}}

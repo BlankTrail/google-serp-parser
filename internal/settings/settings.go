@@ -146,6 +146,19 @@ type Settings struct {
 
 	Proxy    ProxySource `json:"proxy"`
 	Language string      `json:"language"`
+
+	// GuideDone says the quick start has been put aside, so the program stops
+	// opening on it.
+	//
+	// It is here rather than in a cookie because it is about the machine and not
+	// about the browser: whoever set this up did it once, and being walked
+	// through it again from the laptop they check the run on would be the
+	// program forgetting what it was told.
+	//
+	// Nothing sets it but the press that says so. A machine where every step is
+	// done stops opening on the guide because there is nothing left on it to do,
+	// and the guide stays where it is for whoever wants to read it again.
+	GuideDone bool `json:"guide_done"`
 }
 
 // DefaultControlURL is where the identities are asked for on a machine where

@@ -60,12 +60,20 @@ func listing() store.Profile {
 }
 
 // withProfile is a server keeping settings, with the default profile it is
-// handed already written down.
+// handed already written down, on a machine that has been used.
+//
+// Used, because a machine that has never run anything opens on the quick start
+// instead of on what is happening, and these are about the banners a machine in
+// use puts up.
 func withProfile(t *testing.T, p store.Profile) *Server {
 	t.Helper()
 	st := testStore(t)
 	if _, err := st.CreateProfile(context.Background(), p); err != nil {
 		t.Fatalf("CreateProfile: %v", err)
+	}
+	if _, err := st.CreateJob(context.Background(),
+		store.JobSpec{Name: "one that has been run", Pages: 1}, []string{"a"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
 	}
 	s, err := New(Config{
 		Store:        st,
