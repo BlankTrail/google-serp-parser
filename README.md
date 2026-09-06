@@ -302,13 +302,27 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   queries: ten thousand queries done says nothing about how much there is.
 - **A walk through the interface** on a machine nothing has been run on: seven
   stops, one sentence each, standing beside the thing they are about.
-- **An address lookup is carried to another identity.** Two thirds of the
-  addresses Google hides were still not coming back. The lookups went out with
-  one attempt through one identity, and a whole page's links share one, so a
-  dead proxy lost every link on that page together. Measured on a live list:
-  every single failure was the address dropping the connection, and none of them
-  was Google. Three identities now, and one that carries nothing is put out of
-  the rotation.
+- **The redirect an address lookup asks for is an answer, not the wall.** A
+  hidden address is read out of the `Location` header of a redirect, so every
+  lookup that works answers 302 — and 302 is the shape Google's block page
+  arrives in. The pool held one against the port the same way: three lookups in
+  a row took the address that was carrying them out of the port, and the
+  searches that followed went out through whatever the list offered next. On a
+  region that hides its addresses that is most of the requests a job makes, so
+  the run was taking its own pool apart as fast as it filled it. The caller now
+  says which answer it asked for. A search is unchanged: nobody asked it for a
+  redirect, and one still counts as the wall.
+- **A page is worked at until every address is had.** The lookups gave up after
+  three identities, and three is not a number this kind of list has any time
+  for. Measured against a live fifteen-thousand-address list, one link at a
+  time, one identity per attempt: 29 hidden addresses cost 114 attempts to read
+  all 29 — one attempt in four — and every single failure was the address
+  dropping the connection rather than the far end answering something else.
+  Three identities read 55% of those addresses, eight read 93%, fifteen read all
+  of them. A page is now carried to as many identities as a query is, and for
+  the same measured reason. A round asks only for what is still missing, so a
+  page down to its last address costs one request a round, and a region that
+  states its addresses costs nothing at all.
 - **Proxy profiles.** A profile is a named set of exits, and a job names one when
   it is set up. Two lists no longer mean editing one screen between two runs, and
   a finished job can say which exits it went out through. A machine being
