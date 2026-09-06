@@ -224,22 +224,41 @@ func TestStyles_LeaveTheThemeToTheReaderRatherThanToTheirMachine(t *testing.T) {
 	}
 }
 
-func TestStyles_FillOnlyTheProgressBarWithTheAccent(t *testing.T) {
-	// One accent per screen: exactly one thing is filled with colour, and it is
-	// the bar. A coloured button beside it means two accents, and two accents
-	// mean the eye is told nothing by either.
-	var uses int
+func TestStyles_SpendTheAccentOnTheBarAndTheWalkAndNothingElse(t *testing.T) {
+	// One accent per screen: the bar is the one thing filled with colour, and a
+	// coloured button beside it means two accents and the eye told nothing by
+	// either.
+	//
+	// The walk through the interface is the exception, and it is one for the
+	// opposite reason to everything else here. Drawn in the same greys and
+	// hairlines as the screens, it reads as part of them — and a reader who has
+	// just installed this cannot tell the program from the thing explaining it.
+	// It is up for a minute in the life of a machine and being told apart is the
+	// whole of its job, so it is drawn in the one colour this interface has.
+	allowed := []string{"progress-bar", ".tour"}
+	spent := map[string]bool{}
 	for _, d := range stylesheet(t) {
 		if strings.HasPrefix(d.Property, "--") || !strings.Contains(d.Value, "var(--accent") {
 			continue
 		}
-		uses++
-		if !strings.Contains(d.Selector, "progress-bar") {
-			t.Errorf("%s fills %s with the accent, which belongs to the bar alone", d.Selector, d.Property)
+		var allowedHere bool
+		for _, where := range allowed {
+			if strings.Contains(d.Selector, where) {
+				allowedHere = true
+				spent[where] = true
+			}
+		}
+		if !allowedHere {
+			t.Errorf("%s fills %s with the accent, which belongs to the bar and the walk",
+				d.Selector, d.Property)
 		}
 	}
-	if uses == 0 {
-		t.Error("nothing on any page is filled with the accent, so there is no accent")
+	// And both of them do spend it. A walk drawn in the greys of the screens it
+	// stands on is a walk the reader takes for part of the program.
+	for _, where := range allowed {
+		if !spent[where] {
+			t.Errorf("nothing under %s is drawn in the accent", where)
+		}
 	}
 }
 
