@@ -150,6 +150,15 @@ type JobSpec struct {
 	// is what a job that never chose means and what every job written before the
 	// choice existed carries.
 	Fields Fields
+
+	// ProfileID is the proxy profile this job runs through.
+	//
+	// Nought is a job that named none, and it runs on whichever profile is
+	// default — which is what every job written before profiles existed does,
+	// and what a job whose profile was deleted goes back to. It is the id and
+	// not a copy of the settings: a profile edited today changes what its jobs
+	// do tomorrow, which is the whole reason for naming one.
+	ProfileID int64
 }
 
 // kind is what to write in the column, which is never the empty string.
@@ -243,11 +252,11 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
 		spec.Device, spec.Country, spec.Language, ports, threads, tries,
-		spec.Cooldown.Milliseconds(), string(spec.Fields))
+		spec.Cooldown.Milliseconds(), string(spec.Fields), spec.ProfileID)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -351,14 +360,14 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 	// has to know which unit the column is written in.
 	var cooldownMS int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields
+		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
 			&j.Spec.Device, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads,
-			&j.Spec.Tries, &cooldownMS, &j.Spec.Fields)
+			&j.Spec.Tries, &cooldownMS, &j.Spec.Fields, &j.Spec.ProfileID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}

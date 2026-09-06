@@ -109,6 +109,14 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// The profiles and the column naming one, which the thirteenth step
+		// brought. The column has to go too: SQLite has no "add column if it is
+		// not there", so a second walk of the path over a database that kept it
+		// stops on a duplicate name.
+		`DROP INDEX IF EXISTS proxy_profiles_one_default`,
+		`DROP INDEX IF EXISTS proxy_profiles_name`,
+		`DROP TABLE IF EXISTS proxy_profiles`,
+		`ALTER TABLE jobs DROP COLUMN profile_id`,
 		`DROP TABLE IF EXISTS rested_upstreams`,
 		// The index goes first: SQLite will not drop a column an index is built
 		// on, and the message it gives says nothing about the index.
