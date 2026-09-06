@@ -207,6 +207,15 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// And what this run has brought back that the history has not been told
+	// about yet. A query taken to a hundred pages is written down once, at the
+	// end of all hundred, so a screen reading the history alone shows nothing
+	// collected and no speed for as long as that takes.
+	var flying int
+	var landed []time.Time
+	if s.sup != nil {
+		flying, landed = s.sup.InFlight(sum.ID)
+	}
 	at := s.progress(sum)
 	// A kind the catalogue has no word for is not drawn as a search. It is a job
 	// nothing here can describe, and naming it wrongly is worse than the key.
@@ -247,7 +256,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		},
 		Progress:   at,
 		State:      stateOf(at, sum.PlanReady),
-		Collected:  collected,
+		Collected:  collected + flying,
 		Reshaped:   reshapedSaid(r.URL.Query().Get(reshapedField)),
 		Rows:       rows,
 		Standings:  standings,
@@ -262,7 +271,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		Shown:     rowsShown,
 		Asking:    s.asking(sum.ID),
 		Speed:     perMinute(pace.PerMinute()),
-		PageSpeed: perMinute(pace.PagesPerMinute()),
+		PageSpeed: pageSpeed(landed, pace),
 		Formats:   export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
@@ -275,6 +284,30 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		CanRetry: s.sup != nil && sum.PlanReady &&
 			!at.Running && !at.Queued && at.Failed > 0,
 	})
+}
+
+// pageSpeed is how fast pages are coming back, measured over the ones this run
+// has taken where there are any and over the history where there are not.
+//
+// The two are the same measurement of the same thing, taken from the only place
+// that has it at the time. While a run is between settled queries the history
+// knows nothing about the last hour of it, and a figure read from there says a
+// job is doing nothing while it is doing all it can.
+func pageSpeed(landed []time.Time, pace store.Pace) string {
+	if len(landed) >= 2 {
+		newest := landed[len(landed)-1]
+		first := 0
+		for i, at := range landed {
+			if newest.Sub(at) <= store.PaceWindow {
+				first = i
+				break
+			}
+		}
+		if over := newest.Sub(landed[first]); over > 0 && len(landed)-first >= 2 {
+			return perMinute(float64(len(landed)-first-1) / over.Minutes())
+		}
+	}
+	return perMinute(pace.PagesPerMinute())
 }
 
 // jobAsked reads the job a request names and answers the reader itself when

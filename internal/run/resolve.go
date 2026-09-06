@@ -58,26 +58,42 @@ func (r *Runner) resolveQuery(ctx context.Context, res *QueryResult, workers int
 	return total
 }
 
-// resolvePage looks up the addresses missing from one page, through one
-// identity.
+// resolvePage looks up the addresses missing from one page, carrying what is
+// left to another identity for as long as that keeps working.
 //
-// One identity for the page rather than one per link: the address behind a link
-// does not depend on who captured the page, so a separate identity per link
-// buys nothing and spends a whole page's worth of the pool to get it.
+// One identity at a time for the whole page rather than one per link: the
+// address behind a link does not depend on who captured the page, so a separate
+// identity per link buys nothing and spends a whole page's worth of the pool to
+// get it.
+//
+// What it stops on is the important part. It used to be three identities,
+// however well they were doing, and that left gaps in the middle of a page:
+// each round read some of what was left, three rounds ran out, and the rest
+// were written with no address at all. A page that arrived is a page whose
+// addresses can be had, so the rule is now about progress rather than about
+// effort — it goes on while rounds keep bringing something back, and gives up
+// only when several in a row bring nothing.
 func (r *Runner) resolvePage(ctx context.Context, serp *google.SERP, workers int) google.ResolveReport {
 	var total google.ResolveReport
-	for try := 0; try < resolveTries && needsResolving(serp); try++ {
+	var quiet int
+	for try := 0; try < resolveRounds && quiet < resolveStall && needsResolving(serp); try++ {
 		if err := ctx.Err(); err != nil {
 			total.Errs = append(total.Errs, err)
 			return total
 		}
-		gather(&total, r.resolveOnce(ctx, serp, workers))
+		one := r.resolveOnce(ctx, serp, workers)
+		if one.Resolved > 0 {
+			quiet = 0
+		} else {
+			quiet++
+		}
+		gather(&total, one)
 	}
 	return total
 }
 
-// resolveTries is how many identities one page's addresses may be looked up
-// through before what is left is given up on.
+// resolveStall is how many identities in a row may bring nothing back before
+// what is left is given up on.
 //
 // One was not enough, and the reason is the list rather than the lookup. A
 // search is carried to a fresh identity when the address it went through is
@@ -89,10 +105,23 @@ func (r *Runner) resolvePage(ctx context.Context, serp *google.SERP, workers int
 // the same one — the address dropped the connection. Not Google refusing, not a
 // challenge: the proxy.
 //
-// Three, for the reason the search takes three by default: it is the number
-// past which a list this bad is the operator's problem rather than something to
-// spend more requests on.
-const resolveTries = 3
+// Three of them in a row, for the reason the search takes three by default: it
+// is the number past which a list this bad is the operator's problem rather
+// than something to spend more requests on. The difference from counting rounds
+// is the whole of the fix: a page whose links come back a few at a time is
+// worked at until they are all had, and only a page nothing can be had from at
+// all is let go.
+const resolveStall = 3
+
+// resolveRounds is the ceiling on the identities one page may be carried to,
+// however well they are doing.
+//
+// It is not a budget, it is a stop. A page holds ten links at most and a round
+// that brings even one back keeps the walk going, so ten rounds would already
+// be the worst case worth planning for; twenty is that with room, and it is
+// there so that a page which somehow answers one link a round forever cannot
+// hold a thread of the run for the rest of the night.
+const resolveRounds = 20
 
 // resolveOnce looks up what is missing from one page, through one identity, and
 // puts that identity away when it carried nothing.

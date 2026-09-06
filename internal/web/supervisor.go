@@ -213,14 +213,30 @@ func dialing(open OpenPool, watch run.Watch) source {
 type jobSink struct {
 	st    *store.Store
 	jobID int64
+	// caught is the tally of what has been brought back and not yet written. It
+	// is told here because this is where "not yet written" stops being true.
+	caught *caught
 }
 
 func (s jobSink) Record(ctx context.Context, res run.QueryResult) error {
-	return s.st.Record(ctx, s.jobID, store.QueryOutcome{
+	err := s.st.Record(ctx, s.jobID, store.QueryOutcome{
 		Ordinal: res.Ordinal,
 		Pages:   res.Pages,
 		Err:     res.Err,
 	})
+	if err == nil && s.caught != nil {
+		s.caught.written(s.jobID, resultsIn(res))
+	}
+	return err
+}
+
+// resultsIn is how many results this query brought back, across all its pages.
+func resultsIn(res run.QueryResult) int {
+	var n int
+	for _, page := range res.Pages {
+		n += len(page.Results)
+	}
+	return n
 }
 
 // Supervisor runs jobs one at a time, in the order they were asked for, each on
@@ -282,6 +298,9 @@ type Supervisor struct {
 	// guards the queue on each of them would put the whole run behind the screen
 	// that watches it.
 	asking askingNow
+	// caught is what the run has brought back that the history has not been
+	// told about yet, for the screen watching a job taken to many pages.
+	caught caught
 
 	// wake carries one signal, which is all the worker needs: it empties the
 	// queue before it waits again, so a signal it missed is one it had already
@@ -862,8 +881,13 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
 	// job and not about what the job is.
 	j.Asking = func(url string) { v.asking.note(id, url) }
 	defer v.asking.forget(id)
+	// And what it has brought back, for the same screen. A job taken to a
+	// hundred pages writes nothing down for an hour at a time, and a screen with
+	// nothing but the history to read shows a run that looks stopped.
+	j.Captured = func(page google.SERP) { v.caught.took(id, len(page.Results), time.Now()) }
+	defer v.caught.forget(id)
 
-	if rep := eng.Run(ctx, j, jobSink{st: v.st, jobID: id}); rep.Err != nil {
+	if rep := eng.Run(ctx, j, jobSink{st: v.st, jobID: id, caught: &v.caught}); rep.Err != nil {
 		v.log.Error("a job was refused before anything was sent", "job", id, "error", rep.Err)
 	}
 }
@@ -971,6 +995,88 @@ func (v *Supervisor) isClosed() bool {
 	defer v.mu.Unlock()
 	return v.closed
 }
+
+// caught is what the job in flight has brought back that the history does not
+// know about yet: results captured but not yet written, and the moments the
+// pages arrived at.
+//
+// It exists because of the depth a job can be taken to. A query taken to a
+// hundred pages is written down once, at the end of all hundred, so a screen
+// reading the history alone shows nothing collected and no speed for as long as
+// that takes — which on a wide job is most of an afternoon. What is here is the
+// other half of the same count: the history holds what has settled, this holds
+// what is in flight, and the screen shows the sum.
+//
+// One job, like the address beside it: one runs at a time, and a tally kept for
+// a job that is no longer running would be added to the wrong screen.
+type caught struct {
+	mu      sync.Mutex
+	job     int64
+	results int
+	// pages are the moments the last few pages came back at, oldest first. They
+	// are what a speed is measured over while a run is between settled queries,
+	// and they are capped for the reason the history's own sample is: a figure
+	// measured over an hour is not what somebody watching a screen is asking
+	// about.
+	pages []time.Time
+}
+
+// took records a page that came back, with what it carried.
+func (c *caught) took(job int64, results int, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.job != job {
+		c.job, c.results, c.pages = job, 0, nil
+	}
+	c.results += results
+	c.pages = append(c.pages, now)
+	if len(c.pages) > store.PaceSample {
+		c.pages = c.pages[len(c.pages)-store.PaceSample:]
+	}
+}
+
+// written takes back what has just reached the history, so that a result is
+// counted once rather than twice.
+//
+// It is the count that was captured rather than the count that was kept: a
+// repeat the history drops is no longer in flight either, and the two halves
+// have to be about the same thing or their sum is not a count of anything.
+func (c *caught) written(job int64, results int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.job != job {
+		return
+	}
+	c.results -= results
+	if c.results < 0 {
+		c.results = 0
+	}
+}
+
+// forget drops the tally once a job is no longer running, so a finished job's
+// last pages are not still counted as in flight.
+func (c *caught) forget(job int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.job == job {
+		c.job, c.results, c.pages = 0, 0, nil
+	}
+}
+
+// at is what this job has in flight: how many results, and the moments of the
+// pages that brought them. Nothing at all for a job that is not the one running.
+func (c *caught) at(job int64) (int, []time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.job != job {
+		return 0, nil
+	}
+	return c.results, slices.Clone(c.pages)
+}
+
+// InFlight is what the given job has brought back that the history has not been
+// told about yet.
+func (v *Supervisor) InFlight(job int64) (int, []time.Time) { return v.caught.at(job) }
 
 // askingNow is what a job is fetching this second.
 //

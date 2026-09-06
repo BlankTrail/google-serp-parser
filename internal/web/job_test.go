@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/export"
 	"github.com/blanktrail/google-serp-parser/internal/google"
@@ -1074,5 +1075,46 @@ func TestJobPage_CountsWhatTheJobHasCollected(t *testing.T) {
 	}
 	if got := shown(t, get(t, s, jobPath(id)).Body.String(), "count-collected"); got != strconv.Itoa(collected) {
 		t.Errorf("the page shows %q collected, and the store holds %d", got, collected)
+	}
+}
+
+func TestJobPage_CountsWhatTheRunHasBroughtBackBeforeItIsWrittenDown(t *testing.T) {
+	// A query taken to a hundred pages is written down once, at the end of all
+	// hundred. Read from the history alone, a screen watching such a job shows
+	// nothing collected and no speed for as long as that takes — which is most
+	// of an afternoon on a wide job, and reads as a run that has stopped.
+	//
+	// So the screen shows both halves of the same count: what has settled, and
+	// what this run has in flight.
+	s, _, _ := serverWithRunningJob(t)
+	id, running := s.sup.Running()
+	if !running {
+		t.Fatal("the fixture has no job in flight, so there is nothing in flight to count")
+	}
+
+	before := shown(t, get(t, s, jobPath(id)).Body.String(), "count-collected")
+	if before != "0" {
+		t.Fatalf("the job starts with %q collected, so this test cannot tell the halves apart", before)
+	}
+
+	// Three pages come back, none of them written yet.
+	now := time.Now()
+	for i := range 3 {
+		s.sup.caught.took(id, 10, now.Add(time.Duration(i)*2*time.Second))
+	}
+	body := get(t, s, jobPath(id)).Body.String()
+	if got := shown(t, body, "count-collected"); got != "30" {
+		t.Errorf("the screen shows %q collected while the run holds 30 unwritten", got)
+	}
+	// And the pages a minute follow the same moments rather than waiting for a
+	// query to settle: three pages four seconds apart is thirty a minute.
+	if got := shown(t, body, "run-page-speed"); got != "30" {
+		t.Errorf("the screen shows %q pages a minute, want the run's own 30", got)
+	}
+
+	// What reaches the history stops being in flight, so it is counted once.
+	s.sup.caught.written(id, 30)
+	if got := shown(t, get(t, s, jobPath(id)).Body.String(), "count-collected"); got != "0" {
+		t.Errorf("the screen shows %q collected after the run handed those results over", got)
 	}
 }

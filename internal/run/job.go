@@ -62,6 +62,16 @@ type Job struct {
 	Target string
 	// Queries are taken in this order and reported in it.
 	Queries []google.Query
+	// Captured, when set, is told about each page as it comes back, before the
+	// query it belongs to has finished.
+	//
+	// It is here because a job taken to a hundred pages settles one query for
+	// every hundred requests it makes: what is written down moves once an hour
+	// while the run works as hard as it ever does, and a screen reading the
+	// history alone shows nothing collected and no speed for all of it. Whoever
+	// holds this knows what the run has brought back that nothing has been told
+	// about yet.
+	Captured func(page google.SERP)
 	// Ordinals gives each query its place in the list the job originally had,
 	// which matters only for a job picked up part way: it holds what is left,
 	// and numbering that from zero would file every result against the wrong
@@ -224,7 +234,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	// One Attempt for the whole job. It keeps a session per port, and a port is
 	// leased to one thread at a time, so the threads never meet inside it.
 	attempt := &Attempt{Pool: r.Pool, SpecName: j.SpecName, Tries: j.Tries, Mobile: j.Mobile,
-		Asking: j.Asking}
+		Asking: j.Asking, Captured: j.Captured}
 
 	queue := make(chan int)
 	// Closed once, by whichever thread first finds the pool empty. Every thread

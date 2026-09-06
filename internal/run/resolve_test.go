@@ -5,6 +5,7 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -240,13 +241,14 @@ func TestRunner_KeepsTheRequestBoundThePoolWasGiven(t *testing.T) {
 	r := &Runner{Pool: f.Pool, Threads: 1}
 	got := r.ResolveLinks(context.Background(), &rep, 1)
 
-	// Once per identity the page is carried to: the bound ends each attempt,
-	// and a slow address is passed over the same way a dead one is.
-	if got.Failed != resolveTries || got.Resolved != 0 {
+	// Once per identity the page is carried to, and it is carried to as many as
+	// are allowed to bring nothing in a row: the bound ends each attempt, and a
+	// slow address is passed over the same way a dead one is.
+	if got.Failed != resolveStall || got.Resolved != 0 {
 		t.Fatalf("Failed=%d Resolved=%d, want the request bound to have ended every one of the %d attempts",
-			got.Failed, got.Resolved, resolveTries)
+			got.Failed, got.Resolved, resolveStall)
 	}
-	if len(got.Errs) != resolveTries {
+	if len(got.Errs) != resolveStall {
 		t.Fatalf("the report carries %d errors, want one per attempt: %v", len(got.Errs), got.Errs)
 	}
 	for i, err := range got.Errs {
@@ -439,10 +441,11 @@ func TestRunner_CarriesTheLookupToAnotherIdentityWhenTheAddressIsDead(t *testing
 	}
 }
 
-func TestRunner_GivesUpOnAPageAfterThreeIdentities(t *testing.T) {
+func TestRunner_GivesUpOnAPageAfterThreeIdentitiesBringNothing(t *testing.T) {
 	// And it stops. A list where every address is dead is the operator's
-	// problem, not something to spend the pool on: past three the page is left
-	// as it is and the job goes on.
+	// problem, not something to spend the pool on: once three identities in a
+	// row have brought nothing back, the page is left as it is and the job goes
+	// on.
 	d := dropping(t, 1000)
 	f := poolFacing(t, d.addr(), 6)
 
@@ -460,7 +463,67 @@ func TestRunner_GivesUpOnAPageAfterThreeIdentities(t *testing.T) {
 	if got.Resolved != 0 {
 		t.Errorf("resolved %d against an address that answers nothing", got.Resolved)
 	}
-	if got.Attempted != resolveTries {
-		t.Errorf("the page was attempted %d times, want %d", got.Attempted, resolveTries)
+	if got.Attempted != resolveStall {
+		t.Errorf("the page was attempted %d times, want %d", got.Attempted, resolveStall)
+	}
+}
+
+// grudging answers one request in three and takes the connection away for the
+// rest, so a page of several links comes back a few at a time however often it
+// is asked.
+//
+// It is the shape the live list has: not an address that answers everything or
+// nothing, but one that answers some of what is asked of it. A page like this
+// used to be left with gaps in the middle of it.
+func grudging(t *testing.T) *destination {
+	t.Helper()
+	d := &destination{}
+	d.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if d.asked.Add(1)%3 != 1 {
+			if hijacked, _, err := http.NewResponseController(w).Hijack(); err == nil {
+				_ = hijacked.Close()
+				return
+			}
+		}
+		w.Header().Set("Location", "https://example.com"+r.URL.Path)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(d.Close)
+	return d
+}
+
+func TestRunner_WorksAPageUntilEveryAddressIsHadRatherThanForAFixedNumberOfTries(t *testing.T) {
+	// A page that arrived is a page whose addresses can be had, and the reader
+	// wants all of them: a result written with no address is a row of a report
+	// with a hole in it, and a hole in the middle of a page reads as a result
+	// that has no address rather than as one nobody could reach.
+	//
+	// Counting rounds is what left those holes. Every round brought some of what
+	// was left back, three rounds ran out, and the rest were written empty. The
+	// rule is about progress now: while rounds keep bringing something, the page
+	// is worked at.
+	d := grudging(t)
+	f := poolFacing(t, d.addr(), 8)
+
+	var links []google.Result
+	for i := 0; i < 6; i++ {
+		links = append(links, unread(fmt.Sprintf("/goto/%d", i+1), "example.com"))
+	}
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages:     []google.SERP{{Origin: d.URL, Results: links}},
+	}}}
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	got := r.ResolveLinks(context.Background(), &rep, 1)
+
+	for i, one := range rep.Results[0].Pages[0].Results {
+		if !one.Resolved() {
+			t.Errorf("result %d was left with no address after %d attempts of which %d came back",
+				i+1, got.Attempted, got.Resolved)
+		}
+	}
+	if got.Resolved != len(links) {
+		t.Fatalf("resolved %d of %d", got.Resolved, len(links))
 	}
 }

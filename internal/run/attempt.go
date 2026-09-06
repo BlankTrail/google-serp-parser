@@ -61,6 +61,13 @@ type Attempt struct {
 	// holds it decides what to keep.
 	Asking func(url string)
 
+	// Captured, when set, is told about each page that comes back, as it comes
+	// back. It is said here rather than where the pages are gathered because
+	// every kind of job asks through this one place: a walk, a position check
+	// and an index check all reach the same searcher, and a hook per engine
+	// would be three that drift apart.
+	Captured func(page google.SERP)
+
 	// SpecName asks for a port opened under a named template, so a run that
 	// wants mobile results is not quietly answered from a desktop one. Empty
 	// takes any port.
@@ -217,7 +224,19 @@ type boundSearcher struct {
 }
 
 func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP, error) {
-	return b.attempt.sessionFor(b.lease).Search(ctx, q)
+	serp, err := b.attempt.sessionFor(b.lease).Search(ctx, q)
+	b.attempt.caught(serp, err)
+	return serp, err
+}
+
+// caught tells whoever is watching that a page came back. A refused request
+// brought no page and is not one: what this counts is what the run has, not
+// what it asked for.
+func (a *Attempt) caught(serp google.SERP, err error) {
+	if err != nil || a.Captured == nil {
+		return
+	}
+	a.Captured(serp)
 }
 
 // once leases one identity, asks it, and hands the answer back.
@@ -234,6 +253,7 @@ func (a *Attempt) once(ctx context.Context, q google.Query) (google.SERP, error)
 	defer lease.Release()
 
 	serp, err := a.sessionFor(lease).Search(ctx, q)
+	a.caught(serp, err)
 	if err == nil {
 		// The identity answered, which is what makes it warm. The pool offers a
 		// warm identity before a cold one, and this is the only place that can
