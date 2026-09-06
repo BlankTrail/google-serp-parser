@@ -198,7 +198,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			continue
 		}
 
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if answered(req.Context(), resp.StatusCode) {
 			t.rem.attemptSucceeded(t.port)
 			return resp, nil
 		}
@@ -227,6 +227,43 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		drainAndClose(resp)
 	}
+}
+
+// redirectWanted marks a context whose requests are asking for a redirect.
+type redirectWanted struct{}
+
+// RedirectIsTheAnswer says that requests made under ctx are asking for a
+// redirect, so a port that returns one has done its work.
+//
+// The pool does not reason about why a request was answered the way it was and
+// this does not ask it to: it is the caller, who knows what it asked for,
+// saying which answer counts as one. By default a redirect counts against the
+// port, and rightly — a search answered with one has been sent to Google's
+// block page, and the port that carried it is the one to move on from.
+//
+// A lookup of a hidden address is the other case, and it is the whole reason
+// this exists. That address is read out of the Location header of a redirect,
+// so every lookup that works answers 302. Held against the port the way the
+// wall is, a page of ten of them throws away the address that was carrying
+// them — three lookups at a time, by the same count that exists to walk away
+// from a dead one — and the searches that follow go out through whatever the
+// list offers next. Measured on a live run of a region that hides its
+// addresses, that is most of the requests a job makes.
+func RedirectIsTheAnswer(ctx context.Context) context.Context {
+	return context.WithValue(ctx, redirectWanted{}, true)
+}
+
+// answered reports whether a response is the far end answering rather than the
+// port failing to carry the request.
+func answered(ctx context.Context, status int) bool {
+	if status >= 200 && status < 300 {
+		return true
+	}
+	if status < 300 || status >= 400 {
+		return false
+	}
+	wanted, _ := ctx.Value(redirectWanted{}).(bool)
+	return wanted
 }
 
 // drainAndClose consumes what is left of a response about to be discarded, so

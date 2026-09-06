@@ -654,3 +654,70 @@ func TestLadder_OpensAPortAgainWhenItsOwnListenerHasGone(t *testing.T) {
 		t.Errorf("the address was blamed for a port that never answered: dead=%d rotations=%d", rem.markedDead, rem.rotations)
 	}
 }
+
+func TestLadder_CountsARedirectAgainstThePortWhenNobodyAskedForOne(t *testing.T) {
+	// This is the wall. A search answered with a redirect has been sent to
+	// Google's block page, and the port that carried it is the one to move on
+	// from — which is why a redirect counts against it by default.
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(http.StatusFound, nil, "")}}
+	rem := &fakeRemedy{retries: 3, rotateOnNth: 1}
+	l := &ladder{rt: rt, port: 20101, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	drainAndClose(resp)
+	if rem.failures != 1 || rem.rotations != 1 {
+		t.Errorf("failures=%d rotations=%d, want the redirect held against the port", rem.failures, rem.rotations)
+	}
+	if rem.successes != 0 {
+		t.Errorf("attemptSucceeded calls=%d, want the redirect not to count as an answer", rem.successes)
+	}
+}
+
+func TestLadder_CreditsThePortWithARedirectTheCallerAskedFor(t *testing.T) {
+	// The address lookups ask for exactly this. A hidden address is read out of
+	// the Location header of a redirect, so every lookup that works answers 302
+	// — and held against the port the way the wall is, a page of ten of them
+	// throws away the very address that was carrying them, three lookups at a
+	// time. The port is asked to find another, and the next search goes out
+	// through whatever the list offers next.
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(http.StatusFound, nil, "")}}
+	rem := &fakeRemedy{retries: 3, rotateOnNth: 1}
+	l := &ladder{rt: rt, port: 20102, rem: rem}
+
+	req := newReq(t, http.MethodGet, "").WithContext(RedirectIsTheAnswer(context.Background()))
+	resp, err := l.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	drainAndClose(resp)
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("status=%d, want the caller to be handed the redirect it asked for", resp.StatusCode)
+	}
+	if rem.successes != 1 {
+		t.Errorf("attemptSucceeded calls=%d, want the port credited with an answer", rem.successes)
+	}
+	if rem.failures != 0 || rem.rotations != 0 || rem.markedBad != 0 {
+		t.Errorf("remedies applied to the answer that was asked for: %+v", rem)
+	}
+}
+
+func TestLadder_StillHoldsARefusalAgainstThePortWhenARedirectWasAskedFor(t *testing.T) {
+	// Only the redirect is forgiven. A lookup answered with a server error is
+	// the same fault it always was.
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(503, nil, "")}}
+	rem := &fakeRemedy{rotateOnNth: 1}
+	l := &ladder{rt: rt, port: 20103, rem: rem}
+
+	req := newReq(t, http.MethodGet, "").WithContext(RedirectIsTheAnswer(context.Background()))
+	resp, err := l.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	drainAndClose(resp)
+	if rem.failures != 1 || rem.successes != 0 {
+		t.Errorf("failures=%d successes=%d, want the refusal held against the port", rem.failures, rem.successes)
+	}
+}

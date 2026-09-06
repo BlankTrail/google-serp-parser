@@ -228,6 +228,10 @@ func TestRunner_KeepsTheRequestBoundThePoolWasGiven(t *testing.T) {
 
 	f := poolFacing(t, slow.Listener.Addr().String(), 2, func(c *blanktrail.PoolConfig) {
 		c.RequestTimeout = 20 * time.Millisecond
+		// The page is carried to every identity it is allowed, and this test is
+		// about the bound rather than about a port being put away, so the ports
+		// stay in the rotation for the whole of it.
+		c.MaxPortStrikes = 1 << 20
 	})
 
 	rep := Report{Results: []QueryResult{{
@@ -241,14 +245,14 @@ func TestRunner_KeepsTheRequestBoundThePoolWasGiven(t *testing.T) {
 	r := &Runner{Pool: f.Pool, Threads: 1}
 	got := r.ResolveLinks(context.Background(), &rep, 1)
 
-	// Once per identity the page is carried to, and it is carried to as many as
-	// are allowed to bring nothing in a row: the bound ends each attempt, and a
-	// slow address is passed over the same way a dead one is.
-	if got.Failed != resolveStall || got.Resolved != 0 {
+	// Once per identity the page is carried to, and it is carried to every one
+	// it is allowed: the bound ends each attempt, and a slow address is passed
+	// over the same way a dead one is.
+	if got.Failed != resolveTries || got.Resolved != 0 {
 		t.Fatalf("Failed=%d Resolved=%d, want the request bound to have ended every one of the %d attempts",
-			got.Failed, got.Resolved, resolveStall)
+			got.Failed, got.Resolved, resolveTries)
 	}
-	if len(got.Errs) != resolveStall {
+	if len(got.Errs) != resolveTries {
 		t.Fatalf("the report carries %d errors, want one per attempt: %v", len(got.Errs), got.Errs)
 	}
 	for i, err := range got.Errs {
@@ -441,13 +445,17 @@ func TestRunner_CarriesTheLookupToAnotherIdentityWhenTheAddressIsDead(t *testing
 	}
 }
 
-func TestRunner_GivesUpOnAPageAfterThreeIdentitiesBringNothing(t *testing.T) {
+func TestRunner_GivesUpOnAPageOnceItHasBeenCarriedToEveryIdentityItIsAllowed(t *testing.T) {
 	// And it stops. A list where every address is dead is the operator's
-	// problem, not something to spend the pool on: once three identities in a
-	// row have brought nothing back, the page is left as it is and the job goes
-	// on.
+	// problem, not something to spend the pool on for ever: once the page has
+	// been carried to as many identities as a query is, it is left as it is and
+	// the job goes on.
 	d := dropping(t, 1000)
-	f := poolFacing(t, d.addr(), 6)
+	f := poolFacing(t, d.addr(), 6, func(c *blanktrail.PoolConfig) {
+		// What is being counted is identities the page was carried to, so the
+		// ports stay in the rotation rather than being put away part way.
+		c.MaxPortStrikes = 1 << 20
+	})
 
 	rep := Report{Results: []QueryResult{{
 		Attempted: true,
@@ -463,8 +471,8 @@ func TestRunner_GivesUpOnAPageAfterThreeIdentitiesBringNothing(t *testing.T) {
 	if got.Resolved != 0 {
 		t.Errorf("resolved %d against an address that answers nothing", got.Resolved)
 	}
-	if got.Attempted != resolveStall {
-		t.Errorf("the page was attempted %d times, want %d", got.Attempted, resolveStall)
+	if got.Attempted != resolveTries {
+		t.Errorf("the page was attempted %d times, want %d", got.Attempted, resolveTries)
 	}
 }
 
@@ -525,5 +533,130 @@ func TestRunner_WorksAPageUntilEveryAddressIsHadRatherThanForAFixedNumberOfTries
 	}
 	if got.Resolved != len(links) {
 		t.Fatalf("resolved %d of %d", got.Resolved, len(links))
+	}
+}
+
+// stingy answers one request in four and takes the connection away for the
+// rest, which is the rate the live list was measured at: 29 hidden addresses
+// cost 114 attempts to read, and every failure was the address dropping the
+// connection.
+func stingy(t *testing.T) *destination {
+	t.Helper()
+	d := &destination{}
+	d.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if d.asked.Add(1)%4 != 1 {
+			if hijacked, _, err := http.NewResponseController(w).Hijack(); err == nil {
+				_ = hijacked.Close()
+				return
+			}
+		}
+		w.Header().Set("Location", "https://example.com"+r.URL.Path)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(d.Close)
+	return d
+}
+
+func TestRunner_FillsAWholePageAgainstTheRateTheLiveListWasMeasuredAt(t *testing.T) {
+	// The report the operator reads has one row per result, and a row with no
+	// address in the middle of nine that have one reads as a result that has no
+	// address rather than as one nobody could reach. On the measured rate a rule
+	// of three identities reads about half of them; this is the whole page.
+	d := stingy(t)
+	f := poolFacing(t, d.addr(), 8, func(c *blanktrail.PoolConfig) {
+		c.MaxPortStrikes = 1 << 20
+	})
+
+	var links []google.Result
+	for i := 0; i < 10; i++ {
+		links = append(links, unread(fmt.Sprintf("/goto/%d", i+1), "example.com"))
+	}
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages:     []google.SERP{{Origin: d.URL, Results: links}},
+	}}}
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	got := r.ResolveLinks(context.Background(), &rep, 2)
+
+	var holes int
+	for i, one := range rep.Results[0].Pages[0].Results {
+		if !one.Resolved() {
+			holes++
+			t.Errorf("result %d was left with no address", i+1)
+		}
+	}
+	if holes > 0 {
+		t.Fatalf("%d of %d addresses were left unread over %d attempts of which %d came back",
+			holes, len(links), got.Attempted, got.Resolved)
+	}
+}
+
+func TestRunner_SpendsNoneOfAPagesAllowanceOnAPoolWithNothingToGive(t *testing.T) {
+	// An identity that was never handed out asked nothing, so it says nothing
+	// about the addresses still missing. Counting it against the page would let
+	// a pool that is shutting down decide that a page has no more addresses to
+	// be had — and the page would be written with holes nobody ever asked about.
+	d := newDestination(t)
+	f := poolFacing(t, d.addr(), 2)
+	_ = f.Pool.Close()
+
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages: []google.SERP{{
+			Origin:  d.URL,
+			Results: []google.Result{unread("/goto/one", "example.com")},
+		}},
+	}}}
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	got := r.ResolveLinks(context.Background(), &rep, 1)
+
+	if got.Attempted != 0 || got.Failed != 0 {
+		t.Errorf("Attempted=%d Failed=%d, want nothing asked of a pool with nothing to give", got.Attempted, got.Failed)
+	}
+	if len(got.Errs) != 1 {
+		t.Fatalf("the report carries %d errors, want the one account of why nothing was looked up: %v", len(got.Errs), got.Errs)
+	}
+	if d.asked.Load() != 0 {
+		t.Errorf("the address was asked %d times through a pool that had no identity to give", d.asked.Load())
+	}
+}
+
+func TestRunner_DoesNotCostThePortItsAddressForAnsweringTheLookups(t *testing.T) {
+	// A hidden address is read out of a Location header, so every lookup that
+	// works answers with a redirect — and a redirect is what the wall looks
+	// like to a search. Held against the port the same way, a page of lookups
+	// takes the address that was carrying them out of the port, three at a
+	// time, and the searches that follow go out through whatever the list
+	// offers next. On a region that hides its addresses that is most of the
+	// requests a job makes, and it is the run taking its own pool apart.
+	d := newDestination(t)
+	f := poolFacing(t, d.addr(), 2, func(c *blanktrail.PoolConfig) {
+		c.RotateAfterFailures = 3
+	})
+
+	var links []google.Result
+	for i := 0; i < 9; i++ {
+		links = append(links, unread(fmt.Sprintf("/goto/%d", i+1), "example.com"))
+	}
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages:     []google.SERP{{Origin: d.URL, Results: links}},
+	}}}
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	got := r.ResolveLinks(context.Background(), &rep, 1)
+	if got.Resolved != len(links) {
+		t.Fatalf("resolved %d of %d", got.Resolved, len(links))
+	}
+
+	st := f.Pool.Stats()
+	if st.EgressRotations != 0 {
+		t.Errorf("the port was moved to another address %d times by lookups that all worked", st.EgressRotations)
+	}
+	if st.Failures[blanktrail.FailureWall] != 0 {
+		t.Errorf("%d lookups were counted as the wall, want none: the redirect is the answer they asked for",
+			st.Failures[blanktrail.FailureWall])
 	}
 }
