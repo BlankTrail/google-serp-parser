@@ -421,6 +421,14 @@ button:hover {
 	background: var(--sunken);
 }
 
+/* A box never stands wider than what holds it.
+   
+   Every one of these asks for a width of its own before anything else is
+   considered: a select is as wide as its longest option, an input as wide as
+   its size, and neither will shrink below that on its own. Measured at 320px, a
+   list of profiles whose one entry reads "Default — по умолчанию" pushed the
+   page four pixels out, and the box asking where a list is read from pushed it
+   thirty-one. Both are the same fault, and this is the whole of the fix. */
 input,
 select,
 textarea {
@@ -430,6 +438,8 @@ textarea {
 	color: var(--ink);
 	font: inherit;
 	font-size: 0.95rem;
+	max-width: 100%;
+	min-width: 0;
 	padding: 0.4rem 0.6rem;
 }
 
@@ -442,6 +452,12 @@ label {
 	font-size: var(--small);
 }
 
+/* A fieldset comes with a floor under its width that nothing else in this file
+   has: the browser gives it the width of its own content and will not take it
+   below that, whatever the window does. At 320px the group of boxes on the new
+   job form stood thirty-nine pixels outside the page because of it, and the
+   page went sideways to reach them. Nought lets it narrow like everything
+   else. */
 fieldset {
 	border: var(--hairline-width) solid var(--hairline);
 	border-radius: var(--radius-metric);
@@ -449,6 +465,7 @@ fieldset {
 	flex-direction: column;
 	gap: 0.85rem;
 	margin: 0;
+	min-width: 0;
 	padding: 0.75rem 1rem 1rem;
 }
 
@@ -472,10 +489,17 @@ legend {
 	gap: 0.75rem;
 }
 
+/* A field standing in a row is a flex item, and a flex item will not go below
+   the width of what is inside it unless it is told it may. The box inside it
+   has already been told (above), and that is worth nothing while the block
+   around it holds the old floor: at 320px the profile picker on a job's page
+   stood four pixels outside the page, from a select as wide as the longest
+   profile name in it. */
 .field {
 	display: flex;
 	flex-direction: column;
 	gap: 0.25rem;
+	min-width: 0;
 }
 
 /* How a job was set up: a label and its value, one setting to a line, in as
@@ -633,6 +657,13 @@ legend {
 	align-items: center;
 	display: flex;
 	gap: 0.5rem;
+}
+
+/* The box in such a pair takes what is left rather than the width it asked for.
+   Without this the pair is as wide as the box wants plus the press beside it,
+   and on a narrow window that is wider than the card holding them. */
+.beside input {
+	flex: 1 1 0;
 }
 
 /* Anything the browser was told to hide stays hidden.

@@ -576,3 +576,63 @@ func TestLayout_KeepsAWindowFromHavingToBeDraggedSideways(t *testing.T) {
 			"rather than scrolling within itself")
 	}
 }
+
+// setIn is every value the stylesheet gives one property under one rule, and it
+// fails when the rule is not there at all: a test that asked a rule nobody
+// writes any more would pass over nothing.
+func setIn(t *testing.T, decls []declaration, selector, property string) []string {
+	t.Helper()
+	var known, values []string
+	for _, d := range decls {
+		if d.Selector != selector {
+			continue
+		}
+		known = append(known, d.Property)
+		if d.Property == property {
+			values = append(values, d.Value)
+		}
+	}
+	if len(known) == 0 {
+		t.Fatalf("the stylesheet has no rule for %q, so this test read nothing", selector)
+	}
+	return values
+}
+
+func TestStyles_LetEveryBoxNarrowWithTheWindow(t *testing.T) {
+	// Three things in this file ask for a width before anything else is
+	// considered, and none of them will go below it on its own: a box is as wide
+	// as its longest option or its size attribute, a fieldset is as wide as what
+	// is inside it, and a flex item is as wide as its content. One of those left
+	// alone is a page that goes sideways at a narrow window, and the reader
+	// drags the page to reach a button.
+	//
+	// Measured at 320px before this: the profile picker on a job's page stood 4px
+	// outside the page, the group of boxes on the new job form 39px, and the box
+	// asking where a list is read from 31px. Every one of them is one of the
+	// three floors below.
+	decls := stylesheet(t)
+	for _, one := range []struct {
+		selector string
+		property string
+		want     string
+		said     string
+	}{
+		// The boxes themselves. Recorded under the last name of the group they
+		// are written in, which is how this file reads a selector list.
+		{"textarea", "max-width", "100%", "a box wider than what holds it"},
+		{"textarea", "min-width", "0", "a box that will not shrink"},
+		{"fieldset", "min-width", "0", "a group of boxes that will not shrink"},
+		{".field", "min-width", "0", "a field that will not shrink around its box"},
+	} {
+		var found bool
+		for _, value := range setIn(t, decls, one.selector, one.property) {
+			if value == one.want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s does not set %s to %s, which leaves %s",
+				one.selector, one.property, one.want, one.said)
+		}
+	}
+}
