@@ -11,10 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
@@ -53,8 +56,25 @@ func uploadBody(t *testing.T, boxes map[string]string, list string) (string, *by
 	// The handler takes the first list source it meets, so a helper that sent the
 	// typed box early would hide every box after it — which is exactly the fault
 	// the page's own ordering exists to avoid.
-	for _, box := range []string{"name", "kind", "target", "from", "pages", "country",
-		"language", "spec", "unique", "threads", "ports", "tries", "keep", "chose", "queries"} {
+	ordered := []string{"name", "kind", "target", "from", "pages", "country",
+		"language", "spec", "unique", "threads", "ports", "tries", "keep", "chose", "queries"}
+	known := map[string]bool{}
+	for _, box := range ordered {
+		known[box] = true
+	}
+	// Whatever else the caller named goes after those and still before the list.
+	// This used to send only the boxes on the list above, which meant a test
+	// asking about any other box was answered by the default and passed: that is
+	// how the pause went missing from the handler for the whole life of this
+	// door without a red line anywhere.
+	var rest []string
+	for box := range boxes {
+		if !known[box] {
+			rest = append(rest, box)
+		}
+	}
+	sort.Strings(rest)
+	for _, box := range append(ordered, rest...) {
 		value, filled := boxes[box]
 		if !filled {
 			continue
@@ -932,5 +952,89 @@ func TestNewJob_RefusesAJobAskedToKeepNothingAtAll(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), LangEN.T("form.keep.none")) {
 		t.Errorf("the page does not say a job has to keep something:\n%s", rec.Body.String())
+	}
+}
+
+func TestUpload_SetsUpTheSameJobAsTheDoorBesideIt(t *testing.T) {
+	// The form posts as a file upload, because it carries one, so this door is
+	// the only one a browser ever uses. The other one — the plain form — is what
+	// almost every test of this form posts to, and the two read the boxes in two
+	// different places: a box added to one and forgotten in the other is read,
+	// thrown away without a word, and the job runs on the default.
+	//
+	// That is not a hypothetical. The pause was missing from this door for its
+	// whole life, so every job ever set up in the interface ran with no pause at
+	// all while its own page reported the number that had been typed — and the
+	// pause is the setting that decides how many requests an identity survives.
+	//
+	// So this asks the question structurally rather than one box at a time: fill
+	// in every box, send it through both doors, and compare the jobs. A box the
+	// next person adds to one door alone fails here.
+	boxes := map[string]string{
+		"name":     "both doors",
+		"kind":     store.KindParse,
+		"unique":   string(store.UniqueURL),
+		"country":  "de",
+		"language": "de",
+		"device":   string(blanktrail.DeviceMobile),
+		"pages":    "3",
+		"tries":    "7",
+		"cooldown": "11",
+		"threads":  "13",
+		"ports":    "2",
+	}
+
+	plain := testServerHolding(t)
+	values := url.Values{"queries": {"a\nb"}}
+	for box, value := range boxes {
+		values.Set(box, value)
+	}
+	if rec := postForm(t, plain, "/new", values); rec.Code != http.StatusSeeOther {
+		t.Fatalf("the plain form gave %d, want a redirect:\n%s", rec.Code, rec.Body.String())
+	}
+
+	uploaded := testServerHolding(t)
+	if rec := postUpload(t, uploaded, boxes, "a\nb\n"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("the upload gave %d, want a redirect:\n%s", rec.Code, rec.Body.String())
+	}
+
+	through, filed := theOneJob(t, plain), theOneJob(t, uploaded)
+	for _, part := range []struct {
+		box         string
+		plain, file any
+	}{
+		{"kind", through.Kind, filed.Kind},
+		{"unique", through.UniqueBy, filed.UniqueBy},
+		{"country", through.Country, filed.Country},
+		{"language", through.Language, filed.Language},
+		{"device", through.Device, filed.Device},
+		{"pages", through.Pages, filed.Pages},
+		{"tries", through.Tries, filed.Tries},
+		{"cooldown", through.Cooldown, filed.Cooldown},
+		{"threads", through.Threads, filed.Threads},
+		{"ports", through.Ports, filed.Ports},
+	} {
+		if part.plain != part.file {
+			t.Errorf("box %q: the plain form filed %v and the upload filed %v — "+
+				"one of the two doors is not reading it", part.box, part.plain, part.file)
+		}
+	}
+}
+
+func TestUpload_CarriesThePauseTheOperatorTyped(t *testing.T) {
+	// Named on its own as well as in the comparison above, because this is the
+	// one that was live: a job set up in the interface rested nought seconds
+	// between two requests on one identity whatever the box said, and an identity
+	// asked without a pause meets the challenge after about a dozen requests
+	// instead of about forty.
+	s := testServerHolding(t)
+	rec := postUpload(t, s, map[string]string{
+		"name": "careful", "pages": "1", "cooldown": "5",
+	}, "a\nb\n")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("uploading gave %d, want a redirect:\n%s", rec.Code, rec.Body.String())
+	}
+	if got := theOneJob(t, s).Cooldown; got != 5*time.Second {
+		t.Errorf("the uploaded job rests %v between two requests, want 5s", got)
 	}
 }

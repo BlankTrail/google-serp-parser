@@ -52,8 +52,8 @@ const (
 )
 
 // boxCap is the most a text box of this form may carry. The boxes hold a name
-// and four short settings, and a part sending more than this is not one of
-// them.
+// and the settings beside it, none of them longer than a word or a number, and
+// a part sending more than this is not one of them.
 const boxCap = 4 << 10
 
 // uploadList takes a list of any size as a file and writes it straight into a
@@ -252,6 +252,8 @@ func (f jobForm) carrying(box, value string) jobForm {
 		f.Keep = append(f.Keep, value)
 	case "tries":
 		f.Tries, _ = strconv.Atoi(value)
+	case "cooldown":
+		f.Cooldown, _ = strconv.Atoi(value)
 	case "threads":
 		f.Threads, _ = strconv.Atoi(value)
 	case "ports":
