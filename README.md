@@ -283,7 +283,8 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 ## 📜 Recent changes
 
 - **A light interface, and a dark one by choice.** The interface is light, and
-  the dark is a press in the header that is remembered. It used to follow
+  the dark is a switch in the header — sun and moon, the knob on the side in use
+  — remembered per browser. It used to follow
   whatever the machine round the browser said at the time, so an operator on a
   dark desktop had no way of reading this program in the light.
 - **The connection is on every screen.** The header says what this program last
@@ -396,8 +397,9 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 - What this program last learned about **BlankTrail** in the header of every
   screen, and a banner with one press where it is something to act on.
 - Live URL of the request going out right now.
-- **Light by default, dark by choice** — a press in the header, remembered per
-  browser.
+- **Light by default, dark by choice** — a switch in the header with a sun and a
+  moon on it, remembered per browser. It is a link, so it works with no script
+  running at all.
 - English and Russian: what the browser asks for, or whichever is chosen in the
   settings.
 - The screens show numbers and draw no conclusions from them. They never call a

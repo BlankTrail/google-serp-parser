@@ -381,11 +381,15 @@ var catalogue = map[Lang]map[string]string{
 		"notice.profile.empty": "The default proxy profile names no exits, so a job would go out from this machine's own address.",
 		"notice.profile.press": "Set the exits up",
 
-		// The lights. Each phrase names the theme the press brings, not the one
-		// the reader is in: a switch labelled with where it already is gets
-		// pressed by everybody who wants to stay there.
-		"theme.dark":  "Dark",
-		"theme.light": "Light",
+		// The lights. The switch draws two marks and no words, so this is the name
+		// on it: what a reader who cannot see it is told, and what the pointer
+		// rests on for everybody else.
+		//
+		// It names what the press does rather than the theme already on. A switch
+		// labelled with where it is gets pressed by everybody who wants to stay
+		// there.
+		"theme.dark":  "Switch to the dark theme",
+		"theme.light": "Switch to the light theme",
 
 		// Setting the machine up. The key is spoken of by its last few characters
 		// and never shown, which is why two phrases are needed where one box
@@ -746,8 +750,8 @@ var catalogue = map[Lang]map[string]string{
 		"notice.profile.empty": "В профиле по умолчанию не указаны выходы — задание пойдёт с адреса этой машины.",
 		"notice.profile.press": "Настроить выходы",
 
-		"theme.dark":  "Тёмная",
-		"theme.light": "Светлая",
+		"theme.dark":  "Перейти на тёмную тему",
+		"theme.light": "Перейти на светлую тему",
 
 		"settings.title":               "Настройки",
 		"settings.connection":          "Связь",

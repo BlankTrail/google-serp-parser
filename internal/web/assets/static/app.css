@@ -111,12 +111,86 @@ header {
 
 /* What is done to the machine is not one of the screens, so it is set smaller
    than the strip of tabs beside it. It holds more than one press now, so they
-   are given the air between them that the tabs have. */
+   are given the air between them that the tabs have, and they are centred on
+   one another: one of them is a switch and the rest are words, and words sat on
+   a switch's baseline stand a third of it too high. */
 .tools {
+	align-items: center;
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.35rem 1rem;
 	font-size: var(--small);
+}
+
+/* The lights: a switch with the two marks in it, and a knob standing on the
+   side of the theme in use.
+
+   It is a link, and pressing it goes to an address like every other press here,
+   so a browser running no script works it exactly as one running the script
+   does. What makes it read as a switch is here and in the theme the server has
+   already written on the document — nothing works it out in the browser, and
+   there is nothing to be out of step with. */
+.lights {
+	align-items: center;
+	background: var(--sunken);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: 999px;
+	display: inline-flex;
+	height: 24px;
+	justify-content: space-between;
+	padding: 0 5px;
+	position: relative;
+	text-decoration: none;
+	width: 44px;
+}
+
+/* The knob. It stands on the left in the light and on the right in the dark,
+   from the same attribute the colours are taken from, so the switch cannot end
+   up showing one theme while the page is drawn in the other. */
+.lights-knob {
+	background: var(--surface);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: 50%;
+	height: 18px;
+	left: 2px;
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 18px;
+}
+
+/* In the dark the knob is the lighter of the two, as it is in the light: a knob
+   darker than the track it sits in reads as a hole cut in the switch. */
+:root[data-theme="dark"] .lights-knob {
+	background: var(--track);
+	left: auto;
+	right: 2px;
+}
+
+/* The marks stand over the knob rather than under it, and the one on the lit
+   side is drawn in the text colour while the other stays quiet. That is the
+   whole of what the switch says, and it says it without a colour: the same
+   difference the header uses to mark the screen being read. */
+.lights-mark {
+	height: 13px;
+	position: relative;
+	width: 13px;
+}
+
+.lights-sun {
+	color: var(--ink);
+}
+
+.lights-moon {
+	color: var(--quiet);
+}
+
+:root[data-theme="dark"] .lights-sun {
+	color: var(--quiet);
+}
+
+:root[data-theme="dark"] .lights-moon {
+	color: var(--ink);
 }
 
 /* Links are neutral. The one place on a screen filled with colour is the bar,

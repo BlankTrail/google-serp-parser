@@ -40,8 +40,15 @@ func documentOf(t *testing.T, body string) string {
 }
 
 // pressOf is the press that changes the theme, as the header draws it: where it
-// goes and what it is called. The address is unescaped because it is read out
-// of markup and pressed as a link.
+// goes and what it is called.
+//
+// What it is called is read off the name on the link rather than off anything
+// drawn inside it. The switch draws two marks and no words, and the name is
+// what a reader who cannot see those marks is told — which makes it the one
+// place the phrase has to be right.
+//
+// The address is unescaped because it is read out of markup and pressed as a
+// link.
 func pressOf(t *testing.T, body string) (string, string) {
 	t.Helper()
 	for _, after := range strings.Split(body, "<a ")[1:] {
@@ -53,12 +60,16 @@ func pressOf(t *testing.T, body string) (string, string) {
 		if !ok {
 			continue
 		}
-		at, said, _ := strings.Cut(at, `"`)
+		at, rest, _ := strings.Cut(at, `"`)
 		if !strings.HasPrefix(at, themeAt) {
 			continue
 		}
-		_, said, _ = strings.Cut(said, ">")
-		return html.UnescapeString(at), strings.TrimSpace(said)
+		_, said, ok := strings.Cut(rest, `aria-label="`)
+		if !ok {
+			t.Fatalf("the press that changes the theme carries no name:\n%s", link)
+		}
+		said, _, _ = strings.Cut(said, `"`)
+		return html.UnescapeString(at), html.UnescapeString(strings.TrimSpace(said))
 	}
 	t.Fatalf("no screen offers a way to change the theme:\n%s", body)
 	return "", ""
@@ -158,4 +169,111 @@ func TestTheme_RefusesToSendTheReaderToAMachineThatIsNotThisOne(t *testing.T) {
 			t.Errorf("a press carrying %q sends the reader to %q", elsewhere, back)
 		}
 	}
+}
+
+// switchOn is the whole of the press that changes the theme, as it stands in
+// the markup.
+func switchOn(t *testing.T, body string) string {
+	t.Helper()
+	_, inside, ok := strings.Cut(body, `<a class="lights"`)
+	if !ok {
+		t.Fatalf("no screen draws a switch for the lights:\n%s", body)
+	}
+	inside, _, ok = strings.Cut(inside, "</a>")
+	if !ok {
+		t.Fatalf("the switch never closes:\n%s", body)
+	}
+	return inside
+}
+
+func TestTheme_IsASwitchWhoseStateIsTakenFromTheDocument(t *testing.T) {
+	// The switch draws the same thing in both themes. Which way the knob stands
+	// and which mark is lit are taken from the theme the server has already
+	// written on the document, by the one stylesheet — so there is no second
+	// place for the two to disagree, and no way to end up with a switch showing
+	// one theme over a page drawn in the other.
+	s := testServer(t)
+	light := switchOn(t, seenBy(t, s, jobsAt, "").Body.String())
+	dark := switchOn(t, seenBy(t, s, jobsAt, themeDark).Body.String())
+
+	// Everything but where it goes and what it is called, which are the two
+	// things about it that are meant to differ.
+	bare := func(markup string) string {
+		var kept []string
+		for _, line := range strings.Split(markup, "\n") {
+			if strings.Contains(line, "href=") {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		return strings.Join(kept, "\n")
+	}
+	if bare(light) != bare(dark) {
+		t.Errorf("the switch is drawn differently in the two themes:\nlight: %s\ndark:  %s", light, dark)
+	}
+	for _, mark := range []string{"lights-sun", "lights-moon", "lights-knob"} {
+		if !strings.Contains(light, mark) {
+			t.Errorf("the switch draws no %s", mark)
+		}
+	}
+
+	// And the stylesheet is where the state lands: every part of the switch that
+	// carries any of it is named again under the theme, so none of them can be
+	// left behind pointing at the theme that was on a moment ago.
+	for _, part := range []string{"lights-knob", "lights-sun", "lights-moon"} {
+		var answers bool
+		for _, d := range stylesheet(t) {
+			if strings.Contains(d.Selector, `[data-theme="dark"]`) && strings.Contains(d.Selector, part) {
+				answers = true
+			}
+		}
+		if !answers {
+			t.Errorf("%s reads the same in both themes, so the switch shows the wrong one in the dark", part)
+		}
+	}
+}
+
+func TestTheme_SaysInWordsWhatTheSwitchDoes(t *testing.T) {
+	// Two marks and no words is fine for whoever can see them. The name on the
+	// link is what everybody else is told, and it is the sentence rather than
+	// the theme: a switch named after where it already is gets pressed by
+	// everybody who wants to stay there.
+	s := testServer(t)
+	for _, one := range []struct {
+		now  string
+		want string
+	}{
+		{"", "theme.dark"},
+		{themeDark, "theme.light"},
+	} {
+		body := seenBy(t, s, jobsAt, one.now).Body.String()
+		if _, said := pressOf(t, body); said != LangEN.T(one.want) {
+			t.Errorf("the switch is named %q, want %q", said, LangEN.T(one.want))
+		}
+		// Nothing but the marks stands inside it: a word left in there would be
+		// read out after the name, and the two would drift apart the first time
+		// one of them was changed.
+		if said := textIn(switchOn(t, body)); said != "" {
+			t.Errorf("the switch carries the word %q as well as its name", said)
+		}
+	}
+}
+
+// textIn is whatever an element would read out: what stands between its tags,
+// with the tags themselves and everything written inside them dropped.
+func textIn(element string) string {
+	// Past the opening tag, so its own attributes are not read as text.
+	_, rest, _ := strings.Cut(element, ">")
+	var said strings.Builder
+	for {
+		before, after, ok := strings.Cut(rest, "<")
+		said.WriteString(strings.TrimSpace(before))
+		if !ok {
+			break
+		}
+		if _, rest, ok = strings.Cut(after, ">"); !ok {
+			break
+		}
+	}
+	return said.String()
 }
