@@ -329,35 +329,6 @@ var catalogue = map[Lang]map[string]string{
 		// The quick start. Each step names what it is for before it names a box:
 		// somebody filling in a key they do not understand the purpose of will
 		// fill it in wrongly once and blame the program for the rest of the week.
-		"guide.title": "Quick start",
-		"guide.lead":  "Three things before the first job. Each step is the screen it is done on, with the boxes that matter named — there is no form here of this page's own.",
-		"guide.done":  "done",
-		"guide.todo":  "not yet",
-		"guide.skip":  "Skip the guide",
-		"guide.ready": "Everything is set up, so this program no longer opens on this page. It stays here for whenever it is wanted.",
-
-		"guide.link.title":        "Connect to BlankTrail",
-		"guide.link.why":          "This program sends nothing itself. BlankTrail opens the identities and every request goes out through one of them, so nothing runs until this machine can reach it.",
-		"guide.link.note.address": "Address — where the service answers. It runs on this machine by default, and the box is already filled in with that.",
-		"guide.link.note.key":     "Key — BlankTrail, Settings, API key. It is kept on this machine and never shown again: the settings say only what it ends in.",
-		"guide.link.note.hot":     "Warm identities — how many are kept open between jobs. They answer at once; a job that opens its own from cold meets a challenge on the first request of each and produces nothing for the minutes that takes.",
-		"guide.link.press":        "Open the settings",
-
-		"guide.exits.title":        "Say where the requests go out",
-		"guide.exits.why":          "A profile is a named set of exits: where the addresses come from and how they are used. Every job names one, and a job that names none runs on the default — which, until this is filled in, is this machine's own address.",
-		"guide.exits.note.source":  "Source — a file beside this program, an address the list is read from again on a timer, or the VPN gateways stored in BlankTrail.",
-		"guide.exits.note.refresh": "How often the list is read again — a list at an address that is refreshed hourly is worth reading hourly; one read once is read once.",
-		"guide.exits.note.ban":     "How long a failed address rests — an address that dropped a request is left out of the rotation for this long rather than being tried again at once.",
-		"guide.exits.press":        "Set the exits up",
-
-		"guide.job.title":        "Set the first job up",
-		"guide.job.why":          "A job is a list of phrases and what to do with each of them. It is written down before anything is asked, which is what lets it be stopped, taken up again and read while it runs.",
-		"guide.job.note.queries": "What to ask — phrases typed into the box, or a file of them. A file is read as it arrives, so a list of a million is a file and not a box.",
-		"guide.job.note.kind":    "Kind — capture the result pages, check where one site stands for each phrase, or ask whether an address is in the index at all.",
-		"guide.job.note.pages":   "Depth — how many result pages each phrase is taken to. Ten results to a page, and every page is a request of its own.",
-		"guide.job.note.where":   "Country and language — what Google is asked to answer as. They change the results, so a run without them is a different measurement rather than a neutral one.",
-		"guide.job.note.pool":    "Threads, ports and tries — how much happens at once, how many identities it happens through, and how many identities one phrase may be carried to before it is written off.",
-		"guide.job.press":        "Set a job up",
 
 		// What this program last learned about the service it runs on, as the
 		// header says it, and as a banner says it where it is worth stopping the
@@ -389,6 +360,25 @@ var catalogue = map[Lang]map[string]string{
 		// It names what the press does rather than the theme already on. A switch
 		// labelled with where it is gets pressed by everybody who wants to stay
 		// there.
+		// The walk through the interface. One sentence a stop and nothing longer:
+		// somebody being shown round is reading while standing, and a paragraph is
+		// a paragraph they close.
+		"tour.title":        "Quick start",
+		"tour.screens":      "The four screens",
+		"tour.screens.said": "What is happening, the jobs, the exits, and every result kept.",
+		"tour.key":          "The key",
+		"tour.key.said":     "Paste the key from BlankTrail here. Nothing runs without it.",
+		"tour.exits":        "The exits",
+		"tour.exits.said":   "A profile is a named set of proxies. Every job goes out through one.",
+		"tour.new":          "A new job",
+		"tour.new.said":     "Jobs are started from here.",
+		"tour.queries":      "What to ask",
+		"tour.queries.said": "Type the phrases, or hand over a file of them.",
+		"tour.depth":        "How deep, and where",
+		"tour.depth.said":   "Pages per phrase, and the country and language to ask as.",
+		"tour.reach":        "The connection",
+		"tour.reach.said":   "A tick here means BlankTrail is answering. A cross means it is not.",
+
 		"theme.dark":  "Switch to the dark theme",
 		"theme.light": "Switch to the light theme",
 
@@ -711,36 +701,6 @@ var catalogue = map[Lang]map[string]string{
 		"state.class.serp":           "страница выдачи",
 		"state.class.silent":         "ответа не было",
 
-		"guide.title": "Быстрый старт",
-		"guide.lead":  "Три шага до первого задания. Каждый шаг — это экран, на котором он делается, и названы поля, которые важны; своих форм у этой страницы нет.",
-		"guide.done":  "сделано",
-		"guide.todo":  "ещё нет",
-		"guide.skip":  "Пропустить гид",
-		"guide.ready": "Всё настроено, и программа больше не открывается на этой странице. Она остаётся здесь — на случай, когда понадобится.",
-
-		"guide.link.title":        "Настроить связь с BlankTrail",
-		"guide.link.why":          "Сама программа ничего не отправляет. Личности открывает BlankTrail, и каждый запрос уходит через одну из них — пока до службы не достучаться, не запустится ничего.",
-		"guide.link.note.address": "Адрес — где отвечает служба. По умолчанию она на этой же машине, и адрес уже подставлен.",
-		"guide.link.note.key":     "Ключ — BlankTrail, Settings, API key. Он хранится на этой машине и больше не показывается: в настройках видно только, чем он оканчивается.",
-		"guide.link.note.hot":     "Прогретые личности — сколько держать открытыми между заданиями. Они отвечают сразу; задание, которое поднимает свои с нуля, встречает проверку на первом запросе каждой и минутами не приносит ничего.",
-		"guide.link.press":        "Открыть настройки",
-
-		"guide.exits.title":        "Указать, через что выходить",
-		"guide.exits.why":          "Профиль — это именованный набор выходов: откуда берутся адреса и как они используются. Каждое задание называет профиль, а задание, которое не называет ни одного, идёт через профиль по умолчанию — то есть, пока здесь пусто, с адреса этой машины.",
-		"guide.exits.note.source":  "Источник — файл рядом с программой, ссылка, по которой список перечитывается по таймеру, или шлюзы VPN, хранящиеся в BlankTrail.",
-		"guide.exits.note.refresh": "Как часто перечитывать список — список по ссылке, который обновляется раз в час, и читать стоит раз в час; прочитанный однажды читается однажды.",
-		"guide.exits.note.ban":     "Сколько отдыхает сорвавшийся адрес — адрес, оборвавший запрос, выпадает из ротации на это время, а не пробуется тут же снова.",
-		"guide.exits.press":        "Настроить выходы",
-
-		"guide.job.title":        "Создать первое задание",
-		"guide.job.why":          "Задание — это список фраз и то, что с каждой из них делать. Оно записывается до того, как что-то спрошено, и именно поэтому его можно остановить, продолжить и читать прямо во время работы.",
-		"guide.job.note.queries": "Что спрашивать — фразы в поле или файл с ними. Файл читается по мере поступления, поэтому список на миллион — это файл, а не поле.",
-		"guide.job.note.kind":    "Вид — снимать страницы выдачи, проверять позицию одного сайта по каждой фразе или выяснять, есть ли адрес в индексе вообще.",
-		"guide.job.note.pages":   "Глубина — до какой страницы выдачи доходить по каждой фразе. Десять результатов на странице, и каждая страница — отдельный запрос.",
-		"guide.job.note.where":   "Страна и язык — какой выдачи просить у Google. Они меняют результат, поэтому прогон без них — не нейтральный, а другой замер.",
-		"guide.job.note.pool":    "Потоки, порты и попытки — сколько идёт одновременно, через сколько личностей и на сколько личностей можно перенести одну фразу, прежде чем списать её.",
-		"guide.job.press":        "Создать задание",
-
 		"link.good":     "связь есть",
 		"link.unset":    "не настроена",
 		"link.silent":   "не отвечает",
@@ -756,6 +716,22 @@ var catalogue = map[Lang]map[string]string{
 		"notice.profile.none":  "Профилей прокси нет — заданию не через что выходить.",
 		"notice.profile.empty": "В профиле по умолчанию не указаны выходы — задание пойдёт с адреса этой машины.",
 		"notice.profile.press": "Настроить выходы",
+
+		"tour.title":        "Быстрый старт",
+		"tour.screens":      "Четыре экрана",
+		"tour.screens.said": "Что происходит, задания, выходы и всё, что собрано.",
+		"tour.key":          "Ключ",
+		"tour.key.said":     "Сюда вставьте ключ из BlankTrail. Без него не запустится ничего.",
+		"tour.exits":        "Выходы",
+		"tour.exits.said":   "Профиль — именованный набор прокси. Каждое задание идёт через один из них.",
+		"tour.new":          "Новое задание",
+		"tour.new.said":     "Задания заводятся отсюда.",
+		"tour.queries":      "Что спрашивать",
+		"tour.queries.said": "Впишите фразы или передайте файл с ними.",
+		"tour.depth":        "Глубина и регион",
+		"tour.depth.said":   "Сколько страниц на фразу и какой выдачи просить.",
+		"tour.reach":        "Связь",
+		"tour.reach.said":   "Галка — BlankTrail отвечает. Крестик — нет.",
 
 		"theme.dark":  "Перейти на тёмную тему",
 		"theme.light": "Перейти на светлую тему",

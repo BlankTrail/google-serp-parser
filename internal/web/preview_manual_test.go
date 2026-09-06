@@ -113,10 +113,6 @@ func TestWritePreviews(t *testing.T) {
 			{"proxies-gateways", proxiesAt + "?profile=" + fmt.Sprint(gateways) + "&lang=" + lang},
 			{"new-job", newAt + "?lang=" + lang},
 			{"job", jobPath(id) + "?lang=" + lang},
-			// The quick start, as somebody meets it: this machine has been set
-			// up, so two of its three steps are already done and the page says
-			// so rather than walking through what is finished.
-			{"guide", guideAt + "?lang=" + lang},
 		} {
 			rec := get(t, s, page.at)
 			if rec.Code != 200 {

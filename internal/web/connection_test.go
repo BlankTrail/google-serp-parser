@@ -277,7 +277,7 @@ func TestExits_AreNotReportedOnTheScreenTheyAreSetUpOn(t *testing.T) {
 // and what it says in words.
 func markOn(t *testing.T, body string) (string, string) {
 	t.Helper()
-	_, inside, ok := strings.Cut(body, `<span class="reach `)
+	_, inside, ok := strings.Cut(body, `<span id="reach" class="reach `)
 	if !ok {
 		return "", ""
 	}

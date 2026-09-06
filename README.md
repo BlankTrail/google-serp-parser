@@ -103,13 +103,11 @@ It listens on this machine only. Reaching it from another one is a setting, and
 it is off until you turn it on — see
 [Running it on a server](#-running-it-on-a-server).
 
-On a machine nothing has been run on yet it opens on a **quick start**: the
-connection, the exits and the first job, each with the fields that matter named
-and a press that leads to the screen it happens on. Every step is read off the
-machine, so anything already set up is already ticked. It can be skipped, and it
-stays in the header afterwards.
-
-![The quick start: the connection, the exits and the first job, each with what it is for and the fields that matter](assets/screenshots/guide-en.png)
+On a machine nothing has been run on yet it **walks you through the interface**:
+seven stops, each a note beside the thing it is talking about — the screens, the
+key, the exits, where a job is started, what a job asks for, and where to see
+that the machine can reach anything at all. One sentence a stop. Close it with
+the cross at any point; it is in the header afterwards for whenever it is wanted.
 
 ### Windows says it protected your PC
 
@@ -298,8 +296,8 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   its press opens that profile's own boxes.
 - **What a job has collected** is a count on its own screen, beside the counts of
   queries: ten thousand queries done says nothing about how much there is.
-- **A quick start** on a machine nothing has been run on, with the fields that
-  matter named and a press to the screen each step happens on.
+- **A walk through the interface** on a machine nothing has been run on: seven
+  stops, one sentence each, standing beside the thing they are about.
 - **An address lookup is carried to another identity.** Two thirds of the
   addresses Google hides were still not coming back. The lookups went out with
   one attempt through one identity, and a whole page's links share one, so a
@@ -391,9 +389,9 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   been added or the tunnels have just been measured.
 - A job that failed can be told to **try the failed queries again**, which is
   not the same button as carrying on with what is left.
-- A **quick start** for a machine nothing has been run on: the connection, the
-  exits and the first job, each read off the machine so what is already done is
-  already ticked.
+- A **walk through the interface** for a machine nothing has been run on: seven
+  stops, each a note beside the thing it is about, on the screens themselves
+  rather than on a page describing them.
 - What this program last learned about **BlankTrail** in the header of every
   screen, and a banner with one press where it is something to act on.
 - Live URL of the request going out right now.

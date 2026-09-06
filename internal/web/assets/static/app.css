@@ -838,6 +838,85 @@ legend button {
 	margin-left: auto;
 }
 
+/* One stop of the walk through the interface: a note beside the thing it is
+   about, and a ring round that thing.
+
+   It stands over the screen rather than in it, so the screen underneath is the
+   one the reader will be using in a moment rather than a picture of it. The note
+   is the same card everything else on these screens is, at the size of a note:
+   whoever is being walked through this is reading one sentence at a time. */
+.tour {
+	background: var(--surface);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-card);
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	max-width: min(22rem, calc(100vw - 24px));
+	padding: 0.85rem 1rem;
+	position: fixed;
+	z-index: 3;
+}
+
+/* The name of the stop, and the way out of the walk at the far end of it. */
+.tour-head {
+	align-items: baseline;
+	display: flex;
+	gap: 1rem;
+	justify-content: space-between;
+}
+
+/* One sentence. A note somebody has to read twice is a note they close. */
+.tour-said {
+	margin: 0;
+}
+
+/* How far along, and the press that goes on. The count is on the left because it
+   is read and not pressed, and the press is where a press is looked for. */
+.tour-foot {
+	align-items: center;
+	display: flex;
+	justify-content: space-between;
+}
+
+.tour-count {
+	color: var(--quiet);
+	font-size: var(--small);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The way out is a cross in the corner, drawn as quietly as it can be and still
+   be found: leaving is always allowed and never the thing being offered. */
+.tour-close {
+	background: none;
+	border: 0;
+	color: var(--quiet);
+	cursor: pointer;
+	font: inherit;
+	line-height: 1;
+	padding: 0;
+}
+
+.tour-next {
+	padding: 0.3rem 0.9rem;
+}
+
+/* What the note is about, drawn round it. It takes no presses: the screen
+   underneath goes on working while the walk stands on it.
+
+   Drawn in the text colour rather than in the accent. The accent belongs to the
+   bar and to nothing else, and this ring would stand on a screen with a bar on
+   it — two filled things, and the eye told nothing by either. Two pixels of ink
+   on a page whose every other line is half a pixel is as loud as this needs to
+   be. */
+.tour-ring {
+	border: 2px solid var(--ink);
+	border-radius: var(--radius-metric);
+	pointer-events: none;
+	position: fixed;
+	z-index: 2;
+}
+
 /* One step of the quick start: what it is, what it is for, the boxes worth
    knowing about before they are met, and the way to the screen it happens on.
    The card spaces its own parts, so nothing inside it carries a margin. */

@@ -623,7 +623,6 @@ func TestSettings_AreOfferedFromEveryScreenAndOnlyWhereTheyCanBeSaved(t *testing
 	// A link to a page that cannot save is worse than no link: what it takes is
 	// dropped, and nothing on the screen says so until the next restart.
 	kept, _ := serverWithSettings(t, settings.Settings{})
-	used(t, kept)
 	for _, at := range []string{stateAt, jobsAt, newAt, historyAt} {
 		if !strings.Contains(getBody(t, kept, at), `href="`+settingsAt+`"`) {
 			t.Errorf("%s does not offer the settings", at)
@@ -643,7 +642,6 @@ func TestSettings_AreReachedWithoutTheScriptThatSwapsScreens(t *testing.T) {
 	// have to be dismissed by something — which is the script every page here
 	// works without.
 	s, _ := serverWithSettings(t, settings.Settings{})
-	used(t, s)
 	strip := oneTag(t, getBody(t, s, stateAt), "nav")
 	if !strings.Contains(strip, `id="`+tabsAnchor+`"`) {
 		t.Fatalf("the first navigation on the page is not the tabs:\n%s", strip)

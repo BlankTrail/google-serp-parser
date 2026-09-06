@@ -53,7 +53,7 @@
      what the pointer rests on. It is missing altogether where nothing is known:
      a server that keeps no settings has no connection of its own to report on,
      and a program that has not finished asking should not answer. */}}
-{{if .Link}}<span class="reach {{if .Reachable}}reach-good{{else}}reach-bad{{end}}" title="BlankTrail: {{.T .Link}}">
+{{if .Link}}<span id="reach" class="reach {{if .Reachable}}reach-good{{else}}reach-bad{{end}}" title="BlankTrail: {{.T .Link}}">
 {{if .Reachable}}<svg class="reach-mark" viewBox="0 0 16 16" role="img" aria-label="BlankTrail: {{.T .Link}}"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.6 8.3l2.3 2.3 4.5-4.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
 {{else}}<svg class="reach-mark" viewBox="0 0 16 16" role="img" aria-label="BlankTrail: {{.T .Link}}"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>{{end}}
 </span>{{end}}
@@ -75,7 +75,11 @@
 <svg class="lights-mark lights-sun" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="3.1" fill="currentColor"/><path d="M8 1v1.9M8 13.1V15M1 8h1.9M13.1 8H15M3.05 3.05l1.35 1.35M11.6 11.6l1.35 1.35M12.95 3.05L11.6 4.4M4.4 11.6l-1.35 1.35" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
 <svg class="lights-mark lights-moon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M13.4 9.9A5.7 5.7 0 0 1 6.1 2.6a5.7 5.7 0 1 0 7.3 7.3z" fill="currentColor"/></svg>
 </a>
-{{with .Guide}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}{{end}}
+{{/* The press that starts the walk. It is an ordinary link to the screen this
+     program opens on, and the script takes the press over: a browser running no
+     script has no walk to start, and going to the beginning is the nearest
+     thing there is to one. */}}
+{{with .Guide}}<a href="{{.URL}}" data-tour>{{$.T .Key}}</a>{{end}}
 {{with .Settings}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}{{end}}
 </nav>
 </header>
@@ -103,6 +107,21 @@
 {{end}}
 {{block "main" .}}{{end}}
 </main>
+{{/* Where the walk goes and what it says at each stop, written by the server and
+     carried out by the script.
+
+     It stands outside the two parts a swapped screen replaces, because the walk
+     crosses screens: a list that travelled with the screen would be gone the
+     moment the walk moved to the next one. It is drawn and never seen — a
+     browser running no script finds a hidden block of nothing, which is what a
+     machine with no walk should have.
+
+     The words are already in the reader's language. The script carries none of
+     its own: a phrase written in it is a phrase the catalogue does not hold and
+     nobody translates. */}}
+<div id="tour" hidden{{if .TourNow}} data-tour-now{{end}}>
+{{range .Tour}}<span data-at="{{.At}}" data-anchor="{{.Anchor}}" data-title="{{.Title}}" data-said="{{.Said}}"></span>
+{{end}}</div>
 {{/* One script, out of this binary, after the page it improves. Everything on
      every screen is drawn before it runs, and a browser that never runs it
      follows the links instead. */}}

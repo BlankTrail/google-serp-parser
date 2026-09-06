@@ -188,14 +188,6 @@ type queuedView struct {
 
 // state draws what is happening right now.
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
-	// A machine nobody has run anything on yet opens on the quick start instead.
-	// This screen is where the work is watched, and there is no work: what it
-	// would show is a column of noughts and a pool of nothing, which reads as a
-	// program that is broken rather than one that has not been set up.
-	if s.guiding(r.Context()) {
-		http.Redirect(w, r, guideAt, http.StatusSeeOther)
-		return
-	}
 	lang := s.rememberLang(w, r)
 	view, err := s.stateOf(r.Context())
 	if err != nil {
