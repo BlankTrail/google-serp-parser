@@ -163,10 +163,19 @@ The rest of this screen can be left alone on a first run:
 
 ### 5. Proxies: say where the exits come from
 
-Open **Proxies**. This one screen holds every setting about identities, and the
-live state of the pool while a job runs.
+Open **Proxies**. At the top are the **profiles**: a profile is a named set of
+exits — where the addresses come from and how the ports on them are used — and a
+job names one when it is set up. One profile is marked default: it is what a job
+that named none runs on, what the identities kept warm are raised on, and what
+the HTTP API's own search goes through.
 
-**Read from** chooses the source, and there are three:
+A machine being upgraded finds one profile already there, called `Default`,
+holding the settings it was set up with. Nothing about a run changes until you
+make a second one.
+
+Under the list is the form that edits the profile you have open, and under that
+the live state of the pool while a job runs. **Read from** chooses the source,
+and there are three:
 
 - **A file on this machine** — one address a line. All of these are read:
 
@@ -191,7 +200,9 @@ live state of the pool while a job runs.
   once. This is where gateways are chosen; nothing is chosen on the BlankTrail
   side. *Refresh* asks the service for the list again and re-measures.
 
-The same screen sets how the pool behaves:
+The rest of the form is how that profile's pool behaves — each of these belongs
+to the profile, so two lists can be banned for different lengths and reached over
+different protocols:
 
 | Setting | What it does | Start with |
 |---|---|---|
@@ -263,6 +274,22 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ## 📜 Recent changes
 
+- **Proxy profiles.** A profile is a named set of exits, and a job names one when
+  it is set up. Two lists no longer mean editing one screen between two runs, and
+  a finished job can say which exits it went out through. A machine being
+  upgraded finds its own settings already in a profile called `Default`, and
+  nothing about a run changes until a second one is made.
+- **A refused API key says so.** The check read the refusal off the one endpoint
+  the service answers without a key, so it always arrived at the next call and
+  was reported as a licence that could not be read. Two support rounds were spent
+  looking at a licence that was fine.
+- **The addresses Google hides are looked up.** Some regions answer with an
+  encrypted link that carries no address at all; the step that fills those in
+  existed and was called by nothing, so every result of such a page was recorded
+  with an empty address.
+- **The pause reaches the run.** Every job set up in the interface ran with no
+  pause between two requests on one identity, whatever was typed: the box was
+  missing from the door a browser actually posts to.
 - A lease goes to an identity that has **answered before**, and never waits for
   one. Measured at ten threads for twenty minutes an arm, at the same minute:
   three ports a thread answered 259 against 164 for one port, and 154 against 54
@@ -421,6 +448,7 @@ measured to it:
 | Re-read every, minutes | How often the list is read again. Nought reads it once |
 | Ban for, minutes | How long a failed address is left out. Nought leaves nobody out; sixty is where a fresh install starts |
 | Threads per proxy | How many threads share one address or one gateway. One by default |
+| Profile | Which named set of exits this is. A job names one; the default one is what a job naming none runs on |
 | Change identity every, minutes | How often a port is opened again with a fresh fingerprint and an empty jar. Sixty by default, nought never does, and choosing the gateways offers ten |
 | Connection to a port | SOCKS5 (default) or HTTP |
 | Gateways | Which stored configurations to use, when the source is the gateways |
@@ -429,6 +457,7 @@ measured to it:
 
 | Setting | What it is |
 |---|---|
+| Proxy profile | Which set of exits the job goes out through. Changeable afterwards on the job's own page |
 | Threads | Queries taken at once |
 | Ports per thread | Identities opened per thread. Threads × ports = pool size. Three by default, which is what measured fastest |
 | Tries per phrase | How many identities one phrase may be taken to |
