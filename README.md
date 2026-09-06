@@ -438,7 +438,7 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   one instead of writing the query down as failed, so a service that goes away
   costs the time it is away and not the rest of the list.
 
-![The proxy screen: the pool as it stands, what failed and of what kind, and the address list](assets/screenshots/proxies-en.png)
+![The proxy screen: the profiles this machine has, which one is default, and one press each to open a profile or read what has been going through it](assets/screenshots/proxies-en.png)
 
 *Three hundred identities on a fifteen-thousand-address list, a hundred of them
 warm: a fifth of the attempts fail and 99 per cent of those are addresses that
