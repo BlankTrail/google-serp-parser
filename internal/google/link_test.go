@@ -146,3 +146,34 @@ func TestResolver_HonoursContextCancellation(t *testing.T) {
 		t.Error("Resolve ignored a cancelled context")
 	}
 }
+
+func TestResolver_RefusesAnAddressThatIsGooglesOwn(t *testing.T) {
+	// Measured on a live run: a result was written with
+	// http://www.google.ru/goto?url=… as its address. The redirector had
+	// answered with a redirect of its own — the identity being walled, or the
+	// link handed on — and the header was taken at face value.
+	//
+	// A row like that is worse than an empty one. An empty address says nobody
+	// could reach it; this one says the ranking site is Google, and every
+	// report, export and rank history downstream believes it. The parser
+	// already refuses a Google host when the page states the address outright;
+	// the address read off the wire needs the same refusal.
+	for _, loc := range []string{
+		"https://www.google.ru/sorry/index?continue=https://www.google.ru/search",
+		"http://www.google.ru/goto?url=CAESuQEB6zswFdO89W2d",
+		"https://consent.google.com/m?continue=https://www.google.com/search",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", loc)
+			w.WriteHeader(http.StatusFound)
+		}))
+		got, err := (&Resolver{Client: srv.Client()}).Resolve(context.Background(), srv.URL+"/goto?url=x")
+		srv.Close()
+		if !errors.Is(err, ErrRedirectedIntoGoogle) {
+			t.Errorf("Location %q resolved to %q with err=%v, want ErrRedirectedIntoGoogle", loc, got, err)
+		}
+		if got != "" {
+			t.Errorf("Location %q was handed back as the address %q", loc, got)
+		}
+	}
+}

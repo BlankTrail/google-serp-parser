@@ -33,8 +33,12 @@ func TestFailureOf_TellsTheKindsApart(t *testing.T) {
 		{"a timeout in words", errors.New("net/http: request canceled (Client.Timeout exceeded)"), 0, FailureTimeout},
 		{"upstream terminates TLS", nil, 526, FailureRelay},
 		{"rate limited", nil, 429, FailureWall},
-		{"sent to the challenge", nil, 302, FailureWall},
 		{"something else", nil, 503, FailureOther},
+		// A redirect is the far end answering and never reaches here — the
+		// ladder credits the port with it — so if it ever did, it would not be
+		// a wall. The refusal a search meets is read off the page it lands on,
+		// by the layer that knows what a Google page says.
+		{"a redirect, were one ever asked about", nil, 302, FailureOther},
 	} {
 		if got := failureOf(tc.err, tc.status); got != tc.want {
 			t.Errorf("%s: named %q, want %q", tc.name, got, tc.want)

@@ -16,6 +16,17 @@ import (
 // as the destination would record Google itself as the ranking site.
 var ErrNotRedirect = errors.New("google: redirector did not answer with a redirect")
 
+// ErrRedirectedIntoGoogle is returned when the redirect the redirector answered
+// with stays on Google.
+//
+// It is the same fault as ErrNotRedirect wearing a redirect's clothes: the
+// identity has been walled and sent to a challenge, or the link has been handed
+// on to another redirector, and either way the header does not hold the address
+// of the result. It is told apart because it says something ErrNotRedirect does
+// not — this identity is being refused — and the caller acts on that by moving
+// to another one rather than by blaming the link.
+var ErrRedirectedIntoGoogle = errors.New("google: the redirect stays on Google, so it is not the address")
+
 // classifyLink decides what a result's href is and, where the page allows it,
 // what it points at.
 //
@@ -149,6 +160,11 @@ func (r *Resolver) Resolve(ctx context.Context, link string) (string, error) {
 	u, err := url.Parse(loc)
 	if err != nil || u.Host == "" {
 		return "", fmt.Errorf("google: resolve returned an unusable Location %q", loc)
+	}
+	if isGoogleHost(u.Hostname()) {
+		// Only the host is quoted. A challenge address carries the query it
+		// refused inside it, and an error goes to logs and screens.
+		return "", fmt.Errorf("%w: %s", ErrRedirectedIntoGoogle, u.Hostname())
 	}
 	return loc, nil
 }

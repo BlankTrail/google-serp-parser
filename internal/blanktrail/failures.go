@@ -30,8 +30,16 @@ const (
 	// FailureRelay is the proxy refusing to carry the request through an
 	// upstream that terminates TLS itself and presents its own certificate.
 	FailureRelay Failure = "relay refused"
-	// FailureWall is the origin refusing this identity: a redirect to its
-	// challenge page, or a rate limit.
+	// FailureWall is the origin refusing this identity outright: a rate limit.
+	//
+	// A redirect used to be counted here as well, on the reading that a search
+	// answered with one has been sent to a challenge page. It is not counted
+	// any more and the count is the better for it: the redirect a hidden
+	// address is read out of was landing in this column by the thousand, and a
+	// screen saying a run is being walled when it is being answered is worse
+	// than one saying nothing. The refusal a search really does meet is read
+	// off the page it lands on, by the layer that knows what a Google page
+	// says, and reaches the pool as a rejection.
 	FailureWall Failure = "wall"
 	// FailureTimeout is our own clock running out — the deadline this program
 	// set, not one the far end kept.
@@ -90,7 +98,7 @@ func failureOf(err error, status int) Failure {
 	switch status {
 	case relayRefused:
 		return FailureRelay
-	case http.StatusTooManyRequests, http.StatusFound, http.StatusMovedPermanently:
+	case http.StatusTooManyRequests:
 		return FailureWall
 	default:
 		return FailureOther

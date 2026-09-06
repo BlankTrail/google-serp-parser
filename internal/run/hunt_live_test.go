@@ -21,7 +21,7 @@ package run
 // what a cold pool costs — not that the default is wrong, but that the pool has
 // to be allowed to warm. A run that keeps taking the address a port has just
 // proved out of that port is a run whose pool is cold for ever, and that is
-// what counting a lookup's redirect as the wall was doing.
+// what counting a redirect against the port was doing.
 //
 //	go test -tags live -run TestLiveHunt -timeout 30m ./internal/run/ -v
 //
@@ -135,7 +135,7 @@ func huntArm(ctx context.Context, t *testing.T, control, key string,
 		resolver := google.NewResolver(cl.Transport)
 		resolver.Client.Timeout = cl.Timeout
 		copyOf := []google.Result{rs[i]}
-		rep := resolver.ResolveResults(blanktrail.RedirectIsTheAnswer(ctx), origin, copyOf, 1)
+		rep := resolver.ResolveResults(ctx, origin, copyOf, 1)
 		if rep.Resolved == 1 {
 			read++
 		} else {

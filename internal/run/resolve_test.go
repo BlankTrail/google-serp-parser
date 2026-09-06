@@ -660,3 +660,101 @@ func TestRunner_DoesNotCostThePortItsAddressForAnsweringTheLookups(t *testing.T)
 			st.Failures[blanktrail.FailureWall])
 	}
 }
+
+// walling answers one named link with a redirect that stays on Google and every
+// other link with a real address. That is what an identity being refused looks
+// like from here — a proper 302, a proper Location, and nothing behind it but
+// the challenge — and mixing the two is what makes the case its own: a round
+// that read something is not a round that brought nothing.
+func walling(t *testing.T, refuse string) *destination {
+	t.Helper()
+	d := &destination{}
+	d.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		d.asked.Add(1)
+		if r.URL.Path == refuse {
+			w.Header().Set("Location", "https://www.google.ru/sorry/index?continue=https://www.google.ru/search")
+		} else {
+			w.Header().Set("Location", "https://example.com"+r.URL.Path)
+		}
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(d.Close)
+	return d
+}
+
+func TestRunner_WritesNoAddressWhenTheLookupIsSentToGooglesOwnPage(t *testing.T) {
+	// Measured on a live run: a result was written with a Google address —
+	// the redirector's own — because the Location header was taken at face
+	// value. An empty address says nobody could reach it; that one says the
+	// ranking site is Google, and every export and rank history downstream
+	// believes it.
+	//
+	// The identity is put out of the rotation too. It succeeded, as far as the
+	// pool can see: a request went out and a redirect came back. Only this
+	// layer knows the redirect was a refusal.
+	d := walling(t, "/goto/two")
+	f := poolFacing(t, d.addr(), 4, func(c *blanktrail.PoolConfig) {
+		c.MaxPortStrikes = 1 << 20
+	})
+
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages: []google.SERP{{
+			Origin: d.URL,
+			Results: []google.Result{
+				unread("/goto/one", "example.com"),
+				unread("/goto/two", "example.com"),
+			},
+		}},
+	}}}
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	got := r.ResolveLinks(context.Background(), &rep, 1)
+
+	if one := rep.Results[0].Pages[0].Results[0]; !one.Resolved() {
+		t.Error("the link that was answered with an address was left without one")
+	}
+	if one := rep.Results[0].Pages[0].Results[1]; one.Resolved() {
+		t.Errorf("the result was written with %q as its address", one.URL)
+	}
+	if got.Resolved != 1 {
+		t.Errorf("resolved %d, want the one real address and not the challenge", got.Resolved)
+	}
+	if !walled(got.Errs) {
+		t.Errorf("the report says %v, want it to name the redirect that stayed on Google", got.Errs)
+	}
+}
+
+func TestRunner_PutsAnIdentitySentToTheChallengeOutOfTheRotation(t *testing.T) {
+	// One round, and a round that read something: the identity answered, the
+	// pool saw a request go out and a redirect come back, and only this layer
+	// knows that one of those redirects was a refusal. Rejecting on the round
+	// that brought nothing cannot stand in for it — by then the round is a
+	// round of one link, and the identity has been handed out again.
+	d := walling(t, "/goto/two")
+	f := poolFacing(t, d.addr(), 4, func(c *blanktrail.PoolConfig) {
+		c.MaxPortStrikes = 1 << 20
+	})
+
+	serp := google.SERP{
+		Origin: d.URL,
+		Results: []google.Result{
+			unread("/goto/one", "example.com"),
+			unread("/goto/two", "example.com"),
+		},
+	}
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	got, err := r.resolveOnce(context.Background(), &serp, 1)
+	if err != nil {
+		t.Fatalf("resolveOnce: %v", err)
+	}
+	if got.Resolved != 1 || got.Failed != 1 {
+		t.Fatalf("Resolved=%d Failed=%d, want the round to have read one and been refused one",
+			got.Resolved, got.Failed)
+	}
+	if st := f.Pool.Stats(); st.Rejections != 1 {
+		t.Errorf("%d identities were put out of the rotation, want the one that was sent to the challenge",
+			st.Rejections)
+	}
+}

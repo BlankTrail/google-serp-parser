@@ -4,8 +4,8 @@ package run
 
 import (
 	"context"
+	"errors"
 
-	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 )
 
@@ -127,20 +127,35 @@ func (r *Runner) resolveOnce(ctx context.Context, serp *google.SERP, workers int
 	// own would then wait on an unreachable identity for as long as it took.
 	resolver.Client.Timeout = client.Timeout
 
-	// The answer this asks for is a redirect. Without saying so, every lookup
-	// that works reads to the pool as the wall — which is what a redirect is to
-	// a search — and three of them in a row take the address that was carrying
-	// them out of the port.
-	rep := resolver.ResolveAll(blanktrail.RedirectIsTheAnswer(ctx), serp, workers)
-	if rep.Resolved == 0 && rep.Failed > 0 {
+	rep := resolver.ResolveAll(ctx, serp, workers)
+	switch {
+	case rep.Resolved == 0 && rep.Failed > 0:
 		// Nothing came back through this address and something was asked of it,
 		// so it is the address rather than the links: it is refused, which is
 		// what puts it out of the rotation and hands the next round a different
 		// one. A round that read even one is left alone — a single dead link is
 		// not a dead address.
 		_ = lease.Reject(ctx)
+	case walled(rep.Errs):
+		// A lookup that came back pointing into Google is this identity being
+		// refused, whatever the rest of the round managed. Nothing below this
+		// layer can see it — the request succeeded and the answer was a proper
+		// redirect — so it is said here, and the links that met it are carried
+		// to another identity rather than counted against the page.
+		_ = lease.Reject(ctx)
 	}
 	return rep, nil
+}
+
+// walled reports whether any lookup of a round was answered with a redirect
+// that stayed on Google.
+func walled(errs []error) bool {
+	for _, err := range errs {
+		if errors.Is(err, google.ErrRedirectedIntoGoogle) {
+			return true
+		}
+	}
+	return false
 }
 
 // needsResolving reports whether a page holds any result whose address is still

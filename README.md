@@ -302,16 +302,28 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   queries: ten thousand queries done says nothing about how much there is.
 - **A walk through the interface** on a machine nothing has been run on: seven
   stops, one sentence each, standing beside the thing they are about.
-- **The redirect an address lookup asks for is an answer, not the wall.** A
-  hidden address is read out of the `Location` header of a redirect, so every
-  lookup that works answers 302 — and 302 is the shape Google's block page
-  arrives in. The pool held one against the port the same way: three lookups in
-  a row took the address that was carrying them out of the port, and the
-  searches that followed went out through whatever the list offered next. On a
-  region that hides its addresses that is most of the requests a job makes, so
-  the run was taking its own pool apart as fast as it filled it. The caller now
-  says which answer it asked for. A search is unchanged: nobody asked it for a
-  redirect, and one still counts as the wall.
+- **A redirect is an answer, and the port that carried it is credited with one.**
+  A hidden address is read out of the `Location` header of a redirect, so every
+  lookup that works answers 302 — and 302 was also the shape the pool took for
+  Google's block page. Three lookups in a row, three that had just worked, took
+  the address that was carrying them out of the port; the searches that followed
+  went out through whatever the list offered next; and a session's first
+  request, answered with a redirect from one country domain to another, cost an
+  address every time a single miss followed it. On a region that hides its
+  addresses that is most of the requests a job makes, so the run was taking its
+  own pool apart as fast as it filled it. Reading a refusal off a status was
+  right about what a redirect can mean and wrong about who to blame: the port
+  carried the request, and what the answer means belongs to the layer that knows
+  what a Google page says — which reads the page it lands on and puts the
+  identity out of the rotation, as it always did.
+- **An address that is Google's own is not an address.** A lookup answered with
+  a redirect that stays on Google is the identity being sent to a challenge, or
+  the link handed on to another redirector. The header was taken at face value,
+  and a live run wrote a result whose address was the redirector itself. That is
+  worse than an empty one: an empty address says nobody could reach it, and that
+  one says the ranking site is Google, to every export and rank history
+  downstream. Such an answer is now no address at all, the link is carried to
+  another identity, and the one that met it is put out of the rotation.
 - **A page is worked at until every address is had.** The lookups gave up after
   three identities, and three is not a number this kind of list has any time
   for. Measured against a live fifteen-thousand-address list, one link at a
