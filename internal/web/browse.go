@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -71,6 +72,12 @@ type browseView struct {
 	// directory this machine will not open is not a fault in the program, and
 	// saying so is the whole of what this page can do about it.
 	Complaint string
+	// Profile is the profile whose boxes this was opened from, as the address
+	// names it: a number, or "new" for one being made. It travels through the
+	// chooser and back so that the path lands in the form it was chosen for —
+	// without it the reader is returned to a list of profiles with what they
+	// picked nowhere on the screen.
+	Profile string
 }
 
 // browseEntry is one thing in the listing.
@@ -94,9 +101,10 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	root := s.browseRoot
 	at := startFrom(r.URL.Query().Get("at"), s.savedListPath(), root)
 	view := browseView{
-		page: s.frame(r, lang, "browse.title", proxiesAt),
-		At:   shownFrom(root, at),
-		Up:   above(at, root),
+		page:    s.frame(r, lang, "browse.title", proxiesAt),
+		At:      shownFrom(root, at),
+		Up:      above(at, root),
+		Profile: profileAsked(r),
 	}
 
 	entries, err := os.ReadDir(at)
@@ -109,6 +117,23 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	}
 	view.Folders, view.Files, view.Left = split(at, entries)
 	s.render(w, r, "browse.html", view)
+}
+
+// profileAsked is the profile the chooser was opened from, as the address names
+// it, and empty where the address names none.
+//
+// It is passed through as the token it arrived as rather than as a number,
+// because one of the values it takes is not one: a profile being made has no id
+// yet and is named "new" everywhere on this screen.
+func profileAsked(r *http.Request) string {
+	asked := strings.TrimSpace(r.URL.Query().Get(profileField))
+	if asked == "new" {
+		return asked
+	}
+	if id, err := strconv.ParseInt(asked, 10, 64); err == nil && id > 0 {
+		return strconv.FormatInt(id, 10)
+	}
+	return ""
 }
 
 // startFrom settles which directory to show, and never leaves the root.

@@ -24,9 +24,15 @@ func TestProxies_ShowsTheReadingOfThePoolAndBreaksTheFailuresDown(t *testing.T) 
 	// cannot say: a run failing on dead addresses wants another list, and one
 	// being walled by the origin wants something else entirely, and both read
 	// the same added together.
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+	// The pool this reading is of stands on that profile. It is written here
+	// because nothing has run: a reading shown under a profile the pool is not
+	// on is one list's failures reported as another's, and the screen says so
+	// instead of drawing figures.
+	s.sup.onProfile = prof
 	rec := httptest.NewRecorder()
-	testServerWithSupervisor(t).Handler().ServeHTTP(
-		rec, httptest.NewRequest(http.MethodGet, proxiesAt, nil))
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, readingOf(prof), nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d, want 200", rec.Code)
@@ -198,7 +204,7 @@ func TestProxies_CarriesTheSettingsTheReadingIsAbout(t *testing.T) {
 		ControlURL: "http://127.0.0.1:1",
 		Proxy:      settings.ProxySource{Kind: "file", Location: "C:/list.txt"},
 	})
-	body := getBody(t, s, proxiesAt)
+	body := getBody(t, s, boxesOf(onlyProfile(t, s)))
 
 	for _, want := range []string{`name="source"`, `name="source_at"`, `name="source_refresh"`, `name="port_protocol"`} {
 		if !strings.Contains(body, want) {
@@ -243,10 +249,11 @@ func TestSaveProxies_WritesTheListDownAndLeavesEverythingElseAlone(t *testing.T)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
 	}
-	// Back to the profile that was just saved rather than to the screen's own
-	// address: a reader who saved one of several profiles and was handed the
-	// default one back would think the save had gone somewhere else.
-	if got, want := rec.Header().Get("Location"), profileAt(prof); got != want {
+	// Back to the list, with the boxes gone. They were opened to write one
+	// profile, they have written it, and a form left standing after a save is one
+	// the reader has to dismiss — and a second answer to which profile the screen
+	// is about.
+	if got, want := rec.Header().Get("Location"), proxiesAt; got != want {
 		t.Errorf("the save lands on %q, want %q", got, want)
 	}
 
@@ -335,7 +342,7 @@ func TestSaveProxies_WritesDownHowLongAnAddressIsBanned(t *testing.T) {
 	}
 
 	// And the box shows it back in the unit it was typed in.
-	if body := getBody(t, s, proxiesAt); !strings.Contains(body, `value="90"`) {
+	if body := getBody(t, s, boxesOf(prof)); !strings.Contains(body, `value="90"`) {
 		t.Error("the box does not show the ban that was saved")
 	}
 }
@@ -387,7 +394,10 @@ func TestProxies_ShowsHowManyPortsWereOpenedAgain(t *testing.T) {
 	// A port opened again on the address it already had is the opposite reading
 	// from a port moved to another address, and a screen that showed only the
 	// second reported nought while every port in the job was being reopened.
-	page := get(t, testServer(t), proxiesAt).Body.String()
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+	s.sup.onProfile = prof
+	page := get(t, s, readingOf(prof)).Body.String()
 	if !strings.Contains(page, `id="reopenings"`) {
 		t.Error("the proxy screen never says how many ports were opened again")
 	}
@@ -446,7 +456,10 @@ func TestProxies_SavesHowOftenAPortChangesItsIdentity(t *testing.T) {
 func TestProxies_ShowsTheGatewaysThatWouldNotCarryAPort(t *testing.T) {
 	// The screen is where an operator finds out; without this the only sign of
 	// fourteen dead gateways is a pool smaller than they asked for.
-	page := get(t, testServer(t), proxiesAt).Body.String()
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+	s.sup.onProfile = prof
+	page := get(t, s, readingOf(prof)).Body.String()
 	if !strings.Contains(page, `id="reopenings"`) {
 		t.Fatal("the proxy screen is not the page this test thinks it is")
 	}
@@ -521,6 +534,20 @@ func TestProxies_KeepsTheAddressOfAListWhileTheGatewaysAreChosen(t *testing.T) {
 	}
 }
 
+// boxesOf is the address that opens one profile's boxes, and readingOf the
+// address that opens its counters.
+//
+// The screen is a list of profiles until one is named. A test about the form or
+// about a reading has to say which profile it means, the same way a reader does
+// by pressing a row.
+func boxesOf(id int64) string {
+	return proxiesAt + "?" + profileField + "=" + strconv.FormatInt(id, 10)
+}
+
+func readingOf(id int64) string {
+	return boxesOf(id) + "&" + statsField
+}
+
 // proxyProfileServer is a server whose history already holds one profile, which
 // is what a machine that has been started once has: the settings it was set up
 // with were carried into it. The id comes back because every test below reads
@@ -548,28 +575,31 @@ func profileValues(id int64, boxes url.Values) url.Values {
 	return out
 }
 
-func TestProxies_PutsTheProfilesAboveTheCounters(t *testing.T) {
-	// Where the work goes out is what this screen is for, and it is the thing a
-	// reader has to set up before anything else on it means much. Under the
-	// counters it read as a detail of a screen about numbers, and readers went
-	// looking for the addresses on the settings page.
-	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+func TestProxies_OpenOnTheListAndNothingElse(t *testing.T) {
+	// The list of profiles is what somebody opening this screen came for. A
+	// form and two dozen figures under it were a page to scroll past to reach
+	// the one thing on it that is always wanted — and the figures were a reading
+	// of one pool standing under a list of profiles, with nothing saying which
+	// of them it was about.
+	s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 	page := get(t, s, proxiesAt).Body.String()
 
-	profiles := strings.Index(page, LangEN.T("proxies.profiles"))
-	counters := strings.Index(page, LangEN.T("proxies.addresses"))
-	if profiles < 0 {
-		t.Fatalf("the screen does not list the profiles at all")
+	if !strings.Contains(page, LangEN.T("proxies.profiles")) {
+		t.Fatalf("the screen does not carry the profiles:\n%s", page)
 	}
-	if counters < 0 {
-		t.Fatalf("the screen does not carry the counters")
+	for _, gone := range []string{`name="source_at"`, `id="addresses"`, `id="requests"`} {
+		if strings.Contains(page, gone) {
+			t.Errorf("the screen opens carrying %s, which nobody asked it for", gone)
+		}
 	}
-	if profiles > counters {
-		t.Error("the counters stand above the profiles, so the screen opens on a reading " +
-			"of exits the reader has not been shown how to set")
+
+	// Both are one press away, on the row of the profile they are about.
+	if boxes := get(t, s, boxesOf(prof)).Body.String(); !strings.Contains(boxes, `name="source_at"`) {
+		t.Errorf("opening a profile does not open its boxes:\n%s", boxes)
 	}
-	if !strings.Contains(page, LangEN.T("proxies.profile.new")) {
-		t.Error("the screen offers no way to make a second profile")
+	s.sup = nil
+	if reading := get(t, s, readingOf(prof)).Body.String(); !strings.Contains(reading, LangEN.T("proxies.reading")) {
+		t.Errorf("asking for a profile's counters draws no reading at all:\n%s", reading)
 	}
 }
 

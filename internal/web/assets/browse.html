@@ -13,12 +13,16 @@
 
 {{/* The listing scrolls within itself rather than running the page down. A
      directory of five hundred entries is a page nobody can see the bottom of,
-     and the way back to the settings is at that bottom. */}}
+     and the way back out is at that bottom.
+
+     Every link here carries the profile this was opened from. Choosing a file
+     is a step in filling that profile's boxes, and a chooser that came back to
+     a list of profiles would have thrown the choice away on the way. */}}
 <ul class="browse">
-{{if .Up}}<li class="folder"><a href="/settings/browse?at={{.Up}}">{{.T "browse.up"}}</a></li>{{end}}
-{{range .Folders}}<li class="folder"><a href="/settings/browse?at={{.Path}}">{{.Name}}</a></li>
+{{if .Up}}<li class="folder"><a href="/proxies/browse?profile={{.Profile}}&amp;at={{.Up}}">{{.T "browse.up"}}</a></li>{{end}}
+{{range .Folders}}<li class="folder"><a href="/proxies/browse?profile={{$.Profile}}&amp;at={{.Path}}">{{.Name}}</a></li>
 {{end}}
-{{range .Files}}<li class="list"><a href="/proxies?source_at={{.Path}}">{{.Name}}</a></li>
+{{range .Files}}<li class="list"><a href="/proxies?profile={{$.Profile}}&amp;source_at={{.Path}}">{{.Name}}</a></li>
 {{end}}
 </ul>
 
@@ -28,5 +32,5 @@
 <p class="empty">{{.T "browse.none"}}</p>
 {{end}}
 
-<p><a href="/settings">{{.T "browse.back"}}</a></p>
+<p><a href="/proxies?profile={{.Profile}}">{{.T "browse.back"}}</a></p>
 {{end}}

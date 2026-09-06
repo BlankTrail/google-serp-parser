@@ -106,7 +106,10 @@ func TestWritePreviews(t *testing.T) {
 	for _, lang := range []string{"en", "ru"} {
 		for _, page := range []struct{ name, at string }{
 			{"status", "/?lang=" + lang},
-			{"proxies", proxiesAt + "?profile=" + fmt.Sprint(list) + "&lang=" + lang},
+			// The screen as it opens: the profiles and nothing else.
+			{"proxies", proxiesAt + "?lang=" + lang},
+			// And the two things one press on a row opens.
+			{"proxies-profile", proxiesAt + "?profile=" + fmt.Sprint(list) + "&lang=" + lang},
 			{"proxies-gateways", proxiesAt + "?profile=" + fmt.Sprint(gateways) + "&lang=" + lang},
 			{"new-job", newAt + "?lang=" + lang},
 			{"job", jobPath(id) + "?lang=" + lang},

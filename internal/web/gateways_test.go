@@ -225,7 +225,13 @@ func gatewayScreen(t *testing.T, gws []fakebt.Gateway, chosen []string) string {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return get(t, s, proxiesAt).Body.String()
+	// The gateways are boxes of one profile, so the screen is asked for that
+	// profile rather than for the list of them.
+	id, err := st.DefaultProfile(t.Context())
+	if err != nil {
+		t.Fatalf("DefaultProfile: %v", err)
+	}
+	return get(t, s, boxesOf(id.ID)).Body.String()
 }
 
 func TestProxies_DrawsALongGatewayListInSomethingThatScrolls(t *testing.T) {
@@ -306,18 +312,23 @@ func TestProxies_ReadsTheListAgainWhenAskedTo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	get(t, s, proxiesAt) // the first drawing reads the list and holds it
+	prof, err := st.DefaultProfile(t.Context())
+	if err != nil {
+		t.Fatalf("DefaultProfile: %v", err)
+	}
+	at := boxesOf(prof.ID)
+	get(t, s, at) // the first drawing reads the list and holds it
 
 	// A configuration added at the service is not on the held reading.
 	f.SetGateways([]fakebt.Gateway{{Name: "Sub.One", Kind: "vless"}, {Name: "Sub.Two", Kind: "vless"}})
-	if page := get(t, s, proxiesAt).Body.String(); strings.Contains(page, "Sub.Two") {
+	if page := get(t, s, at).Body.String(); strings.Contains(page, "Sub.Two") {
 		t.Fatal("the page asked the service again on a redraw, which is what holding the list is for")
 	}
 
 	if rec := postForm(t, s, gatewaysAt, url.Values{}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("pressing refresh answered %d, want a redirect back to the screen", rec.Code)
 	}
-	if page := get(t, s, proxiesAt).Body.String(); !strings.Contains(page, "Sub.Two") {
+	if page := get(t, s, at).Body.String(); !strings.Contains(page, "Sub.Two") {
 		t.Error("the list was not read again after the press")
 	}
 }

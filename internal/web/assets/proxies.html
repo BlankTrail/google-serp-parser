@@ -1,6 +1,14 @@
 {{define "main"}}
 <h1>{{.T "proxies.title"}}</h1>
 
+{{/* What was wrong with what was asked for, above everything else on the screen.
+     It stands here rather than inside the form because not every complaint is
+     about a form: the last profile cannot be deleted, and that is said with no
+     boxes open at all. */}}
+{{if .Complaints}}<ul class="faults">
+{{range .Complaints}}<li>{{$.T .}}</li>
+{{end}}</ul>{{end}}
+
 {{/* The profiles stand first because they are what this screen is for: the work
      goes out through the exits one of them names, and everything below is a
      reading of the one in use. A page that opened on the counters answered a
@@ -25,6 +33,11 @@
      of two profiles into half a screen. */}}
 <td><div class="deeds">
 {{if not .Editing}}<a href="/proxies?profile={{.ID}}">{{$.T "proxies.profile.open"}}</a>{{end}}
+{{/* What this profile's exits have been doing, on its own press rather than
+     under the list. One pool runs at a time and it runs on one profile, so a
+     block of counters standing under a list of five was a reading of one of
+     them with nothing saying which. */}}
+<a href="/proxies?profile={{.ID}}&amp;stats">{{$.T "proxies.profile.stats"}}</a>
 {{if not .Default}}
 <form method="post" action="/proxies/default">
 <input type="hidden" name="profile" value="{{.ID}}">
@@ -46,7 +59,20 @@
      them describe different moments. The screen says nothing about whether the
      numbers are good: what counts as a healthy share of failures depends on the
      list somebody bought, and a program that judges that wrongly once is not
-     believed afterwards about anything else it says. */}}
+     believed afterwards about anything else it says.
+
+     It is drawn only for the profile whose press asked for it, and only when
+     the pool being read is the one that profile names. A reading shown under
+     another profile's name would be one list's failures reported as another's,
+     which is worse than reporting nothing — so where it is not this profile's,
+     the screen says whose it is and draws no figures at all. */}}
+{{if .Reading}}
+<h2>{{.T "proxies.reading"}} {{.ReadingOf}}</h2>
+{{if .Nothing}}
+<p class="empty">{{.T "proxies.reading.none"}}</p>
+{{else if .Elsewhere}}
+<p class="empty">{{.T "proxies.reading.elsewhere"}} {{.Elsewhere}}.</p>
+{{else}}
 
 <section class="card">
 <dl class="metrics">
@@ -118,6 +144,8 @@
 <p class="empty">{{.T "proxies.reset.why"}}</p>
 <p class="empty">{{.T "proxies.release.why"}}</p>
 </section>
+{{end}}
+{{end}}
 
 {{/* Where the addresses come from and how the ports on them are reached. It
      stands on this screen rather than in the settings because it is the same
@@ -125,11 +153,9 @@
      requests never arrive is somebody about to change the list, and a reading
      that sent them to another screen to act on it would be a reading nobody
      acts on. */}}
+{{if .Editing}}
 <section class="card">
 <h2>{{if .Form.ID}}{{.T "proxies.profile.editing"}} {{.Form.Name}}{{else}}{{.T "proxies.profile.new"}}{{end}}</h2>
-{{if .Complaints}}<ul class="notes">
-{{range .Complaints}}<li>{{$.T .}}</li>
-{{end}}</ul>{{end}}
 <form id="gateways-afresh" method="post" action="/proxies/gateways"></form>
 <form method="post" action="/proxies">
 {{/* Which profile is being written. Nought is one being made, and the same
@@ -159,7 +185,7 @@
 {{/* The chooser is a link rather than a button: it leaves the form to look at
      this machine, and a form that submitted to get there would save settings
      nobody had finished filling in. */}}
-<a href="/proxies/browse">{{.T "settings.source.choose"}}</a>
+<a href="/proxies/browse?profile={{if .Form.ID}}{{.Form.ID}}{{else}}new{{end}}">{{.T "settings.source.choose"}}</a>
 </span>
 </div>
 <div class="field">
@@ -232,8 +258,12 @@
 {{end}}
 {{if .Missing}}<p class="empty">{{.T "proxies.gateways.missing"}} {{.Missing}}</p>{{end}}
 {{end}}
+{{/* Save, and the way out without saving. The second is a link and not a
+     button: nothing is written by it, and a button that writes nothing among
+     buttons that do is a press somebody makes by mistake once. */}}
 <div class="actions">
 <button type="submit">{{.T "settings.save"}}</button>
+<a href="/proxies">{{.T "proxies.profile.cancel"}}</a>
 </div>
 </form>
 <p class="empty">{{.T "settings.perupstream.why"}}</p>
@@ -254,4 +284,5 @@
 <p class="empty">{{.T "settings.source.scheme"}}</p>
 <p class="empty">{{.T "settings.source.skipped"}}</p>
 </section>
+{{end}}
 {{end}}

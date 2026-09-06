@@ -67,6 +67,13 @@ type poolFacts struct {
 	Stats    blanktrail.Stats
 	Threads  int
 	Cooldown time.Duration
+	// Profile is the set of exits these identities were raised on, and nought
+	// where nothing has been raised yet.
+	//
+	// It is here because the counters describe one pool and one pool runs on one
+	// profile: a screen showing them under a profile that is not this one would
+	// be reporting somebody else's list as this one's.
+	Profile int64
 	// Pool is the identities themselves, for the one screen that asks them
 	// something the counts cannot answer: how large the address list is and how
 	// much of it is resting. It is nil when there is no pool.
@@ -297,6 +304,10 @@ type Supervisor struct {
 	// inUse is the pool the job in flight is being taken through. It is what the
 	// screens read the identities off, and what release gives back.
 	inUse engine
+	// onProfile is the set of exits that pool was raised on. It is written where
+	// the pool is, so the two are never a job apart, and it outlives the job for
+	// the same reason last does: what a run met is read after it has stopped.
+	onProfile int64
 	// pending is a source waiting for the job in flight to end.
 	pending source
 }
@@ -549,6 +560,7 @@ func (v *Supervisor) Running() (int64, bool) {
 // number invites waiting on them in two orders.
 func (v *Supervisor) pool() poolFacts {
 	v.mu.Lock()
+	on := v.onProfile
 	eng := v.inUse
 	if eng == nil {
 		eng = v.src.held
@@ -566,7 +578,9 @@ func (v *Supervisor) pool() poolFacts {
 		// been given up would describe something that is gone.
 		return poolFacts{}
 	}
-	return eng.Pool()
+	facts := eng.Pool()
+	facts.Profile = on
+	return facts
 }
 
 // Queued is the jobs waiting their turn, in the order they will be taken.
@@ -680,6 +694,11 @@ func (v *Supervisor) next() (int64, context.Context, source, bool) {
 	v.running, v.cancel = id, cancel
 	v.inUse = v.src.held
 	v.last = v.inUse
+	// Which exits this one runs on is not settled until raise has read the job.
+	// Nought until then, rather than the profile the job before it used: a
+	// screen asked in that moment should say it does not know, not name the
+	// wrong one.
+	v.onProfile = 0
 	return id, ctx, v.src, true
 }
 
@@ -714,9 +733,13 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 	}
 	// Written down before the job goes into it, so that a stop or a shutdown
 	// arriving now finds a pool to give back rather than one nothing points at.
+	// The profile goes with it, in the same critical section: a pool and the
+	// exits it stands on are one fact, and a screen that read them a moment
+	// apart could report a reading of one list under the name of another.
 	v.mu.Lock()
 	v.inUse = eng
 	v.last = v.inUse
+	v.onProfile = prof.ID
 	v.mu.Unlock()
 	return eng, nil
 }

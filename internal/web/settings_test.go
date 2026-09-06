@@ -831,7 +831,7 @@ func TestSettings_KeepsTheChooserOnTheLineWithTheBoxItFills(t *testing.T) {
 	// something under it stands a line above the ones beside it. The chooser sat
 	// under its box and pushed that whole line out of true.
 	s, _ := serverWithSettings(t, settings.Defaults())
-	body := getBody(t, s, proxiesAt)
+	body := getBody(t, s, boxesOf(onlyProfile(t, s)))
 
 	at := strings.Index(body, `name="source_at"`)
 	if at < 0 {

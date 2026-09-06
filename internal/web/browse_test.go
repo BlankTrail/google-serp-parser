@@ -3,6 +3,7 @@
 package web
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/blanktrail/google-serp-parser/internal/settings"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // listTree is a directory holding one of each thing the chooser has an opinion
@@ -69,11 +71,17 @@ func TestBrowse_HandsAChosenFileToTheBoxWithoutSavingIt(t *testing.T) {
 	// Choosing is not saving. The reader sees what they picked standing where
 	// they would have typed it, and what is on disk changes when they press save
 	// — the same rule the key box already follows.
+	//
+	// It comes back to the boxes of the profile the chooser was opened from.
+	// The screen shows a list of profiles until one is named, so a return that
+	// named none would land the choice on a page with nowhere to put it.
 	saved := settings.Settings{ControlURL: "http://127.0.0.1:1"}
 	s, path := serverWithSettings(t, saved)
 	chosen := filepath.Join(listTree(t), "proxies.txt")
+	profile := onlyProfile(t, s)
 
-	body := get(t, s, proxiesAt+"?"+whereField+"="+chosen).Body.String()
+	body := get(t, s, proxiesAt+"?"+profileField+"="+strconv.FormatInt(profile, 10)+
+		"&"+whereField+"="+chosen).Body.String()
 	if !strings.Contains(body, chosen) {
 		t.Errorf("the box does not hold the file that was chosen:\n%s", body)
 	}
@@ -84,6 +92,51 @@ func TestBrowse_HandsAChosenFileToTheBoxWithoutSavingIt(t *testing.T) {
 	}
 	if after.Proxy.Location != "" {
 		t.Errorf("choosing a file wrote %q to the settings", after.Proxy.Location)
+	}
+}
+
+// onlyProfile is the profile a fresh machine has, made here because a test
+// store starts with none and the screen this is about is a list of them.
+func onlyProfile(t *testing.T, s *Server) int64 {
+	t.Helper()
+	id, err := s.store.CreateProfile(context.Background(), store.Profile{Name: "the list"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	return id
+}
+
+func TestBrowse_CarriesTheProfileItWasOpenedFromThroughEveryLink(t *testing.T) {
+	// Walking into a folder, walking back out, choosing a file and giving up:
+	// every one of them is a step in filling one profile's boxes, and a link
+	// that dropped which profile that is would end the walk on a list.
+	s, _ := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	s.browseRoot = listTree(t)
+	id := onlyProfile(t, s)
+	named := profileField + "=" + strconv.FormatInt(id, 10)
+
+	// The screen under the tabs, not the tab: the strip offers this screen from
+	// every page and is not part of the walk.
+	whole := get(t, s, browseAt+"?"+named).Body.String()
+	_, body, ok := strings.Cut(whole, "<main")
+	if !ok {
+		t.Fatalf("the chooser is not a page:\n%s", whole)
+	}
+	var carried, bare int
+	for _, after := range strings.Split(body, `<a href="`)[1:] {
+		at, _, _ := strings.Cut(after, `"`)
+		if !strings.HasPrefix(at, proxiesAt) {
+			continue
+		}
+		if strings.Contains(at, named) {
+			carried++
+		} else {
+			bare++
+			t.Errorf("%s leaves the profile behind", at)
+		}
+	}
+	if carried == 0 {
+		t.Fatalf("the chooser offers nothing that comes back at all:\n%s", body)
 	}
 }
 
@@ -228,7 +281,7 @@ func TestSettings_PutsTheChooserAwayWhenTheListIsNotReadFromAFile(t *testing.T) 
 	}
 
 	s, _ := serverWithSettings(t, settings.Defaults())
-	body := getBody(t, s, proxiesAt)
+	body := getBody(t, s, boxesOf(onlyProfile(t, s)))
 	if !strings.Contains(body, `name="source"`) {
 		t.Error("the page has no box saying where the addresses are read from")
 	}

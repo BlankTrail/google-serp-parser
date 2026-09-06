@@ -14,6 +14,11 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
+// statsField is how the address asks for one profile's counters rather than its
+// boxes. It carries no value: it is a question, and the profile beside it is
+// what the question is about.
+const statsField = "stats"
+
 // proxiesRefresh is how often the proxy screen asks to be drawn again.
 //
 // The same span the state screen uses, and for the same reason: what is on it
@@ -86,6 +91,36 @@ type proxiesPage struct {
 	// Kinds is the breakdown, in a fixed order so two readings a minute apart do
 	// not shuffle under the reader's eye.
 	Kinds []failureRow
+
+	// Editing says the boxes of one profile are open, and Reading says one
+	// profile's counters are.
+	//
+	// Neither is drawn until it is asked for. The screen is a list of profiles:
+	// that is what somebody opening it came to see, and a form and two dozen
+	// figures under it were a page to scroll past to reach the one thing on it
+	// that is always wanted. Both close the moment they are done with — a form
+	// that stays open after a save is a form the reader has to dismiss, and one
+	// left standing beside the list is a second answer to "which profile is
+	// this screen about".
+	Editing bool
+	Reading bool
+	// ReadingOf is the name of the profile whose counters are being read, and
+	// Elsewhere the name of the profile the pool actually stands on when that is
+	// a different one. Nothing says no pool has been raised at all.
+	//
+	// One pool runs at a time and it runs on one profile, so the counters belong
+	// to that profile and to no other. Drawing them under a profile they are not
+	// about would be this screen reporting one list's failures as another's,
+	// which is worse than reporting nothing.
+	ReadingOf string
+	Elsewhere string
+	Nothing   bool
+	// OnProfile is the profile the pool being read stands on, and OnName its
+	// name. They are read off the pool rather than guessed from the address: the
+	// screen can be opened on any profile, and only one of them is the one
+	// anything is running through.
+	OnProfile int64
+	OnName    string
 
 	// Form is where the addresses come from and how the ports on them are
 	// reached, which is settled on this screen rather than in the settings.
@@ -212,7 +247,39 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	view.Profiles = profileRows(profiles, editing.ID)
+	// What the address asked for. A profile named with nothing else is its
+	// boxes; a profile named with the counters asked for is its reading; an
+	// address naming no profile at all is the list and nothing else.
+	asked := strings.TrimSpace(r.URL.Query().Get(profileField))
+	view.Reading = asked != "" && r.URL.Query().Has(statsField)
+	view.Editing = asked != "" && !view.Reading
+	if view.Reading {
+		for _, p := range profiles {
+			if p.ID == view.OnProfile {
+				view.OnName = p.Name
+			}
+		}
+		view.readingOf(editing)
+		view.page = s.frame(r, lang, "proxies.title", proxiesAt)
+		if view.Running {
+			view.Refresh = proxiesRefresh.Milliseconds()
+		}
+		view.Profiles = profileRows(profiles, editing.ID)
+		s.render(w, r, "proxies.html", view)
+		return
+	}
+	// Nothing is marked as being edited while nothing is: the mark is what hides
+	// a row's own press to open it, and a list with one row unopenable reads as
+	// a row that cannot be edited at all.
+	view.Profiles = profileRows(profiles, editingOr(editing.ID, view.Editing))
+	if !view.Editing {
+		// The list alone. Nothing below it is drawn, so nothing below it is
+		// asked for either — no gateways fetched from the service to fill a form
+		// nobody opened.
+		view.page = s.frame(r, lang, "proxies.title", proxiesAt)
+		s.render(w, r, "proxies.html", view)
+		return
+	}
 	view.Form = profileShowing(editing)
 	// A path chosen in the browser arrives here and fills the box, and nothing
 	// more: choosing is not saving. The reader sees what they picked standing
@@ -240,10 +307,30 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	view.page = s.frame(r, lang, "proxies.title", proxiesAt)
-	if view.Running {
-		view.Refresh = proxiesRefresh.Milliseconds()
-	}
 	s.render(w, r, "proxies.html", view)
+}
+
+// editingOr is the profile whose row is marked as open, and nought where the
+// screen is only listing them.
+func editingOr(id int64, editing bool) int64 {
+	if editing {
+		return id
+	}
+	return 0
+}
+
+// readingOf settles whose counters these are, and says so rather than drawing
+// them under the wrong name.
+func (v *proxiesPage) readingOf(profile store.Profile) {
+	v.ReadingOf = profile.Name
+	switch {
+	case v.OnProfile == 0:
+		// Nothing has been raised since this server started. There is no reading
+		// to show and no profile to hang one on.
+		v.Nothing = true
+	case v.OnProfile != profile.ID:
+		v.Elsewhere = v.OnName
+	}
 }
 
 // saveProxies writes one profile down: the one the form names, or a new one
@@ -270,7 +357,7 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 	}
 	next, faults := form.onto(was)
 	if len(faults) > 0 {
-		s.showProxies(w, r, lang, form, faults)
+		s.showProxies(w, r, lang, form, faults, true)
 		return
 	}
 
@@ -282,16 +369,21 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 		err = s.store.SaveProfile(r.Context(), next)
 	}
 	if errors.Is(err, store.ErrProfileName) {
-		s.showProxies(w, r, lang, form, []string{"proxies.profile.name.taken"})
+		s.showProxies(w, r, lang, form, []string{"proxies.profile.name.taken"}, true)
 		return
 	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	// A page rendered into the answer to a form is a page the browser's reload
-	// button sends again, and this form decides where later jobs run.
-	http.Redirect(w, r, profileAt(id), http.StatusSeeOther)
+	// Back to the list, with the form gone. It has done what it was opened for,
+	// and a form left standing after a save is one the reader has to dismiss —
+	// and one that answers "which profile is this screen about" a second time.
+	//
+	// A page rendered into the answer to a form is also a page the browser's
+	// reload button sends again, and this form decides where later jobs run.
+	_ = id
+	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
 }
 
 // makeProfileDefault moves the mark: which profile the identities kept warm are
@@ -302,7 +394,7 @@ func (s *Server) makeProfileDefault(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SetDefaultProfile(r.Context(), id); err != nil {
 		s.log.Error("a profile could not be made the default", "profile", id, "error", err)
 	}
-	http.Redirect(w, r, profileAt(id), http.StatusSeeOther)
+	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
 }
 
 // dropProfile removes one.
@@ -315,7 +407,7 @@ func (s *Server) dropProfile(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
 	id, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue(profileField)), 10, 64)
 	if err := s.store.DeleteProfile(r.Context(), id); errors.Is(err, store.ErrLastProfile) {
-		s.showProxies(w, r, lang, profileForm{ID: id}, []string{"proxies.profile.last"})
+		s.showProxies(w, r, lang, profileForm{}, []string{"proxies.profile.last"}, false)
 		return
 	} else if err != nil {
 		s.fail(w, r, err)
@@ -326,9 +418,14 @@ func (s *Server) dropProfile(w http.ResponseWriter, r *http.Request) {
 
 // showProxies draws the screen again with what was typed still in the boxes and
 // the complaints above them.
+// The boxes are kept open where the reader was filling them in and closed where
+// they were not: a refusal to save is answered with what was typed still there,
+// and a refusal to delete is answered with the list, because nothing was being
+// typed.
 func (s *Server) showProxies(w http.ResponseWriter, r *http.Request, lang Lang,
-	form profileForm, complaints []string) {
+	form profileForm, complaints []string, editing bool) {
 	view := s.proxiesOf()
+	view.Editing = editing
 	view.Form = form
 	view.Sources = sourcesOffered(form.Source)
 	view.OnGateways = form.Source == sourceGateways
@@ -433,6 +530,8 @@ func (s *Server) proxiesOf() proxiesPage {
 	facts := s.sup.pool()
 	_, view.Running = s.sup.Running()
 	view.Since = s.sup.proxiesClearedAt().Format("2006-01-02 15:04")
+
+	view.OnProfile = facts.Profile
 
 	st := facts.Stats
 	view.Ports = st.Ports
