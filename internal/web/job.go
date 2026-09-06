@@ -206,7 +206,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	// word, for the reason a kind of job is.
 	device, _ := deviceKey(sum.Device)
 
-	frame := s.frame(lang, "job.title", jobsAt)
+	frame := s.frame(r, lang, "job.title", jobsAt)
 	// Asked for again only while the job can answer differently. A job nobody is
 	// running reads the same in the morning.
 	if at.Watch {

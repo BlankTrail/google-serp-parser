@@ -324,6 +324,12 @@ var catalogue = map[Lang]map[string]string{
 		"state.class.serp":           "a page of results",
 		"state.class.silent":         "no answer at all",
 
+		// The lights. Each phrase names the theme the press brings, not the one
+		// the reader is in: a switch labelled with where it already is gets
+		// pressed by everybody who wants to stay there.
+		"theme.dark":  "Dark",
+		"theme.light": "Light",
+
 		// Setting the machine up. The key is spoken of by its last few characters
 		// and never shown, which is why two phrases are needed where one box
 		// stands.
@@ -635,6 +641,9 @@ var catalogue = map[Lang]map[string]string{
 		"state.class.empty":          "ничего не найдено",
 		"state.class.serp":           "страница выдачи",
 		"state.class.silent":         "ответа не было",
+
+		"theme.dark":  "Тёмная",
+		"theme.light": "Светлая",
 
 		"settings.title":               "Настройки",
 		"settings.connection":          "Связь",

@@ -194,7 +194,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	view.page = s.frame(lang, "state.title", stateAt)
+	view.page = s.frame(r, lang, "state.title", stateAt)
 	view.Back = stateAt
 	// The screen asks for itself again only while the supervisor is holding
 	// something. With nothing running and nothing waiting, every figure on it —

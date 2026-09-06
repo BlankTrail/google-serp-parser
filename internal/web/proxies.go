@@ -239,7 +239,7 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 			view.Taken = taken.Format("15:04")
 		}
 	}
-	view.page = s.frame(lang, "proxies.title", proxiesAt)
+	view.page = s.frame(r, lang, "proxies.title", proxiesAt)
 	if view.Running {
 		view.Refresh = proxiesRefresh.Milliseconds()
 	}
@@ -336,7 +336,7 @@ func (s *Server) showProxies(w http.ResponseWriter, r *http.Request, lang Lang,
 	if all, err := s.store.Profiles(r.Context()); err == nil {
 		view.Profiles = profileRows(all, form.ID)
 	}
-	view.page = s.frame(lang, "proxies.title", proxiesAt)
+	view.page = s.frame(r, lang, "proxies.title", proxiesAt)
 	s.render(w, r, "proxies.html", view)
 }
 

@@ -244,6 +244,11 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("POST "+checkAt, s.checkConnection)
 		s.mux.HandleFunc("GET "+browseAt, s.browse)
 	}
+	// Turning the lights out is not a screen and has no page of its own: it
+	// writes the choice down and sends the reader back to what they were
+	// reading. It is offered by every server, settings or no settings — a
+	// history being read on another machine is read by somebody with eyes.
+	s.mux.HandleFunc("GET "+themeAt, s.switchTheme)
 	// One path element, so a name can never walk out of the directory it is
 	// looked up in.
 	s.mux.HandleFunc("GET /assets/{file}", s.asset)
@@ -366,6 +371,12 @@ type page struct {
 	// it is made here and carried in the markup rather than guessed at in the
 	// browser.
 	Refresh int64
+	// Dark says the reader asked for the lights out. It is written onto the
+	// document itself rather than onto anything on it, so that every colour on
+	// every screen changes together and nothing has to know it happened.
+	Dark bool
+	// Theme is the press that changes that, naming the theme it changes to.
+	Theme themeLink
 }
 
 // T is how a template asks for a phrase. Templates name a key and never a
@@ -378,8 +389,18 @@ func (p page) T(key string) string { return p.Lang.T(key) }
 // thing: a job's own page is titled after that job and stands under the list of
 // jobs, and a screen that lit no tab would tell the reader they had left the
 // program.
-func (s *Server) frame(lang Lang, title, under string) page {
-	p := page{Lang: lang, Title: title, Tabs: tabsFor(under)}
+// The request is taken because two of the things a frame carries are about the
+// address rather than about the screen: which theme was written down for this
+// reader, and where the press that changes it has to come back to.
+func (s *Server) frame(r *http.Request, lang Lang, title, under string) page {
+	theme := themeOf(r)
+	p := page{
+		Lang:  lang,
+		Title: title,
+		Tabs:  tabsFor(under),
+		Dark:  theme == themeDark,
+		Theme: themeSwitch(r, theme),
+	}
 	if s.settingsPath != "" {
 		p.Settings = &tabLink{Key: "settings.title", URL: settingsAt, Current: under == settingsAt}
 	}
@@ -399,7 +420,7 @@ func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	view := jobsPage{page: s.frame(lang, "jobs.title", jobsAt), Jobs: jobs}
+	view := jobsPage{page: s.frame(r, lang, "jobs.title", jobsAt), Jobs: jobs}
 	// Asked for again only while something on it can come back different. A list
 	// where every job has finished reads the same in the morning, and asking
 	// every few seconds until then is knocking on a door with nobody behind it.

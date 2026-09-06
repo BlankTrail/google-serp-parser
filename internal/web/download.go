@@ -269,7 +269,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, "history.html", historyPage{
-		page:      s.frame(lang, "history.title", historyAt),
+		page:      s.frame(r, lang, "history.title", historyAt),
 		Host:      host,
 		Positions: positions,
 	})

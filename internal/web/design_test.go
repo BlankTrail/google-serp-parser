@@ -188,7 +188,7 @@ func TestStyles_GiveEveryColourAValueForTheDarkAsWellAsTheLight(t *testing.T) {
 	// go out, and demanding a dark value for one would be demanding noise.
 	decls := stylesheet(t)
 	light := colourVariablesIn(decls, ":root")
-	dark := colourVariablesIn(decls, "@media (prefers-color-scheme: dark) :root")
+	dark := colourVariablesIn(decls, ":root[data-theme=\"dark\"]")
 	if len(light) == 0 {
 		t.Fatal("no colour is named in the light block, so this test read nothing")
 	}
@@ -203,6 +203,23 @@ func TestStyles_GiveEveryColourAValueForTheDarkAsWellAsTheLight(t *testing.T) {
 		}
 		if darkValue == value {
 			t.Errorf("%s is the same colour in the dark as in the light", name)
+		}
+	}
+}
+
+func TestStyles_LeaveTheThemeToTheReaderRatherThanToTheirMachine(t *testing.T) {
+	// The interface is light, and the dark one is what somebody asked for. A
+	// stylesheet that reads the machine's own preference decides this for a
+	// reader who never said, and overrules one who did: an operator on a dark
+	// desktop had no way of reading this program in the light.
+	//
+	// The whole of that rule is that the dark block is reached by an attribute
+	// the server writes and by nothing else, so what is checked is that nothing
+	// in the stylesheet asks the machine at all.
+	for _, d := range stylesheet(t) {
+		if strings.Contains(d.Selector, "prefers-color-scheme") {
+			t.Errorf("%s sets %s from what the machine prefers, and the theme is the reader's to choose",
+				d.Selector, d.Property)
 		}
 	}
 }

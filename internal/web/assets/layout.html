@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="{{.Lang}}">
+{{/* The theme is on the document itself, put there by the server before the
+     page leaves it. Every colour on every screen is named once and taken from
+     one of two blocks, and this is which of the two — so the whole interface
+     changes together, nothing on it has to know, and a reader who asked for
+     the dark never sees a white page first. */}}
+<html lang="{{.Lang}}"{{if .Dark}} data-theme="dark"{{end}}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -29,16 +34,19 @@
 <nav class="pages" id="tabs" aria-label="{{.T "nav.pages"}}">
 {{range .Tabs}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}
 {{end}}</nav>
-{{/* Setting the machine up stands beside the screens rather than among them,
-     and outside the strip of tabs on purpose: the script takes a press over
-     only inside that strip, so this one is an ordinary link to an ordinary
-     page, which is what the settings are. A server with nowhere to write them
-     offers nothing here rather than a link to a page that cannot save. */}}
-{{with .Settings}}
+{{/* What is done to the machine rather than watched on it, standing beside the
+     screens rather than among them, and outside the strip of tabs on purpose:
+     the script takes a press over only inside that strip, so these are ordinary
+     links to ordinary addresses, which is what they are.
+
+     The lights are first because every server offers them. The settings come
+     after, and only from a server with somewhere to write them — a link to a
+     page that cannot save is worse than no link, since the reader finds out
+     after filling it in. */}}
 <nav class="tools">
-{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}
+<a href="{{.Theme.URL}}">{{.T .Theme.Key}}</a>
+{{with .Settings}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}{{end}}
 </nav>
-{{end}}
 </header>
 {{/* Whether this screen is worth watching was decided by the server too, and it
      says so here. A screen that has nothing moving on it carries no interval and

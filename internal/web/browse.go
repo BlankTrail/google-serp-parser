@@ -94,7 +94,7 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	root := s.browseRoot
 	at := startFrom(r.URL.Query().Get("at"), s.savedListPath(), root)
 	view := browseView{
-		page: s.frame(lang, "browse.title", proxiesAt),
+		page: s.frame(r, lang, "browse.title", proxiesAt),
 		At:   shownFrom(root, at),
 		Up:   above(at, root),
 	}
