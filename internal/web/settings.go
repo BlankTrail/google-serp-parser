@@ -39,6 +39,10 @@ const (
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
+	// The two the profiles brought: which profile a form is about, and what it
+	// is called.
+	profileField = "profile"
+	nameField    = "profile_name"
 	tongueField  = "language"
 )
 

@@ -7,12 +7,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/settings"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 func TestProxies_ShowsTheReadingOfThePoolAndBreaksTheFailuresDown(t *testing.T) {
@@ -227,39 +229,54 @@ func TestSaveProxies_WritesTheListDownAndLeavesEverythingElseAlone(t *testing.T)
 		HotDevice:  blanktrail.DeviceDesktop,
 	}
 	s, path := serverWithSettings(t, before)
+	prof, err := s.store.CreateProfile(t.Context(), store.Profile{Name: "Default"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
 
-	rec := postForm(t, s, proxiesAt, url.Values{
+	rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source":         {"file"},
 		"source_at":      {"C:/somewhere/list.txt"},
 		"source_refresh": {"7"},
 		"port_protocol":  {"http"},
-	})
+	}))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != proxiesAt {
-		t.Errorf("the save lands on %q, want %q", got, proxiesAt)
+	// Back to the profile that was just saved rather than to the screen's own
+	// address: a reader who saved one of several profiles and was handed the
+	// default one back would think the save had gone somewhere else.
+	if got, want := rec.Header().Get("Location"), profileAt(prof); got != want {
+		t.Errorf("the save lands on %q, want %q", got, want)
 	}
 
-	after, err := settings.Load(path)
+	after, err := s.store.Profile(t.Context(), prof)
+	if err != nil {
+		t.Fatalf("reading the profile back: %v", err)
+	}
+	if after.Kind != "file" || after.Location != "C:/somewhere/list.txt" {
+		t.Errorf("the list reads %+v, want the file that was typed", after)
+	}
+	if after.Protocol != blanktrail.ProtocolHTTP {
+		t.Errorf("the ports are reached over %q, want the http that was chosen", after.Protocol)
+	}
+	// And the connection is left where it is. It is not merely untouched by this
+	// form now — it is not this form's at all — but the question the reader has
+	// is the same one, so it is still asked here: does changing a file path cost
+	// them the key.
+	kept, err := settings.Load(path)
 	if err != nil {
 		t.Fatalf("reading the settings back: %v", err)
 	}
-	if after.Proxy.Kind != "file" || after.Proxy.Location != "C:/somewhere/list.txt" {
-		t.Errorf("the list reads %+v, want the file that was typed", after.Proxy)
-	}
-	if after.PortProtocol != blanktrail.ProtocolHTTP {
-		t.Errorf("the ports are reached over %q, want the http that was chosen", after.PortProtocol)
-	}
-	if after.APIKey != before.APIKey {
+	if kept.APIKey != before.APIKey {
 		t.Error("saving a file path took the key away")
 	}
-	if after.ControlURL != before.ControlURL {
-		t.Errorf("the connection reads %q, want the %q it was", after.ControlURL, before.ControlURL)
+	if kept.ControlURL != before.ControlURL {
+		t.Errorf("the connection reads %q, want the %q it was", kept.ControlURL, before.ControlURL)
 	}
-	if after.HotPorts != before.HotPorts || after.HotDevice != before.HotDevice {
+	if kept.HotPorts != before.HotPorts || kept.HotDevice != before.HotDevice {
 		t.Errorf("the identities kept warm read %d %q, want %d %q",
-			after.HotPorts, after.HotDevice, before.HotPorts, before.HotDevice)
+			kept.HotPorts, kept.HotDevice, before.HotPorts, before.HotDevice)
 	}
 }
 
@@ -268,23 +285,27 @@ func TestSaveProxies_ComplainsAboutWhatWasTypedRatherThanWritingIt(t *testing.T)
 	// Nothing is saved while there is anything to complain about, because
 	// settings written and refused leave the file and the machine disagreeing.
 	before := settings.Settings{ControlURL: "http://127.0.0.1:1"}
-	s, path := serverWithSettings(t, before)
+	s, _ := serverWithSettings(t, before)
+	prof, err := s.store.CreateProfile(t.Context(), store.Profile{Name: "Default"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
 
-	rec := postForm(t, s, proxiesAt, url.Values{
+	rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source":         {"file"},
 		"source_at":      {"C:/list.txt"},
 		"source_refresh": {"not a number"},
-	})
+	}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d, want the screen back with the complaint on it", rec.Code)
 	}
 
-	after, err := settings.Load(path)
+	after, err := s.store.Profile(t.Context(), prof)
 	if err != nil {
-		t.Fatalf("reading the settings back: %v", err)
+		t.Fatalf("reading the profile back: %v", err)
 	}
-	if after.Proxy.Kind != "" {
-		t.Errorf("a form that would not parse was written down as %+v", after.Proxy)
+	if after.Kind != "" {
+		t.Errorf("a form that would not parse was written down as %+v", after)
 	}
 }
 
@@ -293,24 +314,24 @@ func TestSaveProxies_WritesDownHowLongAnAddressIsBanned(t *testing.T) {
 	// bought rather than of this program, so the length of a ban is theirs to
 	// set. A ban that is short brings the same dead addresses back inside one
 	// job, which is what a fixed five minutes did.
-	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 
-	rec := postForm(t, s, proxiesAt, url.Values{
+	rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source":      {"file"},
 		"source_at":   {"C:/list.txt"},
 		"ban_minutes": {"90"},
-	})
+	}))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
 	}
 
-	after, err := settings.Load(path)
+	after, err := s.store.Profile(t.Context(), prof)
 	if err != nil {
-		t.Fatalf("reading the settings back: %v", err)
+		t.Fatalf("reading the profile back: %v", err)
 	}
-	if after.Proxy.Ban != 90*time.Minute {
+	if after.Ban != 90*time.Minute {
 		t.Errorf("an address is banned for %s, want the ninety minutes that were typed",
-			after.Proxy.Ban)
+			after.Ban)
 	}
 
 	// And the box shows it back in the unit it was typed in.
@@ -324,19 +345,19 @@ func TestSaveProxies_WritesDownHowManyThreadsOneEgressCarries(t *testing.T) {
 	// what stops all of them going through one address at once. One is the
 	// floor: nought identities through an egress is a pool that hands out
 	// nothing at all.
-	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 
-	rec := postForm(t, s, proxiesAt, url.Values{
+	rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source":               {"file"},
 		"source_at":            {"C:/list.txt"},
 		"threads_per_upstream": {"4"},
-	})
+	}))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
 	}
-	after, err := settings.Load(path)
+	after, err := s.store.Profile(t.Context(), prof)
 	if err != nil {
-		t.Fatalf("reading the settings back: %v", err)
+		t.Fatalf("reading the profile back: %v", err)
 	}
 	if after.ThreadsPerUpstream != 4 {
 		t.Errorf("one egress carries %d threads, want the four that were typed",
@@ -345,16 +366,16 @@ func TestSaveProxies_WritesDownHowManyThreadsOneEgressCarries(t *testing.T) {
 
 	// Nought is not an answer here, and neither is a file edited by hand into
 	// one: what comes back out is one.
-	rec = postForm(t, s, proxiesAt, url.Values{
+	rec = postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source":               {"file"},
 		"source_at":            {"C:/list.txt"},
 		"threads_per_upstream": {"0"},
-	})
+	}))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status=%d, want the save to go through", rec.Code)
 	}
-	if after, err = settings.Load(path); err != nil {
-		t.Fatalf("reading the settings back: %v", err)
+	if after, err = s.store.Profile(t.Context(), prof); err != nil {
+		t.Fatalf("reading the profile back: %v", err)
 	}
 	if after.ThreadsPerUpstream != 1 {
 		t.Errorf("one egress carries %d threads after nought was typed, want one",
@@ -384,34 +405,38 @@ func TestProxies_SavesHowOftenAPortChangesItsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	prof, err := s.store.CreateProfile(t.Context(), store.Profile{Name: "Default"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
 
-	rec := postForm(t, s, proxiesAt, url.Values{
+	rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source":               {"gateways"},
 		"ban_minutes":          {"10"},
 		"threads_per_upstream": {"10"},
 		"renew_minutes":        {"10"},
 		"port_protocol":        {"socks5"},
-	})
+	}))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("saving answered %d: %s", rec.Code, rec.Body.String())
 	}
-	after, err := settings.Load(path)
+	after, err := s.store.Profile(t.Context(), prof)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("reading the profile back: %v", err)
 	}
 	if after.RenewEvery != 10*time.Minute {
 		t.Errorf("kept %v between changes of identity, want ten minutes", after.RenewEvery)
 	}
 	// And nought is an answer: it is how "hold this identity for as long as it
 	// works" is said, and it is what a long address list wants.
-	if rec := postForm(t, s, proxiesAt, url.Values{
+	if rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source": {"url"}, "source_at": {"http://example.test/list"}, "renew_minutes": {"0"},
 		"ban_minutes": {"10"}, "threads_per_upstream": {"1"}, "port_protocol": {"socks5"},
-	}); rec.Code != http.StatusSeeOther {
+	})); rec.Code != http.StatusSeeOther {
 		t.Fatalf("saving nought answered %d", rec.Code)
 	}
-	if after, err = settings.Load(path); err != nil {
-		t.Fatalf("Load: %v", err)
+	if after, err = s.store.Profile(t.Context(), prof); err != nil {
+		t.Fatalf("reading the profile back: %v", err)
 	}
 	if after.RenewEvery != 0 {
 		t.Errorf("nought in the box was kept as %v", after.RenewEvery)
@@ -451,38 +476,191 @@ func TestProxies_KeepsTheAddressOfAListWhileTheGatewaysAreChosen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// The list is the profile's now, so that is where the address stands that
+	// this test is about keeping.
+	prof, err := s.store.CreateProfile(t.Context(), store.Profile{
+		Name: "Default", Kind: "url", Location: "https://example.test/list.txt",
+		Refresh: 30 * time.Minute, Ban: 10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
 
 	// Over to the gateways, with the address box carrying nothing.
-	if rec := postForm(t, s, proxiesAt, url.Values{
+	if rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source": {"gateways"}, "source_at": {""}, "gateway": {"Sub.One"},
 		"ban_minutes": {"10"}, "threads_per_upstream": {"1"}, "port_protocol": {"socks5"},
-	}); rec.Code != http.StatusSeeOther {
+	})); rec.Code != http.StatusSeeOther {
 		t.Fatalf("saving the gateways answered %d", rec.Code)
 	}
-	after, err := settings.Load(path)
+	after, err := s.store.Profile(t.Context(), prof)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("reading the profile back: %v", err)
 	}
-	if after.Proxy.Location != "https://example.test/list.txt" {
-		t.Errorf("the address of the list is %q after choosing the gateways", after.Proxy.Location)
+	if after.Location != "https://example.test/list.txt" {
+		t.Errorf("the address of the list is %q after choosing the gateways", after.Location)
 	}
-	if after.Proxy.Refresh != 30*time.Minute {
-		t.Errorf("how often the list is read again is %v after choosing the gateways", after.Proxy.Refresh)
+	if after.Refresh != 30*time.Minute {
+		t.Errorf("how often the list is read again is %v after choosing the gateways", after.Refresh)
 	}
 
 	// And back again, with the ticks carrying nothing: they are kept for the
 	// same reason, two-and-thirty boxes being no small thing to tick twice.
-	if rec := postForm(t, s, proxiesAt, url.Values{
+	if rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source": {"url"}, "source_at": {"https://example.test/list.txt"},
 		"source_refresh": {"30"}, "ban_minutes": {"10"},
 		"threads_per_upstream": {"1"}, "port_protocol": {"socks5"},
-	}); rec.Code != http.StatusSeeOther {
+	})); rec.Code != http.StatusSeeOther {
 		t.Fatalf("saving the list answered %d", rec.Code)
 	}
-	if after, err = settings.Load(path); err != nil {
-		t.Fatalf("Load: %v", err)
+	if after, err = s.store.Profile(t.Context(), prof); err != nil {
+		t.Fatalf("reading the profile back: %v", err)
 	}
-	if len(after.Proxy.Gateways) != 1 || after.Proxy.Gateways[0] != "Sub.One" {
-		t.Errorf("the gateways ticked are %v after going back to a list", after.Proxy.Gateways)
+	if len(after.Gateways) != 1 || after.Gateways[0] != "Sub.One" {
+		t.Errorf("the gateways ticked are %v after going back to a list", after.Gateways)
+	}
+}
+
+// proxyProfileServer is a server whose history already holds one profile, which
+// is what a machine that has been started once has: the settings it was set up
+// with were carried into it. The id comes back because every test below reads
+// the profile again to see what the form wrote.
+func proxyProfileServer(t *testing.T, saved settings.Settings) (*Server, int64) {
+	t.Helper()
+	s, _ := serverWithSettings(t, saved)
+	id, err := s.store.CreateProfile(t.Context(), store.Profile{Name: "Default"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	return s, id
+}
+
+// profileValues is a form for that profile: the boxes a test cares about, and
+// the two the screen always sends.
+func profileValues(id int64, boxes url.Values) url.Values {
+	out := url.Values{
+		"profile":      {strconv.FormatInt(id, 10)},
+		"profile_name": {"Default"},
+	}
+	for box, values := range boxes {
+		out[box] = values
+	}
+	return out
+}
+
+func TestProxies_PutsTheProfilesAboveTheCounters(t *testing.T) {
+	// Where the work goes out is what this screen is for, and it is the thing a
+	// reader has to set up before anything else on it means much. Under the
+	// counters it read as a detail of a screen about numbers, and readers went
+	// looking for the addresses on the settings page.
+	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	page := get(t, s, proxiesAt).Body.String()
+
+	profiles := strings.Index(page, LangEN.T("proxies.profiles"))
+	counters := strings.Index(page, LangEN.T("proxies.addresses"))
+	if profiles < 0 {
+		t.Fatalf("the screen does not list the profiles at all")
+	}
+	if counters < 0 {
+		t.Fatalf("the screen does not carry the counters")
+	}
+	if profiles > counters {
+		t.Error("the counters stand above the profiles, so the screen opens on a reading " +
+			"of exits the reader has not been shown how to set")
+	}
+	if !strings.Contains(page, LangEN.T("proxies.profile.new")) {
+		t.Error("the screen offers no way to make a second profile")
+	}
+}
+
+func TestSaveProxies_MakesAProfileWhenTheFormNamesNone(t *testing.T) {
+	// One button and one handler for making and editing: the difference is a
+	// number in the form. A second screen for making one would be a second place
+	// for the same boxes to drift apart.
+	s, first := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+
+	rec := postForm(t, s, proxiesAt, url.Values{
+		"profile":      {"0"},
+		"profile_name": {"datacentre"},
+		"source":       {"url"},
+		"source_at":    {"https://example.test/list"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a redirect:\n%s", rec.Code, rec.Body.String())
+	}
+	all, err := s.store.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("%d profiles after making one, want two", len(all))
+	}
+	made, err := s.store.Profile(t.Context(), first+1)
+	if err != nil {
+		t.Fatalf("reading the new profile: %v", err)
+	}
+	if made.Name != "datacentre" || made.Kind != "url" || made.Location != "https://example.test/list" {
+		t.Errorf("the profile made reads %+v, want the boxes that were filled in", made)
+	}
+	if made.Default {
+		t.Error("the profile just made took the default mark from the one that had it")
+	}
+
+	// And a name another profile carries is refused rather than written: the
+	// name is how a job says which exits it wants.
+	again := postForm(t, s, proxiesAt, url.Values{
+		"profile": {"0"}, "profile_name": {"datacentre"}, "source": {""},
+	})
+	if again.Code != http.StatusOK {
+		t.Fatalf("a repeated name answered %d, want the screen back with the complaint", again.Code)
+	}
+	if want := LangEN.T("proxies.profile.name.taken"); !strings.Contains(again.Body.String(), want) {
+		t.Errorf("the screen does not say %q", want)
+	}
+}
+
+func TestProxies_MovesTheDefaultMarkAndRefusesToDeleteTheLast(t *testing.T) {
+	// Something has to be default: it is what the identities kept warm are
+	// raised on and what a job that named no profile runs through. So the mark
+	// moves on a press, and the last profile stays whatever is pressed.
+	s, first := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	second, err := s.store.CreateProfile(t.Context(), store.Profile{Name: "second"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	if rec := postForm(t, s, proxiesAt+"/default", url.Values{
+		"profile": {strconv.FormatInt(second, 10)},
+	}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("making a profile the default answered %d", rec.Code)
+	}
+	if def, _ := s.store.DefaultProfile(t.Context()); def.ID != second {
+		t.Errorf("the default is %d, want the one the press named (%d)", def.ID, second)
+	}
+
+	if rec := postForm(t, s, proxiesAt+"/delete", url.Values{
+		"profile": {strconv.FormatInt(first, 10)},
+	}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("deleting a profile answered %d", rec.Code)
+	}
+	left, err := s.store.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	if len(left) != 1 || left[0].ID != second {
+		t.Fatalf("what is left is %+v, want the one that was not deleted", left)
+	}
+
+	rec := postForm(t, s, proxiesAt+"/delete", url.Values{
+		"profile": {strconv.FormatInt(second, 10)},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deleting the last profile answered %d, want the screen back with the reason", rec.Code)
+	}
+	if want := LangEN.T("proxies.profile.last"); !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("the screen does not say %q", want)
+	}
+	if all, _ := s.store.Profiles(t.Context()); len(all) != 1 {
+		t.Errorf("%d profiles after the refusal, want the one that was kept", len(all))
 	}
 }

@@ -3,13 +3,15 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
-	"github.com/blanktrail/google-serp-parser/internal/settings"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // proxiesRefresh is how often the proxy screen asks to be drawn again.
@@ -92,7 +94,14 @@ type proxiesPage struct {
 	// a quarter of the requests never arrive is somebody about to change the
 	// list, and a reading that sent them to another screen to act on it would be
 	// a reading nobody acts on.
-	Form settingsForm
+	Form profileForm
+	// Profiles are the named sets of exits this machine has, the default one
+	// first, and they stand above everything else on the screen. Which addresses
+	// the work goes out through is the first thing to set up and the first thing
+	// to check; a page that opened on the counters was answering a question
+	// nobody had asked yet, and left the impression that the exits were set up
+	// somewhere else.
+	Profiles []profileRow
 	// Sources are the places a list of addresses can come from, in the order the
 	// page offers them, and Complaints is what was wrong with what was typed.
 	Sources    []sourceOption
@@ -125,6 +134,53 @@ type proxiesPage struct {
 }
 
 // failureRow is one kind of failure and how often it happened.
+// profileRow is one profile on the list above the form.
+type profileRow struct {
+	ID   int64
+	Name string
+	// Source is the key naming where its addresses come from, and Where is the
+	// path or address behind it — empty for the gateways, which have neither.
+	Source string
+	Where  string
+	// Gateways is how many configurations are ticked, for the profile that runs
+	// on them.
+	Gateways int
+	// Default marks the one the warm identities are raised on and a job that
+	// named none runs through; Editing marks the one the form below is showing.
+	Default bool
+	Editing bool
+}
+
+// profileRows are the profiles as the list draws them.
+func profileRows(all []store.Profile, editing int64) []profileRow {
+	rows := make([]profileRow, 0, len(all))
+	for _, p := range all {
+		rows = append(rows, profileRow{
+			ID: p.ID, Name: p.Name,
+			Source:   sourceKey(p.Kind),
+			Where:    p.Location,
+			Gateways: len(p.Gateways),
+			Default:  p.Default,
+			Editing:  p.ID == editing,
+		})
+	}
+	return rows
+}
+
+// sourceKey names a kind of source in the reader's own language.
+func sourceKey(kind string) string {
+	switch kind {
+	case sourceFile:
+		return "settings.source.file"
+	case sourceURL:
+		return "settings.source.url"
+	case sourceGateways:
+		return "settings.source.gateways"
+	default:
+		return "settings.source.none"
+	}
+}
+
 type failureRow struct {
 	// Key names the kind in the catalogue rather than in a language.
 	Key   string
@@ -149,8 +205,15 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
 	view := s.proxiesOf()
 	saved, complaints := s.current()
-	view.Form = formShowing(saved)
 	view.Complaints = complaints
+
+	profiles, editing, err := s.profileShown(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	view.Profiles = profileRows(profiles, editing.ID)
+	view.Form = profileShowing(editing)
 	// A path chosen in the browser arrives here and fills the box, and nothing
 	// more: choosing is not saving. The reader sees what they picked standing
 	// where they would have typed it, and it is written down when they press
@@ -168,7 +231,7 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 		} else if !list.Available {
 			view.GatewayFault = "proxies.gateways.unavailable"
 		} else {
-			view.Groups, view.Missing = gatewaysOffered(list, saved.Proxy.Gateways)
+			view.Groups, view.Missing = gatewaysOffered(list, view.Form.Gateways)
 			for _, g := range view.Groups {
 				view.Chosen += g.Chosen
 				view.Offered += g.Offered
@@ -183,60 +246,136 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "proxies.html", view)
 }
 
-// saveProxies writes down where the addresses come from and how the ports on
-// them are reached.
+// saveProxies writes one profile down: the one the form names, or a new one
+// when it names none.
 //
-// It lays what was typed here over the settings that are saved rather than over
-// an empty form, so the boxes this screen does not show — the connection, the
-// key, the identities kept warm — are carried through untouched. Everything
-// after that is the settings page's own path: the same complaints, the same
-// order of complain, open, then write.
+// One button and one handler for making and editing, because the difference
+// between the two is a number in the form rather than a different page. What
+// the screen does not show for the source in hand — the address while the
+// gateways are chosen, the ticks while a list is — is carried through rather
+// than emptied; see profileForm.onto.
 func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 	lang := s.rememberLang(w, r)
-	saved, unreadable := s.current()
-
-	form := formShowing(saved)
-	form.Source = strings.TrimSpace(r.FormValue(sourceField))
-	form.Where = strings.TrimSpace(r.FormValue(whereField))
-	form.Refresh = strings.TrimSpace(r.FormValue(refreshField))
-	form.Wire = strings.TrimSpace(r.FormValue(wireField))
-	form.Ban = strings.TrimSpace(r.FormValue(banField))
-	form.PerUpstream = strings.TrimSpace(r.FormValue(perUpField))
-	form.Renew = strings.TrimSpace(r.FormValue(renewField))
+	form := profileFrom(r)
 	form.Gateways = ticked(r, gatewayField)
 
-	next, faults := form.onto(saved)
-	if len(faults) > 0 || s.settingsPath == "" {
-		view := s.proxiesOf()
-		view.Form = form
-		view.Sources = sourcesOffered(form.Source)
-		view.Complaints = append(unreadable, faults...)
-		if s.settingsPath == "" {
-			// Nowhere to write. Saying so beats a page that takes the press and
-			// quietly forgets it at the next start.
-			view.Complaints = append(view.Complaints, "settings.opened.nothing")
+	was := store.Profile{}
+	if form.ID != 0 {
+		p, err := s.store.Profile(r.Context(), form.ID)
+		if err != nil {
+			s.fail(w, r, err)
+			return
 		}
-		view.page = s.frame(lang, "proxies.title", proxiesAt)
-		s.render(w, r, "proxies.html", view)
+		was = p
+	}
+	next, faults := form.onto(was)
+	if len(faults) > 0 {
+		s.showProxies(w, r, lang, form, faults)
 		return
 	}
-	if err := s.takeIntoUse(next); err != nil {
-		s.log.Error("nothing could be opened with the settings that were just saved", "error", err)
-		view := s.proxiesOf()
-		view.Form = form
-		view.Sources = sourcesOffered(form.Source)
-		view.Complaints = []string{"settings.opened.nothing"}
-		view.page = s.frame(lang, "proxies.title", proxiesAt)
-		s.render(w, r, "proxies.html", view)
+
+	id := form.ID
+	var err error
+	if form.ID == 0 {
+		id, err = s.store.CreateProfile(r.Context(), next)
+	} else {
+		err = s.store.SaveProfile(r.Context(), next)
+	}
+	if errors.Is(err, store.ErrProfileName) {
+		s.showProxies(w, r, lang, form, []string{"proxies.profile.name.taken"})
 		return
 	}
-	if err := settings.Save(s.settingsPath, next); err != nil {
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	// A page rendered into the answer to a form is a page the browser's reload
-	// button sends again, and this form changes where every later job runs.
+	// button sends again, and this form decides where later jobs run.
+	http.Redirect(w, r, profileAt(id), http.StatusSeeOther)
+}
+
+// makeProfileDefault moves the mark: which profile the identities kept warm are
+// raised on, which the API's own search goes through, and which a job that named
+// none runs on.
+func (s *Server) makeProfileDefault(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue(profileField)), 10, 64)
+	if err := s.store.SetDefaultProfile(r.Context(), id); err != nil {
+		s.log.Error("a profile could not be made the default", "profile", id, "error", err)
+	}
+	http.Redirect(w, r, profileAt(id), http.StatusSeeOther)
+}
+
+// dropProfile removes one.
+//
+// The jobs that named it keep the number and fall back to the default when they
+// run: rewriting them would be this program deciding which exits somebody's job
+// should use, which is the decision the profile was for. The last profile stays
+// whatever is pressed, and the screen says why.
+func (s *Server) dropProfile(w http.ResponseWriter, r *http.Request) {
+	lang := s.rememberLang(w, r)
+	id, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue(profileField)), 10, 64)
+	if err := s.store.DeleteProfile(r.Context(), id); errors.Is(err, store.ErrLastProfile) {
+		s.showProxies(w, r, lang, profileForm{ID: id}, []string{"proxies.profile.last"})
+		return
+	} else if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
+}
+
+// showProxies draws the screen again with what was typed still in the boxes and
+// the complaints above them.
+func (s *Server) showProxies(w http.ResponseWriter, r *http.Request, lang Lang,
+	form profileForm, complaints []string) {
+	view := s.proxiesOf()
+	view.Form = form
+	view.Sources = sourcesOffered(form.Source)
+	view.OnGateways = form.Source == sourceGateways
+	view.Complaints = complaints
+	if all, err := s.store.Profiles(r.Context()); err == nil {
+		view.Profiles = profileRows(all, form.ID)
+	}
+	view.page = s.frame(lang, "proxies.title", proxiesAt)
+	s.render(w, r, "proxies.html", view)
+}
+
+// profileShown is every profile and the one the form is about: the one the
+// address names, or the default when it names none or names one that is gone.
+func (s *Server) profileShown(r *http.Request) ([]store.Profile, store.Profile, error) {
+	all, err := s.store.Profiles(r.Context())
+	if err != nil {
+		return nil, store.Profile{}, err
+	}
+	// "new" rather than a number is the empty form: a profile being made has no
+	// id to name it by, and nought would be indistinguishable from the address
+	// having said nothing at all.
+	if strings.TrimSpace(r.URL.Query().Get(profileField)) == "new" {
+		return all, store.Profile{}, nil
+	}
+	want, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get(profileField)), 10, 64)
+	for _, p := range all {
+		if p.ID == want {
+			return all, p, nil
+		}
+	}
+	for _, p := range all {
+		if p.Default {
+			return all, p, nil
+		}
+	}
+	if len(all) > 0 {
+		return all, all[0], nil
+	}
+	return all, store.Profile{}, nil
+}
+
+// profileAt is the screen showing one profile in its boxes.
+func profileAt(id int64) string {
+	if id == 0 {
+		return proxiesAt
+	}
+	return proxiesAt + "?" + profileField + "=" + strconv.FormatInt(id, 10)
 }
 
 // resetProxies puts the counters back to nought and shows the screen again.

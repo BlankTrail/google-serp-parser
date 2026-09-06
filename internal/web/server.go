@@ -214,6 +214,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /job/{id}", s.job)
 	s.mux.HandleFunc("GET "+proxiesAt, s.proxies)
 	s.mux.HandleFunc("POST "+proxiesAt, s.saveProxies)
+	// Making one the default and removing one are presses of their own rather
+	// than another button on the form: they are about a profile in the list
+	// above it, and sending the form to do either would save whatever happened
+	// to be typed in the boxes at the time.
+	s.mux.HandleFunc("POST "+proxiesAt+"/default", s.makeProfileDefault)
+	s.mux.HandleFunc("POST "+proxiesAt+"/delete", s.dropProfile)
 	s.mux.HandleFunc("POST "+gatewaysAt, s.refreshGateways)
 	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)

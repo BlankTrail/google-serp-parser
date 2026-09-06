@@ -13,6 +13,7 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/settings"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 )
 
@@ -93,41 +94,41 @@ func TestSaveProxies_WritesDownTheGatewaysThatWereTicked(t *testing.T) {
 	// The names are what is saved, not the configurations: what is behind a name
 	// lives in the service, is edited there, and a copy kept here would be a
 	// second answer to what a gateway is.
-	s, path := serverWithSettings(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 
-	rec := postForm(t, s, proxiesAt, url.Values{
+	rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
 		"source":  {"gateways"},
 		"gateway": {"WiseKeys.DE", "WiseKeys.EE"},
-	})
+	}))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
 	}
-	after, err := settings.Load(path)
+	after, err := s.store.Profile(t.Context(), prof)
 	if err != nil {
-		t.Fatalf("reading the settings back: %v", err)
+		t.Fatalf("reading the profile back: %v", err)
 	}
-	if after.Proxy.Kind != settings.ProxyGateways {
-		t.Errorf("the source reads %q, want the gateways", after.Proxy.Kind)
+	if after.Kind != settings.ProxyGateways {
+		t.Errorf("the source reads %q, want the gateways", after.Kind)
 	}
-	if len(after.Proxy.Gateways) != 2 {
+	if len(after.Gateways) != 2 {
 		t.Fatalf("%d gateways were saved, want the two that were ticked: %v",
-			len(after.Proxy.Gateways), after.Proxy.Gateways)
+			len(after.Gateways), after.Gateways)
 	}
-	if after.Proxy.Location != "" {
-		t.Errorf("a set of gateways was saved with a location of %q", after.Proxy.Location)
+	if after.Location != "" {
+		t.Errorf("a set of gateways was saved with a location of %q", after.Location)
 	}
 
 	// Unticking every one leaves none, rather than keeping what was there: a
 	// box that cannot be cleared is a box that cannot be corrected.
-	rec = postForm(t, s, proxiesAt, url.Values{"source": {"gateways"}})
+	rec = postForm(t, s, proxiesAt, profileValues(prof, url.Values{"source": {"gateways"}}))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status=%d, want the save to go through", rec.Code)
 	}
-	if after, err = settings.Load(path); err != nil {
-		t.Fatalf("reading the settings back: %v", err)
+	if after, err = s.store.Profile(t.Context(), prof); err != nil {
+		t.Fatalf("reading the profile back: %v", err)
 	}
-	if len(after.Proxy.Gateways) != 0 {
-		t.Errorf("%v were kept after every box was cleared", after.Proxy.Gateways)
+	if len(after.Gateways) != 0 {
+		t.Errorf("%v were kept after every box was cleared", after.Gateways)
 	}
 }
 
@@ -208,13 +209,19 @@ func gatewayScreen(t *testing.T, gws []fakebt.Gateway, chosen []string) string {
 	f := fakebt.New(t)
 	f.SetGateways(gws)
 	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := settings.Save(path, settings.Settings{
-		ControlURL: f.URL(), APIKey: f.Key(),
-		Proxy: settings.ProxySource{Kind: settings.ProxyGateways, Gateways: chosen},
-	}); err != nil {
+	if err := settings.Save(path, settings.Settings{ControlURL: f.URL(), APIKey: f.Key()}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	s, err := New(Config{Store: testStore(t), Logger: quiet(), SettingsPath: path})
+	// The connection is the settings file's and the gateways are the profile's,
+	// which is the whole shape of the change: where the service is, and what to
+	// go out through, are two different questions with two different answers.
+	st := testStore(t)
+	if _, err := st.CreateProfile(t.Context(), store.Profile{
+		Name: "Default", Kind: settings.ProxyGateways, Gateways: chosen,
+	}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	s, err := New(Config{Store: st, Logger: quiet(), SettingsPath: path})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -283,13 +290,19 @@ func TestProxies_ReadsTheListAgainWhenAskedTo(t *testing.T) {
 	f := fakebt.New(t)
 	f.SetGateways([]fakebt.Gateway{{Name: "Sub.One", Kind: "vless"}})
 	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := settings.Save(path, settings.Settings{
-		ControlURL: f.URL(), APIKey: f.Key(),
-		Proxy: settings.ProxySource{Kind: settings.ProxyGateways},
-	}); err != nil {
+	if err := settings.Save(path, settings.Settings{ControlURL: f.URL(), APIKey: f.Key()}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	s, err := New(Config{Store: testStore(t), Logger: quiet(), SettingsPath: path})
+	// Running on the gateways is the profile's choice; the connection is the
+	// settings file's. The screen draws the list only for a profile that is on
+	// them, so the profile is what decides whether there is a list to hold.
+	st := testStore(t)
+	if _, err := st.CreateProfile(t.Context(), store.Profile{
+		Name: "Default", Kind: settings.ProxyGateways,
+	}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	s, err := New(Config{Store: st, Logger: quiet(), SettingsPath: path})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

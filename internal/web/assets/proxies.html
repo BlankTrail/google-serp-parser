@@ -1,6 +1,43 @@
 {{define "main"}}
 <h1>{{.T "proxies.title"}}</h1>
 
+{{/* The profiles stand first because they are what this screen is for: the work
+     goes out through the exits one of them names, and everything below is a
+     reading of the one in use. A page that opened on the counters answered a
+     question the reader had not asked yet, and left them looking elsewhere for
+     where the addresses are set. */}}
+<section class="card">
+<h2>{{.T "proxies.profiles"}}</h2>
+<p class="empty">{{.T "proxies.profiles.why"}}</p>
+<table class="rows">
+<thead><tr>
+<th scope="col">{{.T "proxies.profile.name"}}</th>
+<th scope="col">{{.T "settings.source.where"}}</th>
+<th scope="col"></th>
+</tr></thead>
+<tbody>
+{{range .Profiles}}<tr>
+<td>{{.Name}}{{if .Default}} — {{$.T "proxies.profile.default"}}{{end}}</td>
+<td>{{$.T .Source}}{{if .Where}} · {{.Where}}{{end}}{{if .Gateways}} · {{.Gateways}}{{end}}</td>
+<td>
+{{if not .Editing}}<a href="/proxies?profile={{.ID}}">{{$.T "proxies.profile.open"}}</a>{{end}}
+{{if not .Default}}
+<form method="post" action="/proxies/default">
+<input type="hidden" name="profile" value="{{.ID}}">
+<button type="submit">{{$.T "proxies.profile.makedefault"}}</button>
+</form>
+<form method="post" action="/proxies/delete">
+<input type="hidden" name="profile" value="{{.ID}}">
+<button type="submit">{{$.T "proxies.profile.delete"}}</button>
+</form>
+{{end}}
+</td>
+</tr>
+{{end}}</tbody>
+</table>
+<p><a href="/proxies?profile=new">{{.T "proxies.profile.new"}}</a></p>
+</section>
+
 {{/* Every figure here was worked out in one reading of one pool, so no two of
      them describe different moments. The screen says nothing about whether the
      numbers are good: what counts as a healthy share of failures depends on the
@@ -85,12 +122,22 @@
      that sent them to another screen to act on it would be a reading nobody
      acts on. */}}
 <section class="card">
-<h2>{{.T "settings.source"}}</h2>
+<h2>{{if .Form.ID}}{{.T "proxies.profile.editing"}} {{.Form.Name}}{{else}}{{.T "proxies.profile.new"}}{{end}}</h2>
 {{if .Complaints}}<ul class="notes">
 {{range .Complaints}}<li>{{$.T .}}</li>
 {{end}}</ul>{{end}}
 <form id="gateways-afresh" method="post" action="/proxies/gateways"></form>
 <form method="post" action="/proxies">
+{{/* Which profile is being written. Nought is one being made, and the same
+     button writes both: making and editing differ by a number rather than by a
+     page. */}}
+<input type="hidden" name="profile" value="{{.Form.ID}}">
+<div class="row">
+<div class="field">
+<label for="profile_name">{{.T "proxies.profile.name"}}</label>
+<input id="profile_name" name="profile_name" value="{{.Form.Name}}" required>
+</div>
+</div>
 <div class="row">
 <div class="field">
 <label for="source">{{.T "settings.source.where"}}</label>
