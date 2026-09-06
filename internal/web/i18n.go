@@ -387,6 +387,39 @@ var catalogue = map[Lang]map[string]string{
 		// Setting the machine up. The key is spoken of by its last few characters
 		// and never shown, which is why two phrases are needed where one box
 		// stands.
+		// What the connection check found. The name of the fault and what to do
+		// about it were written by this program and belong here; the detail
+		// beside them is usually the service quoting itself, and it is shown in
+		// the words it arrived in.
+		//
+		// The two findings that count ports and processes carry no phrase for
+		// what to do: their answer is a sentence with numbers in it, and a
+		// catalogue entry could only hold the sentence without them.
+		"check.unreachable":             "BlankTrail is not answering",
+		"check.unreachable.do":          "Start BlankTrail Proxy and make sure its control API is listening (127.0.0.1:8891 by default).",
+		"check.license_unreadable":      "Could not read the licence status",
+		"check.license_unreadable.do":   "Open the BlankTrail dashboard and check that the licence is activated.",
+		"check.license_inactive":        "The BlankTrail licence is not activated",
+		"check.license_inactive.do":     "Activate the licence in the BlankTrail dashboard, then run this check again.",
+		"check.gateways_unlisted":       "Could not list VPN gateways",
+		"check.gateways_unlisted.do":    "Gateways will not be offered as egress channels. Proxy lists and direct egress still work.",
+		"check.gateways_unavailable":    "The gateway backend is unavailable",
+		"check.gateways_unavailable.do": "Install the gateway backend in BlankTrail if you want to egress through VPN profiles.",
+		"check.ca_missing":              "Could not fetch the BlankTrail CA certificate",
+		"check.ca_missing.do":           "Without the CA every HTTPS request through a port would fail verification. Check that BlankTrail has generated its CA.",
+		"check.key_refused":             "BlankTrail rejected the API key",
+		"check.key_refused.do":          "Copy the current key from BlankTrail → Settings → API key and paste it into the connection settings.",
+		"check.solver_absent":           "Challenge Breaker is not included in this tariff",
+		"check.solver_absent.do":        "Upgrade to a plan that includes Challenge Breaker in the BlankTrail cabinet.",
+		"check.solver_off":              "Challenge Breaker is entitled but switched off",
+		"check.solver_short":            "More ports than Challenge Breaker processes",
+		"check.pool_absent":             "The multi-port pool is not included in this tariff",
+		"check.pool_absent.do":          "Set threads and ports per thread to 1, or upgrade to a plan that includes the port pool.",
+		"check.domains_missing":         "The tariff does not cover every domain this run needs",
+		"check.domains_missing.do":      "Ask for those domains to be added to the licence, or switch to an unrestricted plan.",
+		"check.domains_optional":        "Some optional domains are outside the tariff",
+		"check.domains_optional.do":     "Features relying on these domains will fall back to another route. Parsing is unaffected.",
+
 		"settings.title":               "Settings",
 		"settings.connection":          "Connection",
 		"settings.address":             "Address",
@@ -739,6 +772,31 @@ var catalogue = map[Lang]map[string]string{
 
 		"theme.dark":  "Перейти на тёмную тему",
 		"theme.light": "Перейти на светлую тему",
+
+		"check.unreachable":             "BlankTrail не отвечает",
+		"check.unreachable.do":          "Запустите BlankTrail Proxy и убедитесь, что его control API слушает (по умолчанию 127.0.0.1:8891).",
+		"check.license_unreadable":      "Не удалось прочитать состояние лицензии",
+		"check.license_unreadable.do":   "Откройте панель BlankTrail и проверьте, что лицензия активирована.",
+		"check.license_inactive":        "Лицензия BlankTrail не активирована",
+		"check.license_inactive.do":     "Активируйте лицензию в панели BlankTrail и запустите проверку снова.",
+		"check.gateways_unlisted":       "Не удалось получить список шлюзов VPN",
+		"check.gateways_unlisted.do":    "Шлюзы не будут предлагаться как выходы. Списки прокси и прямой выход работают по-прежнему.",
+		"check.gateways_unavailable":    "Бэкенд шлюзов недоступен",
+		"check.gateways_unavailable.do": "Установите бэкенд шлюзов в BlankTrail, если хотите выходить через VPN-профили.",
+		"check.ca_missing":              "Не удалось получить сертификат CA BlankTrail",
+		"check.ca_missing.do":           "Без CA любой HTTPS-запрос через порт не пройдёт проверку. Убедитесь, что BlankTrail сгенерировал свой CA.",
+		"check.key_refused":             "BlankTrail отклонил ключ",
+		"check.key_refused.do":          "Скопируйте текущий ключ из BlankTrail → Settings → API key и вставьте его в настройки связи.",
+		"check.solver_absent":           "Challenge Breaker не входит в этот тариф",
+		"check.solver_absent.do":        "Перейдите на тариф с Challenge Breaker в кабинете BlankTrail.",
+		"check.solver_off":              "Challenge Breaker доступен, но выключен",
+		"check.solver_short":            "Портов больше, чем процессов Challenge Breaker",
+		"check.pool_absent":             "Пул из нескольких портов не входит в этот тариф",
+		"check.pool_absent.do":          "Поставьте потоки и порты на поток в 1 или перейдите на тариф с пулом портов.",
+		"check.domains_missing":         "Тариф покрывает не все домены, нужные этому прогону",
+		"check.domains_missing.do":      "Попросите добавить эти домены в лицензию или перейдите на тариф без ограничений.",
+		"check.domains_optional":        "Часть необязательных доменов вне тарифа",
+		"check.domains_optional.do":     "Возможности, зависящие от этих доменов, пойдут другим путём. На парсинг это не влияет.",
 
 		"settings.title":               "Настройки",
 		"settings.connection":          "Связь",

@@ -1024,3 +1024,63 @@ func TestSaveSettings_WillNotAnswerTheNetworkWithoutAPassword(t *testing.T) {
 		t.Error("an empty password box changed the password that was saved")
 	}
 }
+
+func TestSettings_SayWhatTheCheckFoundInTheReadersOwnLanguage(t *testing.T) {
+	// The name of a fault and what to do about it were written by this program,
+	// so they belong in the catalogue like every other phrase on every page. The
+	// detail beside them is usually the service quoting itself — a binary it
+	// cannot find, an address that would not answer — and it is shown in the
+	// words it arrived in, because translating it would mean keeping a table of
+	// another program's error strings.
+	said := findingSaid(LangRU, blanktrail.Finding{
+		ID:       "gateways",
+		Key:      "gateways_unavailable",
+		Severity: blanktrail.SeverityWarn,
+		Title:    "The gateway backend is unavailable",
+		Detail:   "no gateway backend available — openvpn binary not found",
+		Action:   "Install the gateway backend in BlankTrail if you want to egress through VPN profiles.",
+	})
+	if want := LangRU.T("check.gateways_unavailable"); said.Title != want {
+		t.Errorf("the fault is named %q, want %q", said.Title, want)
+	}
+	if want := LangRU.T("check.gateways_unavailable.do"); said.Action != want {
+		t.Errorf("what to do about it says %q, want %q", said.Action, want)
+	}
+	if said.Detail != "no gateway backend available — openvpn binary not found" {
+		t.Errorf("the service's own sentence was rewritten as %q", said.Detail)
+	}
+
+	// A finding this program has no words for is shown as it came. A check that
+	// grows one says it in English on a Russian page rather than saying nothing.
+	fresh := findingSaid(LangRU, blanktrail.Finding{
+		Key:    "something_new",
+		Title:  "Something new went wrong",
+		Action: "Do the new thing about it.",
+	})
+	if fresh.Title != "Something new went wrong" || fresh.Action != "Do the new thing about it." {
+		t.Errorf("a finding the catalogue does not know was changed: %+v", fresh)
+	}
+}
+
+func TestSettings_NameEveryFindingTheCheckCanMake(t *testing.T) {
+	// A finding with no name of its own can never be said in another language,
+	// and nothing about it says so: the page shows English on a Russian screen
+	// and reads as a translation somebody forgot. So every one of them carries a
+	// name, and every name is in both catalogues.
+	//
+	// The two that count ports against solver processes carry no phrase for what
+	// to do, on purpose: their answer is a sentence with numbers in it, and a
+	// catalogue entry could only hold the sentence without them.
+	for _, key := range []string{
+		"unreachable", "license_unreadable", "license_inactive",
+		"gateways_unlisted", "gateways_unavailable", "ca_missing", "key_refused",
+		"solver_absent", "solver_off", "solver_short", "pool_absent",
+		"domains_missing", "domains_optional",
+	} {
+		for _, lang := range []Lang{LangEN, LangRU} {
+			if said := lang.T("check." + key); said == "check."+key {
+				t.Errorf("the catalogue has no %s name for the %q finding", lang, key)
+			}
+		}
+	}
+}

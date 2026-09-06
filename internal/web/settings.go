@@ -490,12 +490,7 @@ func (s *Server) checkConnection(w http.ResponseWriter, r *http.Request) {
 	})
 	view.Findings = true
 	for _, f := range report.Findings {
-		view.Checked = append(view.Checked, findingView{
-			Severity: severityKeys[f.Severity],
-			Title:    f.Title,
-			Detail:   f.Detail,
-			Action:   f.Action,
-		})
+		view.Checked = append(view.Checked, findingSaid(lang, f))
 	}
 	// A check that found nothing has to say what that means. The check reports a
 	// service that will not answer, a key that was refused and a licence that is
@@ -511,9 +506,42 @@ func (s *Server) checkConnection(w http.ResponseWriter, r *http.Request) {
 	s.showSettings(w, r, lang, view)
 }
 
+// findingSaid is one finding as this page says it: what this program wrote in
+// the reader's own language, and what the service said in the words it said it.
+//
+// The split is the whole of the rule. The name of the fault and what to do about
+// it were written here and belong in the catalogue like every other phrase; the
+// detail is usually the service quoting itself — a missing binary, an address
+// that would not answer, a licence endpoint's own sentence — and translating
+// that would mean keeping a table of another program's error strings, which
+// would be out of date the first time it changed one.
+//
+// A finding the catalogue does not know is shown as it came. That is what makes
+// this safe to leave alone: a check that grows a new finding says it in English
+// on a Russian page rather than saying nothing at all.
+func findingSaid(lang Lang, f blanktrail.Finding) findingView {
+	said := findingView{
+		Severity: severityKeys[f.Severity],
+		Title:    f.Title,
+		Detail:   f.Detail,
+		Action:   f.Action,
+	}
+	if f.Key == "" {
+		return said
+	}
+	if title := lang.T("check." + f.Key); title != "check."+f.Key {
+		said.Title = title
+	}
+	if f.Action != "" {
+		if action := lang.T("check." + f.Key + ".do"); action != "check."+f.Key+".do" {
+			said.Action = action
+		}
+	}
+	return said
+}
+
 // severityKeys names how serious a finding is in the catalogue, like every
-// other phrase on every page. What the finding itself says comes from the check
-// and is not this program's to translate.
+// other phrase on every page.
 var severityKeys = map[blanktrail.Severity]string{
 	blanktrail.SeverityOK:   "settings.finding.ok",
 	blanktrail.SeverityWarn: "settings.finding.warn",

@@ -74,8 +74,11 @@ type Server struct {
 	mu       sync.Mutex
 	license  License
 	gateways []Gateway
-	ca       []byte
-	ports    map[int]string // port -> upstream
+	// gatewaysOff is the reason the service gives for having no gateway backend,
+	// and empty on a service that has one.
+	gatewaysOff string
+	ca          []byte
+	ports       map[int]string // port -> upstream
 	// deadGateways are the ones whose tunnel will not start.
 	deadGateways map[string]bool
 	profiles     map[int]Profile
@@ -125,6 +128,18 @@ func (s *Server) SetLicense(l License) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.license = l
+}
+
+// SetGatewayBackendMissing makes the service answer that it has no gateway
+// backend, with the reason it gives for it.
+//
+// It is here because that answer is one of the things the check reports on, and
+// a service that always says the backend is there is a service the reporting of
+// it cannot be tested against. Empty puts the backend back.
+func (s *Server) SetGatewayBackendMissing(why string) {
+	s.mu.Lock()
+	s.gatewaysOff = why
+	s.mu.Unlock()
 }
 
 // SetGateways replaces the gateway list.
@@ -342,6 +357,15 @@ func (s *Server) serveGateways(w http.ResponseWriter) {
 			entry["ping"] = ping
 		}
 		configs = append(configs, entry)
+	}
+	s.mu.Lock()
+	off := s.gatewaysOff
+	s.mu.Unlock()
+	if off != "" {
+		// A service with no gateway backend installed: it answers, and what it
+		// answers is that it cannot carry a port through one.
+		writeJSON(w, http.StatusOK, map[string]any{"configs": configs, "available": false, "reason": off})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"configs": configs, "available": true})
 }

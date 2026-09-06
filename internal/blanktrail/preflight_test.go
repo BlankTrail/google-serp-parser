@@ -253,3 +253,74 @@ func genTestCA(t *testing.T) []byte {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
+
+func TestPreflight_NamesEveryFindingItMakes(t *testing.T) {
+	// A finding carries a name so that an interface can say it in the reader's
+	// own language: the title and the remedy are this package's own words, and a
+	// screen with nothing to key them by can only print the English.
+	//
+	// It is the kind of thing that goes wrong silently — a finding added without
+	// one shows English on a page that is otherwise translated, and reads as a
+	// translation somebody forgot — so every path that makes one is walked here.
+	unnamed := func(t *testing.T, where string, found []Finding) {
+		t.Helper()
+		if len(found) == 0 {
+			t.Fatalf("%s made no finding, so this test read nothing", where)
+		}
+		for _, f := range found {
+			if f.Key == "" {
+				t.Errorf("%s makes %q with no name of its own", where, f.Title)
+			}
+		}
+	}
+
+	// The two that stop the check where they are found.
+	away, err := NewClient("http://127.0.0.1:1", "k")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	unnamed(t, "a service that is not there",
+		Preflight(context.Background(), away, PreflightInput{Ports: 1}).Findings)
+
+	refused, fake := newTestClient(t)
+	fake.SetCA(genTestCA(t))
+	wrong, err := NewClient(fake.URL(), "not-the-key")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_ = refused
+	unnamed(t, "a key the service will not take",
+		Preflight(context.Background(), wrong, PreflightInput{Ports: 1}).Findings)
+
+	// A service that answers and has no gateway backend to offer.
+	noBackend, backendless := newTestClient(t)
+	backendless.SetCA(genTestCA(t))
+	backendless.SetGatewayBackendMissing("no gateway backend available")
+	var gatewayFindings []Finding
+	for _, f := range Preflight(context.Background(), noBackend, PreflightInput{Ports: 1}).Findings {
+		if f.ID == "gateways" {
+			gatewayFindings = append(gatewayFindings, f)
+		}
+	}
+	unnamed(t, "a service with no gateway backend", gatewayFindings)
+
+	// And the ones the licence decides, each asked for by the shape of licence
+	// that produces it.
+	unnamed(t, "a licence with no solver",
+		challengeBreakerFinding(LicenseStatus{Activated: true}, 1))
+	unnamed(t, "a solver that is entitled and switched off",
+		challengeBreakerFinding(LicenseStatus{Activated: true, JsSolverMaxProcs: 4}, 1))
+	unnamed(t, "fewer solver processes than ports",
+		challengeBreakerFinding(LicenseStatus{Activated: true, JsSolverMaxProcs: 4, JsSolverProcs: 1}, 40))
+	unnamed(t, "a licence with no pool",
+		poolFinding(LicenseStatus{Activated: true}, 4))
+	unnamed(t, "a licence restricted to other domains",
+		domainFindings(LicenseStatus{Activated: true, AllowedDomains: []string{"other.example"}},
+			PreflightInput{Domains: []string{"www.google.com"}}))
+
+	one, ok := refusedKey(&APIError{Status: http.StatusUnauthorized, Path: "/api/v1/license"})
+	if !ok {
+		t.Fatal("a refusal was not read as one, so this test read nothing")
+	}
+	unnamed(t, "a refusal met anywhere", []Finding{one})
+}

@@ -35,8 +35,15 @@ func (s Severity) String() string {
 // Finding is one preflight verdict. Detail explains what is wrong in the user's
 // terms and Action says what to do about it — never leave Action empty on a
 // Warn or Fail, a bare error code is not an answer.
+//
+// Key names the message rather than the subject: two findings can share an ID —
+// a licence that cannot be read and one that is not activated are both about the
+// licence — and what an interface has to look up is the sentence, not the topic.
+// It is what a screen showing this in another language keys its phrases by, and
+// a finding whose key nothing translates is shown in the words below.
 type Finding struct {
 	ID       string
+	Key      string
 	Severity Severity
 	Title    string
 	Detail   string
@@ -102,6 +109,7 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 		rep.Findings = append(rep.Findings, Finding{
 			ID:       "unreachable",
 			Severity: SeverityFail,
+			Key:      "unreachable",
 			Title:    "BlankTrail is not answering",
 			Detail:   fmt.Sprintf("No response from %s: %v", c.base.String(), err),
 			Action:   "Start BlankTrail Proxy and make sure its control API is listening (127.0.0.1:8891 by default).",
@@ -118,6 +126,7 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 		rep.Findings = append(rep.Findings, Finding{
 			ID:       "license_inactive",
 			Severity: SeverityFail,
+			Key:      "license_unreadable",
 			Title:    "Could not read the licence status",
 			Detail:   err.Error(),
 			Action:   "Open the BlankTrail dashboard and check that the licence is activated.",
@@ -130,6 +139,7 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 		rep.Findings = append(rep.Findings, Finding{
 			ID:       "license_inactive",
 			Severity: SeverityFail,
+			Key:      "license_inactive",
 			Title:    "The BlankTrail licence is not activated",
 			Detail:   "The proxy reports an inactive licence, so it will refuse to open ports.",
 			Action:   "Activate the licence in the BlankTrail dashboard, then run this check again.",
@@ -149,6 +159,7 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 		rep.Findings = append(rep.Findings, Finding{
 			ID:       "gateways",
 			Severity: SeverityWarn,
+			Key:      "gateways_unlisted",
 			Title:    "Could not list VPN gateways",
 			Detail:   err.Error(),
 			Action:   "Gateways will not be offered as egress channels. Proxy lists and direct egress still work.",
@@ -159,6 +170,7 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 			rep.Findings = append(rep.Findings, Finding{
 				ID:       "gateways",
 				Severity: SeverityWarn,
+				Key:      "gateways_unavailable",
 				Title:    "The gateway backend is unavailable",
 				Detail:   gws.Reason,
 				Action:   "Install the gateway backend in BlankTrail if you want to egress through VPN profiles.",
@@ -175,6 +187,7 @@ func Preflight(ctx context.Context, c *Client, in PreflightInput) Report {
 		rep.Findings = append(rep.Findings, Finding{
 			ID:       "ca",
 			Severity: SeverityFail,
+			Key:      "ca_missing",
 			Title:    "Could not fetch the BlankTrail CA certificate",
 			Detail:   err.Error(),
 			Action:   "Without the CA every HTTPS request through a port would fail verification. Check that BlankTrail has generated its CA.",
@@ -204,6 +217,7 @@ func refusedKey(err error) (Finding, bool) {
 	return Finding{
 		ID:       "unauthorized",
 		Severity: SeverityFail,
+		Key:      "key_refused",
 		Title:    "BlankTrail rejected the API key",
 		Detail:   err.Error(),
 		Action:   "Copy the current key from BlankTrail → Settings → API key and paste it into the connection settings.",
@@ -215,6 +229,7 @@ func challengeBreakerFinding(lic LicenseStatus, ports int) []Finding {
 		return []Finding{{
 			ID:       "challenge_breaker",
 			Severity: SeverityFail,
+			Key:      "solver_absent",
 			Title:    "Challenge Breaker is not included in this tariff",
 			Detail:   "The target is behind a JavaScript challenge. Without the solver, requests are answered with a challenge page instead of data.",
 			Action:   "Upgrade to a plan that includes Challenge Breaker in the BlankTrail cabinet.",
@@ -228,6 +243,7 @@ func challengeBreakerFinding(lic LicenseStatus, ports int) []Finding {
 		return []Finding{{
 			ID:       "solver_capacity",
 			Severity: SeverityFail,
+			Key:      "solver_off",
 			Title:    "Challenge Breaker is entitled but switched off",
 			Detail: fmt.Sprintf(
 				"The licence allows up to %d solver processes, but none are configured, so no challenge would ever be solved.",
@@ -241,6 +257,7 @@ func challengeBreakerFinding(lic LicenseStatus, ports int) []Finding {
 		return []Finding{{
 			ID:       "solver_capacity",
 			Severity: SeverityWarn,
+			Key:      "solver_short",
 			Title:    "More ports than Challenge Breaker processes",
 			Detail: fmt.Sprintf(
 				"This run opens %d ports but only %d solver processes are configured, so challenges will queue and the run will be slower than planned.",
@@ -260,6 +277,7 @@ func poolFinding(lic LicenseStatus, ports int) []Finding {
 	return []Finding{{
 		ID:       "pool",
 		Severity: SeverityFail,
+		Key:      "pool_absent",
 		Title:    "The multi-port pool is not included in this tariff",
 		Detail:   fmt.Sprintf("This run needs %d ports, but the licence only allows a single port.", ports),
 		Action:   "Set threads and ports per thread to 1, or upgrade to a plan that includes the port pool.",
@@ -275,6 +293,7 @@ func domainFindings(lic LicenseStatus, in PreflightInput) []Finding {
 		out = append(out, Finding{
 			ID:       "domains",
 			Severity: SeverityFail,
+			Key:      "domains_missing",
 			Title:    "The tariff does not cover every domain this run needs",
 			Detail: fmt.Sprintf("Licence %q is restricted to a domain allowlist, and these are not on it: %s.",
 				strings.TrimSpace(lic.Plan+" "+lic.Label), strings.Join(missing, ", ")),
@@ -285,6 +304,7 @@ func domainFindings(lic LicenseStatus, in PreflightInput) []Finding {
 		out = append(out, Finding{
 			ID:       "optional_domains",
 			Severity: SeverityWarn,
+			Key:      "domains_optional",
 			Title:    "Some optional domains are outside the tariff",
 			Detail:   fmt.Sprintf("Not on the licence allowlist: %s.", strings.Join(missing, ", ")),
 			Action:   "Features relying on these domains will fall back to another route. Parsing is unaffected.",
