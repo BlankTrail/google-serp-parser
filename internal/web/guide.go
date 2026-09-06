@@ -29,6 +29,16 @@ type stop struct {
 	// the note points at, as the stylesheet would name it.
 	At     string
 	Anchor string
+	// Via is what the reader presses to get here, named the same way and
+	// standing on the screen the stop before this one is on.
+	//
+	// The walk does not move the program itself. It used to, and what that
+	// taught was nothing: the screen changed under the reader, and the next note
+	// stood beside something on a screen they had not seen arrive. So each stop
+	// that is on a new screen points at the way there and waits — the reader
+	// presses it, the program moves the way it moves for everybody, and the note
+	// follows them.
+	Via string
 	// Title and Said are the phrases, already in the reader's language: the
 	// script carries no words of its own.
 	Title string
@@ -45,13 +55,24 @@ type stop struct {
 // a manual nobody finishes.
 func tourFor(lang Lang) []stop {
 	return []stop{
-		{At: stateAt, Anchor: "#tabs", Title: lang.T("tour.screens"), Said: lang.T("tour.screens.said")},
-		{At: settingsAt, Anchor: "#api_key", Title: lang.T("tour.key"), Said: lang.T("tour.key.said")},
-		{At: proxiesAt, Anchor: "#profiles", Title: lang.T("tour.exits"), Said: lang.T("tour.exits.said")},
-		{At: jobsAt, Anchor: "#new-job", Title: lang.T("tour.new"), Said: lang.T("tour.new.said")},
-		{At: newAt, Anchor: "#queries", Title: lang.T("tour.queries"), Said: lang.T("tour.queries.said")},
-		{At: newAt, Anchor: "#pages", Title: lang.T("tour.depth"), Said: lang.T("tour.depth.said")},
-		{At: stateAt, Anchor: "#reach", Title: lang.T("tour.reach"), Said: lang.T("tour.reach.said")},
+		{At: stateAt, Via: tabAt(stateAt), Anchor: "#tabs",
+			Title: lang.T("tour.screens"), Said: lang.T("tour.screens.said")},
+		{At: settingsAt, Via: "#to-settings", Anchor: "#api_key",
+			Title: lang.T("tour.key"), Said: lang.T("tour.key.said")},
+		{At: proxiesAt, Via: tabAt(proxiesAt), Anchor: "#profiles",
+			Title: lang.T("tour.exits"), Said: lang.T("tour.exits.said")},
+		{At: jobsAt, Via: tabAt(jobsAt), Anchor: "#new-job",
+			Title: lang.T("tour.new"), Said: lang.T("tour.new.said")},
+		// The way to the form is the press the stop before it pointed at, which
+		// is the whole of what that stop was about.
+		{At: newAt, Via: "#new-job", Anchor: "#queries",
+			Title: lang.T("tour.queries"), Said: lang.T("tour.queries.said")},
+		// Already there: this one and the last share a screen, so there is
+		// nothing to press to reach it.
+		{At: newAt, Anchor: "#pages",
+			Title: lang.T("tour.depth"), Said: lang.T("tour.depth.said")},
+		{At: stateAt, Via: tabAt(stateAt), Anchor: "#reach",
+			Title: lang.T("tour.reach"), Said: lang.T("tour.reach.said")},
 	}
 }
 

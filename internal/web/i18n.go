@@ -364,6 +364,8 @@ var catalogue = map[Lang]map[string]string{
 		// somebody being shown round is reading while standing, and a paragraph is
 		// a paragraph they close.
 		"tour.title":        "Quick start",
+		"tour.press":        "Press what is outlined",
+		"tour.close":        "Close the walk",
 		"tour.screens":      "The four screens",
 		"tour.screens.said": "What is happening, the jobs, the exits, and every result kept.",
 		"tour.key":          "The key",
@@ -718,6 +720,8 @@ var catalogue = map[Lang]map[string]string{
 		"notice.profile.press": "Настроить выходы",
 
 		"tour.title":        "Быстрый старт",
+		"tour.press":        "Нажмите обведённое",
+		"tour.close":        "Закрыть гид",
 		"tour.screens":      "Четыре экрана",
 		"tour.screens.said": "Что происходит, задания, выходы и всё, что собрано.",
 		"tour.key":          "Ключ",

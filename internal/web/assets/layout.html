@@ -32,7 +32,7 @@
      a screen the script swapped in is marked exactly as one the browser
      fetched. */}}
 <nav class="pages" id="tabs" aria-label="{{.T "nav.pages"}}">
-{{range .Tabs}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}
+{{range .Tabs}}{{if .Current}}<a id="tab-{{.Slug}}" href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a id="tab-{{.Slug}}" href="{{.URL}}">{{$.T .Key}}</a>{{end}}
 {{end}}</nav>
 {{/* What is done to the machine rather than watched on it, standing beside the
      screens rather than among them, and outside the strip of tabs on purpose:
@@ -80,7 +80,7 @@
      script has no walk to start, and going to the beginning is the nearest
      thing there is to one. */}}
 {{with .Guide}}<a href="{{.URL}}" data-tour>{{$.T .Key}}</a>{{end}}
-{{with .Settings}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}{{end}}
+{{with .Settings}}{{if .Current}}<a id="to-settings" href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a id="to-settings" href="{{.URL}}">{{$.T .Key}}</a>{{end}}{{end}}
 </nav>
 </header>
 {{/* Whether this screen is worth watching was decided by the server too, and it
@@ -119,8 +119,8 @@
      The words are already in the reader's language. The script carries none of
      its own: a phrase written in it is a phrase the catalogue does not hold and
      nobody translates. */}}
-<div id="tour" hidden{{if .TourNow}} data-tour-now{{end}}>
-{{range .Tour}}<span data-at="{{.At}}" data-anchor="{{.Anchor}}" data-title="{{.Title}}" data-said="{{.Said}}"></span>
+<div id="tour" hidden data-press="{{.T "tour.press"}}" data-close="{{.T "tour.close"}}"{{if .TourNow}} data-tour-now{{end}}>
+{{range .Tour}}<span data-at="{{.At}}" data-anchor="{{.Anchor}}" data-via="{{.Via}}" data-title="{{.Title}}" data-said="{{.Said}}"></span>
 {{end}}</div>
 {{/* One script, out of this binary, after the page it improves. Everything on
      every screen is drawn before it runs, and a browser that never runs it

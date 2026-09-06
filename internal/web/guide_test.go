@@ -66,6 +66,7 @@ func stopsOn(t *testing.T, body string) []stop {
 		}{
 			{"data-at", &one.At},
 			{"data-anchor", &one.Anchor},
+			{"data-via", &one.Via},
 			{"data-title", &one.Title},
 			{"data-said", &one.Said},
 		} {
@@ -107,6 +108,80 @@ func TestTour_PointsAtSomethingThatIsActuallyOnTheScreenItNames(t *testing.T) {
 				one.At, one.Anchor, want)
 		}
 	}
+}
+
+func TestTour_PointsAtTheWayInFromTheScreenTheReaderIsStandingOn(t *testing.T) {
+	// The walk does not move the program: it says which press leads on and waits
+	// for the reader to make it. So every stop on a new screen has to name a
+	// press, and that press has to be on the screen the reader is standing on
+	// when they are told about it — which is the screen the stop before it is on.
+	//
+	// Get that wrong and the walk points at nothing on a screen the reader is
+	// looking at, tells them to press it, and waits for a press that can never
+	// come. Nothing errors; the walk simply stops.
+	s := walked(t)
+	all := stopsOn(t, get(t, s, stateAt).Body.String())
+	var pressed int
+	for i, one := range all {
+		if one.Via == "" {
+			// Only where the stop before it is on the same screen: a stop that
+			// needs no press is a stop the reader is already looking at.
+			if i > 0 && all[i-1].At != one.At {
+				t.Errorf("the stop on %s names no way in, and the one before it is on %s",
+					one.At, all[i-1].At)
+			}
+			continue
+		}
+		pressed++
+		if !strings.HasPrefix(one.Via, "#") {
+			t.Errorf("the stop on %s is reached by %q, which is not a name", one.At, one.Via)
+			continue
+		}
+		// The first stop is reached from wherever the reader happened to be, so
+		// the press it names has to be on its own screen as well as anywhere else
+		// — which is what makes a tab the only sound answer for it.
+		from := one.At
+		if i > 0 {
+			from = all[i-1].At
+		}
+		body := get(t, s, from).Body.String()
+		named := `id="` + strings.TrimPrefix(one.Via, "#") + `"`
+		if !strings.Contains(body, named) {
+			t.Errorf("the stop on %s is reached by pressing %s, and there is no %s on %s",
+				one.At, one.Via, named, from)
+			continue
+		}
+		// And the press has to lead where the stop says it does. A press that
+		// exists on the right screen and goes somewhere else is the same dead
+		// wait as one that is not there at all, and it reads as correct in every
+		// other way.
+		if leads := leadsTo(t, body, named); leads != one.At {
+			t.Errorf("the stop on %s is reached by pressing %s, which leads to %s",
+				one.At, one.Via, leads)
+		}
+	}
+	if pressed == 0 {
+		t.Fatal("no stop names a way in, so this test read nothing")
+	}
+}
+
+// leadsTo is where the press carrying the given name goes.
+func leadsTo(t *testing.T, body, named string) string {
+	t.Helper()
+	for _, after := range strings.Split(body, "<a ")[1:] {
+		tag, _, _ := strings.Cut(after, ">")
+		if !strings.Contains(tag, named) {
+			continue
+		}
+		_, at, ok := strings.Cut(tag, `href="`)
+		if !ok {
+			t.Fatalf("the press %s goes nowhere: <a %s>", named, tag)
+		}
+		at, _, _ = strings.Cut(at, `"`)
+		return at
+	}
+	t.Fatalf("the press %s is not a link at all", named)
+	return ""
 }
 
 func TestTour_SaysOneSentenceAStopInTheReadersOwnLanguage(t *testing.T) {

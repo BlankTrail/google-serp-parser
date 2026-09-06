@@ -40,6 +40,11 @@ type tab struct {
 	Key string
 	// At is the screen's address.
 	At string
+	// Slug is what the tab is called in the markup, so that something else on
+	// the page can point at it. The walk through the interface does: it tells
+	// the reader which tab to press and draws a ring round that one, and a ring
+	// has to be drawn round a thing that can be named.
+	Slug string
 }
 
 // tabs is the header, in the order it is read.
@@ -51,17 +56,34 @@ type tab struct {
 // stands under it — and a tab of its own put a form beside four screens that
 // report, which is one of five presses being a different kind of thing.
 var tabs = []tab{
-	{Key: "state.title", At: stateAt},
-	{Key: "jobs.title", At: jobsAt},
-	{Key: "proxies.title", At: proxiesAt},
-	{Key: "history.title", At: historyAt},
+	{Key: "state.title", At: stateAt, Slug: "state"},
+	{Key: "jobs.title", At: jobsAt, Slug: "jobs"},
+	{Key: "proxies.title", At: proxiesAt, Slug: "proxies"},
+	{Key: "history.title", At: historyAt, Slug: "history"},
 }
 
 // tabLink is one tab as the header draws it.
 type tabLink struct {
 	Key     string
 	URL     string
+	Slug    string
 	Current bool
+}
+
+// tabAt is what the tab leading to a screen is called in the markup, and empty
+// for a screen that is not one of them.
+//
+// It is worked out here rather than in the browser because it is the same list
+// the header is drawn from: a walk that guessed at the name of a tab would be a
+// second opinion about the strip, and the two would part company the day a
+// screen was renamed.
+func tabAt(screen string) string {
+	for _, t := range tabs {
+		if t.At == screen {
+			return "#tab-" + t.Slug
+		}
+	}
+	return ""
 }
 
 // tabsFor is the header of a page standing under the given tab.
@@ -78,7 +100,7 @@ type tabLink struct {
 func tabsFor(under string) []tabLink {
 	links := make([]tabLink, 0, len(tabs))
 	for _, t := range tabs {
-		links = append(links, tabLink{Key: t.Key, URL: t.At, Current: t.At == under})
+		links = append(links, tabLink{Key: t.Key, URL: t.At, Slug: t.Slug, Current: t.At == under})
 	}
 	return links
 }

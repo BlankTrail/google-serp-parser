@@ -66,11 +66,19 @@
 		here.replaceWith(screen);
 		lit.replaceWith(header);
 		document.title = arrived.title;
-		// The screen that just arrived has never been through anything that runs
-		// once on load. What listens for this is what shapes the new-job form,
-		// and without it that form works on a reload and not on a swap.
-		window.dispatchEvent(new Event("gserp:screen"));
 		return true;
+	}
+
+	// settled says a screen has arrived and the address bar agrees with it.
+	//
+	// It is raised here rather than inside the swap, and that is the whole point
+	// of it: the address is written down after the markup is put in place, so
+	// anything listening from inside the swap would be told the screen had
+	// changed while the browser still said it was on the one before. What listens
+	// is the shaping of the new-job form and the walk through the interface, and
+	// the second of those asks which screen it is on.
+	function settled() {
+		window.dispatchEvent(new Event("gserp:screen"));
 	}
 
 	// show fetches an address and puts the screen at it on the page.
@@ -87,6 +95,7 @@
 				window.history.pushState(null, "", address);
 			}
 			watch();
+			settled();
 		}).catch(lost);
 	}
 
@@ -197,6 +206,7 @@
 			fetched(window.location.href).then(function (html) {
 				if (mine === showing && swap(html)) {
 					watch();
+					settled();
 				}
 			}).catch(function () {
 				triesLeft--;
@@ -467,16 +477,47 @@
 
 
 	// The walk through the interface: one stop at a time, a note beside the thing
-	// it is talking about.
+	// it is talking about, and the reader doing the walking.
+	//
+	// It does not move the program. It used to, and what that taught was nothing:
+	// the screen changed under the reader and the next note stood beside
+	// something on a screen they had not seen arrive. So a stop on a new screen
+	// points at the way there and waits — the reader presses it, the program
+	// moves the way it moves for everybody, and the note follows them across and
+	// settles beside the next thing.
 	//
 	// Where it goes and what it says are the server's, written into the page as a
-	// hidden list; everything here is carrying that out — move to the screen the
-	// stop names, find the thing on it, put the note where it can be seen. A
-	// phrase written in this file would be a phrase the catalogue does not hold
-	// and nobody translates, so there is not one.
-	var walking = -1;
-	var note = null;
-	var ring = null;
+	// hidden list. Everything here is carrying that out. A phrase written in this
+	// file would be a phrase the catalogue does not hold and nobody translates,
+	// so there is not one.
+
+	// Which stop the walk is on, kept where a page load cannot lose it: one of
+	// the presses it asks for — the one that opens the form — is an ordinary link
+	// and takes the whole document with it. Per tab rather than per browser: two
+	// tabs are two readers, and one of them being shown round is not the other's
+	// business.
+	var walkKey = "gserp:tour";
+	var walkOver = "done";
+
+	function walkAt() {
+		try {
+			var kept = window.sessionStorage.getItem(walkKey);
+			return kept === null || kept === walkOver ? -1 : Number(kept);
+		} catch (whatever) {
+			// A browser that will not remember is a browser the walk cannot cross a
+			// page load in. It is not a reason for anything else to stop working.
+			return -1;
+		}
+	}
+
+	function walkGo(n) {
+		try {
+			window.sessionStorage.setItem(walkKey, String(n));
+		} catch (whatever) {
+			// As above.
+		}
+		showWalk();
+	}
 
 	function stops() {
 		var box = document.getElementById("tour");
@@ -489,6 +530,7 @@
 			out.push({
 				at: written[i].getAttribute("data-at"),
 				anchor: written[i].getAttribute("data-anchor"),
+				via: written[i].getAttribute("data-via"),
 				title: written[i].getAttribute("data-title"),
 				said: written[i].getAttribute("data-said")
 			});
@@ -496,10 +538,30 @@
 		return out;
 	}
 
-	// walkAway ends the walk, however it ended, and says so to the server so that
-	// it does not start itself again on the next screen.
-	function walkAway() {
-		walking = -1;
+	// note is the card, and ring the outline round whatever it is about. They are
+	// made once and moved afterwards, which is what lets the move be seen: a card
+	// taken away and put back somewhere else has not travelled anywhere.
+	var note = null;
+	var ring = null;
+
+	// showWalk draws the stop the walk is on, or nothing when it is not on one.
+	//
+	// One rule for every way of arriving: a press on the note, a screen swapped
+	// under it, a whole page loaded afresh. Standing on the stop's own screen it
+	// points at the thing; standing anywhere else it points at the way there and
+	// waits.
+	function showWalk() {
+		var n = walkAt();
+		var all = stops();
+		if (n < 0 || n >= all.length) {
+			putAway();
+			return;
+		}
+		var stop = all[n];
+		drawStop(stop, n, all.length, window.location.pathname !== stop.at);
+	}
+
+	function putAway() {
 		if (note) {
 			note.remove();
 			note = null;
@@ -508,61 +570,40 @@
 			ring.remove();
 			ring = null;
 		}
-		window.removeEventListener("resize", place);
-		window.removeEventListener("scroll", place, true);
+		window.removeEventListener("resize", replaceNote);
+		window.removeEventListener("scroll", placeNote, true);
+	}
+
+	// endWalk puts it away and says so to the server, so that it does not start
+	// itself again on the next screen.
+	function endWalk() {
+		try {
+			window.sessionStorage.setItem(walkKey, walkOver);
+		} catch (whatever) {
+			// A browser that will not remember offers the walk again, which is a
+			// great deal better than a page that stops working over it.
+		}
+		putAway();
 		fetch("/guide/done", { method: "POST" }).catch(function () {
-			// A machine that would not write it down is a machine that offers the
-			// walk again, which is a great deal better than a page that stops
-			// working over it.
+			// As above: the walk being offered twice is not worth an error page.
 		});
 	}
 
-	// walkTo puts the walk on one stop: the screen first, then the note.
-	function walkTo(n) {
-		var all = stops();
-		if (n < 0 || n >= all.length) {
-			walkAway();
-			return;
-		}
-		walking = n;
-		var stop = all[n];
-		if (window.location.pathname === stop.at) {
-			draw(stop, n, all.length);
-			return;
-		}
-		// The same swap a press on a tab does, so the walk moves the way the
-		// program moves and the screen it lands on is the one the server drew.
-		//
-		// It is written into the browser's history like any other press, and it
-		// has to be: the address bar is what the next stop asks where it is, and a
-		// walk that moved the screen without moving the address would be told it
-		// was still on the screen it left.
-		show(stop.at, true, function () {
-			window.location.assign(stop.at);
-		});
-		var once = function () {
-			window.removeEventListener("gserp:screen", once);
-			if (walking === n) {
-				draw(stop, n, all.length);
-			}
-		};
-		window.addEventListener("gserp:screen", once);
-	}
-
-	// draw puts the note and the ring on the screen, and hangs the presses on
-	// them: one that goes on, and one that gives up.
-	function draw(stop, n, total) {
+	function drawStop(stop, n, total, waiting) {
 		if (!note) {
 			note = document.createElement("div");
 			note.className = "tour";
 			document.body.appendChild(note);
-			window.addEventListener("resize", place);
+			// A resize is the window changing under the note, not the reader
+			// moving about in it, so the thing being pointed at is brought back
+			// into view as well as re-measured. It is also how the note recovers
+			// from being drawn into a window that had no size yet.
+			window.addEventListener("resize", replaceNote);
 			// In the capture phase: what scrolls is usually a box inside the page
 			// rather than the page itself, and a listener on the window alone would
 			// never hear it.
-			window.addEventListener("scroll", place, true);
+			window.addEventListener("scroll", placeNote, true);
 		}
-		var last = n + 1 >= total;
 		note.textContent = "";
 
 		var head = document.createElement("div");
@@ -572,9 +613,9 @@
 		var close = document.createElement("button");
 		close.type = "button";
 		close.className = "tour-close";
-		close.setAttribute("aria-label", document.title);
+		close.setAttribute("aria-label", noteWord("close"));
 		close.textContent = "✕";
-		close.addEventListener("click", walkAway);
+		close.addEventListener("click", endWalk);
 		head.appendChild(title);
 		head.appendChild(close);
 
@@ -587,46 +628,101 @@
 		var count = document.createElement("span");
 		count.className = "tour-count";
 		count.textContent = (n + 1) + "/" + total;
-		var next = document.createElement("button");
-		next.type = "button";
-		next.className = "tour-next";
-		next.textContent = last ? "✓" : "→";
-		next.addEventListener("click", function () {
-			walkTo(n + 1);
-		});
 		foot.appendChild(count);
-		foot.appendChild(next);
+		if (waiting) {
+			// Nothing to press on the note: what moves the walk on is the press it
+			// is pointing at, and a second press here would be a way round the one
+			// thing this stop is teaching.
+			var asked = document.createElement("span");
+			asked.className = "tour-asks";
+			asked.textContent = noteWord("press");
+			foot.appendChild(asked);
+		} else {
+			var last = n + 1 >= total;
+			var next = document.createElement("button");
+			next.type = "button";
+			next.className = "tour-next";
+			next.textContent = last ? "✓" : "→";
+			next.addEventListener("click", function () {
+				if (last) {
+					endWalk();
+					return;
+				}
+				walkGo(n + 1);
+			});
+			foot.appendChild(next);
+		}
 
 		note.appendChild(head);
 		note.appendChild(said);
 		note.appendChild(foot);
-		note.dataset.anchor = stop.anchor;
-		// The thing being pointed at is brought into view before the note is put
-		// beside it. Without this a stop whose thing is below the fold puts the
-		// note where that thing would have been — off the top of the window, with
-		// no ring and nothing to look at.
-		var at = document.querySelector(stop.anchor);
-		if (at && at.scrollIntoView) {
-			at.scrollIntoView({ block: "center", inline: "nearest" });
+		note.dataset.anchor = waiting ? stop.via : stop.anchor;
+		bringIntoView(note.dataset.anchor);
+		placeNote();
+		// A page that is still loading has not had its scroll put back yet. The
+		// browser restores where the reader was after this runs, which would leave
+		// the note pointing at something above the top of the window — so the
+		// thing is brought into view once more when the loading is over.
+		if (document.readyState !== "complete") {
+			window.addEventListener("load", function settled() {
+				window.removeEventListener("load", settled);
+				if (!note) {
+					return;
+				}
+				replaceNote();
+			});
 		}
-		place();
-		next.focus();
+		// The move is only worth watching once the note is somewhere to move from.
+		// Put on after the first placement, and after a frame, so the first note
+		// does not fly in from the corner of the window.
+		window.requestAnimationFrame(function () {
+			if (note) {
+				note.classList.add("tour-moves");
+				if (ring) {
+					ring.classList.add("tour-moves");
+				}
+			}
+		});
 	}
 
-	// place puts the note beside the thing this stop is about, and the ring round
-	// it. A stop whose thing is not on the screen — a screen drawn without it,
-	// because there is nothing to draw — puts the note in the middle and draws no
-	// ring: the words are the point, and a ring round nothing is a lie about where
-	// to look.
-	function place() {
+	// noteWord is the one thing on the note that is not one of the stop's own
+	// phrases. It is read off the page like everything else the walk says.
+	function noteWord(which) {
+		var box = document.getElementById("tour");
+		return box ? box.getAttribute("data-" + which) || "" : "";
+	}
+
+	// replaceNote is the pair of them, for the moments when what changed is the
+	// window rather than where the reader is looking.
+	function replaceNote() {
 		if (!note) {
 			return;
 		}
+		bringIntoView(note.dataset.anchor);
+		placeNote();
+	}
+
+	function bringIntoView(anchor) {
+		var at = anchor ? document.querySelector(anchor) : null;
+		if (at && at.scrollIntoView && at.getBoundingClientRect().height > 0) {
+			at.scrollIntoView({ block: "center", inline: "nearest" });
+		}
+	}
+
+	// placeNote puts the note beside the thing this stop is about, and the ring
+	// round it. A stop whose thing is not on the screen — or is on it and drawn as
+	// nothing, because the form above it has put that box away — puts the note in
+	// the middle and draws no ring: the words are the point, and a ring round
+	// nothing is a lie about where to look.
+	function placeNote() {
+		if (!note || window.innerHeight === 0) {
+			// A window with no height is a window nothing can be placed in: every
+			// measurement below would be against nothing and would put the note
+			// somewhere it can never be seen. The resize that gives the window its
+			// size is what draws it.
+			return;
+		}
 		var at = note.dataset.anchor ? document.querySelector(note.dataset.anchor) : null;
-		// A thing that is on the screen and drawn as nothing — a box the form has
-		// put away because the choices above it made it beside the point — is not
-		// a thing to point at. Its box is nought wide and nought high, and a ring
-		// round it is a ring in the corner of the window with nothing in it.
 		if (at && at.getBoundingClientRect().height === 0) {
 			at = null;
 		}
@@ -661,23 +757,36 @@
 		note.style.top = top + "px";
 	}
 
-	// The press in the header starts it. It is an ordinary link to the screen the
-	// program opens on, so a browser running no script goes there instead of
-	// doing nothing at all.
+	// The press in the header starts it over. It is an ordinary link to the
+	// screen the program opens on and it is left to do exactly that: the walk is
+	// written down first, and the page that lands finds it and draws the first
+	// stop. A browser running no script follows the same link and lands on the
+	// same screen with no walk, which is the nearest thing there is to one.
 	document.addEventListener("click", function (press) {
 		var link = press.target.closest ? press.target.closest("[data-tour]") : null;
 		if (!link || press.defaultPrevented || press.button !== 0) {
 			return;
 		}
-		press.preventDefault();
-		walkTo(0);
+		try {
+			window.sessionStorage.setItem(walkKey, "0");
+		} catch (whatever) {
+			// Nothing to be done, and nothing to break: the link still leads to the
+			// screen the walk would have started on.
+		}
 	});
+
+	// A screen swapped under the walk is the reader having pressed the thing it
+	// was pointing at — or having gone somewhere else entirely. Either way the
+	// same rule settles what to draw.
+	window.addEventListener("gserp:screen", showWalk);
 
 	// And on a machine nobody has run anything on, it starts itself. The server
 	// decides that — it is the one that knows whether this machine has ever been
 	// used — and says so on the page.
-	if (document.querySelector("#tour[data-tour-now]") && stops().length > 0) {
-		walkTo(0);
+	if (walkAt() < 0 && document.querySelector("#tour[data-tour-now]") && stops().length > 0) {
+		walkGo(0);
+	} else {
+		showWalk();
 	}
 
 	shape(document);

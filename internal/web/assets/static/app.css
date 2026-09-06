@@ -902,6 +902,7 @@ legend button {
    whoever is being walked through this is reading one sentence at a time. */
 .tour {
 	background: var(--surface);
+	/* Two pixels of ink round the thing, and a card that walks to it. */
 	border: var(--hairline-width) solid var(--hairline);
 	border-radius: var(--radius-card);
 	display: flex;
@@ -911,6 +912,35 @@ legend button {
 	padding: 0.85rem 1rem;
 	position: fixed;
 	z-index: 3;
+}
+
+/* The move from one stop to the next is watched rather than jumped, because the
+   whole of what this walk teaches is where things are: a card that vanished here
+   and appeared there would say nothing about the way between them.
+
+   It is put on after the first placement, so the first note does not fly in from
+   the corner of the window — and it is taken off entirely for a reader whose
+   machine says it wants no motion, which is not a preference to argue with. */
+.tour-moves {
+	transition: left 0.32s cubic-bezier(0.2, 0.7, 0.3, 1),
+		top 0.32s cubic-bezier(0.2, 0.7, 0.3, 1),
+		width 0.32s cubic-bezier(0.2, 0.7, 0.3, 1),
+		height 0.32s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.tour-moves {
+		transition: none;
+	}
+}
+
+/* What the walk is waiting for, where the press that goes on would have stood.
+   It is not a press: what moves the walk on is the thing it is pointing at, and
+   a second way forward here would be a way round the one thing this stop is
+   teaching. */
+.tour-asks {
+	color: var(--quiet);
+	font-size: var(--small);
 }
 
 /* The name of the stop, and the way out of the walk at the far end of it. */
