@@ -272,3 +272,58 @@ func TestExits_AreNotReportedOnTheScreenTheyAreSetUpOn(t *testing.T) {
 		t.Errorf("the proxies screen offers to take the reader to itself: %q -> %s", one.Said, one.At)
 	}
 }
+
+// markOn is the connection mark as the header draws it: which of the two it is,
+// and what it says in words.
+func markOn(t *testing.T, body string) (string, string) {
+	t.Helper()
+	_, inside, ok := strings.Cut(body, `<span class="reach `)
+	if !ok {
+		return "", ""
+	}
+	inside, _, ok = strings.Cut(inside, "</span>")
+	if !ok {
+		t.Fatalf("the mark never closes:\n%s", body)
+	}
+	which, rest, _ := strings.Cut(inside, `"`)
+	_, said, _ := strings.Cut(rest, `aria-label="`)
+	said, _, _ = strings.Cut(said, `"`)
+	return strings.TrimSpace(which), html.UnescapeString(said)
+}
+
+func TestConnection_IsAMarkRatherThanAWordInTheHeader(t *testing.T) {
+	// The fact every other screen depends on, in the corner of the eye of
+	// somebody watching a run: a tick where the service answers and a cross where
+	// it does not.
+	//
+	// The two differ by shape as well as by colour — a reader who cannot tell
+	// green from red is left with the shape — and what it means is written out
+	// as the mark's own name, which is what a screen reader says and what the
+	// pointer rests on.
+	s := withProfile(t, listing())
+	for _, one := range []struct {
+		reach reach
+		want  string
+	}{
+		{reachGood, "reach-good"},
+		{reachSilent, "reach-bad"},
+		{reachRefused, "reach-bad"},
+		{reachInactive, "reach-bad"},
+		{reachUnset, "reach-bad"},
+	} {
+		s.link.saw(one.reach)
+		which, said := markOn(t, get(t, s, jobsAt).Body.String())
+		if which != one.want {
+			t.Errorf("a connection that is %q is drawn as %q, want %q", one.reach, which, one.want)
+		}
+		if want := "BlankTrail: " + LangEN.T(string(one.reach)); said != want {
+			t.Errorf("the mark for %q is named %q, want %q", one.reach, said, want)
+		}
+	}
+
+	// And nothing at all before anything has been asked.
+	quiet := withProfile(t, listing())
+	if which, _ := markOn(t, get(t, quiet, jobsAt).Body.String()); which != "" {
+		t.Errorf("a connection nothing is known about is drawn as %q", which)
+	}
+}

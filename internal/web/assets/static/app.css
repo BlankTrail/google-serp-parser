@@ -20,6 +20,8 @@
 	--hairline: #d2d2d7;
 	--track: #e8e8ed;
 	--accent: #0071e3;
+	--good: #1a8b3c;
+	--bad: #c8271d;
 
 	--radius-card: 14px;
 	--radius-metric: 10px;
@@ -56,6 +58,8 @@
 	--hairline: #34373d;
 	--track: #2d3036;
 	--accent: #4d86f7;
+	--good: #4bd06f;
+	--bad: #ff6a5e;
 }
 
 *,
@@ -209,14 +213,32 @@ a {
 	outline-offset: 2px;
 }
 
-/* What this program last learned about the thing it runs on, said in the header
-   in the same grey as everything beside it. There is no colour here and no lamp:
-   a light that is green or amber tells nothing to the reader who cannot tell the
-   two apart, and a connection that works is not news. What is worth a colour on
-   this screen is the bar, and a working connection is not worth spending it on.
-   */
+/* What this program last learned about the thing it runs on: a mark in the
+   header, green where the service answers and red where it does not.
+
+   It is the one thing besides the bar that is filled with colour, and it earns
+   it: this is the fact every other screen depends on, and a reader glancing up
+   from a run wants it in the corner of their eye rather than as a word to read.
+   The colour is not the whole of it — the mark is a tick or a cross, so the two
+   are told apart by shape as well, which is what a reader who cannot tell green
+   from red is left with. What it says in words is on the link's own name, for
+   whoever is not looking at it at all. */
 .reach {
-	color: var(--quiet);
+	align-items: center;
+	display: inline-flex;
+}
+
+.reach-mark {
+	height: 15px;
+	width: 15px;
+}
+
+.reach-good {
+	color: var(--good);
+}
+
+.reach-bad {
+	color: var(--bad);
 }
 
 /* Something that is not set up, one to a line, above the screen it is not set

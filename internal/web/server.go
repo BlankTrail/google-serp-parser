@@ -401,6 +401,10 @@ type page struct {
 	// connection to the service, and empty where nothing is known — a server
 	// that keeps no settings, or one that has not finished asking.
 	Link string
+	// Reachable says that phrase is the good one. It is worked out here rather
+	// than in the markup, because which of the five states counts as working is
+	// a decision and a decision can be tested.
+	Reachable bool
 	// Notices are what stands above the screen: one sentence each about
 	// something that is not set up, and one press leading to where it is.
 	//
@@ -426,13 +430,14 @@ func (p page) T(key string) string { return p.Lang.T(key) }
 func (s *Server) frame(r *http.Request, lang Lang, title, under string) page {
 	theme := themeOf(r)
 	p := page{
-		Lang:    lang,
-		Title:   title,
-		Tabs:    tabsFor(under),
-		Dark:    theme == themeDark,
-		Theme:   themeSwitch(r, theme),
-		Link:    string(s.link.last()),
-		Notices: s.noticesFor(r.Context(), under),
+		Lang:      lang,
+		Title:     title,
+		Tabs:      tabsFor(under),
+		Dark:      theme == themeDark,
+		Theme:     themeSwitch(r, theme),
+		Link:      string(s.link.last()),
+		Reachable: s.link.last() == reachGood,
+		Notices:   s.noticesFor(r.Context(), under),
 	}
 	if s.settingsPath != "" {
 		p.Settings = &tabLink{Key: "settings.title", URL: settingsAt, Current: under == settingsAt}

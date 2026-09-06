@@ -44,13 +44,19 @@
      page that cannot save is worse than no link, since the reader finds out
      after filling it in. */}}
 <nav class="tools">
-{{/* What this program last learned about the thing it runs on. It is a word
-     rather than a colour: whether a light is green or amber is a fact half the
-     people reading this cannot get at, and the word is the same size and the
-     same grey as everything else up here because a connection that is working
-     is not news. It is missing altogether where nothing is known — a server
-     that keeps no settings has no connection of its own to report on. */}}
-{{if .Link}}<span class="reach">BlankTrail: {{.T .Link}}</span>{{end}}
+{{/* What this program last learned about the thing it runs on: a tick where the
+     service answers and a cross where it does not.
+
+     The two are told apart by shape as well as by colour, so the reader who
+     cannot tell green from red is not left with nothing, and what it means is
+     written out as the mark's own name — which is what a screen reader says and
+     what the pointer rests on. It is missing altogether where nothing is known:
+     a server that keeps no settings has no connection of its own to report on,
+     and a program that has not finished asking should not answer. */}}
+{{if .Link}}<span class="reach {{if .Reachable}}reach-good{{else}}reach-bad{{end}}" title="BlankTrail: {{.T .Link}}">
+{{if .Reachable}}<svg class="reach-mark" viewBox="0 0 16 16" role="img" aria-label="BlankTrail: {{.T .Link}}"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.6 8.3l2.3 2.3 4.5-4.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+{{else}}<svg class="reach-mark" viewBox="0 0 16 16" role="img" aria-label="BlankTrail: {{.T .Link}}"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>{{end}}
+</span>{{end}}
 {{/* The lights, as a switch rather than as a word. It is one link and it
      navigates, so a browser running no script works it exactly as one running
      the script does; what makes it a switch is the stylesheet and the theme
