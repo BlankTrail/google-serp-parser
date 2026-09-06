@@ -105,12 +105,31 @@ header {
 	margin-right: auto;
 }
 
-/* The screen being read is marked by the line under it going from a hairline to
-   the weight of the text. Colour is not spent on this: the one filled thing on
-   a screen is the bar, and a reader who cannot tell two half-tones apart can
-   still see a line. */
+/* A tab is a place to stand rather than a word in a sentence, so it is drawn as
+   one: a pill, lit under the pointer, filled on the screen being read.
+
+   The border is there on every one of them and shows on none but the current:
+   a border that appeared with the fill would move every tab beside it by half a
+   pixel as the reader crossed the strip. It is written as no colour rather than
+   as a colour, which is what it is. */
+.pages a {
+	border: var(--hairline-width) solid transparent;
+	border-radius: 999px;
+	padding: 0.3rem 0.75rem;
+	text-decoration: none;
+}
+
+.pages a:hover {
+	background: var(--sunken);
+}
+
+/* The screen being read is filled and outlined. No colour is spent on it — the
+   one filled thing on a screen is the bar — and the difference is shape, which
+   is what a reader who cannot tell two half-tones apart is left with. */
 .pages a[aria-current] {
-	text-decoration-color: var(--ink);
+	background: var(--surface);
+	border-color: var(--hairline);
+	font-weight: 500;
 }
 
 /* What is done to the machine is not one of the screens, so it is set smaller
@@ -122,8 +141,20 @@ header {
 	align-items: center;
 	display: flex;
 	flex-wrap: wrap;
-	gap: 0.35rem 1rem;
+	gap: 0.35rem 0.5rem;
 	font-size: var(--small);
+}
+
+/* Drawn like the tabs beside them and a size smaller: they are places to go,
+   not words in a line. */
+.tools a:not(.lights) {
+	border-radius: 999px;
+	padding: 0.25rem 0.6rem;
+	text-decoration: none;
+}
+
+.tools a:not(.lights):hover {
+	background: var(--sunken);
 }
 
 /* The lights: a switch with the two marks in it, and a knob standing on the
@@ -440,6 +471,30 @@ button {
 }
 
 button:hover {
+	background: var(--sunken);
+}
+
+/* A press that happens to be a link.
+   
+   Some of what can be done to a row is a link and some is a form — opening a
+   profile changes nothing and needs no form, deleting one writes and must be a
+   press — and the reader is not being asked to know which. So they are drawn
+   the same: a row of four things to press reads as a row of four things to
+   press, rather than as two words and two buttons. */
+.deeds a,
+.export a {
+	background: var(--surface);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-control);
+	color: var(--ink);
+	display: inline-block;
+	font-size: 0.9rem;
+	padding: 0.45rem 0.95rem;
+	text-decoration: none;
+}
+
+.deeds a:hover,
+.export a:hover {
 	background: var(--sunken);
 }
 
