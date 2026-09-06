@@ -123,6 +123,10 @@ type Server struct {
 	// A field so a test can name a directory of its own, since where a test
 	// binary sits is not something a test can arrange.
 	browseRoot string
+	// link is the last thing learned about the connection to the service, kept
+	// current by a watcher of its own rather than asked after by the pages: every
+	// screen carries it and the busiest of them redraws every three seconds.
+	link link
 	// now is where this server reads the clock. It is a field so that a test can
 	// hold the clock still: how long a job has been running is a number on the
 	// screen, and a test that could not name the instant could only check that
@@ -321,6 +325,12 @@ func BrowserPolls() []string {
 // that receive, so the caller is never told the server has stopped while a page
 // is still going out.
 func (s *Server) ServeHandler(ctx context.Context, ln net.Listener, h http.Handler) error {
+	// What the pages say about the connection is learned here, in the background,
+	// for as long as this server is up. It is started before the socket is
+	// answered so the first page out already carries an answer, and it ends with
+	// the context like everything else this function starts.
+	go s.watchConnection(ctx)
+
 	srv := &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: readHeaderGrace,
@@ -377,6 +387,17 @@ type page struct {
 	Dark bool
 	// Theme is the press that changes that, naming the theme it changes to.
 	Theme themeLink
+	// Link is the phrase naming what this program last learned about its
+	// connection to the service, and empty where nothing is known — a server
+	// that keeps no settings, or one that has not finished asking.
+	Link string
+	// Notices are what stands above the screen: one sentence each about
+	// something that is not set up, and one press leading to where it is.
+	//
+	// They are on the frame rather than on a screen because they are true
+	// wherever the reader is standing. A banner drawn by the screen that happened
+	// to notice would be a banner that appears on that screen and nowhere else.
+	Notices []notice
 }
 
 // T is how a template asks for a phrase. Templates name a key and never a
@@ -395,11 +416,13 @@ func (p page) T(key string) string { return p.Lang.T(key) }
 func (s *Server) frame(r *http.Request, lang Lang, title, under string) page {
 	theme := themeOf(r)
 	p := page{
-		Lang:  lang,
-		Title: title,
-		Tabs:  tabsFor(under),
-		Dark:  theme == themeDark,
-		Theme: themeSwitch(r, theme),
+		Lang:    lang,
+		Title:   title,
+		Tabs:    tabsFor(under),
+		Dark:    theme == themeDark,
+		Theme:   themeSwitch(r, theme),
+		Link:    string(s.link.last()),
+		Notices: s.noticesFor(r.Context(), under),
 	}
 	if s.settingsPath != "" {
 		p.Settings = &tabLink{Key: "settings.title", URL: settingsAt, Current: under == settingsAt}

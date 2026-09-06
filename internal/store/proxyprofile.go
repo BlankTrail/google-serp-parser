@@ -66,6 +66,32 @@ type Profile struct {
 	Default bool
 }
 
+// Empty reports whether this profile names no way out at all, so a job run on
+// it would go out from this machine's own address.
+//
+// It is a question worth asking because it is the ordinary state of a machine
+// that has just been installed: a profile is written on the first start out of
+// whatever the settings named, and on a fresh machine the settings name
+// nothing. The profile is there, it is the default, and it sends every request
+// from the address the operator is sitting at — which is the one thing this
+// program exists to avoid, and the one thing nothing on any screen used to say.
+//
+// Each source is asked what it needs and nothing more. A list is a path or an
+// address and is nothing without one; the gateways live in the service, so what
+// makes that source empty is naming none of them.
+func (p Profile) Empty() bool {
+	switch p.Kind {
+	case "file", "url":
+		return strings.TrimSpace(p.Location) == ""
+	// The word is written here rather than taken from the settings package: the
+	// column holds it, this package reads that column, and a store that imported
+	// the settings to name its own data would be the wrong way round.
+	case "gateways":
+		return len(p.Gateways) == 0
+	}
+	return true
+}
+
 // profileColumns is the read half of every query below, written once so a
 // column added to the table cannot be added to one query and forgotten in
 // another.

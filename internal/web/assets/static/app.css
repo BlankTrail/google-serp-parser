@@ -135,6 +135,47 @@ a {
 	outline-offset: 2px;
 }
 
+/* What this program last learned about the thing it runs on, said in the header
+   in the same grey as everything beside it. There is no colour here and no lamp:
+   a light that is green or amber tells nothing to the reader who cannot tell the
+   two apart, and a connection that works is not news. What is worth a colour on
+   this screen is the bar, and a working connection is not worth spending it on.
+   */
+.reach {
+	color: var(--quiet);
+}
+
+/* Something that is not set up, one to a line, above the screen it is not set
+   up on. */
+.banners {
+	display: flex;
+	flex-direction: column;
+	gap: 0.6rem;
+}
+
+/* The sentence and the way to the screen that answers it, on one line while
+   there is room and on two when there is not.
+
+   It is drawn as a card that has sunk rather than as an alarm: what it says is
+   that something has not been done, which is the state every fresh install is
+   in, and a program that met its new reader with a red box would be a program
+   reporting their own arrival as a fault. */
+.banner {
+	align-items: baseline;
+	background: var(--sunken);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-card);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem 1rem;
+	justify-content: space-between;
+	padding: 0.75rem 1rem;
+}
+
+.banner p {
+	margin: 0;
+}
+
 /* The gap between the blocks of a page is the page's structure. Nothing below
    draws a line to do the same work twice. */
 main {

@@ -324,6 +324,29 @@ var catalogue = map[Lang]map[string]string{
 		"state.class.serp":           "a page of results",
 		"state.class.silent":         "no answer at all",
 
+		// What this program last learned about the service it runs on, as the
+		// header says it, and as a banner says it where it is worth stopping the
+		// reader over. The banner names the state and never the remedy: the press
+		// beside it is the remedy.
+		"link.good":     "connected",
+		"link.unset":    "not set up",
+		"link.silent":   "not answering",
+		"link.refused":  "key refused",
+		"link.inactive": "licence inactive",
+
+		"notice.unset":    "The connection to BlankTrail has not been set up yet, so nothing can be run.",
+		"notice.silent":   "BlankTrail is not answering, so nothing can be run.",
+		"notice.refused":  "BlankTrail would not take the key it was given.",
+		"notice.inactive": "The BlankTrail licence is not active, so no port will open.",
+		"notice.settings": "Open the settings",
+
+		// The exits a job runs through when it names none. A profile with nothing
+		// in it is what a machine has on the day it is installed, and a run on it
+		// goes out from the address the operator is sitting at.
+		"notice.profile.none":  "There is no proxy profile, so a job has nothing to go out through.",
+		"notice.profile.empty": "The default proxy profile names no exits, so a job would go out from this machine's own address.",
+		"notice.profile.press": "Set the exits up",
+
 		// The lights. Each phrase names the theme the press brings, not the one
 		// the reader is in: a switch labelled with where it already is gets
 		// pressed by everybody who wants to stay there.
@@ -641,6 +664,22 @@ var catalogue = map[Lang]map[string]string{
 		"state.class.empty":          "ничего не найдено",
 		"state.class.serp":           "страница выдачи",
 		"state.class.silent":         "ответа не было",
+
+		"link.good":     "связь есть",
+		"link.unset":    "не настроена",
+		"link.silent":   "не отвечает",
+		"link.refused":  "ключ отклонён",
+		"link.inactive": "лицензия неактивна",
+
+		"notice.unset":    "Связь с BlankTrail ещё не настроена — запустить ничего нельзя.",
+		"notice.silent":   "BlankTrail не отвечает — запустить ничего нельзя.",
+		"notice.refused":  "BlankTrail не принял ключ.",
+		"notice.inactive": "Лицензия BlankTrail неактивна — порты не откроются.",
+		"notice.settings": "Открыть настройки",
+
+		"notice.profile.none":  "Профилей прокси нет — заданию не через что выходить.",
+		"notice.profile.empty": "В профиле по умолчанию не указаны выходы — задание пойдёт с адреса этой машины.",
+		"notice.profile.press": "Настроить выходы",
 
 		"theme.dark":  "Тёмная",
 		"theme.light": "Светлая",

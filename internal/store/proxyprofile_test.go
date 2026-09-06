@@ -332,3 +332,36 @@ func TestCarryProxySettings_WritesOneProfileAndThenLeavesItAlone(t *testing.T) {
 		t.Errorf("%d profiles after the carried one was renamed, want one: a start after a rename carried the settings again", len(all))
 	}
 }
+
+func TestProfile_IsEmptyWhenItNamesNoWayOut(t *testing.T) {
+	// A profile that names nothing sends every request from the machine the
+	// operator is sitting at. That is the state a fresh install is in — the
+	// first profile is written out of settings that named nothing — and it is
+	// worth telling apart from a profile that is set up, because everything else
+	// about the two looks the same.
+	//
+	// Each source is asked what it needs and nothing else: a list is a path or an
+	// address, and the gateways live in the service, so what makes that one empty
+	// is naming none of them.
+	for _, one := range []struct {
+		said  string
+		p     Profile
+		empty bool
+	}{
+		{"a profile with nothing in it", Profile{Name: "Default"}, true},
+		{"a file with no path", Profile{Name: "a", Kind: "file"}, true},
+		{"a file", Profile{Name: "a", Kind: "file", Location: "proxies.txt"}, false},
+		{"an address with nothing at it", Profile{Name: "a", Kind: "url", Location: "  "}, true},
+		{"an address", Profile{Name: "a", Kind: "url", Location: "http://list.example/p"}, false},
+		{"the gateways, none of them chosen", Profile{Name: "a", Kind: "gateways"}, true},
+		{"the gateways", Profile{Name: "a", Kind: "gateways", Gateways: []string{"one"}}, false},
+		// A path left behind under the gateways is not a way out: what that
+		// source uses is the list of names beside it, and nothing else.
+		{"the gateways, with an old path still in the box",
+			Profile{Name: "a", Kind: "gateways", Location: "proxies.txt"}, true},
+	} {
+		if got := one.p.Empty(); got != one.empty {
+			t.Errorf("%s reads as empty=%v, want %v", one.said, got, one.empty)
+		}
+	}
+}

@@ -44,6 +44,13 @@
      page that cannot save is worse than no link, since the reader finds out
      after filling it in. */}}
 <nav class="tools">
+{{/* What this program last learned about the thing it runs on. It is a word
+     rather than a colour: whether a light is green or amber is a fact half the
+     people reading this cannot get at, and the word is the same size and the
+     same grey as everything else up here because a connection that is working
+     is not news. It is missing altogether where nothing is known — a server
+     that keeps no settings has no connection of its own to report on. */}}
+{{if .Link}}<span class="reach">BlankTrail: {{.T .Link}}</span>{{end}}
 <a href="{{.Theme.URL}}">{{.T .Theme.Key}}</a>
 {{with .Settings}}{{if .Current}}<a href="{{.URL}}" aria-current="page">{{$.T .Key}}</a>{{else}}<a href="{{.URL}}">{{$.T .Key}}</a>{{end}}{{end}}
 </nav>
@@ -52,6 +59,24 @@
      says so here. A screen that has nothing moving on it carries no interval and
      is asked for nothing more. */}}
 <main id="page"{{if .Refresh}} data-refresh="{{.Refresh}}"{{end}}>
+{{/* Something that is not set up, above the screen rather than on it, with the
+     one press that leads to where it is set up.
+
+     They stand inside the screen and not between it and the header, because
+     this is the part the script replaces: a banner drawn outside it would go on
+     saying the connection is down for as long as the tab stayed open, and the
+     reader who had just fixed it would be the last to know. Here it goes on the
+     redraw that follows the fix. */}}
+{{with .Notices}}
+<div class="banners">
+{{range .}}
+<div class="banner">
+<p>{{$.T .Key}}</p>
+<a href="{{.URL}}">{{$.T .Press}}</a>
+</div>
+{{end}}
+</div>
+{{end}}
 {{block "main" .}}{{end}}
 </main>
 {{/* One script, out of this binary, after the page it improves. Everything on
