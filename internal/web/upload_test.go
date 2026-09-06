@@ -984,8 +984,8 @@ func TestUpload_SetsUpTheSameJobAsTheDoorBesideIt(t *testing.T) {
 		// whether the box survives the door, and the column holds whatever it is
 		// given — a job naming a profile that is gone runs on the default.
 		"profile": "7",
-		"threads":  "13",
-		"ports":    "2",
+		"threads": "13",
+		"ports":   "2",
 	}
 
 	plain := testServerHolding(t)
