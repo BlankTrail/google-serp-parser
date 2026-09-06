@@ -26,20 +26,34 @@ import (
 func (r *Runner) ResolveLinks(ctx context.Context, rep *Report, workers int) google.ResolveReport {
 	var total google.ResolveReport
 	for i := range rep.Results {
-		pages := rep.Results[i].Pages
-		for p := range pages {
-			if err := ctx.Err(); err != nil {
-				// One account of why the rest was left, rather than the same
-				// one against every page still to come.
-				total.Errs = append(total.Errs, err)
-				return total
-			}
-			one := r.resolvePage(ctx, &pages[p], workers)
-			total.Attempted += one.Attempted
-			total.Resolved += one.Resolved
-			total.Failed += one.Failed
-			total.Errs = append(total.Errs, one.Errs...)
+		if err := ctx.Err(); err != nil {
+			// One account of why the rest was left, rather than the same one
+			// against every query still to come.
+			total.Errs = append(total.Errs, err)
+			return total
 		}
+		gather(&total, r.resolveQuery(ctx, &rep.Results[i], workers))
+	}
+	return total
+}
+
+// resolveQuery fills in the addresses missing from one query's pages.
+//
+// This is where a job that writes as it goes has to do it. The comment above
+// says the lookups belong after the capture rather than during it, and they
+// still do — but "after the job" is too late for a run whose results reach the
+// history one query at a time: a row already written has nowhere to put an
+// address discovered afterwards, and there is no path that goes back for it.
+// One query is where the two meet. The walk of that query's pages is over
+// before any of this runs.
+func (r *Runner) resolveQuery(ctx context.Context, res *QueryResult, workers int) google.ResolveReport {
+	var total google.ResolveReport
+	for p := range res.Pages {
+		if err := ctx.Err(); err != nil {
+			total.Errs = append(total.Errs, err)
+			return total
+		}
+		gather(&total, r.resolvePage(ctx, &res.Pages[p], workers))
 	}
 	return total
 }
@@ -80,4 +94,30 @@ func needsResolving(serp *google.SERP) bool {
 		}
 	}
 	return false
+}
+
+// gather adds one page's account to the running total, so a caller looking at
+// many pages ends with one account of the whole rather than a slice of them.
+func gather(total *google.ResolveReport, one google.ResolveReport) {
+	total.Attempted += one.Attempted
+	total.Resolved += one.Resolved
+	total.Failed += one.Failed
+	total.Errs = append(total.Errs, one.Errs...)
+}
+
+// resolveWorkers is how many of one page's links are looked up at a time.
+//
+// They go through one identity, and the pool holds that identity to its own
+// per-address limit whatever this says, so a larger number here buys queueing
+// rather than speed. Four is what a page of ten hidden addresses clears in
+// three rounds without asking the pool for a second port.
+const resolveWorkers = 4
+
+// firstOf is the one error worth putting against a step. A step carries one,
+// and a page whose every lookup failed failed for one reason.
+func firstOf(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs[0]
 }

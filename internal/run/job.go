@@ -86,6 +86,22 @@ type Job struct {
 	// recorded as failed. Non-positive means defaultTries.
 	Tries int
 
+	// Addresses asks for the addresses the page would not state to be looked up
+	// before each result is written down.
+	//
+	// Some regions are answered with an encrypted link — "/goto?url=…" — which
+	// carries no address at all: the destination is not in the markup and there
+	// is nowhere but the link itself to get it from. Without this, every result
+	// of such a page is recorded with an empty address, and no later pass can
+	// mend it, because the link it would have been read from was not kept
+	// either.
+	//
+	// It is asked for rather than assumed because it is not free: one request
+	// per result that arrived without an address, measured at 19 of 54 on one
+	// live page and none of about 60 on another. A job that does not keep the
+	// address buys nothing with them.
+	Addresses bool
+
 	// Asking, when set, is told the address of each search as it goes out, from
 	// whichever thread is making it. It is what a screen showing "what is this
 	// job doing now" is drawn from, and it is a job's rather than a runner's
@@ -258,6 +274,23 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 					return
 				}
 				r.step(thread, StageAsk, asked, text, results[i].Err)
+
+				// Before the sink and not after the job: what is written is
+				// what is kept, and a result written with no address stays
+				// without one.
+				//
+				// What gets looked up is decided by what was captured and not
+				// by how the query ended — a walk that failed on its fourth
+				// page still hands back three, and those results are as worth
+				// completing as any others. A lookup that fails is not the
+				// query failing: the capture stands, and the address is the
+				// one thing that could not be had.
+				if j.Addresses {
+					looked := time.Now()
+					filled := r.resolveQuery(ctx, &results[i], resolveWorkers)
+					r.step(thread, StageResolve, looked, text, firstOf(filled.Errs))
+				}
+
 				if r.Sink != nil {
 					// The failures go to the sink as well as the successes.
 					// A query whose failure was never written down is one a

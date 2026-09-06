@@ -5,8 +5,10 @@ package run
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -279,5 +281,91 @@ func TestRunner_StopsOnceTheCallerHasGoneAndSaysSoOnce(t *testing.T) {
 	}
 	if n := d.asked.Load(); n != 0 {
 		t.Errorf("%d requests made after the caller had already gone", n)
+	}
+}
+
+// hidingOrigin is a search host of the kind that answers with encrypted links:
+// the markup carries "/goto?url=…" and no address at all, and the address is
+// readable only by asking that link where it goes.
+//
+// One server answers both, because that is how the page arrives — the link is
+// origin-relative, so it is fetched from the host that served the page.
+func hidingOrigin(t *testing.T, searches, lookups *atomic.Int64) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/goto"):
+			lookups.Add(1)
+			w.Header().Set("Location", "https://example.com/page")
+			w.WriteHeader(http.StatusFound)
+		case strings.HasPrefix(r.URL.Path, "/search"):
+			searches.Add(1)
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			_, _ = io.WriteString(w, `<!doctype html><html><body><div id="search"><div data-snc="x">`+
+				`<a href="/goto?url=CAESXAHuR6pN7OGc" data-ved="2"><h3>Title</h3></a>`+
+				`<cite>example.com</cite></div></div></body></html>`)
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			_, _ = io.WriteString(w, `<!doctype html><html><body><div id="main"></div></body></html>`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestRunner_WritesDownTheAddressOnARegionThatHidesIt(t *testing.T) {
+	// A whole region is answered with encrypted links, and the parser leaves the
+	// address empty for them on purpose: it is not in the markup. Filling it in
+	// is a step of its own, and for a job that writes as it goes that step has to
+	// happen before the write — a row already in the history has nowhere to put
+	// an address found later, and there is no pass that goes back for one.
+	//
+	// This was live for a whole release. A job of 36 044 results was recorded
+	// with an empty address in every one of them, its "unique by url" filter
+	// dropped nothing because an empty address is no key, and the operator was
+	// left with a page of ranks against blanks.
+	var searches, lookups atomic.Int64
+	o := hidingOrigin(t, &searches, &lookups)
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink}
+	rep := r.Run(context.Background(), Job{
+		Queries:   usQueries(1),
+		Pages:     1,
+		Addresses: true,
+	})
+
+	if rep.Done != 1 {
+		t.Fatalf("Done=%d, want 1 (failed %d, untried %d)", rep.Done, rep.Failed, rep.Untried)
+	}
+	got := sink.records()
+	if len(got) != 1 || len(got[0].Pages) != 1 || len(got[0].Pages[0].Results) != 1 {
+		t.Fatalf("the sink was handed %+v, want one result on one page", got)
+	}
+	res := got[0].Pages[0].Results[0]
+	if res.URL == "" {
+		t.Errorf("the result reached the sink with no address, only the link %q — "+
+			"everything written from this page is a rank against a blank", res.Link)
+	}
+	if lookups.Load() == 0 {
+		t.Error("the hidden address was never asked for")
+	}
+}
+
+func TestRunner_LeavesTheHiddenAddressesAloneForAJobThatKeepsNone(t *testing.T) {
+	// The lookups cost a request each. A job that does not keep the address has
+	// nowhere to put one, so it must not pay for them — which is also what makes
+	// the switch above worth having rather than always resolving.
+	var searches, lookups atomic.Int64
+	o := hidingOrigin(t, &searches, &lookups)
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink}
+	r.Run(context.Background(), Job{Queries: usQueries(1), Pages: 1})
+
+	if lookups.Load() != 0 {
+		t.Errorf("%d addresses were looked up for a job that keeps none", lookups.Load())
 	}
 }

@@ -23,6 +23,12 @@ const (
 	StageLease Stage = "waited for an identity"
 	// StageAsk is the request itself, which is the one wait that is the work.
 	StageAsk Stage = "asked"
+	// StageResolve is looking up the addresses the page would not state. It is
+	// its own stage because it is its own requests: a region answered with
+	// encrypted links spends one here per result, and a run that got slower
+	// after moving to such a region has the reason in this line rather than in
+	// a search that suddenly takes twice as long.
+	StageResolve Stage = "looked up the hidden addresses"
 	// StageRecord is writing the result down.
 	StageRecord Stage = "recorded"
 	// StageQuery is the whole of one query, from taking it to writing it down,

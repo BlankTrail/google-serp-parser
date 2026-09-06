@@ -296,6 +296,10 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 		Ordinals: p.ordinals,
 		Pages:    p.spec.Pages,
 		Mobile:   p.spec.Device == blanktrail.DeviceMobile,
+		// Looked up only for a job that keeps the address: they cost a request
+		// each, and a job keeping the title and the domain has nowhere to put
+		// one.
+		Addresses: p.spec.Fields.Keeps(store.FieldURL),
 	}
 	// The estimate is printed on every run, not only on a dry one: the number a
 	// user is about to spend is worth a line whether or not they asked for it.

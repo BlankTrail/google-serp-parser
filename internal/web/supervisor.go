@@ -852,9 +852,13 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSumm
 	// Mobile reaches the run because one header depends on it: what a browser
 	// will accept differs between a phone and a desktop, and the ports were
 	// already opened as one or the other.
+	// The addresses Google would not state are looked up only for a job that
+	// keeps the address. A job that keeps the title and the domain has nowhere
+	// to put one, and the lookups are a request apiece.
 	j := run.Job{Kind: runKind(sum.Kind), Target: sum.Target,
 		Pages: sum.Pages, Tries: sum.Tries,
-		Mobile: runsOnPhones(sum.Device)}
+		Mobile:    runsOnPhones(sum.Device),
+		Addresses: sum.Fields.Keeps(store.FieldURL)}
 	for _, q := range left {
 		j.Queries = append(j.Queries,
 			google.Query{Text: q.Text, Country: sum.Country, Language: sum.Language})
