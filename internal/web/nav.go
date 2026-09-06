@@ -46,10 +46,13 @@ type tab struct {
 //
 // What is happening comes first because it is what the reader opened this for:
 // whoever has the program up all day is following a run, not filling in a form.
+// Setting a job up is not one of them. It is something done to the list of
+// jobs — the press that opens the form stands on that list, and the form itself
+// stands under it — and a tab of its own put a form beside four screens that
+// report, which is one of five presses being a different kind of thing.
 var tabs = []tab{
 	{Key: "state.title", At: stateAt},
 	{Key: "jobs.title", At: jobsAt},
-	{Key: "new.title", At: newAt},
 	{Key: "proxies.title", At: proxiesAt},
 	{Key: "history.title", At: historyAt},
 }

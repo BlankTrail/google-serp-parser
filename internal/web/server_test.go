@@ -216,14 +216,29 @@ func TestServer_ChoosesTheLanguageInTheSettingsAndNotAlongTheTop(t *testing.T) {
 	}
 }
 
-func TestServer_OffersTheFormThatStartsAJobFromEveryPage(t *testing.T) {
-	// Starting a job is what this program is for, and until now its page was
-	// reachable only by typing the address. A page nothing links to is a page
-	// nobody finds.
+func TestServer_OffersTheFormThatStartsAJobWhereJobsAreRead(t *testing.T) {
+	// Starting a job is what this program is for, and the press that does it
+	// stands where jobs are read: on the list of them, and on the screen the
+	// work is watched from while nothing is running. A page nothing links to is
+	// a page nobody finds.
 	s := testServer(t)
-	for _, at := range []string{"/", "/history", "/new"} {
+	for _, at := range []string{jobsAt, stateAt} {
 		if body := get(t, s, at).Body.String(); !strings.Contains(body, `href="/new"`) {
-			t.Errorf("%s does not offer the page that starts a job:\n%s", at, body)
+			t.Errorf("%s does not offer the form that starts a job:\n%s", at, body)
+		}
+	}
+
+	// And it is not one of the screens. The strip of tabs is what a reader
+	// watches the work from; a form standing among four screens that report is
+	// one press in five being a different kind of thing.
+	for _, t2 := range tabs {
+		if t2.At == newAt {
+			t.Errorf("the form that starts a job is a tab again")
+		}
+	}
+	for _, shown := range tabsOffered(t, get(t, s, jobsAt).Body.String()) {
+		if shown.At == newAt {
+			t.Errorf("the strip of tabs carries the form that starts a job")
 		}
 	}
 }
