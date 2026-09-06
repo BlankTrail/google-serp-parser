@@ -106,8 +106,12 @@ it is off until you turn it on — see
 On a machine nothing has been run on yet it **walks you through the interface**:
 seven stops, each a note beside the thing it is talking about — the screens, the
 key, the exits, where a job is started, what a job asks for, and where to see
-that the machine can reach anything at all. One sentence a stop. Close it with
-the cross at any point; it is in the header afterwards for whenever it is wanted.
+that the machine can reach anything at all. One sentence a stop.
+
+It does not move the program for you. A stop on another screen outlines the
+press that leads there and waits; you press it, and the note follows you across
+and settles beside the next thing. Close it with the cross at any point; it is in
+the header afterwards for whenever it is wanted.
 
 ### Windows says it protected your PC
 
