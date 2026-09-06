@@ -124,7 +124,12 @@ func (e *poolEngine) Pool() poolFacts {
 //
 // The context is the job's: a job stopped while its pool is still going up stops
 // there, rather than after ports it will never use have been opened.
-type Dial func(ctx context.Context, ports, threads int, device string, cooldown time.Duration) (engine, error)
+//
+// The profile is where the exits come from, and it is passed rather than looked
+// up behind this: which addresses a job runs through is a property of the job,
+// read once when its turn comes, so a profile edited between two jobs takes
+// effect on the second and not in the middle of the first.
+type Dial func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration) (engine, error)
 
 // OpenPool opens the identities one job asked to run on. It is Dial as a caller
 // outside this package can write it: what a pool is opened as, how long its
@@ -132,7 +137,7 @@ type Dial func(ctx context.Context, ports, threads int, device string, cooldown 
 // command that starts this server, and an interface with a second opinion about
 // that would give a job set up here a different cost from the same job set up
 // there.
-type OpenPool func(ctx context.Context, ports, threads int, device string, cooldown time.Duration) (*blanktrail.Pool, error)
+type OpenPool func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration) (*blanktrail.Pool, error)
 
 // source is where the pool for the next job comes from.
 //
@@ -157,8 +162,10 @@ func standing(eng engine) source {
 		return source{}
 	}
 	return source{
-		raise: func(context.Context, int, int, string, time.Duration) (engine, error) { return eng, nil },
-		held:  eng,
+		raise: func(context.Context, store.Profile, int, int, string, time.Duration) (engine, error) {
+			return eng, nil
+		},
+		held: eng,
 	}
 }
 
@@ -167,8 +174,8 @@ func dialing(open OpenPool, watch run.Watch) source {
 	if open == nil {
 		return source{}
 	}
-	return source{raise: func(ctx context.Context, ports, threads int, device string, cooldown time.Duration) (engine, error) {
-		pool, err := open(ctx, ports, threads, device, cooldown)
+	return source{raise: func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration) (engine, error) {
+		pool, err := open(ctx, prof, ports, threads, device, cooldown)
 		if err != nil {
 			return nil, err
 		}
@@ -688,7 +695,20 @@ func (v *Supervisor) next() (int64, context.Context, source, bool) {
 // pool, and keeping it inside the source rather than as a case here is what stops
 // the rest of this file from having to know which kind of source it is holding.
 func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary) (engine, error) {
-	eng, err := src.raise(ctx, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown)
+	// Which exits this job runs through, read now rather than when it was set
+	// up: a profile is named by its id, so an edit to it reaches every job of
+	// its that has not started yet — which is the whole reason a job names one
+	// instead of carrying a copy.
+	//
+	// A job whose profile has been deleted, and a database with no profiles at
+	// all, both come back as the zero profile rather than as a refusal: a job
+	// that cannot start is worse than a job that starts on the exits everything
+	// else is using, and that is what every job did before profiles existed.
+	prof, err := v.st.ProfileFor(ctx, sum.ProfileID)
+	if err != nil && !errors.Is(err, store.ErrNoProfile) {
+		return nil, err
+	}
+	eng, err := src.raise(ctx, prof, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown)
 	if err != nil {
 		return nil, err
 	}

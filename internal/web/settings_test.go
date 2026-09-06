@@ -35,18 +35,22 @@ import (
 var errNoLivePool = errors.New("no pool is opened in these tests")
 
 type stubConnect struct {
-	mu    sync.Mutex
-	with  []settings.Settings
-	sizes [][2]int
-	gaps  []time.Duration
-	err   error
+	mu   sync.Mutex
+	with []settings.Settings
+	// through is the profile each raise was asked for, so a test can ask which
+	// exits a job would have gone out by as well as which connection.
+	through []store.Profile
+	sizes   [][2]int
+	gaps    []time.Duration
+	err     error
 }
 
-func (c *stubConnect) open(_ context.Context, saved settings.Settings, ports, threads int,
-	_ string, cooldown time.Duration) (*blanktrail.Pool, error) {
+func (c *stubConnect) open(_ context.Context, saved settings.Settings, prof store.Profile,
+	ports, threads int, _ string, cooldown time.Duration) (*blanktrail.Pool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.with = append(c.with, saved)
+	c.through = append(c.through, prof)
 	c.sizes = append(c.sizes, [2]int{ports, threads})
 	c.gaps = append(c.gaps, cooldown)
 	if c.err != nil {

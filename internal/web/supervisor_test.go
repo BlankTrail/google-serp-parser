@@ -197,7 +197,12 @@ func (e *heldEngine) took(query string) bool {
 }
 
 // poolShape is the size one job asked the pool raised for it to be.
-type poolShape struct{ Ports, Threads int }
+// poolShape is one raise as the stub saw it: the size asked for and the profile
+// the exits were to come from.
+type poolShape struct {
+	Ports, Threads int
+	Profile        int64
+}
 
 // raisedPools stands where the pools go.
 //
@@ -222,10 +227,10 @@ type raisedPools struct {
 }
 
 // raise is the Dial a supervisor is built on.
-func (r *raisedPools) raise(_ context.Context, ports, threads int, _ string,
+func (r *raisedPools) raise(_ context.Context, prof store.Profile, ports, threads int, _ string,
 	_ time.Duration) (engine, error) {
 	r.mu.Lock()
-	r.asked = append(r.asked, poolShape{Ports: ports, Threads: threads})
+	r.asked = append(r.asked, poolShape{Ports: ports, Threads: threads, Profile: prof.ID})
 	if r.refuse != nil {
 		err := r.refuse
 		r.mu.Unlock()
@@ -468,7 +473,7 @@ func standInPools(t *testing.T) (OpenPool, *fakebt.Server) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	return func(ctx context.Context, ports, threads int, device string,
+	return func(ctx context.Context, _ store.Profile, ports, threads int, device string,
 		_ time.Duration) (*blanktrail.Pool, error) {
 		return blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 			Specs:            blanktrail.SpecsFor(device),
@@ -497,7 +502,7 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	open, fake := standInPools(t)
 	ctx := t.Context()
 
-	proof, err := open(ctx, 2, 1, blanktrail.DeviceDesktop, 0)
+	proof, err := open(ctx, store.Profile{}, 2, 1, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening a pool: %v", err)
 	}
@@ -515,12 +520,12 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	// supervisor that never opened a pool at all would leave behind.
 	var counting sync.Mutex
 	opened := 0
-	count := func(ctx context.Context, ports, threads int, device string,
+	count := func(ctx context.Context, prof store.Profile, ports, threads int, device string,
 		_ time.Duration) (*blanktrail.Pool, error) {
 		counting.Lock()
 		opened++
 		counting.Unlock()
-		return open(ctx, ports, threads, device, 0)
+		return open(ctx, prof, ports, threads, device, 0)
 	}
 	raised := func() int {
 		counting.Lock()
@@ -972,7 +977,7 @@ func TestReconnect_ChangesWhereTheNextJobsPoolComesFrom(t *testing.T) {
 	// the only way it can is by changing what raises their pools.
 	v, _, _ := heldSupervisor(t)
 	next := &heldEngine{}
-	if err := v.Reconnect(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -991,7 +996,7 @@ func TestReconnect_LeavesTheJobInFlightOnThePoolItRaised(t *testing.T) {
 	id := enqueue(t, v, "one", "a")
 	waitUntilRunning(t, v, id)
 
-	if err := v.Reconnect(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1011,7 +1016,7 @@ func TestReconnect_GivesUpAStandingSetOfIdentitiesNobodyIsInside(t *testing.T) {
 	// follow raise their own, those ports are nobody's, and left open they are
 	// held for as long as the process runs.
 	v, _, standing := heldSupervisor(t)
-	if err := v.Reconnect(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
+	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1037,7 +1042,7 @@ func TestSupervisor_RefusesARaiseThatCameBackWithNeitherAPoolNorAReason(t *testi
 	// that caused it. It is refused where it happens instead, and the job stays
 	// there to be carried on.
 	st := testStore(t)
-	v := start(st, dialing(func(context.Context, int, int, string, time.Duration) (*blanktrail.Pool, error) {
+	v := start(st, dialing(func(context.Context, store.Profile, int, int, string, time.Duration) (*blanktrail.Pool, error) {
 		return nil, nil
 	}, nil), 1, 1)
 	t.Cleanup(func() { _ = v.Close() })
@@ -1201,7 +1206,7 @@ func TestSupervisor_RaisesThePoolAsTheKindOfPageTheJobAskedFor(t *testing.T) {
 	st := testStore(t)
 	var asked []string
 	var mu sync.Mutex
-	v := start(st, source{raise: func(_ context.Context, _, _ int, device string, _ time.Duration) (engine, error) {
+	v := start(st, source{raise: func(_ context.Context, _ store.Profile, _, _ int, device string, _ time.Duration) (engine, error) {
 		mu.Lock()
 		asked = append(asked, device)
 		mu.Unlock()
@@ -1331,5 +1336,61 @@ func TestSupervisor_ReportsNothingBeforeAnythingHasRun(t *testing.T) {
 
 	if got := v.pool(); got.Stats.Ports != 0 || got.Stats.EgressRotations != 0 {
 		t.Errorf("a supervisor that has run nothing reports %+v", got.Stats)
+	}
+}
+
+func TestSupervisor_RaisesEachJobOnTheProfileItNames(t *testing.T) {
+	// Which exits a job goes out by is the job's own property now, and this is
+	// the seam where it becomes ports: the queue reads the profile the job named
+	// and hands it to whatever opens the pool. A job run through the wrong list
+	// is the fault nothing on any screen would show — the page says one thing
+	// and the traffic goes out another way.
+	//
+	// Asked of the raise itself rather than through the queue: what is under
+	// test is which profile reaches the raiser, and driving two jobs through a
+	// held engine to find that out would be a test about the queue.
+	pools := &raisedPools{}
+	v, st := raisingSupervisor(t, pools, 1, 1)
+	ctx := t.Context()
+
+	def, err := st.CreateProfile(ctx, store.Profile{Name: "the default one"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	other, err := st.CreateProfile(ctx, store.Profile{Name: "the other one"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	for _, job := range []struct {
+		what  string
+		named int64
+		want  int64
+	}{
+		{"a job that named a profile", other, other},
+		// Nought is not a missing value: it is "whichever is default", which is
+		// what every job written before profiles existed carries.
+		{"a job that named none", 0, def},
+		// And a profile that has since been deleted, which must not stop a job
+		// with queries still waiting from starting at all.
+		{"a job whose profile is gone", 9999, def},
+	} {
+		eng, err := v.raise(ctx, source{raise: pools.raise}, store.JobSummary{
+			ProfileID: job.named, Ports: 2, Threads: 1, Device: blanktrail.DeviceDesktop,
+		})
+		if err != nil {
+			t.Fatalf("raising for %s: %v", job.what, err)
+		}
+		_ = eng.Close()
+	}
+
+	shapes := pools.shapes()
+	if len(shapes) != 3 {
+		t.Fatalf("%d pools were raised, want three: %v", len(shapes), shapes)
+	}
+	for i, want := range []int64{other, def, def} {
+		if shapes[i].Profile != want {
+			t.Errorf("raise %d went out on profile %d, want %d", i+1, shapes[i].Profile, want)
+		}
 	}
 }

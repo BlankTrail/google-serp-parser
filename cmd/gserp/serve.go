@@ -357,7 +357,17 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 			cfg.OnLease = o.leaseTracer()
 			return openPool(ctx, io.Discard, cfg)
 		}
-		return o.dial(ctx, saved, 1, want, device, 0)
+		// The standing identities are the default profile's. They are the
+		// machine's own rather than any job's — the API's own search goes
+		// through them, and so does the first job of the day before it grows
+		// them to its size. Read here rather than captured at startup, so a
+		// default changed on the screen is the one the next warm port is
+		// opened on.
+		prof, err := st.DefaultProfile(ctx)
+		if err != nil && !errors.Is(err, store.ErrNoProfile) {
+			return nil, err
+		}
+		return o.dial(ctx, saved, prof, 1, want, device, 0)
 	}
 
 	if saved.APIKey == "" && !fromEnv {
@@ -425,7 +435,7 @@ func deviceOr(device string) string {
 // back as an error, and the queue puts it in the log against the job it belongs
 // to.
 func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet) web.OpenPool {
-	return func(ctx context.Context, ports, threads int, device string,
+	return func(ctx context.Context, prof store.Profile, ports, threads int, device string,
 		cooldown time.Duration) (*blanktrail.Pool, error) {
 		// A job of the kind the standing identities were opened for runs on them,
 		// grown to its own size. It gives the growth back when it ends and the
@@ -469,7 +479,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			pool.PaceAt(cooldown)
 			return pool, nil
 		}
-		pool, err := o.dial(ctx, saved, threads, ports, device, cooldown)
+		pool, err := o.dial(ctx, saved, prof, threads, ports, device, cooldown)
 		if err != nil {
 			return nil, err
 		}
@@ -489,12 +499,12 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 // started with: somebody who has this moment typed a port count into the
 // settings has said which they want, and a flag from last week that quietly won
 // would make the box on the screen a box that does nothing.
-func (o serveOptions) connect(ctx context.Context, saved settings.Settings,
+func (o serveOptions) connect(ctx context.Context, saved settings.Settings, prof store.Profile,
 	ports, threads int, device string, cooldown time.Duration) (*blanktrail.Pool, error) {
 	// The size and the kind of result page come from the job, through the
 	// supervisor, and the connection from the settings. Neither knows the other's
 	// half, and this is where the two are put together.
-	return o.dial(ctx, saved, threads, ports, device, cooldown)
+	return o.dial(ctx, saved, prof, threads, ports, device, cooldown)
 }
 
 // dial opens a pool against the connection described, after the check that says
@@ -503,8 +513,8 @@ func (o serveOptions) connect(ctx context.Context, saved settings.Settings,
 // The check is the one gserp doctor runs, for the reason it is run before a run
 // from the command line: the most common way a job is dead on arrival is one a
 // single request would have shown.
-func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads, ports int,
-	device string, cooldown time.Duration) (*blanktrail.Pool, error) {
+func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof store.Profile,
+	threads, ports int, device string, cooldown time.Duration) (*blanktrail.Pool, error) {
 	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 	if err != nil {
 		return nil, o.scrubbed(err)
@@ -516,16 +526,20 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 		ports = o.Ports
 	}
 	cfg := poolConfig(threads, ports)
-	cfg.Spec.Protocol = saved.PortProtocol
-	cfg.MaxPerUpstream = saved.ThreadsPerUpstream
-	cfg.RenewAfterInterval = saved.RenewEvery
+	cfg.Spec.Protocol = prof.Protocol
+	cfg.MaxPerUpstream = prof.ThreadsPerUpstream
+	cfg.RenewAfterInterval = prof.RenewEvery
 	// Which kind of result page this job asked for. Desktop opens every port
 	// under the one default template, as this program always has; mobile hands
 	// the pool two named templates and it spreads the ports over both, so a run
 	// on phones is a run on more than one phone.
 	cfg.Specs = blanktrail.SpecsFor(device)
+	// Both places, and they are two: SpecsFor answers nil for a desktop job and
+	// two named templates for a mobile one, and a pool given templates ignores
+	// the single spec above. Setting only one of the two loses the protocol on
+	// one kind of job and on no other, which is as quiet as a fault gets.
 	for i := range cfg.Specs {
-		cfg.Specs[i].Spec.Protocol = saved.PortProtocol
+		cfg.Specs[i].Spec.Protocol = prof.Protocol
 	}
 	cfg.Trace = o.tracer()
 	cfg.OnLease = o.leaseTracer()
@@ -543,16 +557,16 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 	cfg.Client = client
 	cfg.CA = report.CA
 
-	if saved.Proxy.Kind == settings.ProxyGateways {
+	if prof.Kind == settings.ProxyGateways {
 		// The gateways are asked for now rather than kept: what is behind a name
 		// lives in BlankTrail and can be changed there between one job and the
 		// next.
-		ch, err := o.gatewayChannel(ctx, client, saved)
+		ch, err := o.gatewayChannel(ctx, client, prof)
 		if err != nil {
 			return nil, o.scrubbed(err)
 		}
 		cfg.Channels = []blanktrail.Channel{ch}
-	} else if saved.Proxy.Kind != "" {
+	} else if prof.Kind != "" {
 		// The list is loaded here and reloaded on its own interval afterwards, so a
 		// list that changes during a run is a list this pool follows.
 		// How long a failed address is left out is the operator's, because how
@@ -561,8 +575,8 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, threads
 		bench := []blanktrail.RotorOption{blanktrail.WithOnBench(o.remember)}
 		// Passed as it stands, nought included: nought is an operator saying no
 		// address is ever put away, not an operator saying nothing.
-		bench = append(bench, blanktrail.WithRest(saved.Proxy.Ban))
-		rotor, err := blanktrail.NewRotor(ctx, listFrom(saved.Proxy), bench...)
+		bench = append(bench, blanktrail.WithRest(prof.Ban))
+		rotor, err := blanktrail.NewRotor(ctx, listFrom(prof), bench...)
 		if err != nil {
 			return nil, o.scrubbed(err)
 		}
@@ -635,7 +649,7 @@ const listScheme = "socks5"
 // because every field of it is a box somebody filled in: a place that quietly
 // read its own interval, or its own idea of file or address, would leave a box
 // on the settings page that changes nothing and says nothing about it.
-func listFrom(p settings.ProxySource) blanktrail.Source {
+func listFrom(p store.Profile) blanktrail.Source {
 	return blanktrail.Source{
 		Kind:          p.Kind,
 		Location:      p.Location,
@@ -1204,7 +1218,7 @@ func lockFor(saved settings.Settings) string {
 // an evening lost to a configuration deleted last week. Nothing to run on at all
 // is a different matter and is an error.
 func (o serveOptions) gatewayChannel(ctx context.Context, client *blanktrail.Client,
-	saved settings.Settings) (blanktrail.Channel, error) {
+	prof store.Profile) (blanktrail.Channel, error) {
 	list, err := client.Gateways(ctx)
 	if err != nil {
 		return nil, err
@@ -1218,7 +1232,7 @@ func (o serveOptions) gatewayChannel(ctx context.Context, client *blanktrail.Cli
 	}
 	var chosen []string
 	gone := 0
-	for _, name := range saved.Proxy.Gateways {
+	for _, name := range prof.Gateways {
 		if have[name] {
 			chosen = append(chosen, name)
 			continue
@@ -1233,7 +1247,7 @@ func (o serveOptions) gatewayChannel(ctx context.Context, client *blanktrail.Cli
 		return nil, errors.New("blanktrail: none of the chosen gateways are on the service any more")
 	}
 	opts := []blanktrail.RotorOption{}
-	opts = append(opts, blanktrail.WithRest(saved.Proxy.Ban))
+	opts = append(opts, blanktrail.WithRest(prof.Ban))
 	rotor := blanktrail.NewStaticRotor(blanktrail.GatewayUpstreams(chosen), opts...)
 	return blanktrail.NewGatewayListChannel("gateways", rotor), nil
 }

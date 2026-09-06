@@ -47,7 +47,7 @@ func TestAttemptCost_LiveWhereTheMinutesGo(t *testing.T) {
 	defer cancel()
 
 	const ports, threads, each = 12, 6, 5
-	pool, err := o.dial(ctx, saved, 1, ports, blanktrail.DeviceDesktop, 0)
+	pool, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, ports, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening %d identities: %v", ports, o.clean(err.Error()))
 	}

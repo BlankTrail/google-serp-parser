@@ -99,7 +99,7 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 		}
 		ports = n
 	}
-	pool, err := o.dial(ctx, saved, 1, ports, blanktrail.DeviceDesktop, 0)
+	pool, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, ports, blanktrail.DeviceDesktop, 0)
 	if err != nil {
 		t.Fatalf("opening the identities: %v", o.clean(err.Error()))
 	}

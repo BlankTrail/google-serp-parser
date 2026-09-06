@@ -445,7 +445,7 @@ func TestLiveAPI_ASearchAnsweredInOneConnection(t *testing.T) {
 	// arrangement the command builds, and measuring anything else would measure
 	// a program nobody runs — which is why the job's pool is raised here rather
 	// than shared with the search.
-	sup := web.NewSupervisor(st, func(ctx context.Context, ports, threads int, device string,
+	sup := web.NewSupervisor(st, func(ctx context.Context, _ store.Profile, ports, threads int, device string,
 		_ time.Duration) (*blanktrail.Pool, error) {
 		return livePool(ctx, t, ports, threads), nil
 	}, livePorts, liveThreads)
