@@ -65,9 +65,38 @@ func (r *Runner) resolveQuery(ctx context.Context, res *QueryResult, workers int
 // does not depend on who captured the page, so a separate identity per link
 // buys nothing and spends a whole page's worth of the pool to get it.
 func (r *Runner) resolvePage(ctx context.Context, serp *google.SERP, workers int) google.ResolveReport {
-	if !needsResolving(serp) {
-		return google.ResolveReport{}
+	var total google.ResolveReport
+	for try := 0; try < resolveTries && needsResolving(serp); try++ {
+		if err := ctx.Err(); err != nil {
+			total.Errs = append(total.Errs, err)
+			return total
+		}
+		gather(&total, r.resolveOnce(ctx, serp, workers))
 	}
+	return total
+}
+
+// resolveTries is how many identities one page's addresses may be looked up
+// through before what is left is given up on.
+//
+// One was not enough, and the reason is the list rather than the lookup. A
+// search is carried to a fresh identity when the address it went through is
+// dead — that is what Tries is for — and the lookups had no such thing: one
+// address, one attempt, and every link on that page lost together when it was a
+// dead one. Measured live on a fifteen-thousand-address list, three pages of a
+// region that hides its addresses: 5 of 14 read through the identity that
+// captured the page and 6 of 15 through another, and every single failure was
+// the same one — the address dropped the connection. Not Google refusing, not a
+// challenge: the proxy.
+//
+// Three, for the reason the search takes three by default: it is the number
+// past which a list this bad is the operator's problem rather than something to
+// spend more requests on.
+const resolveTries = 3
+
+// resolveOnce looks up what is missing from one page, through one identity, and
+// puts that identity away when it carried nothing.
+func (r *Runner) resolveOnce(ctx context.Context, serp *google.SERP, workers int) google.ResolveReport {
 	lease, err := r.Pool.Acquire(ctx)
 	if err != nil {
 		return google.ResolveReport{Errs: []error{err}}
@@ -81,7 +110,16 @@ func (r *Runner) resolvePage(ctx context.Context, serp *google.SERP, workers int
 	// own would then wait on an unreachable identity for as long as it took.
 	resolver.Client.Timeout = client.Timeout
 
-	return resolver.ResolveAll(ctx, serp, workers)
+	rep := resolver.ResolveAll(ctx, serp, workers)
+	if rep.Resolved == 0 && rep.Failed > 0 {
+		// Nothing came back through this address and something was asked of it,
+		// so it is the address rather than the links: it is refused, which is
+		// what puts it out of the rotation and hands the next round a different
+		// one. A round that read even one is left alone — a single dead link is
+		// not a dead address.
+		_ = lease.Reject(ctx)
+	}
+	return rep
 }
 
 // needsResolving reports whether a page holds any result whose address is still
