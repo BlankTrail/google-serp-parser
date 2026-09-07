@@ -303,6 +303,19 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   queries: ten thousand queries done says nothing about how much there is.
 - **A walk through the interface** on a machine nothing has been run on: seven
   stops, one sentence each, standing beside the thing they are about.
+- **The hidden addresses are read through ports of their own.** Some regions
+  put no address in the markup: the link is a redirector and the address is read
+  out of the `Location` header it answers with. Those lookups were going out
+  through the same ports the searches do — carrying the challenge solver, which
+  a tariff holds only so many of, and writing into the cookie jar of a session
+  built for searching — and on such a region they are most of the requests a job
+  makes. Measured on a live list, the same links through a searching port,
+  through one with the solver switched off, and through one with neither solver
+  nor cookie jar read 9 of 9, 9 of 9 and 11 of 11, at 2.33, 2.33 and 2.27
+  attempts each; every failure in all three was the address dropping the
+  connection. So a lookup needs none of it, and a job that keeps addresses now
+  opens a second set of ports that carry none of it. One address, one identity,
+  a fresh one for every attempt, and nothing kept between them.
 - **Spend the whole proxy list.** A tick beside "ports per thread", and the job
   stops running on a pool of a fixed size: it opens a port of its own for every
   address the list can spare, as it asks for identities, until the list runs out

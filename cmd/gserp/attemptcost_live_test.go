@@ -47,10 +47,11 @@ func TestAttemptCost_LiveWhereTheMinutesGo(t *testing.T) {
 	defer cancel()
 
 	const ports, threads, each = 12, 6, 5
-	pool, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, ports, blanktrail.DeviceDesktop, 0)
+	want, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, ports, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening %d identities: %v", ports, o.clean(err.Error()))
 	}
+	pool := want.Search
 	defer func() { _ = pool.Close() }()
 	t.Logf("%d identities open, cooldown %v", pool.Stats().Ports, pool.Cooldown())
 

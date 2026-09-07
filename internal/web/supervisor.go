@@ -90,8 +90,12 @@ type poolFacts struct {
 // spoil the next one's — and that the size a job runs at is changed by editing
 // that job rather than by starting the server again.
 type poolEngine struct {
-	pool    *blanktrail.Pool
-	threads int
+	pool *blanktrail.Pool
+	// addresses is the second set of ports, the one the hidden addresses are
+	// read through. It is nil where the caller opened only one set, and the
+	// lookups then go out through pool as they always did.
+	addresses *blanktrail.Pool
+	threads   int
 	// watch, when set, is told every stage a thread of the run passes through,
 	// so a slow job can be taken apart second by second rather than guessed at.
 	watch run.Watch
@@ -100,7 +104,8 @@ type poolEngine struct {
 // Run builds a runner around the pool this job was raised. A runner is a few
 // fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
-	return (&run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch}).Run(ctx, j)
+	return (&run.Runner{Pool: e.pool, Addresses: e.addresses, Threads: e.threads,
+		Sink: sink, Watch: e.watch}).Run(ctx, j)
 }
 
 // Close gives up the identities this job was raised. It runs when the job has
@@ -111,6 +116,12 @@ func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Repo
 // answering at once instead of a minute in. What the job opened on top of them
 // is what goes. A pool with no standing set is closed whole, as it always was.
 func (e *poolEngine) Close() error {
+	// The ports the addresses were read through are this job's alone — nothing
+	// stands warm on them and nothing else will want them — so they are closed
+	// whole whatever happens to the others.
+	if e.addresses != nil {
+		_ = e.addresses.Close()
+	}
 	if e.pool.Hot() > 0 {
 		_, err := e.pool.Shrink(context.Background())
 		return err
@@ -136,7 +147,21 @@ func (e *poolEngine) Pool() poolFacts {
 // up behind this: which addresses a job runs through is a property of the job,
 // read once when its turn comes, so a profile edited between two jobs takes
 // effect on the second and not in the middle of the first.
-type Dial func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool bool) (engine, error)
+type Dial func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (engine, error)
+
+// Identities are the ports one job runs on.
+//
+// Two sets, because they are two different things. Search goes out through
+// ports built for it — the challenge solver, a cookie jar, a session that holds
+// across the pages of a query — and reading a hidden address needs none of
+// that: measured on a live list, the same links through a searching port, a
+// port with the solver off and a port with neither solver nor jar read 9 of 9,
+// 9 of 9 and 11 of 11, at the same cost. Addresses is nil where the caller
+// opened one set, and the lookups then go out through Search.
+type Identities struct {
+	Search    *blanktrail.Pool
+	Addresses *blanktrail.Pool
+}
 
 // OpenPool opens the identities one job asked to run on. It is Dial as a caller
 // outside this package can write it: what a pool is opened as, how long its
@@ -144,7 +169,7 @@ type Dial func(ctx context.Context, prof store.Profile, ports, threads int, devi
 // command that starts this server, and an interface with a second opinion about
 // that would give a job set up here a different cost from the same job set up
 // there.
-type OpenPool func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error)
+type OpenPool func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (Identities, error)
 
 // source is where the pool for the next job comes from.
 //
@@ -169,7 +194,7 @@ func standing(eng engine) source {
 		return source{}
 	}
 	return source{
-		raise: func(context.Context, store.Profile, int, int, string, time.Duration, bool) (engine, error) {
+		raise: func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (engine, error) {
 			return eng, nil
 		},
 		held: eng,
@@ -181,12 +206,12 @@ func dialing(open OpenPool, watch run.Watch) source {
 	if open == nil {
 		return source{}
 	}
-	return source{raise: func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool bool) (engine, error) {
-		pool, err := open(ctx, prof, ports, threads, device, cooldown, wholePool)
+	return source{raise: func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (engine, error) {
+		want, err := open(ctx, prof, ports, threads, device, cooldown, wholePool, wantsAddresses)
 		if err != nil {
 			return nil, err
 		}
-		if pool == nil {
+		if want.Search == nil {
 			// Neither identities nor a reason. Taken as it comes, the job would run
 			// on nothing and fall over at the first screen that asks the pool how it
 			// is doing — which is a crash a long way from the mistake that caused it.
@@ -196,7 +221,8 @@ func dialing(open OpenPool, watch run.Watch) source {
 		// because that number paces the job and is what the screen puts into its
 		// estimate: two answers to how wide this job runs would put a figure on the
 		// screen that no run ever matched.
-		return &poolEngine{pool: pool, threads: threads, watch: watch}, nil
+		return &poolEngine{pool: want.Search, addresses: want.Addresses,
+			threads: threads, watch: watch}, nil
 	}}
 }
 
@@ -746,7 +772,7 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 	if err != nil && !errors.Is(err, store.ErrNoProfile) {
 		return nil, err
 	}
-	eng, err := src.raise(ctx, prof, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown, sum.WholePool)
+	eng, err := src.raise(ctx, prof, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown, sum.WholePool, sum.Fields.Keeps(store.FieldURL))
 	if err != nil {
 		return nil, err
 	}

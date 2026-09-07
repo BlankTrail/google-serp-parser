@@ -81,13 +81,14 @@ func TestPortsPerThread_LiveWhetherASpareIdentityPaysForItself(t *testing.T) {
 		arms.Add(1)
 		go func(i, perThread int) {
 			defer arms.Done()
-			pool, err := o.dial(ctx, saved, theFirstProfile(saved, true), threads, perThread, blanktrail.DeviceDesktop, 0)
+			want, err := o.dial(ctx, saved, theFirstProfile(saved, true), threads, perThread, blanktrail.DeviceDesktop, 0, false, false)
 			if err != nil {
 				say.Lock()
 				t.Errorf("%d ports a thread: opening the identities: %v", perThread, o.clean(err.Error()))
 				say.Unlock()
 				return
 			}
+			pool := want.Search
 			defer func() { _ = pool.Close() }()
 
 			r := reading{ports: perThread}

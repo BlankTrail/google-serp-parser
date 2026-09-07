@@ -46,7 +46,7 @@ type stubConnect struct {
 }
 
 func (c *stubConnect) open(_ context.Context, saved settings.Settings, prof store.Profile,
-	ports, threads int, _ string, cooldown time.Duration, _ bool) (*blanktrail.Pool, error) {
+	ports, threads int, _ string, cooldown time.Duration, _, _ bool) (Identities, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.with = append(c.with, saved)
@@ -54,12 +54,12 @@ func (c *stubConnect) open(_ context.Context, saved settings.Settings, prof stor
 	c.sizes = append(c.sizes, [2]int{ports, threads})
 	c.gaps = append(c.gaps, cooldown)
 	if c.err != nil {
-		return nil, c.err
+		return Identities{}, c.err
 	}
 	// These tests are about which settings and which size a raise was asked for,
 	// never about the pool itself, so none is opened. The refusal is what keeps
 	// the supervisor from running a job on nothing.
-	return nil, errNoLivePool
+	return Identities{}, errNoLivePool
 }
 
 // lastGap is the pause between two requests on one identity the last raise was

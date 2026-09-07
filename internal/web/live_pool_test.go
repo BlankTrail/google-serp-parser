@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -85,8 +84,8 @@ func TestLiveRaise_LeavesAJobWhosePoolWouldNotGoUpWhereItCanBeCarriedOn(t *testi
 	liveEnv(t)
 
 	st := testStore(t)
-	sup := NewSupervisor(st, func(context.Context, store.Profile, int, int, string, time.Duration) (*blanktrail.Pool, error) {
-		return nil, errors.New("the control service refused this connection")
+	sup := NewSupervisor(st, func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+		return Identities{}, errors.New("the control service refused this connection")
 	}, livePorts, liveThreads)
 	t.Cleanup(func() { _ = sup.Close() })
 

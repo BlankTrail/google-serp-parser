@@ -99,10 +99,11 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 		}
 		ports = n
 	}
-	pool, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, ports, blanktrail.DeviceDesktop, 0)
+	want, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, ports, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening the identities: %v", o.clean(err.Error()))
 	}
+	pool := want.Search
 	defer func() { _ = pool.Close() }()
 
 	t.Logf("gaps: %v, budget: %d requests an arm, %d identities, every arm at once", gaps, budget, ports)

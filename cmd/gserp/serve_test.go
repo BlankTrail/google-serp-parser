@@ -594,25 +594,25 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 
 	// A job that named no size reaches here already stood in for, so what this end
 	// is asked for is the pair this server was started with.
-	own, err := raise(t.Context(), store.Profile{}, opts.Ports, opts.Threads, blanktrail.DeviceDesktop, 0, false)
+	own, err := raise(t.Context(), store.Profile{}, opts.Ports, opts.Threads, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("raising the pool of a job that named no size: %v", err)
 	}
 	if got, want := len(fake.OpenPorts()), opts.Threads*opts.Ports; got != want {
 		t.Errorf("%d ports were opened, want the %d this server was started with", got, want)
 	}
-	if err := own.Close(); err != nil {
+	if err := own.Search.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if got := len(fake.OpenPorts()); got != 0 {
 		t.Fatalf("%d ports are still open after that pool was given up", got)
 	}
 
-	named, err := raise(t.Context(), store.Profile{}, 2, 1, blanktrail.DeviceDesktop, 0, false)
+	named, err := raise(t.Context(), store.Profile{}, 2, 1, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("raising the pool a job named: %v", err)
 	}
-	t.Cleanup(func() { _ = named.Close() })
+	t.Cleanup(func() { _ = named.Search.Close() })
 	if got := len(fake.OpenPorts()); got != 2 {
 		t.Errorf("%d ports were opened, want the 2 the job asked for", got)
 	}
@@ -869,22 +869,22 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false)
+	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
-	t.Cleanup(func() { _ = standing.Close() })
-	if got := standing.KeepWarm(); got != 10 {
+	t.Cleanup(func() { _ = standing.Search.Close() })
+	if got := standing.Search.KeepWarm(); got != 10 {
 		t.Fatalf("%d identities were declared standing, want ten", got)
 	}
 
-	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	pool, err := raise(t.Context(), store.Profile{}, 10, 10, blanktrail.DeviceDesktop, 0, false)
+	pool, err := raise(t.Context(), store.Profile{}, 10, 10, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("raising a job of a hundred on ten standing: %v", err)
 	}
-	if pool != standing {
+	if pool.Search != standing.Search {
 		t.Error("the job was handed a second pool rather than the standing one grown")
 	}
 	if got := len(fake.OpenPorts()); got != 100 {
@@ -894,7 +894,7 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 	// What the job's end does. The queue reaches this through the engine it
 	// wraps the pool in, and that engine's own rule — shrink a pool that has a
 	// standing set, close one that has not — is checked where it lives.
-	gone, err := pool.Shrink(t.Context())
+	gone, err := pool.Search.Shrink(t.Context())
 	if err != nil {
 		t.Fatalf("letting go of the job's identities: %v", err)
 	}
@@ -917,28 +917,28 @@ func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 4, blanktrail.DeviceDesktop, 0, false)
+	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 4, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
-	t.Cleanup(func() { _ = standing.Close() })
-	standing.KeepWarm()
+	t.Cleanup(func() { _ = standing.Search.Close() })
+	standing.Search.KeepWarm()
 
-	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	own, err := raise(t.Context(), store.Profile{}, 2, 1, blanktrail.DeviceMobile, 0, false)
+	own, err := raise(t.Context(), store.Profile{}, 2, 1, blanktrail.DeviceMobile, 0, false, false)
 	if err != nil {
 		t.Fatalf("raising a phone job beside the standing desktops: %v", err)
 	}
-	t.Cleanup(func() { _ = own.Close() })
+	t.Cleanup(func() { _ = own.Search.Close() })
 
 	if own == standing {
 		t.Fatal("a phone job was handed the desktop identities")
 	}
-	if got := standing.Stats().Ports; got != 4 {
+	if got := standing.Search.Stats().Ports; got != 4 {
 		t.Errorf("the standing set is %d after a phone job was raised, want the four it was", got)
 	}
-	if got := own.Hot(); got != 0 {
+	if got := own.Search.Hot(); got != 0 {
 		t.Errorf("the phone job's own pool holds %d standing ports, want none of its own", got)
 	}
 }
@@ -953,16 +953,16 @@ func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *t
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false)
+	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
-	t.Cleanup(func() { _ = standing.Close() })
-	standing.KeepWarm()
+	t.Cleanup(func() { _ = standing.Search.Close() })
+	standing.Search.KeepWarm()
 
-	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	if _, err := raise(t.Context(), store.Profile{}, 1, 2, blanktrail.DeviceDesktop, 0, false); err != nil {
+	if _, err := raise(t.Context(), store.Profile{}, 1, 2, blanktrail.DeviceDesktop, 0, false, false); err != nil {
 		t.Fatalf("raising a job of two: %v", err)
 	}
 	if got := len(fake.OpenPorts()); got != 10 {
@@ -1157,24 +1157,28 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false)
+	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
-	t.Cleanup(func() { _ = standing.Close() })
-	standing.KeepWarm()
+	t.Cleanup(func() { _ = standing.Search.Close() })
+	standing.Search.KeepWarm()
 
 	running := true
-	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, error) {
-		return opts.dial(ctx, saved, store.Profile{}, 1, want, device, 0, false)
+		got, err := opts.dial(ctx, saved, store.Profile{}, 1, want, device, 0, false, false)
+		if err != nil {
+			return nil, err
+		}
+		return got.Search, nil
 	}
 	warm.running = func() bool { return running }
 
 	if err := warm.bring(t.Context(), 2, blanktrail.DeviceDesktop); err != nil {
 		t.Fatalf("saving a smaller number while a job runs: %v", err)
 	}
-	if got := standing.Stats().Ports; got != 10 {
+	if got := standing.Search.Stats().Ports; got != 10 {
 		t.Errorf("%d identities are open, want the ten the job is running on", got)
 	}
 
@@ -1190,7 +1194,7 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 	if err := warm.bring(t.Context(), owed.want, owed.device); err != nil {
 		t.Fatalf("bringing about what was owed: %v", err)
 	}
-	if got := standing.Stats().Ports; got != 2 {
+	if got := standing.Search.Stats().Ports; got != 2 {
 		t.Errorf("%d identities are open after the job let go, want the two that were saved", got)
 	}
 }
@@ -1215,43 +1219,43 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 	saved, _ := opts.saved(io.Discard)
 
 	// Opened the way the standing set is opened: one thread, ten identities.
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false)
+	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
-	t.Cleanup(func() { _ = standing.Close() })
-	standing.KeepWarm()
-	opened := standing.Cooldown()
+	t.Cleanup(func() { _ = standing.Search.Close() })
+	standing.Search.KeepWarm()
+	opened := standing.Search.Cooldown()
 	if opened <= 0 {
 		t.Fatalf("the standing set was opened with no pace at all")
 	}
 
-	warm := &warmSet{pool: standing, device: blanktrail.DeviceDesktop}
+	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
 
 	// A job that names no pause wants none: nought is nought, and the identities
 	// it was given are handed out as fast as they come free.
-	if _, err := raise(t.Context(), store.Profile{}, 2, 50, blanktrail.DeviceDesktop, 0, false); err != nil {
+	if _, err := raise(t.Context(), store.Profile{}, 2, 50, blanktrail.DeviceDesktop, 0, false, false); err != nil {
 		t.Fatalf("raising a job of fifty on two: %v", err)
 	}
-	if got := standing.Cooldown(); got != 0 {
+	if got := standing.Search.Cooldown(); got != 0 {
 		t.Errorf("the pool is paced at %s for a job that asked for no pause "+
 			"(it was opened at %s)", got, opened)
 	}
 	// And no pause means no pause anywhere: a thread that sat out two to five
 	// seconds after every query would be keeping one nobody asked for.
-	if got := standing.NextDelay(); got != 0 {
+	if got := standing.Search.NextDelay(); got != 0 {
 		t.Errorf("a thread waits %s between queries on a job that asked for no pause", got)
 	}
 
 	// And a job that named a pause of its own is paced by that.
-	if _, err := raise(t.Context(), store.Profile{}, 2, 50, blanktrail.DeviceDesktop, 3*time.Second, false); err != nil {
+	if _, err := raise(t.Context(), store.Profile{}, 2, 50, blanktrail.DeviceDesktop, 3*time.Second, false, false); err != nil {
 		t.Fatalf("raising a job that named its own pause: %v", err)
 	}
-	if got := standing.Cooldown(); got != 3*time.Second {
+	if got := standing.Search.Cooldown(); got != 3*time.Second {
 		t.Errorf("the pool is paced at %s, want the three seconds the job named", got)
 	}
-	if got := standing.NextDelay(); got != 3*time.Second {
+	if got := standing.Search.NextDelay(); got != 3*time.Second {
 		t.Errorf("a thread waits %s between queries, want the three seconds the job named", got)
 	}
 }
@@ -1321,13 +1325,13 @@ func TestDial_CarriesHowOftenAPortChangesIdentityIntoThePool(t *testing.T) {
 	saved, _ := opts.saved(io.Discard)
 
 	prof := store.Profile{RenewEvery: 10 * time.Minute}
-	pool, err := opts.dial(t.Context(), saved, prof, 1, 2, blanktrail.DeviceDesktop, 0, false)
+	pool, err := opts.dial(t.Context(), saved, prof, 1, 2, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening the identities: %v", err)
 	}
-	t.Cleanup(func() { _ = pool.Close() })
+	t.Cleanup(func() { _ = pool.Search.Close() })
 
-	if got := pool.RenewEvery(); got != 10*time.Minute {
+	if got := pool.Search.RenewEvery(); got != 10*time.Minute {
 		t.Errorf("the pool changes identity every %v, want the ten minutes that were saved", got)
 	}
 }
@@ -1372,5 +1376,81 @@ func TestTheFirstProfile_CarriesTheSettingsFileAndFallsBackToTheDefaults(t *test
 	}
 	if !fresh.Default {
 		t.Error("the profile a fresh install starts with is not the default one")
+	}
+}
+
+func TestDial_OpensPlainPortsForTheAddressesAJobKeeps(t *testing.T) {
+	// A job that keeps addresses gets a second set of ports to read them
+	// through, and they are made of less than the searching ones: no challenge
+	// solver and no cookie jar.
+	//
+	// The reason is measured. A hidden address is read out of a Location header
+	// and needs neither: the same links through a searching port, a port with
+	// the solver off and a port with neither read 9 of 9, 9 of 9 and 11 of 11
+	// at the same cost in attempts. What it saves is the solver, of which a
+	// tariff holds only so many, and the cookie jar of a session built for
+	// searching — on a region that hides its addresses the lookups are most of
+	// the requests a job makes, and all of them were going through both.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	saved, _ := opts.saved(io.Discard)
+
+	want, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 2, blanktrail.DeviceDesktop, 0, false, true)
+	if err != nil {
+		t.Fatalf("opening the identities of a job that keeps addresses: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = want.Search.Close()
+		if want.Addresses != nil {
+			_ = want.Addresses.Close()
+		}
+	})
+	if want.Addresses == nil {
+		t.Fatal("a job that keeps addresses was given no ports to read them through")
+	}
+
+	var solving, plain int
+	for _, r := range fake.Requests() {
+		if r.Path != "/api/v1/ports/open" {
+			continue
+		}
+		switch {
+		case strings.Contains(r.Body, `"js_solver":true`):
+			solving++
+		case strings.Contains(r.Body, `"js_solver":false`):
+			plain++
+			if !strings.Contains(r.Body, `"keep_sessions":false`) {
+				t.Errorf("a port opened for reading addresses keeps a cookie jar: %s", r.Body)
+			}
+		}
+	}
+	if solving != 2 {
+		t.Errorf("%d ports were opened with the solver, want the two the searches run on", solving)
+	}
+	if plain != 2 {
+		t.Errorf("%d ports were opened without it, want the two the addresses are read through", plain)
+	}
+}
+
+func TestDial_OpensNoAddressPortsForAJobThatKeepsNone(t *testing.T) {
+	// Ports are the scarce thing. A job with nothing to look up would hold a
+	// second set of them idle for the length of the run.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	saved, _ := opts.saved(io.Discard)
+
+	want, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 2, blanktrail.DeviceDesktop, 0, false, false)
+	if err != nil {
+		t.Fatalf("opening the identities: %v", err)
+	}
+	t.Cleanup(func() { _ = want.Search.Close() })
+
+	if want.Addresses != nil {
+		t.Error("a job that keeps no address was given ports to read addresses through")
+	}
+	if got := len(fake.OpenPorts()); got != 2 {
+		t.Errorf("%d ports are open, want the two the searches run on", got)
 	}
 }

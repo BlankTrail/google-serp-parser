@@ -45,10 +45,11 @@ func TestWarmCost_LiveWhatASecondRequestOnOneIdentityCosts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	defer cancel()
 
-	pool, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, 6, blanktrail.DeviceDesktop, 0)
+	want, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, 6, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening two identities: %v", o.clean(err.Error()))
 	}
+	pool := want.Search
 	defer func() { _ = pool.Close() }()
 
 	for _, keep := range []bool{false, true} {

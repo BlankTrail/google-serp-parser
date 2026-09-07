@@ -20,7 +20,6 @@ import (
 	"path"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/settings"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
@@ -84,7 +83,7 @@ type Config struct {
 // how long they rest and what they are opened as is decided by the command that
 // starts this server. A browser interface with a second opinion about that would
 // give a job set up here a different cost from the same job set up there.
-type Connect func(ctx context.Context, saved settings.Settings, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error)
+type Connect func(ctx context.Context, saved settings.Settings, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (Identities, error)
 
 // Standing brings the set of identities kept warm to what was just saved.
 //

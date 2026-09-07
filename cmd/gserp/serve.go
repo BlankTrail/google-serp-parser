@@ -367,7 +367,11 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 		if err != nil && !errors.Is(err, store.ErrNoProfile) {
 			return nil, err
 		}
-		return o.dial(ctx, saved, prof, 1, want, device, 0, false)
+		got, err := o.dial(ctx, saved, prof, 1, want, device, 0, false, false)
+		if err != nil {
+			return nil, err
+		}
+		return got.Search, nil
 	}
 
 	if saved.APIKey == "" && !fromEnv {
@@ -436,7 +440,7 @@ func deviceOr(device string) string {
 // to.
 func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet) web.OpenPool {
 	return func(ctx context.Context, prof store.Profile, ports, threads int, device string,
-		cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error) {
+		cooldown time.Duration, wholePool, wantsAddresses bool) (web.Identities, error) {
 		// A job of the kind the standing identities were opened for runs on them,
 		// grown to its own size. It gives the growth back when it ends and the
 		// standing ones stay warm for the next.
@@ -447,8 +451,8 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 		// They are a pool of a fixed size, opened before anybody asked for this,
 		// and growing it one address at a time would leave the machine's warm
 		// ones scattered through a job's ports when the job ended.
-		if pool, mine, err := warm.raiseFor(ctx, ports, threads, device, wholePool); err != nil {
-			return nil, err
+		if pool, mine, err := warm.raiseFor(ctx, ports, threads, device, wholePool || wantsAddresses); err != nil {
+			return web.Identities{}, err
 		} else if mine {
 			// The job's own pause, and nothing else's.
 			//
@@ -469,7 +473,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			// and deriving one for it is this program pacing a run nobody asked to
 			// have paced.
 			pool.PaceAt(cooldown)
-			return pool, nil
+			return web.Identities{Search: pool}, nil
 		}
 		if fromEnv {
 			cfg := poolConfig(threads, ports, wholePool)
@@ -478,17 +482,17 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			cfg.OnLease = o.leaseTracer()
 			pool, err := openPool(ctx, io.Discard, cfg)
 			if err != nil {
-				return nil, err
+				return web.Identities{}, err
 			}
 			pool.PaceAt(cooldown)
-			return pool, nil
+			return web.Identities{Search: pool}, nil
 		}
-		pool, err := o.dial(ctx, saved, prof, threads, ports, device, cooldown, wholePool)
+		want, err := o.dial(ctx, saved, prof, threads, ports, device, cooldown, wholePool, wantsAddresses)
 		if err != nil {
-			return nil, err
+			return web.Identities{}, err
 		}
-		pool.PaceAt(cooldown)
-		return pool, nil
+		want.Search.PaceAt(cooldown)
+		return want, nil
 	}
 }
 
@@ -504,11 +508,11 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 // settings has said which they want, and a flag from last week that quietly won
 // would make the box on the screen a box that does nothing.
 func (o serveOptions) connect(ctx context.Context, saved settings.Settings, prof store.Profile,
-	ports, threads int, device string, cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error) {
+	ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (web.Identities, error) {
 	// The size and the kind of result page come from the job, through the
 	// supervisor, and the connection from the settings. Neither knows the other's
 	// half, and this is where the two are put together.
-	return o.dial(ctx, saved, prof, threads, ports, device, cooldown, wholePool)
+	return o.dial(ctx, saved, prof, threads, ports, device, cooldown, wholePool, wantsAddresses)
 }
 
 // dial opens a pool against the connection described, after the check that says
@@ -518,10 +522,10 @@ func (o serveOptions) connect(ctx context.Context, saved settings.Settings, prof
 // from the command line: the most common way a job is dead on arrival is one a
 // single request would have shown.
 func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof store.Profile,
-	threads, ports int, device string, cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error) {
+	threads, ports int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (web.Identities, error) {
 	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 	if err != nil {
-		return nil, o.scrubbed(err)
+		return web.Identities{}, o.scrubbed(err)
 	}
 	if threads < 1 {
 		threads = o.Threads
@@ -556,7 +560,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 
 	report, err := o.checked(ctx, client, cfg.Size())
 	if err != nil {
-		return nil, err
+		return web.Identities{}, err
 	}
 	cfg.Client = client
 	cfg.CA = report.CA
@@ -567,7 +571,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 		// next.
 		ch, err := o.gatewayChannel(ctx, client, prof)
 		if err != nil {
-			return nil, o.scrubbed(err)
+			return web.Identities{}, o.scrubbed(err)
 		}
 		cfg.Channels = []blanktrail.Channel{ch}
 	} else if prof.Kind != "" {
@@ -582,7 +586,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 		bench = append(bench, blanktrail.WithRest(prof.Ban))
 		rotor, err := blanktrail.NewRotor(ctx, listFrom(prof), bench...)
 		if err != nil {
-			return nil, o.scrubbed(err)
+			return web.Identities{}, o.scrubbed(err)
 		}
 		// What this machine already knows about the list. Without it every start
 		// walks back into the addresses the last run spent its time finding dead,
@@ -593,9 +597,45 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 
 	pool, err := blanktrail.NewPool(ctx, cfg)
 	if err != nil {
-		return nil, o.scrubbed(err)
+		return web.Identities{}, o.scrubbed(err)
 	}
-	return pool, nil
+	if !wantsAddresses {
+		// A job that keeps no address has nothing to look up, and ports opened
+		// for it would stand idle for the length of the run.
+		return web.Identities{Search: pool}, nil
+	}
+
+	// The second set: the ports the hidden addresses are read through.
+	//
+	// They share this pool's channels, so both spend one list and what either
+	// learns about a dead address the other has too. What differs is what a
+	// port is made of. A lookup is a GET to a redirector answered with a
+	// Location header: measured on the live list, the same links through a
+	// searching port, a port with the challenge solver off, and a port with
+	// neither solver nor cookie jar read 9 of 9, 9 of 9 and 11 of 11 at the
+	// same cost in attempts. So these carry neither, and the solver — which a
+	// tariff holds only so many of — is left to the searches that need it.
+	//
+	// They are the same size as the pool above and for a measured reason: on a
+	// region that hides its addresses every result wants a lookup, so this is
+	// where most of a job's requests go. There is no cooldown worth keeping on
+	// them either — nothing is carried between two lookups, so there is no
+	// session for a rest to protect.
+	plain := cfg
+	plain.WholeList = false
+	plain.Threads, plain.PortsPerThread = threads, ports
+	plain.Spec.JSSolver = false
+	plain.Spec.KeepSessions = false
+	plain.Specs = nil
+	plain.Cooldown = time.Millisecond
+	addresses, err := blanktrail.NewPool(ctx, plain)
+	if err != nil {
+		// The searches can go on without them; the addresses then go out the
+		// way they always did, through the ports above.
+		o.logger(io.Discard).Info("the ports for reading addresses would not open", "why", o.clean(err.Error()))
+		return web.Identities{Search: pool}, nil
+	}
+	return web.Identities{Search: pool, Addresses: addresses}, nil
 }
 
 // rests is where the addresses this machine has found dead are kept between

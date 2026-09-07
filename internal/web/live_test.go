@@ -428,8 +428,8 @@ func livePool(ctx context.Context, t *testing.T, ports, threads int, device stri
 // this file exists to report.
 func liveRaise(t *testing.T) OpenPool {
 	return func(ctx context.Context, _ store.Profile, ports, threads int, device string,
-		_ time.Duration) (*blanktrail.Pool, error) {
-		return livePool(ctx, t, ports, threads, device), nil
+		_ time.Duration, _, _ bool) (Identities, error) {
+		return Identities{Search: livePool(ctx, t, ports, threads, device)}, nil
 	}
 }
 
@@ -1333,10 +1333,10 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 // command does: the check first, then the ports, then the list behind them.
 func liveConnect(t *testing.T) Connect {
 	return func(ctx context.Context, saved settings.Settings, _ store.Profile, ports, threads int,
-		device string, _ time.Duration) (*blanktrail.Pool, error) {
+		device string, _ time.Duration, _, _ bool) (Identities, error) {
 		client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 		if err != nil {
-			return nil, err
+			return Identities{}, err
 		}
 		// The connection comes from the settings and the size from the job. This
 		// is the seam the command has too, and a live run that took both from one
@@ -1346,7 +1346,7 @@ func liveConnect(t *testing.T) Connect {
 			Domains: reachedDomains, Ports: ports,
 		})
 		if !pre.OK() {
-			return nil, errors.New("the check refused this connection")
+			return Identities{}, errors.New("the check refused this connection")
 		}
 		cfg := blanktrail.PoolConfig{
 			Client: client, Threads: threads, PortsPerThread: max(ports/threads, 1),
@@ -1357,7 +1357,7 @@ func liveConnect(t *testing.T) Connect {
 			ups, _, err := (blanktrail.Source{Kind: saved.Proxy.Kind, Location: saved.Proxy.Location,
 				DefaultScheme: "socks5"}).Load(ctx)
 			if err != nil {
-				return nil, err
+				return Identities{}, err
 			}
 			cfg.Channels = []blanktrail.Channel{
 				blanktrail.NewListChannel("list", blanktrail.NewStaticRotor(ups)),
@@ -1366,11 +1366,11 @@ func liveConnect(t *testing.T) Connect {
 		started := time.Now()
 		pool, err := blanktrail.NewPool(ctx, cfg)
 		if err != nil {
-			return nil, err
+			return Identities{}, err
 		}
 		logf(t, "MEASUREMENT settings: %d identities opened in %v for a connection that was just saved",
 			pool.Size(), time.Since(started).Round(time.Millisecond))
-		return pool, nil
+		return Identities{Search: pool}, nil
 	}
 }
 

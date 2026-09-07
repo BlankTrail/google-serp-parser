@@ -125,10 +125,20 @@ func TestRunner_SpendsNothingOnAPageWhoseAddressesAreAllKnown(t *testing.T) {
 	}
 }
 
-func TestRunner_TakesOneIdentityForAWholePageOfLinks(t *testing.T) {
-	// The address behind a link does not depend on who captured the page, so a
-	// separate identity per link buys nothing and spends the whole page's worth
-	// of the pool to get it.
+func TestRunner_TakesAnIdentityOfItsOwnForEveryAddress(t *testing.T) {
+	// It used to be one identity for a whole page, on the reading that the
+	// address behind a link does not depend on who captured the page — which is
+	// true, and is also the reason the opposite is right. Nothing is carried
+	// between two lookups: no session, no cookie jar, no challenge solved.
+	// Measured on the live list, the same links through a port made as a search
+	// runs, through one with the solver off, and through one with neither
+	// solver nor cookie jar read 9 of 9, 9 of 9 and 11 of 11, at the same cost
+	// in attempts.
+	//
+	// So a lookup is a stranger, and one identity per address is what a
+	// stranger looks like. What it buys is that a dead address costs one
+	// lookup instead of a page of them, and that these requests can be given
+	// ports of their own — see Runner.Addresses.
 	d := newDestination(t)
 	f := poolFacing(t, d.addr(), 4)
 
@@ -153,8 +163,8 @@ func TestRunner_TakesOneIdentityForAWholePageOfLinks(t *testing.T) {
 	if got.Resolved != 3 {
 		t.Fatalf("Resolved=%d, want 3 (failed %d: %v)", got.Resolved, got.Failed, got.Errs)
 	}
-	if spent != 1 {
-		t.Errorf("%d identities taken for one page of 3 links, want 1", spent)
+	if spent != 3 {
+		t.Errorf("%d identities taken for 3 addresses, want one each", spent)
 	}
 }
 
@@ -720,41 +730,113 @@ func TestRunner_WritesNoAddressWhenTheLookupIsSentToGooglesOwnPage(t *testing.T)
 	if got.Resolved != 1 {
 		t.Errorf("resolved %d, want the one real address and not the challenge", got.Resolved)
 	}
-	if !walled(got.Errs) {
+	if !sentToGoogle(got.Errs) {
 		t.Errorf("the report says %v, want it to name the redirect that stayed on Google", got.Errs)
 	}
 }
 
+// sentToGoogle reports whether any lookup was answered with a redirect that
+// stayed on Google.
+func sentToGoogle(errs []error) bool {
+	for _, err := range errs {
+		if errors.Is(err, google.ErrRedirectedIntoGoogle) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunner_PutsAnIdentitySentToTheChallengeOutOfTheRotation(t *testing.T) {
-	// One round, and a round that read something: the identity answered, the
-	// pool saw a request go out and a redirect come back, and only this layer
-	// knows that one of those redirects was a refusal. Rejecting on the round
-	// that brought nothing cannot stand in for it — by then the round is a
-	// round of one link, and the identity has been handed out again.
+	// The identity answered, as far as anything below this layer can see: a
+	// request went out and a well-formed redirect came back. Only here is it
+	// known that the redirect was a refusal, so only here can the identity be
+	// taken out of the rotation — and it has to be, or the next attempt at this
+	// address is handed the same identity and told the same thing.
 	d := walling(t, "/goto/two")
 	f := poolFacing(t, d.addr(), 4, func(c *blanktrail.PoolConfig) {
 		c.MaxPortStrikes = 1 << 20
 	})
 
-	serp := google.SERP{
+	res := &QueryResult{Pages: []google.SERP{{
 		Origin: d.URL,
 		Results: []google.Result{
 			unread("/goto/one", "example.com"),
 			unread("/goto/two", "example.com"),
 		},
-	}
+	}}}
 
 	r := &Runner{Pool: f.Pool, Threads: 1}
-	got, err := r.resolveOnce(context.Background(), &serp, 1)
+	got, err := r.readAddress(context.Background(), res, spot{page: 0, at: 1})
 	if err != nil {
-		t.Fatalf("resolveOnce: %v", err)
+		t.Fatalf("readAddress: %v", err)
 	}
-	if got.Resolved != 1 || got.Failed != 1 {
-		t.Fatalf("Resolved=%d Failed=%d, want the round to have read one and been refused one",
-			got.Resolved, got.Failed)
+	if got.Resolved != 0 {
+		t.Fatalf("resolved %d, want the challenge not counted as an address", got.Resolved)
 	}
-	if st := f.Pool.Stats(); st.Rejections != 1 {
-		t.Errorf("%d identities were put out of the rotation, want the one that was sent to the challenge",
-			st.Rejections)
+	if st := f.Pool.Stats(); st.Rejections != resolveTries {
+		t.Errorf("%d identities were put out of the rotation over %d attempts, want one each",
+			st.Rejections, resolveTries)
+	}
+}
+
+func TestRunner_ReadsTheAddressesThroughTheirOwnIdentities(t *testing.T) {
+	// The lookups have ports of their own, and the searches never see them.
+	// What those ports are made of is settled where they are opened — no
+	// challenge solver, no cookie jar — and what makes that safe is measured:
+	// the same links through a searching port, a port with the solver off, and
+	// a port with neither read 9 of 9, 9 of 9 and 11 of 11 at the same cost.
+	//
+	// What it buys is that the solver, of which a tariff holds only so many,
+	// stops being spent on redirects that never needed it, and that a session
+	// built for searching stops being written into by requests that are not
+	// searches.
+	d := newDestination(t)
+	searching := poolFacing(t, d.addr(), 4)
+	reading := poolFacing(t, d.addr(), 4)
+
+	var links []google.Result
+	for i := 0; i < 5; i++ {
+		links = append(links, unread(fmt.Sprintf("/goto/%d", i+1), "example.com"))
+	}
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages:     []google.SERP{{Origin: d.URL, Results: links}},
+	}}}
+
+	r := &Runner{Pool: searching.Pool, Addresses: reading.Pool, Threads: 1}
+	got := r.ResolveLinks(context.Background(), &rep, 2)
+
+	if got.Resolved != len(links) {
+		t.Fatalf("resolved %d of %d", got.Resolved, len(links))
+	}
+	if st := searching.Pool.Stats(); st.Attempts != 0 {
+		t.Errorf("%d requests went out through the searching identities, want none", st.Attempts)
+	}
+	if st := reading.Pool.Stats(); st.Attempts < int64(len(links)) {
+		t.Errorf("%d requests went out through the reading identities, want one per address at least", st.Attempts)
+	}
+}
+
+func TestRunner_ReadsTheAddressesThroughTheRunsOwnIdentitiesWhenThereAreNoOthers(t *testing.T) {
+	// A caller that opened one set of ports means one set of ports. The lookups
+	// then go out the way they always did rather than falling over on a pool
+	// nobody gave.
+	d := newDestination(t)
+	f := poolFacing(t, d.addr(), 4)
+
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages: []google.SERP{{
+			Origin:  d.URL,
+			Results: []google.Result{unread("/goto/one", "example.com")},
+		}},
+	}}}
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	if got := r.ResolveLinks(context.Background(), &rep, 1); got.Resolved != 1 {
+		t.Fatalf("resolved %d of 1: %v", got.Resolved, got.Errs)
+	}
+	if st := f.Pool.Stats(); st.Attempts == 0 {
+		t.Error("nothing went out through the run's own identities")
 	}
 }

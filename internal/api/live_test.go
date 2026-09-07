@@ -446,8 +446,8 @@ func TestLiveAPI_ASearchAnsweredInOneConnection(t *testing.T) {
 	// a program nobody runs — which is why the job's pool is raised here rather
 	// than shared with the search.
 	sup := web.NewSupervisor(st, func(ctx context.Context, _ store.Profile, ports, threads int, device string,
-		_ time.Duration) (*blanktrail.Pool, error) {
-		return livePool(ctx, t, ports, threads), nil
+		_ time.Duration, _, _ bool) (web.Identities, error) {
+		return web.Identities{Search: livePool(ctx, t, ports, threads)}, nil
 	}, livePorts, liveThreads)
 	// Registered after the history's own cleanup and so run before it: a job
 	// this ends is written down as it lets go of it. It gives up the identities

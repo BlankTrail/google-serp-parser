@@ -4,8 +4,9 @@ package run
 
 import (
 	"context"
-	"errors"
+	"sync"
 
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 )
 
@@ -38,7 +39,27 @@ func (r *Runner) ResolveLinks(ctx context.Context, rep *Report, workers int) goo
 	return total
 }
 
-// resolveQuery fills in the addresses missing from one query's pages.
+// spot names one result of one page: the address missing from it, and where to
+// write that address once it is had.
+type spot struct{ page, at int }
+
+// resolveQuery reads every address one query's pages are missing.
+//
+// One address, one identity, and a fresh one for every attempt. That is the
+// whole of the arrangement, and it is what the measurement leaves standing: a
+// hidden address is read out of a Location header, and reading it needs nothing
+// a session provides. Measured on the live list, the same links through three
+// kinds of port — as a search runs, with the challenge solver switched off, and
+// with neither solver nor cookie jar — read 9 of 9, 9 of 9 and 11 of 11, at
+// 2.33, 2.33 and 2.27 attempts each. Every failure in all three was the address
+// dropping the connection. Nothing else came into it.
+//
+// So there is no page to work at and no identity to keep warm. There is a list
+// of addresses to read, each of which wants a live proxy and nothing else; they
+// go out several at a time, and one that will not come back is carried to
+// another identity until it does or the allowance is spent. What that leaves is
+// a step with no session in it at all, which is why it can be given ports of
+// its own — see Runner.Addresses.
 //
 // This is where a job that writes as it goes has to do it. The comment above
 // says the lookups belong after the capture rather than during it, and they
@@ -48,130 +69,158 @@ func (r *Runner) ResolveLinks(ctx context.Context, rep *Report, workers int) goo
 // One query is where the two meet. The walk of that query's pages is over
 // before any of this runs.
 func (r *Runner) resolveQuery(ctx context.Context, res *QueryResult, workers int) google.ResolveReport {
+	todo := whatIsMissing(res)
+	if len(todo) == 0 {
+		// Asking first is what keeps a query whose pages state their addresses
+		// — which is most regions — from costing an identity to discover there
+		// was nothing to do.
+		return google.ResolveReport{}
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	// A pool with nothing to give is the one failure that stops the rest: it
+	// says nothing about any address, and asking again cannot change it.
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+
+	var mu sync.Mutex
 	var total google.ResolveReport
-	for p := range res.Pages {
-		if err := ctx.Err(); err != nil {
-			total.Errs = append(total.Errs, err)
-			return total
+	var starved error
+
+	jobs := make(chan spot)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for one := range jobs {
+				got, err := r.readAddress(ctx, res, one)
+				mu.Lock()
+				gather(&total, got)
+				if err != nil && starved == nil {
+					starved = err
+					stop()
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, one := range todo {
+		sent := false
+		select {
+		case <-ctx.Done():
+			// Either the caller has gone or the pool has nothing left. Both are
+			// answered once, below, rather than once per address still to come.
+		case jobs <- one:
+			sent = true
 		}
-		gather(&total, r.resolvePage(ctx, &res.Pages[p], workers))
+		if !sent {
+			break
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	if starved != nil {
+		total.Errs = append(total.Errs, starved)
 	}
 	return total
 }
 
-// resolvePage looks up the addresses missing from one page, carrying what is
-// left to another identity for as long as there is one left to try.
-//
-// One identity at a time for the whole page rather than one per link: the
-// address behind a link does not depend on who captured the page, so a separate
-// identity per link buys nothing and spends a whole page's worth of the pool to
-// get it. A round asks only for what is still missing, so the cost falls away
-// as the page fills: a page down to its last address costs one request a round.
-//
-// What it stops on is the important part, and it was twice wrong. It was three
-// identities however well they were doing, which left gaps in the middle of a
-// page; then it was three in a row bringing nothing, which left fewer. Both
-// were three, and three is the number the measurement below has no time for.
-func (r *Runner) resolvePage(ctx context.Context, serp *google.SERP, workers int) google.ResolveReport {
+// readAddress reads one address, carrying it to another identity for as long as
+// it is allowed. The error it returns is the pool having no identity to give,
+// which is not something about this address.
+func (r *Runner) readAddress(ctx context.Context, res *QueryResult, one spot) (google.ResolveReport, error) {
 	var total google.ResolveReport
-	for tried := 0; tried < resolveTries && needsResolving(serp); tried++ {
-		if err := ctx.Err(); err != nil {
-			total.Errs = append(total.Errs, err)
-			return total
+	page := &res.Pages[one.page]
+	// The one result, in place: what is written into it is written into the
+	// page, and no other worker holds this index.
+	mine := page.Results[one.at : one.at+1]
+
+	for try := 0; try < resolveTries && !mine[0].Resolved(); try++ {
+		if ctx.Err() != nil {
+			return total, nil
 		}
-		one, err := r.resolveOnce(ctx, serp, workers)
-		gather(&total, one)
+		lease, err := r.addresses().Acquire(ctx)
 		if err != nil {
-			// No identity was handed out, so nothing was asked and nothing is
-			// known about what is left. The pool is closed or the caller has
-			// gone — neither is answered by asking again.
-			total.Errs = append(total.Errs, err)
-			return total
+			if ctx.Err() != nil {
+				// The pool was fine; this worker was stopped because another
+				// found it starved, or because the caller went. Say nothing.
+				return total, nil
+			}
+			return total, err
 		}
+
+		client := lease.Client()
+		resolver := google.NewResolver(client.Transport)
+		// The pool was told how long one request may take. A resolver built on
+		// the transport alone would drop that bound, and a call with no
+		// deadline of its own would then wait on an unreachable identity for as
+		// long as it took.
+		resolver.Client.Timeout = client.Timeout
+
+		got := resolver.ResolveResults(ctx, page.Origin, mine, 1)
+		gather(&total, got)
+		if got.Resolved == 0 && got.Failed > 0 {
+			// Nothing came back through this address and something was asked of
+			// it, so it is the address rather than the link: it is refused,
+			// which is what puts it out of the rotation and hands the next
+			// attempt a different one. A lookup answered with a redirect that
+			// stayed on Google is the same verdict from the other direction —
+			// this identity is being sent to a challenge — and nothing below
+			// this layer can see it, because the request succeeded.
+			_ = lease.Reject(ctx)
+		}
+		lease.Release()
 	}
-	return total
+	return total, nil
 }
 
-// resolveTries is how many identities one page's missing addresses are carried
-// to before what is still missing is given up on.
+// addresses is the pool the lookups go through.
+//
+// It is a pool of its own where the caller opened one, and the run's own where
+// nobody did. What that pool is opened as belongs to whoever opens it; what it
+// is for is settled here — strangers, one per request, with nothing kept
+// between them.
+func (r *Runner) addresses() *blanktrail.Pool {
+	if r.Addresses != nil {
+		return r.Addresses
+	}
+	return r.Pool
+}
+
+// whatIsMissing lists every result of every page whose address is still
+// unknown, in the order they were captured.
+func whatIsMissing(res *QueryResult) []spot {
+	var out []spot
+	for p := range res.Pages {
+		for i, one := range res.Pages[p].Results {
+			if one.Link != "" && !one.Resolved() {
+				out = append(out, spot{page: p, at: i})
+			}
+		}
+	}
+	return out
+}
+
+// resolveTries is how many identities one missing address is carried to before
+// it is given up on.
 //
 // It is defaultTries, and for the reason defaultTries is thirty rather than for
 // a reason of its own: what a lookup meets is what a search meets. Measured
-// against the live fifteen-thousand-address list this is pointed at, one link
-// at a time, one identity per attempt — 29 hidden addresses, 114 attempts to
-// read all 29, and every single failure the address dropping the connection
-// rather than the far end answering something else. On that distribution a rule
-// of three identities reads 55% of the addresses, five reads 76%, eight reads
-// 93%, and fifteen reads every one of them. Three was the rule, and 55% is what
-// a hole in the middle of a report was.
-//
-// Nothing is spent on a page that does not need it. The step asks whether there
-// is anything to look up before it takes an identity, so the region that states
-// its addresses — which is most of them — costs no requests at all.
+// against the live fifteen-thousand-address list, one link at a time, one
+// identity per attempt — 29 hidden addresses, 114 attempts to read all 29, and
+// every single failure the address dropping the connection rather than the far
+// end answering something else. On that distribution a rule of three identities
+// reads 55% of the addresses, five reads 76%, eight reads 93%, and fifteen
+// reads every one of them. Three was the rule, and 55% is what a hole in the
+// middle of a report was.
 const resolveTries = defaultTries
 
-// resolveOnce looks up what is missing from one page, through one identity, and
-// puts that identity away when it carried nothing. The error it returns is the
-// pool having no identity to give, which is not something about this page.
-func (r *Runner) resolveOnce(ctx context.Context, serp *google.SERP, workers int) (google.ResolveReport, error) {
-	lease, err := r.Pool.Acquire(ctx)
-	if err != nil {
-		return google.ResolveReport{}, err
-	}
-	defer lease.Release()
-
-	client := lease.Client()
-	resolver := google.NewResolver(client.Transport)
-	// The pool was told how long one request may take. A resolver built on the
-	// transport alone would drop that bound, and a call with no deadline of its
-	// own would then wait on an unreachable identity for as long as it took.
-	resolver.Client.Timeout = client.Timeout
-
-	rep := resolver.ResolveAll(ctx, serp, workers)
-	switch {
-	case rep.Resolved == 0 && rep.Failed > 0:
-		// Nothing came back through this address and something was asked of it,
-		// so it is the address rather than the links: it is refused, which is
-		// what puts it out of the rotation and hands the next round a different
-		// one. A round that read even one is left alone — a single dead link is
-		// not a dead address.
-		_ = lease.Reject(ctx)
-	case walled(rep.Errs):
-		// A lookup that came back pointing into Google is this identity being
-		// refused, whatever the rest of the round managed. Nothing below this
-		// layer can see it — the request succeeded and the answer was a proper
-		// redirect — so it is said here, and the links that met it are carried
-		// to another identity rather than counted against the page.
-		_ = lease.Reject(ctx)
-	}
-	return rep, nil
-}
-
-// walled reports whether any lookup of a round was answered with a redirect
-// that stayed on Google.
-func walled(errs []error) bool {
-	for _, err := range errs {
-		if errors.Is(err, google.ErrRedirectedIntoGoogle) {
-			return true
-		}
-	}
-	return false
-}
-
-// needsResolving reports whether a page holds any result whose address is still
-// unknown. Asking first is what keeps a page that states its addresses from
-// costing an identity to discover there was nothing to do.
-func needsResolving(serp *google.SERP) bool {
-	for _, res := range serp.Results {
-		if res.Link != "" && !res.Resolved() {
-			return true
-		}
-	}
-	return false
-}
-
-// gather adds one page's account to the running total, so a caller looking at
-// many pages ends with one account of the whole rather than a slice of them.
+// gather adds one account to the running total, so a caller looking at many
+// addresses ends with one account of the whole rather than a slice of them.
 func gather(total *google.ResolveReport, one google.ResolveReport) {
 	total.Attempted += one.Attempted
 	total.Resolved += one.Resolved
@@ -179,16 +228,17 @@ func gather(total *google.ResolveReport, one google.ResolveReport) {
 	total.Errs = append(total.Errs, one.Errs...)
 }
 
-// resolveWorkers is how many of one page's links are looked up at a time.
+// resolveWorkers is how many of one query's missing addresses are read at once.
 //
-// They go through one identity, and the pool holds that identity to its own
-// per-address limit whatever this says, so a larger number here buys queueing
-// rather than speed. Four is what a page of ten hidden addresses clears in
-// three rounds without asking the pool for a second port.
+// Four, and the number is about the run rather than about the pool: every
+// thread reads its own query's addresses, so a job of a hundred threads already
+// has four hundred lookups in the air — more than the demand measured on a run
+// doing three hundred pages a minute. Raising it here would buy queueing at the
+// pool rather than speed.
 const resolveWorkers = 4
 
 // firstOf is the one error worth putting against a step. A step carries one,
-// and a page whose every lookup failed failed for one reason.
+// and a query whose every lookup failed failed for one reason.
 func firstOf(errs []error) error {
 	if len(errs) == 0 {
 		return nil

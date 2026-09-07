@@ -639,8 +639,8 @@ func (s *Server) takeIntoUse(saved settings.Settings) error {
 	// asks anybody what to do about the job that is running: it runs on the pool
 	// it raised for itself and is not touched.
 	return s.sup.Reconnect(func(ctx context.Context, prof store.Profile, ports, threads int,
-		device string, cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error) {
-		return s.connect(ctx, saved, prof, ports, threads, device, cooldown, wholePool)
+		device string, cooldown time.Duration, wholePool, wantsAddresses bool) (Identities, error) {
+		return s.connect(ctx, saved, prof, ports, threads, device, cooldown, wholePool, wantsAddresses)
 	})
 }
 

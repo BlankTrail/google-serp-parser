@@ -229,7 +229,7 @@ type raisedPools struct {
 
 // raise is the Dial a supervisor is built on.
 func (r *raisedPools) raise(_ context.Context, prof store.Profile, ports, threads int, _ string,
-	_ time.Duration, wholePool bool) (engine, error) {
+	_ time.Duration, wholePool, _ bool) (engine, error) {
 	r.mu.Lock()
 	r.asked = append(r.asked, poolShape{Ports: ports, Threads: threads, Profile: prof.ID, WholePool: wholePool})
 	if r.refuse != nil {
@@ -475,8 +475,8 @@ func standInPools(t *testing.T) (OpenPool, *fakebt.Server) {
 		t.Fatalf("NewClient: %v", err)
 	}
 	return func(ctx context.Context, _ store.Profile, ports, threads int, device string,
-		_ time.Duration, _ bool) (*blanktrail.Pool, error) {
-		return blanktrail.NewPool(ctx, blanktrail.PoolConfig{
+		_ time.Duration, _, _ bool) (Identities, error) {
+		pool, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 			Specs:            blanktrail.SpecsFor(device),
 			Client:           cl,
 			Threads:          threads,
@@ -488,6 +488,10 @@ func standInPools(t *testing.T) (OpenPool, *fakebt.Server) {
 			MaxRetriesPerReq: 1,
 			Sleep:            func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
 		})
+		if err != nil {
+			return Identities{}, err
+		}
+		return Identities{Search: pool}, nil
 	}, fake
 }
 
@@ -503,14 +507,14 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	open, fake := standInPools(t)
 	ctx := t.Context()
 
-	proof, err := open(ctx, store.Profile{}, 2, 1, blanktrail.DeviceDesktop, 0, false)
+	proof, err := open(ctx, store.Profile{}, 2, 1, blanktrail.DeviceDesktop, 0, false, false)
 	if err != nil {
 		t.Fatalf("opening a pool: %v", err)
 	}
 	if got := len(fake.OpenPorts()); got != 2 {
 		t.Fatalf("the service lists %d ports for a pool of 2, so it cannot say what a job holds", got)
 	}
-	if err := proof.Close(); err != nil {
+	if err := proof.Search.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if got := len(fake.OpenPorts()); got != 0 {
@@ -522,11 +526,11 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	var counting sync.Mutex
 	opened := 0
 	count := func(ctx context.Context, prof store.Profile, ports, threads int, device string,
-		_ time.Duration, _ bool) (*blanktrail.Pool, error) {
+		_ time.Duration, _, _ bool) (Identities, error) {
 		counting.Lock()
 		opened++
 		counting.Unlock()
-		return open(ctx, prof, ports, threads, device, 0, false)
+		return open(ctx, prof, ports, threads, device, 0, false, false)
 	}
 	raised := func() int {
 		counting.Lock()
@@ -978,8 +982,8 @@ func TestReconnect_ChangesWhereTheNextJobsPoolComesFrom(t *testing.T) {
 	// the only way it can is by changing what raises their pools.
 	v, _, _ := heldSupervisor(t)
 	next := &heldEngine{}
-	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool) (*blanktrail.Pool, error) {
-		return nil, nil
+	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+		return Identities{}, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
 	}
@@ -997,8 +1001,8 @@ func TestReconnect_LeavesTheJobInFlightOnThePoolItRaised(t *testing.T) {
 	id := enqueue(t, v, "one", "a")
 	waitUntilRunning(t, v, id)
 
-	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool) (*blanktrail.Pool, error) {
-		return nil, nil
+	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+		return Identities{}, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
 	}
@@ -1017,8 +1021,8 @@ func TestReconnect_GivesUpAStandingSetOfIdentitiesNobodyIsInside(t *testing.T) {
 	// follow raise their own, those ports are nobody's, and left open they are
 	// held for as long as the process runs.
 	v, _, standing := heldSupervisor(t)
-	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool) (*blanktrail.Pool, error) {
-		return nil, nil
+	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+		return Identities{}, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
 	}
@@ -1043,8 +1047,8 @@ func TestSupervisor_RefusesARaiseThatCameBackWithNeitherAPoolNorAReason(t *testi
 	// that caused it. It is refused where it happens instead, and the job stays
 	// there to be carried on.
 	st := testStore(t)
-	v := start(st, dialing(func(context.Context, store.Profile, int, int, string, time.Duration, bool) (*blanktrail.Pool, error) {
-		return nil, nil
+	v := start(st, dialing(func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+		return Identities{}, nil
 	}, nil), 1, 1)
 	t.Cleanup(func() { _ = v.Close() })
 
@@ -1207,7 +1211,7 @@ func TestSupervisor_RaisesThePoolAsTheKindOfPageTheJobAskedFor(t *testing.T) {
 	st := testStore(t)
 	var asked []string
 	var mu sync.Mutex
-	v := start(st, source{raise: func(_ context.Context, _ store.Profile, _, _ int, device string, _ time.Duration, _ bool) (engine, error) {
+	v := start(st, source{raise: func(_ context.Context, _ store.Profile, _, _ int, device string, _ time.Duration, _, _ bool) (engine, error) {
 		mu.Lock()
 		asked = append(asked, device)
 		mu.Unlock()
