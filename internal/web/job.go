@@ -79,6 +79,10 @@ type jobSetup struct {
 	Ports   int
 	Threads int
 	Tries   int
+	// WholePool says this job spends the whole proxy list. Ports means nothing
+	// while it is ticked, and the box beside it is refused rather than left to
+	// be filled in with a number nothing will read.
+	WholePool bool
 	// Profiles are the sets of exits this job could go out through, the one it
 	// names marked. Changing it is the same press as the numbers beside it and
 	// reaches the job the same way: what is written is what the next raise
@@ -250,6 +254,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Ports:       sum.Ports,
 			Threads:     sum.Threads,
 			Tries:       sum.Tries,
+			WholePool:   sum.WholePool,
 			Pause:       int(sum.Cooldown / time.Second),
 			KeptAds:     sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldAds),
 			KeptRelated: sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldRelated),
@@ -396,7 +401,8 @@ func (s *Server) apiReshape(w http.ResponseWriter, r *http.Request) {
 	}
 	err = s.store.Reshape(r.Context(), id,
 		countOf(r.FormValue("ports")), countOf(r.FormValue("threads")), countOf(r.FormValue("tries")),
-		time.Duration(countOf(r.FormValue("cooldown")))*time.Second)
+		time.Duration(countOf(r.FormValue("cooldown")))*time.Second,
+		r.FormValue("wholepool") != "")
 	switch {
 	case errors.Is(err, store.ErrNoJob):
 		http.NotFound(w, r)

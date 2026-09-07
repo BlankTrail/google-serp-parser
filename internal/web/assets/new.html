@@ -115,7 +115,10 @@
 </div>
 <div class="field">
 <label for="ports">{{.T "form.ports"}}</label>
-<input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}">
+<input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}"{{if .Form.WholePool}} disabled{{end}}>
+</div>
+<div class="field">
+<label><input id="wholepool" name="wholepool" type="checkbox" value="1"{{if .Form.WholePool}} checked{{end}}> {{.T "form.wholepool"}}</label>
 </div>
 <div class="field">
 <label for="tries">{{.T "form.tries"}}</label>
@@ -129,6 +132,7 @@
 <ul class="notes">
 <li>{{.T "form.tries.why"}}</li>
 <li>{{.T "form.pause.why"}}</li>
+<li>{{.T "form.wholepool.why"}}</li>
 </ul>
 <p class="empty">{{.T "form.pool.why"}}</p>
 </fieldset>

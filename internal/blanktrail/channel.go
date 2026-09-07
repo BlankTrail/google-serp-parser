@@ -78,6 +78,16 @@ func (c *listChannel) Next() (Egress, bool) {
 	return Egress{Upstream: u.URL()}, true
 }
 
+// NextFree is Next without taking an address off the bench early. See
+// Rotor.NextFree for why the two answers are both wanted.
+func (c *listChannel) NextFree() (Egress, bool) {
+	u, ok := c.rotor.NextFree()
+	if !ok {
+		return Egress{}, false
+	}
+	return Egress{Upstream: u.URL()}, true
+}
+
 func (c *listChannel) Renew(_ context.Context, _ Egress) (Egress, error) {
 	eg, ok := c.Next()
 	if !ok {
@@ -96,6 +106,19 @@ func (c *listChannel) MarkDead(eg Egress) {
 	if u, ok := oneUpstream(eg); ok {
 		c.rotor.MarkDead(u)
 	}
+}
+
+// freeEgress asks a channel for an address nothing is resting on, and reports
+// whether there was one.
+//
+// A channel that cannot tell the difference answers the way it always does. The
+// distinction only exists for a list: a gateway or a single rotating address
+// has no bench to be resting on.
+func freeEgress(ch Channel) (Egress, bool) {
+	if free, ok := ch.(interface{ NextFree() (Egress, bool) }); ok {
+		return free.NextFree()
+	}
+	return ch.Next()
 }
 
 // oneUpstream reads back the address an egress was built from, and says no when

@@ -122,7 +122,10 @@
 </div>
 <div class="field">
 <label for="ports">{{.T "form.ports"}}</label>
-<input id="ports" name="ports" type="number" min="1" value="{{.Job.Ports}}">
+<input id="ports" name="ports" type="number" min="1" value="{{.Job.Ports}}"{{if .Job.WholePool}} disabled{{end}}>
+</div>
+<div class="field">
+<label><input id="wholepool" name="wholepool" type="checkbox" value="1"{{if .Job.WholePool}} checked{{end}}> {{.T "form.wholepool"}}</label>
 </div>
 <div class="field">
 <label for="tries">{{.T "form.tries"}}</label>
@@ -136,6 +139,7 @@
 <div class="actions"><button type="submit">{{.T "job.reshape"}}</button></div>
 <p class="empty">{{.T "job.reshape.why"}}</p>
 <p class="empty">{{.T "job.reshape.total"}}</p>
+<p class="empty">{{.T "form.wholepool.why"}}</p>
 {{if .Reshaped}}<p class="empty">{{.T .Reshaped}}</p>{{end}}
 </form>
 </section>

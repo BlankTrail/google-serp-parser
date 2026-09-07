@@ -247,6 +247,7 @@ before you start it.
 | Dropping duplicates | Keep everything, one row per URL, or one per host |
 | Threads | How many phrases are taken at once |
 | Ports per thread | Identities opened per thread. Threads × ports is the size of the pool. Three by default, which measured fastest |
+| Use the whole proxy list | A port of its own for every address the list can spare, opened as the run asks for identities, until the list or the service runs out. Ports per thread means nothing while it is ticked |
 | Tries per phrase | How many identities one phrase may be carried to before it is called failed |
 | Pause on one identity, seconds | The gap before an identity is asked again. Five by default — an identity asked every two seconds answered a dozen requests before it was challenged, one asked every five around forty. Nought means nought |
 
@@ -302,6 +303,16 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   queries: ten thousand queries done says nothing about how much there is.
 - **A walk through the interface** on a machine nothing has been run on: seven
   stops, one sentence each, standing beside the thing they are about.
+- **Spend the whole proxy list.** A tick beside "ports per thread", and the job
+  stops running on a pool of a fixed size: it opens a port of its own for every
+  address the list can spare, as it asks for identities, until the list runs out
+  or the service has no room left to stand on — and only then hands back a port
+  it already has, the one that has rested longest. Every request settles through
+  a different address. It is off by default and what it costs is measured: a
+  port on a fresh address pays for a challenge on its first request, one to
+  three minutes against a second or two through one that has already answered,
+  and on a large cheap list three addresses in four carry nothing at all. It is
+  there for a run that must not be seen coming from a handful of exits.
 - **A redirect is an answer, and the port that carried it is credited with one.**
   A hidden address is read out of the `Location` header of a redirect, so every
   lookup that works answers 302 — and 302 was also the shape the pool took for
@@ -530,6 +541,7 @@ measured to it:
 | Proxy profile | Which set of exits the job goes out through. Changeable afterwards on the job's own page |
 | Threads | Queries taken at once |
 | Ports per thread | Identities opened per thread. Threads × ports = pool size. Three by default, which is what measured fastest |
+| Use the whole proxy list | A port of its own for every address the list can spare, until the list or the service runs out. Ports per thread means nothing while it is ticked |
 | Tries per phrase | How many identities one phrase may be taken to |
 | Pause on one identity, seconds | Gap before an identity is asked again. Five by default: an identity asked every two seconds answered twelve requests before it was challenged, one asked every five around forty. **Nought means none** |
 | Pages per query | Depth of pagination |

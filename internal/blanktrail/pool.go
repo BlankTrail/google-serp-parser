@@ -268,10 +268,74 @@ type PoolConfig struct {
 	// buys nothing.
 	MaxRevivals int
 
+	// WholeList opens a port of its own for every address the list can spare,
+	// on demand, instead of the fixed number Threads × PortsPerThread decides
+	// before the run begins.
+	//
+	// A caller asks for an identity, and the pool answers with a port on an
+	// address nothing else is using — opening one for the purpose — for as long
+	// as there is an address to spare and room on the service to stand on. Only
+	// once there is neither does it hand back a port it has already opened, and
+	// then the one that has rested longest.
+	//
+	// It is off by default, and the reason is measured. A port on a fresh
+	// address pays for a challenge on its first request — one to three minutes,
+	// against a second or two through one that has already answered — and on a
+	// large cheap list three addresses in four carry nothing at all. Measured at
+	// five threads for twenty minutes an arm on such a list, one port a thread
+	// against three: 96 answers against 67, and 325 failures against 459. More
+	// addresses in play is not more work done.
+	//
+	// What it buys is the other thing a list is for: every request that settles
+	// settles through a different address, and a job that must not be seen
+	// coming from a handful of them is what this is for.
+	WholeList bool
+
+	// MaxPorts is the most ports the service may hold open at once, counting
+	// every port on it and not only this pool's. Zero means defaultMaxPorts.
+	//
+	// It is what the service says about itself when it says anything: the ports
+	// listing carries a ceiling and how many are open right now, and both beat
+	// anything stated here. This is what stands when the service says nothing,
+	// and it is a tariff's number rather than a guess.
+	//
+	// Neither reading is the last word. A pool that grows into the ceiling finds
+	// out the hard way — the open is refused — and that refusal is remembered
+	// for the rest of the run, which is the one reading that is true whatever
+	// the tariff says and whoever else is holding ports.
+	MaxPorts int
+
+	// PortsHeldBack is how many of MaxPorts this pool leaves for everything
+	// else on the machine. Zero means defaultPortsHeldBack; below zero holds
+	// nothing back, which is a thing an operator can mean and nought is not.
+	//
+	// A pool that grows to the last port leaves the browser interface, the
+	// warm identities and whatever else uses the service with nowhere to stand,
+	// and the first thing that notices is something other than the job.
+	PortsHeldBack int
+
 	// Now and Sleep are clock seams for tests. Both default to the real clock.
 	Now   func() time.Time
 	Sleep func(context.Context, time.Duration) error
 }
+
+// defaultMaxPorts is how many ports the service is taken to allow at once when
+// the caller names no number, and defaultPortsHeldBack is what a pool growing
+// into that leaves for everything else on the machine.
+const (
+	defaultMaxPorts      = 1000
+	defaultPortsHeldBack = 40
+)
+
+// growAgainAfter is how long a pool waits before trying to open another port
+// once an attempt found no room.
+//
+// Nothing here is watching for room to appear: an address comes back off the
+// bench when its rest is up and another program lets a port go when it lets it
+// go, and neither announces itself. So the pool looks again on a timer, rarely
+// enough that a run which has stopped growing is not asking the service about
+// it every time a thread wants an identity.
+const growAgainAfter = 30 * time.Second
 
 // Size is how many ports the pool will open.
 func (cfg PoolConfig) Size() int {
@@ -381,6 +445,11 @@ type Pool struct {
 	closed    bool // set inside closeOnce.Do; renewIfDue checks it before reopening a port
 	closeOnce sync.Once
 	stats     Stats
+
+	// ceiling is how many ports this pool has learned it may hold, nought until
+	// something says otherwise, and triedToGrow is when it last looked for room.
+	ceiling     int
+	triedToGrow time.Time
 }
 
 // SpecStats is per-template port accounting, so a progress screen can say
@@ -428,6 +497,11 @@ type Stats struct {
 	// Revivals counts quarantined ports given another egress and put back into
 	// rotation.
 	Revivals int64
+
+	// Closures counts ports closed and taken out of the pool because the list
+	// had no address left to put behind them. It is the whole-list mode's own
+	// number: everywhere else a port outlives its address.
+	Closures int64
 
 	// Failures counts what went wrong, by kind. A run whose failures are nearly
 	// all transport is a run on dead addresses; one whose failures are walls is
@@ -586,6 +660,15 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 	if cfg.MaxRevivals <= 0 {
 		cfg.MaxRevivals = 3
 	}
+	if cfg.MaxPorts <= 0 {
+		cfg.MaxPorts = defaultMaxPorts
+	}
+	switch {
+	case cfg.PortsHeldBack == 0:
+		cfg.PortsHeldBack = defaultPortsHeldBack
+	case cfg.PortsHeldBack < 0:
+		cfg.PortsHeldBack = 0
+	}
 
 	cool := cfg.Cooldown
 	switch {
@@ -673,7 +756,14 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 		g := layout[i]
 		ch := groups[g][taken[g]]
 		taken[g]++
+		// A pool spending the whole list opens a port for an address nothing
+		// is resting on or does not open one at all: a port on an address the
+		// bench was holding is a port that will fail, and here it also holds a
+		// place in the tariff that a working one could have had.
 		eg, ok := ch.Next()
+		if p.cfg.WholeList {
+			eg, ok = freeEgress(ch)
+		}
 		if !ok {
 			return fmt.Errorf("blanktrail: channel %q has no egress to hand out", ch.Name())
 		}
@@ -747,6 +837,112 @@ func (p *Pool) Grow(ctx context.Context, extra int) error {
 		return ErrPoolExhausted
 	}
 	return p.openBatch(ctx, extra, false)
+}
+
+// growByOne opens one more port, on an address of its own, and reports whether
+// it managed. It is how the whole-list mode grows: not a size decided before
+// the run, but one port at a time, at the moment a caller wants an identity.
+//
+// Nothing about a failure here is an error to the caller. There being no room
+// left is the normal end of growing, and the caller's answer is the same either
+// way: take a port that is already open.
+func (p *Pool) growByOne(ctx context.Context) bool {
+	if p.isClosed() {
+		return false
+	}
+	now := p.cfg.Now()
+	p.mu.Lock()
+	mine, learned, lastTried := len(p.ports), p.ceiling, p.triedToGrow
+	p.mu.Unlock()
+
+	if learned > 0 && mine >= learned {
+		// The service has already refused this pool a port at this size. It may
+		// let one go later, and looking again is what growAgainAfter is for.
+		if now.Sub(lastTried) < growAgainAfter {
+			return false
+		}
+	}
+	if mine >= p.cfg.MaxPorts-p.cfg.PortsHeldBack {
+		return false
+	}
+	p.mu.Lock()
+	p.triedToGrow = now
+	p.mu.Unlock()
+
+	// What the service says about itself, which beats what this pool was told:
+	// how many ports are open on it — every port, not only this pool's — and
+	// how many it will hold. A build that does not say keeps the number the
+	// caller supplied.
+	if _, room, err := p.cl.Ports(ctx); err == nil {
+		ceiling := room.Ceiling
+		if ceiling <= 0 {
+			ceiling = p.cfg.MaxPorts
+		}
+		if room.Open >= ceiling-p.cfg.PortsHeldBack {
+			p.ceilingIsHere(mine)
+			return false
+		}
+	}
+
+	if err := p.openBatch(ctx, 1, false); err != nil {
+		// Either the service would not open another port or the list has no
+		// address left to spare. Both mean the same thing to a caller and both
+		// are answered the same way: stop growing, and look again later.
+		p.ceilingIsHere(mine)
+		return false
+	}
+	return true
+}
+
+// dropPort closes one port and takes it out of the pool.
+//
+// It is the whole-list mode's answer to a port whose address is gone: the port
+// is the scarce thing, the address behind it is what makes it worth anything,
+// and one without the other is a place in the tariff nobody can use. The
+// learned ceiling goes with it, because the room this pool was told it did not
+// have is room it has just made.
+//
+// A port still leased is dropped all the same. The lease holder is in the
+// middle of being told its answer was unusable and is about to let go; the
+// release then lands on a port nothing will hand out again, which is what was
+// wanted.
+func (p *Pool) dropPort(ctx context.Context, pt *poolPort) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	kept := p.ports[:0]
+	var found bool
+	for _, other := range p.ports {
+		if other == pt {
+			found = true
+			continue
+		}
+		kept = append(kept, other)
+	}
+	if !found {
+		p.mu.Unlock()
+		return
+	}
+	p.ports = kept
+	delete(p.byNum, pt.num)
+	p.ceiling = 0
+	p.stats.Closures++
+	p.mu.Unlock()
+
+	_ = p.cl.ClosePort(ctx, pt.num)
+	pt.base.CloseIdleConnections()
+}
+
+// ceilingIsHere remembers that this pool could not grow past the size it was.
+func (p *Pool) ceilingIsHere(size int) {
+	p.mu.Lock()
+	if size < 1 {
+		size = 1
+	}
+	p.ceiling = size
+	p.mu.Unlock()
 }
 
 // Shrink closes every port this pool has grown by, and keeps the standing ones.
@@ -1353,9 +1549,20 @@ func (p *Pool) AcquireSpec(ctx context.Context, name string) (*Lease, error) {
 
 func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 	asked := p.cfg.Now()
+	// One port per caller, not one per turn of the loop below. The loop goes
+	// round for every wait, and a pool that grew on each of those would spend
+	// the whole tariff on the first caller that had to queue.
+	grown := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if p.cfg.WholeList && !grown {
+			// An address nothing is using beats one that is, so the pool looks
+			// for room to stand on a fresh one before it hands back a port it
+			// has already opened. A port nobody has used yet is the one that has
+			// rested longest, so take below picks up what this opens.
+			grown = p.growByOne(ctx)
 		}
 		pt, wait, err := p.take(specName)
 		if err != nil {
@@ -1559,7 +1766,14 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 			// Within each of the two, longest-rested still: an address asked
 			// once every hundred seconds looks less like a machine than one
 			// asked every seven.
-			if pt.answered {
+			//
+			// The whole-list mode keeps the ordering and drops the preference.
+			// It is there to spend the list, and a pool asked to spend the list
+			// that goes on handing back the same few identities is not doing
+			// what was asked of it: every port here already stands on an
+			// address of its own, and the one that has rested longest is the
+			// one whose turn it is.
+			if pt.answered && !p.cfg.WholeList {
 				if proven == nil || last.Before(provenUsed) {
 					proven, provenUsed = pt, last
 				}
@@ -1817,6 +2031,17 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 		return fmt.Errorf("blanktrail: port %d is not in the pool", num)
 	}
 	cur := pt.egress()
+	if p.cfg.WholeList {
+		// The address is what this port was for. Another one that is free takes
+		// its place; if none is, the port goes rather than standing on an
+		// address the bench is holding.
+		next, ok := freeEgress(pt.ch)
+		if !ok {
+			p.dropPort(ctx, pt)
+			return fmt.Errorf("blanktrail: channel %q has no address free to put behind port %d", pt.ch.Name(), num)
+		}
+		return p.putEgress(ctx, pt, next)
+	}
 	next, err := pt.ch.Renew(ctx, cur)
 	if errors.Is(err, ErrRenewUnsupported) {
 		// This channel has one fixed IP; there is nothing to rotate to. Say so
@@ -1826,6 +2051,15 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 	if err != nil {
 		return err
 	}
+	return p.putEgress(ctx, pt, next)
+}
+
+// putEgress moves a port onto an address that has already been chosen, and says
+// what it took to get there. It is the second half of rotateEgress, shared with
+// the whole-list mode, which chooses its address differently and then does
+// exactly this with it.
+func (p *Pool) putEgress(ctx context.Context, pt *poolPort, next Egress) error {
+	num := pt.num
 	pt.setEgress(next)
 	if next.Gateway != "" {
 		// A gateway is chosen when the port is opened and cannot be swapped on a

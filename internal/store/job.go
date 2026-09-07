@@ -146,6 +146,15 @@ type JobSpec struct {
 	// Nought is a job that named none, and what that becomes is decided where the
 	// pool is opened.
 	Cooldown time.Duration
+	// WholePool says this job spends the whole proxy list: a port of its own for
+	// every address the list can spare, opened as the run asks for identities,
+	// instead of the fixed Threads × Ports opened before it starts.
+	//
+	// False is a job that runs the way every job has, which is what a job
+	// written before this existed carries. Ports means nothing when it is set —
+	// there is no number of ports per thread to name — and the screen that
+	// offers it says so by refusing the box.
+	WholePool bool
 	// Fields is what each result of this job keeps. Empty is everything, which
 	// is what a job that never chose means and what every job written before the
 	// choice existed carries.
@@ -252,11 +261,11 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, whole_pool, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
 		spec.Device, spec.Country, spec.Language, ports, threads, tries,
-		spec.Cooldown.Milliseconds(), string(spec.Fields), spec.ProfileID)
+		spec.Cooldown.Milliseconds(), string(spec.Fields), spec.ProfileID, spec.WholePool)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -360,14 +369,14 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 	// has to know which unit the column is written in.
 	var cooldownMS int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id
+		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, whole_pool
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
 			&j.Spec.Device, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads,
-			&j.Spec.Tries, &cooldownMS, &j.Spec.Fields, &j.Spec.ProfileID)
+			&j.Spec.Tries, &cooldownMS, &j.Spec.Fields, &j.Spec.ProfileID, &j.Spec.WholePool)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}
@@ -399,7 +408,7 @@ var ErrJobFinished = errors.New("store: this job has already finished")
 // a job that finished between a check outside a transaction and the write after
 // it would take a change this refuses, which is the exact case being refused.
 func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads, tries int,
-	cooldown time.Duration) error {
+	cooldown time.Duration, wholePool bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin reshaping job %d: %w", jobID, err)
@@ -419,9 +428,9 @@ func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads, tries 
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE jobs SET ports = ?, threads = ?, tries = ?, cooldown_ms = ? WHERE id = ?`,
+		`UPDATE jobs SET ports = ?, threads = ?, tries = ?, cooldown_ms = ?, whole_pool = ? WHERE id = ?`,
 		atLeastNone(ports), atLeastNone(threads), atLeastNone(tries),
-		cooldown.Milliseconds(), jobID); err != nil {
+		cooldown.Milliseconds(), wholePool, jobID); err != nil {
 		return fmt.Errorf("store: reshaping job %d: %w", jobID, err)
 	}
 	if err := tx.Commit(); err != nil {

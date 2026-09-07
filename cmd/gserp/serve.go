@@ -351,7 +351,7 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	warm := &warmSet{log: o.logger(os.Stderr)}
 	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, error) {
 		if fromEnv {
-			cfg := poolConfig(1, want)
+			cfg := poolConfig(1, want, false)
 			cfg.Specs = blanktrail.SpecsFor(device)
 			cfg.Trace = o.tracer()
 			cfg.OnLease = o.leaseTracer()
@@ -367,7 +367,7 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 		if err != nil && !errors.Is(err, store.ErrNoProfile) {
 			return nil, err
 		}
-		return o.dial(ctx, saved, prof, 1, want, device, 0)
+		return o.dial(ctx, saved, prof, 1, want, device, 0, false)
 	}
 
 	if saved.APIKey == "" && !fromEnv {
@@ -436,14 +436,18 @@ func deviceOr(device string) string {
 // to.
 func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet) web.OpenPool {
 	return func(ctx context.Context, prof store.Profile, ports, threads int, device string,
-		cooldown time.Duration) (*blanktrail.Pool, error) {
+		cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error) {
 		// A job of the kind the standing identities were opened for runs on them,
 		// grown to its own size. It gives the growth back when it ends and the
 		// standing ones stay warm for the next.
 		//
 		// A job of the other kind opens its own from cold: a phone's results are
 		// not a desktop's, and an identity cannot be both.
-		if pool, mine, err := warm.raiseFor(ctx, ports, threads, device); err != nil {
+		// A job spending the whole list cannot run on the standing identities.
+		// They are a pool of a fixed size, opened before anybody asked for this,
+		// and growing it one address at a time would leave the machine's warm
+		// ones scattered through a job's ports when the job ended.
+		if pool, mine, err := warm.raiseFor(ctx, ports, threads, device, wholePool); err != nil {
 			return nil, err
 		} else if mine {
 			// The job's own pause, and nothing else's.
@@ -468,7 +472,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			return pool, nil
 		}
 		if fromEnv {
-			cfg := poolConfig(threads, ports)
+			cfg := poolConfig(threads, ports, wholePool)
 			cfg.Specs = blanktrail.SpecsFor(device)
 			cfg.Trace = o.tracer()
 			cfg.OnLease = o.leaseTracer()
@@ -479,7 +483,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			pool.PaceAt(cooldown)
 			return pool, nil
 		}
-		pool, err := o.dial(ctx, saved, prof, threads, ports, device, cooldown)
+		pool, err := o.dial(ctx, saved, prof, threads, ports, device, cooldown, wholePool)
 		if err != nil {
 			return nil, err
 		}
@@ -500,11 +504,11 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 // settings has said which they want, and a flag from last week that quietly won
 // would make the box on the screen a box that does nothing.
 func (o serveOptions) connect(ctx context.Context, saved settings.Settings, prof store.Profile,
-	ports, threads int, device string, cooldown time.Duration) (*blanktrail.Pool, error) {
+	ports, threads int, device string, cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error) {
 	// The size and the kind of result page come from the job, through the
 	// supervisor, and the connection from the settings. Neither knows the other's
 	// half, and this is where the two are put together.
-	return o.dial(ctx, saved, prof, threads, ports, device, cooldown)
+	return o.dial(ctx, saved, prof, threads, ports, device, cooldown, wholePool)
 }
 
 // dial opens a pool against the connection described, after the check that says
@@ -514,7 +518,7 @@ func (o serveOptions) connect(ctx context.Context, saved settings.Settings, prof
 // from the command line: the most common way a job is dead on arrival is one a
 // single request would have shown.
 func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof store.Profile,
-	threads, ports int, device string, cooldown time.Duration) (*blanktrail.Pool, error) {
+	threads, ports int, device string, cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error) {
 	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 	if err != nil {
 		return nil, o.scrubbed(err)
@@ -525,7 +529,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 	if ports < 1 {
 		ports = o.Ports
 	}
-	cfg := poolConfig(threads, ports)
+	cfg := poolConfig(threads, ports, wholePool)
 	cfg.Spec.Protocol = prof.Protocol
 	cfg.MaxPerUpstream = prof.ThreadsPerUpstream
 	cfg.RenewAfterInterval = prof.RenewEvery
@@ -1041,11 +1045,20 @@ func (w *warmSet) Pool() *blanktrail.Pool {
 
 // raiseFor hands a job the standing pool grown to its size, or nothing when the
 // job asks for the other kind of result page.
-func (w *warmSet) raiseFor(ctx context.Context, ports, threads int, device string) (*blanktrail.Pool, bool, error) {
+func (w *warmSet) raiseFor(ctx context.Context, ports, threads int, device string, wholePool bool) (*blanktrail.Pool, bool, error) {
 	w.mu.Lock()
 	pool, kind := w.pool, w.device
 	w.mu.Unlock()
 	if pool == nil || device != kind {
+		return nil, false, nil
+	}
+	if wholePool {
+		// A job spending the whole list opens its own. These were opened before
+		// anybody asked for this job, as a set of a fixed size on whatever the
+		// list handed out then; a job that grows one port per address through
+		// them would leave the machine's warm identities scattered among a
+		// job's when it gave the growth back, and each of them on an address
+		// this job had already spent.
 		return nil, false, nil
 	}
 	if extra := ports*threads - pool.Stats().Ports; extra > 0 {

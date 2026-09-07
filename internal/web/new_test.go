@@ -920,3 +920,63 @@ func TestJobPage_PointsAJobAtAnotherProfile(t *testing.T) {
 			sum.Threads, sum.Ports, sum.Tries, sum.Cooldown)
 	}
 }
+
+func TestCreateJob_TakesTheWholeListTickAndLeavesThePortsBoxUnread(t *testing.T) {
+	// The tick is what is sent and the number beside it is not read. A form
+	// that took both would let a job say two things about its pool — spend the
+	// whole list, and open seven ports a thread — and the pool would have to
+	// pick one without saying which.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name":      {"whole"},
+		"queries":   {"кондиционер"},
+		"pages":     {"1"},
+		"threads":   {"4"},
+		"ports":     {"7"},
+		"wholepool": {"1"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the job was refused with %d: %s", rec.Code, rec.Body.String())
+	}
+
+	sums, err := s.store.Jobs(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(sums) != 1 {
+		t.Fatalf("the history holds %d jobs, want the one", len(sums))
+	}
+	if !sums[0].WholePool {
+		t.Error("the job was written without the tick that was sent")
+	}
+	if sums[0].Threads != 4 {
+		t.Errorf("threads=%d, want the four that were asked for", sums[0].Threads)
+	}
+}
+
+func TestJobPage_RefusesThePortsBoxWhileTheWholeListIsTicked(t *testing.T) {
+	// Said on the page as well as in the handler. A box a job's settings ignore
+	// must not be fillable: a reader who types into it and sees the number kept
+	// has been told the run will use it.
+	s := testServerWithSupervisor(t)
+	if rec := postForm(t, s, "/new?do=start", url.Values{
+		"name": {"whole"}, "queries": {"кондиционер"}, "pages": {"1"},
+		"threads": {"4"}, "ports": {"7"}, "wholepool": {"1"},
+	}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("the job was refused with %d", rec.Code)
+	}
+	sums, err := s.store.Jobs(t.Context(), 10)
+	if err != nil || len(sums) != 1 {
+		t.Fatalf("ListJobs: %v, %d jobs", err, len(sums))
+	}
+
+	body := get(t, s, jobPath(sums[0].ID)).Body.String()
+	at := strings.Index(body, `name="ports"`)
+	if at < 0 {
+		t.Fatal("the job page does not show the ports box at all")
+	}
+	box := body[at : at+strings.Index(body[at:], ">")]
+	if !strings.Contains(box, "disabled") {
+		t.Errorf("the ports box is offered as %q, want it refused while the whole list is ticked", box)
+	}
+}

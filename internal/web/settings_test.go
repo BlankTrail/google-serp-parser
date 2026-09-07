@@ -46,7 +46,7 @@ type stubConnect struct {
 }
 
 func (c *stubConnect) open(_ context.Context, saved settings.Settings, prof store.Profile,
-	ports, threads int, _ string, cooldown time.Duration) (*blanktrail.Pool, error) {
+	ports, threads int, _ string, cooldown time.Duration, _ bool) (*blanktrail.Pool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.with = append(c.with, saved)

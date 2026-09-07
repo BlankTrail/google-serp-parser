@@ -54,6 +54,10 @@ type JobSummary struct {
 	// Cooldown is the gap this job leaves between two requests on one identity,
 	// and nought is a job that named none — see JobSpec.Cooldown.
 	Cooldown time.Duration
+	// WholePool says this job spends the whole proxy list rather than a fixed
+	// number of ports — see JobSpec.WholePool. Ports means nothing when it is
+	// set.
+	WholePool bool
 
 	// Ports and Threads are the pool this job asks to be run on. Zero in either
 	// is a job that named no size rather than one asking for nothing at all — see
@@ -95,7 +99,7 @@ const jobSummaryQuery = `
 	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind, j.target,
 	       j.unique_by, j.dropped,
 	       j.pages, j.country, j.language, j.device,
-	       j.ports, j.threads, j.tries, j.cooldown_ms, j.fields, j.profile_id, j.plan_ready,
+	       j.ports, j.threads, j.tries, j.cooldown_ms, j.fields, j.profile_id, j.whole_pool, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
 	       sum(CASE WHEN q.state = 'failed'  THEN 1 ELSE 0 END),
@@ -197,7 +201,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind, &sum.Target,
 		&sum.UniqueBy, &sum.Dropped,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.Device,
-		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &sum.Fields, &sum.ProfileID, &sum.PlanReady,
+		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &sum.Fields, &sum.ProfileID, &sum.WholePool, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobSummary{}, err

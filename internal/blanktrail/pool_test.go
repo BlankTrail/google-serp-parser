@@ -2897,3 +2897,179 @@ func TestLease_RejectLeavesTheIdentityColdAgain(t *testing.T) {
 		t.Error("the lease went back to the identity that had just been refused")
 	}
 }
+
+// listPool is a pool over a named number of addresses, in the mode that spends
+// them one port at a time.
+func listPool(t *testing.T, f *fakebt.Server, clock *fakeClock, addresses int, tune ...func(*PoolConfig)) *Pool {
+	t.Helper()
+	var lines []string
+	for i := 1; i <= addresses; i++ {
+		lines = append(lines, fmt.Sprintf("192.0.2.%d:1080", i))
+	}
+	ups, bad := Parse(strings.Join(lines, "\n"), "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	cfg := testPoolConfig(t, f, clock, 1, 1)
+	// A rest, so an address can be put away: without one nothing is ever
+	// benched and the list has no way to run out.
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups, WithRest(time.Minute)))}
+	cfg.WholeList = true
+	cfg.Cooldown = time.Nanosecond
+	for _, fn := range tune {
+		fn(&cfg)
+	}
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	return p
+}
+
+func TestPool_OpensAPortOfItsOwnForEachIdentityWhenSpendingTheWholeList(t *testing.T) {
+	// The mode's whole point. A caller asking for an identity is answered with a
+	// port on an address nothing else is using, opened for the purpose, rather
+	// than with one of a fixed set decided before the run.
+	f := fakebt.New(t)
+	p := listPool(t, f, newFakeClock(), 20)
+
+	// Held all at once, and on a deadline. The identities are the point — six
+	// callers, six ports — and a pool that does not grow has one port and five
+	// callers waiting on it for ever, which should read as a failure rather
+	// than as a test that never finishes.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var held []*Lease
+	for i := 0; i < 6; i++ {
+		l, err := p.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire %d: %v", i+1, err)
+		}
+		held = append(held, l)
+	}
+	for _, l := range held {
+		l.Release()
+	}
+
+	// Seven: the one the pool opened to start with, one per thread, and one
+	// more for each identity asked of it after that.
+	if got := p.Size(); got != 7 {
+		t.Errorf("the pool holds %d ports after six identities, want one each beside the first", got)
+	}
+	seen := map[string]bool{}
+	for _, num := range f.OpenPorts() {
+		seen[f.UpstreamOf(num)] = true
+	}
+	if len(seen) != 7 {
+		t.Errorf("seven ports stand on %d addresses, want one each", len(seen))
+	}
+}
+
+func TestPool_LeavesTheServiceRoomAndStopsGrowingThere(t *testing.T) {
+	// The ports are the scarce thing, and they are not all this program's: the
+	// browser interface, the warm identities and a second run stand on the same
+	// service. A pool that counts only its own grows into what they hold, and
+	// the refusal then arrives on somebody else's request.
+	f := fakebt.New(t)
+	// A tariff of ten ports with three already held elsewhere, and five held
+	// back: two are this pool's to take.
+	f.SetPortRoom(10, 3)
+	p := listPool(t, f, newFakeClock(), 20, func(c *PoolConfig) {
+		c.PortsHeldBack = 5
+	})
+
+	var held []*Lease
+	for i := 0; i < 4; i++ {
+		l, err := p.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("acquire %d: %v", i+1, err)
+		}
+		held = append(held, l)
+		l.Release()
+	}
+
+	if got := p.Size(); got != 2 {
+		t.Errorf("the pool grew to %d ports, want the two the service had room for", got)
+	}
+}
+
+func TestPool_HandsBackTheLongestRestedOnceItCannotGrow(t *testing.T) {
+	// Once there is nothing left to open, the mode is a rotation and nothing
+	// else. It must not fall back on the preference the fixed pool has for an
+	// identity that has already answered: a pool asked to spend the list that
+	// goes on handing back the same few identities is not doing what was asked.
+	f := fakebt.New(t)
+	clock := newFakeClock()
+	p := listPool(t, f, clock, 20, func(c *PoolConfig) { c.MaxPorts = 2; c.PortsHeldBack = -1 })
+
+	first, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	firstPort := first.pt.num
+	first.Release()
+	clock.Advance(time.Second)
+
+	second, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	if second.pt.num == firstPort {
+		t.Fatalf("both identities were port %d; the pool did not grow", firstPort)
+	}
+	// The one that has answered, and the one used most recently. A fixed pool
+	// would hand this one back every time from here on.
+	second.Answered()
+	second.Release()
+	clock.Advance(time.Second)
+
+	if p.Size() != 2 {
+		t.Fatalf("the pool holds %d ports, want the two the ceiling allowed", p.Size())
+	}
+	third, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("third acquire: %v", err)
+	}
+	defer third.Release()
+	if third.pt.num != firstPort {
+		t.Errorf("the third identity was port %d, want %d — the one that has rested longest",
+			third.pt.num, firstPort)
+	}
+}
+
+func TestPool_ClosesAPortTheListCannotPutAnAddressBehind(t *testing.T) {
+	// A port standing on nothing is worse than no port at all here: it holds one
+	// of the service's, which is the scarce thing, and every caller handed it
+	// spends a try finding out. The fixed pool quarantines it and waits, because
+	// there the port is what was paid for; here the address is.
+	f := fakebt.New(t)
+	p := listPool(t, f, newFakeClock(), 1, func(c *PoolConfig) { c.MaxPorts = 4; c.PortsHeldBack = -1 })
+
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	num := l.pt.num
+	held := p.Size()
+
+	// The one address is spent, so there is nothing to move the port to.
+	pt := p.port(num)
+	pt.ch.MarkDead(pt.egress())
+	if err := p.rotateEgress(context.Background(), num); err == nil {
+		t.Fatal("the list had one address and rotating found another")
+	}
+	l.Release()
+
+	if got := p.Size(); got != held-1 {
+		t.Errorf("the pool holds %d ports, want %d — the one with no address closed", got, held-1)
+	}
+	for _, open := range f.OpenPorts() {
+		if open == num {
+			t.Errorf("port %d is still open on the service", num)
+		}
+	}
+	if st := p.Stats(); st.Closures != 1 {
+		t.Errorf("Closures=%d, want the one port that lost its address", st.Closures)
+	}
+}

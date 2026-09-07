@@ -187,7 +187,7 @@ func TestRunCommand_PacesTheEstimateAsThePoolItWillOpenWouldPaceItself(t *testin
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	cfg := poolConfig(2, 3)
+	cfg := poolConfig(2, 3, false)
 	cfg.Client = client
 	cfg.Insecure = true // the fake serves plain HTTP
 	cfg.Channels = []blanktrail.Channel{blanktrail.NewDirectChannel("direct")}
@@ -945,5 +945,33 @@ func TestResumedPlan_KeepsTheNumberEachQueryHadInTheOriginalList(t *testing.T) {
 	}
 	if !slices.Equal(p.ordinals, []int{1, 2}) {
 		t.Errorf("the plan numbers them %v, want the 1 and 2 they had in the list", p.ordinals)
+	}
+}
+
+func TestPoolConfig_SpendsTheWholeListWithNoPortsPerThreadToName(t *testing.T) {
+	// The two cannot both be true. A pool told to open a port for every address
+	// it can spare has no fixed number of ports a thread, and one carried in
+	// beside the flag would decide the size of the pool it starts with — which
+	// is one per thread, so a run of fifty threads does not begin with
+	// forty-nine of them queueing on one port.
+	cfg := poolConfig(50, 7, true)
+
+	if !cfg.WholeList {
+		t.Error("the pool was not told to spend the whole list")
+	}
+	if cfg.PortsPerThread != 1 {
+		t.Errorf("ports per thread=%d, want the one the pool starts each thread on", cfg.PortsPerThread)
+	}
+	if cfg.Threads != 50 {
+		t.Errorf("threads=%d, want the fifty that were asked for", cfg.Threads)
+	}
+	if got := cfg.Size(); got != 50 {
+		t.Errorf("the pool would open %d ports to start with, want one a thread", got)
+	}
+
+	// And the other way: a job that did not ask for it is the pool this program
+	// has always opened.
+	if fixed := poolConfig(50, 7, false); fixed.WholeList || fixed.PortsPerThread != 7 {
+		t.Errorf("a job that asked for nothing got %+v", fixed)
 	}
 }

@@ -185,10 +185,18 @@ func insist(again <-chan os.Signal, done <-chan struct{}, kill func()) {
 // It takes the two numbers it reads rather than a whole command's options,
 // because the two commands that open a pool describe themselves with different
 // options and neither is the other's.
-func poolConfig(threads, ports int) blanktrail.PoolConfig {
+func poolConfig(threads, ports int, wholePool bool) blanktrail.PoolConfig {
+	if wholePool {
+		// There is no number of ports per thread here: the pool opens one port
+		// for each address it can spare, as the run asks for identities. What
+		// it starts with is a port a thread, so a run of fifty threads does not
+		// begin with forty-nine of them queueing on one.
+		ports = 1
+	}
 	return blanktrail.PoolConfig{
 		Threads:        threads,
 		PortsPerThread: ports,
+		WholeList:      wholePool,
 		Spec:           blanktrail.DefaultPortSpec(),
 		DelayMin:       shortestPause,
 		DelayMax:       longestPause,
@@ -290,7 +298,7 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 		}
 	}
 
-	cfg := poolConfig(opts.Threads, opts.Ports)
+	cfg := poolConfig(opts.Threads, opts.Ports, false)
 	job := run.Job{
 		Queries:  searchQueries(p.queries, p.spec),
 		Ordinals: p.ordinals,

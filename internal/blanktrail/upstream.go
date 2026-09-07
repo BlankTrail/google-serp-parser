@@ -464,6 +464,37 @@ func (r *Rotor) Next() (Upstream, bool) {
 	return l.up, true
 }
 
+// NextFree returns the next address that is not resting, and says so when there
+// is none.
+//
+// It is Next without the forgiveness at the end of it. Next must answer — a
+// caller asking for an address to open a port on has nothing else to do if it
+// does not — so a list where everything is resting has its longest-rested
+// address handed back early. That is the right answer for a pool of a fixed
+// size, where the port exists either way and an address that is probably still
+// dead beats none at all.
+//
+// It is the wrong answer for a caller that is deciding whether to open a port
+// in the first place, or whether to keep one it already has. There the address
+// is what the port is for, and "everything is resting" is exactly the answer
+// worth acting on: wait, and let the rests run out.
+func (r *Rotor) NextFree() (Upstream, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.releaseRested(r.now())
+
+	n := len(r.ups)
+	for i := 0; i < n; i++ {
+		l := r.ups[r.pos%n]
+		r.pos = (r.pos + 1) % n
+		if _, resting := r.benched[l.key]; !resting {
+			return l.up, true
+		}
+	}
+	return Upstream{}, false
+}
+
 // refreshNextRelease recomputes the earliest instant a rest ends. Called with
 // the lock held, from every path that takes an address off the bench.
 //

@@ -439,7 +439,7 @@ func TestReshape_ChangesThePoolOfThatJobAndOfNoOther(t *testing.T) {
 		t.Fatalf("CreateJob: %v", err)
 	}
 
-	if err := s.Reshape(context.Background(), mine, 11, 3, 5, 0); err != nil {
+	if err := s.Reshape(context.Background(), mine, 11, 3, 5, 0, false); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
 	if ports, threads := poolOf(t, s, mine); ports != 11 || threads != 3 {
@@ -470,7 +470,7 @@ func TestCreateJobAndReshape_KeepThePauseTheJobNamed(t *testing.T) {
 		t.Errorf("the job rests %v between two requests on one identity, want 45s", sum.Cooldown)
 	}
 
-	if err := s.Reshape(context.Background(), id, 2, 1, 5, 90*time.Second); err != nil {
+	if err := s.Reshape(context.Background(), id, 2, 1, 5, 90*time.Second, false); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
 	sum, err = s.Progress(context.Background(), id)
@@ -508,10 +508,10 @@ func TestReshape_RefusesAJobThatHasAlreadyFinished(t *testing.T) {
 		t.Fatalf("FinishJob: %v", err)
 	}
 
-	if err := s.Reshape(context.Background(), done, 11, 3, 5, 0); !errors.Is(err, ErrJobFinished) {
+	if err := s.Reshape(context.Background(), done, 11, 3, 5, 0, false); !errors.Is(err, ErrJobFinished) {
 		t.Errorf("Reshape returned %v, want ErrJobFinished", err)
 	}
-	if err := s.Reshape(context.Background(), running, 11, 3, 5, 0); err != nil {
+	if err := s.Reshape(context.Background(), running, 11, 3, 5, 0, false); err != nil {
 		t.Errorf("a job with work left could not be reshaped: %v", err)
 	}
 	if ports, threads := poolOf(t, s, done); ports != 4 || threads != 7 {
@@ -525,7 +525,7 @@ func TestReshape_RefusesAJobThatIsNotThere(t *testing.T) {
 	// the wrong id that their change landed.
 	s := testStore(t)
 	jobWith(t, s, "a")
-	if err := s.Reshape(context.Background(), 4242, 11, 3, 5, 0); !errors.Is(err, ErrNoJob) {
+	if err := s.Reshape(context.Background(), 4242, 11, 3, 5, 0, false); !errors.Is(err, ErrNoJob) {
 		t.Errorf("Reshape returned %v, want ErrNoJob", err)
 	}
 }
@@ -540,7 +540,7 @@ func TestReshape_TakesTheNumbersAJobIsAlreadyOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.Reshape(context.Background(), id, 4, 7, 5, 0); err != nil {
+	if err := s.Reshape(context.Background(), id, 4, 7, 5, 0, false); err != nil {
 		t.Errorf("Reshape of a job onto the pool it already has: %v", err)
 	}
 	if ports, threads := poolOf(t, s, id); ports != 4 || threads != 7 {
@@ -558,7 +558,7 @@ func TestReshape_ReadsAPoolBelowNothingAsOneThatWasNeverNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.Reshape(context.Background(), id, -4, -7, 5, 0); err != nil {
+	if err := s.Reshape(context.Background(), id, -4, -7, 5, 0, false); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
 	if ports, threads := poolOf(t, s, id); ports != 0 || threads != 0 {
@@ -785,4 +785,44 @@ func TestTryFailedAgain_PutsTheFailuresBackInTheQueueAndLeavesTheRest(t *testing
 	if sum.Finished {
 		t.Error("the job is still stamped finished with work back in front of it")
 	}
+}
+
+func TestReshape_CarriesWhetherTheJobSpendsTheWholeList(t *testing.T) {
+	// The four numbers beside it can be changed on a job's own page, and so can
+	// this: a run that has not started yet is a run whose pool is still an open
+	// question. A reshape that dropped it would tick the box on the screen and
+	// start the job on the pool it always had.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(), JobSpec{Name: "whole", Pages: 1}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if wholePoolOf(t, s, id) {
+		t.Fatal("a job that asked for nothing was written spending the whole list")
+	}
+
+	if err := s.Reshape(context.Background(), id, 2, 1, 5, 0, true); err != nil {
+		t.Fatalf("Reshape: %v", err)
+	}
+	if !wholePoolOf(t, s, id) {
+		t.Error("the reshape did not carry the whole list the reader asked for")
+	}
+
+	// And back off again, which is the half a flag written only when true loses.
+	if err := s.Reshape(context.Background(), id, 2, 1, 5, 0, false); err != nil {
+		t.Fatalf("Reshape back: %v", err)
+	}
+	if wholePoolOf(t, s, id) {
+		t.Error("the tick could not be taken off again")
+	}
+}
+
+// wholePoolOf reads back whether a job spends the whole list.
+func wholePoolOf(t *testing.T, s *Store, id int64) bool {
+	t.Helper()
+	sum, err := s.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	return sum.WholePool
 }

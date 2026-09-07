@@ -327,6 +327,28 @@
 		apply();
 	}
 
+	// A job spending the whole list has no ports-per-thread to name, so the box
+	// is refused while the tick is on rather than left to be filled in with a
+	// number nothing will read. The page already draws it that way when it is
+	// loaded; this is the same thing the moment the tick changes, so the reader
+	// is not told one thing by the form and another by the next page load.
+	//
+	// A browser with no script shows the box enabled and the run does what the
+	// tick says, which is the right way round: the tick is what is sent, and a
+	// number beside it is ignored either way.
+	function spendsTheList(root) {
+		var whole = root.querySelector("[name=wholepool]");
+		var ports = root.querySelector("[name=ports]");
+		if (!whole || !ports) {
+			return;
+		}
+		var apply = function () {
+			ports.disabled = whole.checked;
+		};
+		whole.addEventListener("change", apply);
+		apply();
+	}
+
 	// mark hides or shows the field a box stands in, along with whatever the page
 	// wrote under it: a box put away without its own sentence leaves the sentence
 	// explaining something nobody can see.
@@ -790,12 +812,14 @@
 	}
 
 	shape(document);
+	spendsTheList(document);
 	shapeSettings(document);
 
 	// A form that arrived with a swapped screen has to be shaped as well, or it
 	// is the one screen where this works only on a reload.
 	window.addEventListener("gserp:screen", function () {
 		shape(document);
+	spendsTheList(document);
 		shapeSettings(document);
 	});
 

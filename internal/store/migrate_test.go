@@ -109,6 +109,8 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// Whether a job spends the whole list, which the fifteenth step brought.
+		`ALTER TABLE jobs DROP COLUMN whole_pool`,
 		// The index on the page a result belongs to, which the fourteenth step
 		// brought.
 		`DROP INDEX IF EXISTS results_by_page`,
@@ -337,7 +339,7 @@ func TestOpen_CarriesAJobWrittenBeforeThePoolColumnsAndLeavesItRunnable(t *testi
 	if len(pending) != 1 {
 		t.Errorf("%d queries left to run after the upgrade, want the one that was not done", len(pending))
 	}
-	if err := again.Reshape(context.Background(), id, 5, 9, 5, 0); err != nil {
+	if err := again.Reshape(context.Background(), id, 5, 9, 5, 0, false); err != nil {
 		t.Errorf("a job that came through the upgrade cannot be given a pool: %v", err)
 	}
 }

@@ -136,7 +136,7 @@ func (e *poolEngine) Pool() poolFacts {
 // up behind this: which addresses a job runs through is a property of the job,
 // read once when its turn comes, so a profile edited between two jobs takes
 // effect on the second and not in the middle of the first.
-type Dial func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration) (engine, error)
+type Dial func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool bool) (engine, error)
 
 // OpenPool opens the identities one job asked to run on. It is Dial as a caller
 // outside this package can write it: what a pool is opened as, how long its
@@ -144,7 +144,7 @@ type Dial func(ctx context.Context, prof store.Profile, ports, threads int, devi
 // command that starts this server, and an interface with a second opinion about
 // that would give a job set up here a different cost from the same job set up
 // there.
-type OpenPool func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration) (*blanktrail.Pool, error)
+type OpenPool func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool bool) (*blanktrail.Pool, error)
 
 // source is where the pool for the next job comes from.
 //
@@ -169,7 +169,7 @@ func standing(eng engine) source {
 		return source{}
 	}
 	return source{
-		raise: func(context.Context, store.Profile, int, int, string, time.Duration) (engine, error) {
+		raise: func(context.Context, store.Profile, int, int, string, time.Duration, bool) (engine, error) {
 			return eng, nil
 		},
 		held: eng,
@@ -181,8 +181,8 @@ func dialing(open OpenPool, watch run.Watch) source {
 	if open == nil {
 		return source{}
 	}
-	return source{raise: func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration) (engine, error) {
-		pool, err := open(ctx, prof, ports, threads, device, cooldown)
+	return source{raise: func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool bool) (engine, error) {
+		pool, err := open(ctx, prof, ports, threads, device, cooldown, wholePool)
 		if err != nil {
 			return nil, err
 		}
@@ -746,7 +746,7 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 	if err != nil && !errors.Is(err, store.ErrNoProfile) {
 		return nil, err
 	}
-	eng, err := src.raise(ctx, prof, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown)
+	eng, err := src.raise(ctx, prof, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown, sum.WholePool)
 	if err != nil {
 		return nil, err
 	}

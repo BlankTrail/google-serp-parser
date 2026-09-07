@@ -45,6 +45,12 @@ type jobForm struct {
 	// written off, and From says which of the two ways the phrases arrived by.
 	Tries int
 	From  string
+	// WholePool says this job spends the whole proxy list: a port of its own
+	// for every address it can spare, opened as the run asks for identities,
+	// rather than the fixed Threads × Ports. Ports means nothing while it is
+	// set, and the form refuses that box rather than leaving a number on it
+	// that nothing will read.
+	WholePool bool
 	// Cooldown is how long one identity rests between two requests, in seconds,
 	// because that is the unit a person setting it thinks in. Nought is a job
 	// that named none, and the pool then works one out from its own size.
@@ -397,6 +403,7 @@ func (f jobForm) spec() store.JobSpec {
 		Ports:     f.Ports,
 		Threads:   f.Threads,
 		Tries:     f.Tries,
+		WholePool: f.WholePool,
 		Cooldown:  time.Duration(f.Cooldown) * time.Second,
 		ProfileID: f.Profile,
 		Fields:    store.FieldsOf(f.Keep),
@@ -411,23 +418,24 @@ func formOf(r *http.Request) jobForm {
 		return n
 	}
 	return jobForm{
-		Name:     strings.TrimSpace(r.FormValue("name")),
-		Kind:     strings.TrimSpace(r.FormValue("kind")),
-		Target:   strings.TrimSpace(r.FormValue("target")),
-		Unique:   strings.TrimSpace(r.FormValue("unique")),
-		Queries:  r.FormValue("queries"),
-		Country:  strings.TrimSpace(r.FormValue("country")),
-		Language: strings.TrimSpace(r.FormValue("language")),
-		Device:   strings.TrimSpace(r.FormValue("device")),
-		Pages:    atoi("pages"),
-		Threads:  atoi("threads"),
-		Ports:    atoi("ports"),
-		Tries:    atoi("tries"),
-		Cooldown: atoi("cooldown"),
-		Profile:  atoi64(r, profileField),
-		From:     strings.TrimSpace(r.FormValue(fromField)),
-		Keep:     r.Form["keep"],
-		Chose:    r.FormValue(choseField) != "",
+		Name:      strings.TrimSpace(r.FormValue("name")),
+		Kind:      strings.TrimSpace(r.FormValue("kind")),
+		Target:    strings.TrimSpace(r.FormValue("target")),
+		Unique:    strings.TrimSpace(r.FormValue("unique")),
+		Queries:   r.FormValue("queries"),
+		Country:   strings.TrimSpace(r.FormValue("country")),
+		Language:  strings.TrimSpace(r.FormValue("language")),
+		Device:    strings.TrimSpace(r.FormValue("device")),
+		Pages:     atoi("pages"),
+		Threads:   atoi("threads"),
+		Ports:     atoi("ports"),
+		Tries:     atoi("tries"),
+		WholePool: r.FormValue("wholepool") != "",
+		Cooldown:  atoi("cooldown"),
+		Profile:   atoi64(r, profileField),
+		From:      strings.TrimSpace(r.FormValue(fromField)),
+		Keep:      r.Form["keep"],
+		Chose:     r.FormValue(choseField) != "",
 	}
 }
 

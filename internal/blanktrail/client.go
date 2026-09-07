@@ -435,19 +435,50 @@ func (c *Client) SuggestPort(ctx context.Context) (int, error) {
 // ListPorts reports the port numbers currently open on the proxy, including
 // ports this program did not open. Callers must not take those over.
 func (c *Client) ListPorts(ctx context.Context) ([]int, error) {
+	open, _, err := c.Ports(ctx)
+	return open, err
+}
+
+// PortRoom is what the service says about how many ports it is holding and how
+// many it will hold.
+//
+// Ceiling is nought when the service does not say, which is the honest reading
+// for an older build: a caller that needs a number of its own supplies one, and
+// a caller that would have believed a nought would otherwise stop opening ports
+// on a service that never refused it any.
+type PortRoom struct {
+	Open    int
+	Ceiling int
+}
+
+// Ports lists the ports open on the service and says how much room is left.
+//
+// The open ports are everything on the service and not only this pool's, which
+// is the whole reason a caller asks: a pool that counts its own grows into
+// whatever the browser interface, the warm identities and a second run are
+// already standing on, and the refusal then arrives on somebody else's request.
+func (c *Client) Ports(ctx context.Context) ([]int, PortRoom, error) {
 	var out struct {
 		Ports []struct {
 			Port int `json:"port"`
 		} `json:"ports"`
+		TotalOpen int `json:"total_open"`
+		MaxPorts  int `json:"max_ports"`
 	}
 	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/ports", nil, &out); err != nil {
-		return nil, err
+		return nil, PortRoom{}, err
 	}
 	ports := make([]int, 0, len(out.Ports))
 	for _, p := range out.Ports {
 		ports = append(ports, p.Port)
 	}
-	return ports, nil
+	open := out.TotalOpen
+	if open < len(ports) {
+		// The list is what was actually named; a total below it is a service
+		// that counts something else, and the names are the safer of the two.
+		open = len(ports)
+	}
+	return ports, PortRoom{Open: open, Ceiling: out.MaxPorts}, nil
 }
 
 // FetchCAPool downloads the proxy's MITM CA and returns a pool trusting it.

@@ -74,6 +74,12 @@ type Server struct {
 	mu       sync.Mutex
 	license  License
 	gateways []Gateway
+	// maxPorts is the ceiling the service reports, and elsewhere is how many
+	// ports it says are held by something other than the caller. Both are nought
+	// until a test says otherwise, which is a service with room to spare.
+	maxPorts  int
+	elsewhere int
+
 	// gatewaysOff is the reason the service gives for having no gateway backend,
 	// and empty on a service that has one.
 	gatewaysOff string
@@ -427,9 +433,28 @@ func (s *Server) serveList(w http.ResponseWriter) {
 	for _, p := range ports {
 		list = append(list, map[string]any{"port": p, "protocol": "http"})
 	}
+	s.mu.Lock()
+	elsewhere, ceiling := s.elsewhere, s.maxPorts
+	s.mu.Unlock()
+	if ceiling == 0 {
+		ceiling = 1000
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ports": list, "total_open": len(list), "max_ports": 1000,
+		"ports": list, "total_open": len(list) + elsewhere, "max_ports": ceiling,
 	})
+}
+
+// SetPortRoom makes the service report a ceiling of its own and a number of
+// ports held by something other than the caller.
+//
+// Both are what a real service reports and neither can be produced by opening
+// ports through this fake: the ceiling belongs to a tariff, and the ports held
+// elsewhere belong to another program on the same machine. A pool that must
+// stop growing before it reaches either has no other way to be shown one.
+func (s *Server) SetPortRoom(ceiling, heldElsewhere int) {
+	s.mu.Lock()
+	s.maxPorts, s.elsewhere = ceiling, heldElsewhere
+	s.mu.Unlock()
 }
 
 func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
