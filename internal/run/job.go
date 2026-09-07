@@ -252,6 +252,41 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	attempt := &Attempt{Pool: r.Pool, SpecName: j.SpecName, Tries: j.Tries, Mobile: j.Mobile,
 		Asking: j.Asking, Captured: j.Captured}
 
+	// What a finished query goes through, wherever it was finished: its
+	// addresses read, its results written down, and the stages reported. It is
+	// one closure rather than two copies because a query settled two ways is a
+	// history that disagrees with itself.
+	settle := func(ctx context.Context, thread, at int, began time.Time) {
+		text := j.Queries[at].Text
+		// Before the sink and not after the job: what is written is what is
+		// kept, and a result written with no address stays without one.
+		//
+		// What gets looked up is decided by what was captured and not by how
+		// the query ended — a walk that failed on its fourth page still hands
+		// back three, and those results are as worth completing as any others.
+		// A lookup that fails is not the query failing: the capture stands, and
+		// the address is the one thing that could not be had.
+		if j.Addresses {
+			looked := time.Now()
+			filled := r.resolveQuery(ctx, &results[at], resolveWorkers)
+			r.step(thread, StageResolve, looked, text, firstOf(filled.Errs))
+		}
+		if r.Sink != nil {
+			// The failures go to the sink as well as the successes. A query
+			// whose failure was never written down is one a job picked up again
+			// takes up again, for as long as it keeps failing.
+			wrote := time.Now()
+			sinkErr := r.Sink.Record(ctx, results[at])
+			r.step(thread, StageRecord, wrote, text, sinkErr)
+			if sinkErr != nil && results[at].Err == nil {
+				// A job whose results are not being written is not a job that
+				// succeeded, whatever the walk returned.
+				results[at].Err = fmt.Errorf("run: recording %q: %w", text, sinkErr)
+			}
+		}
+		r.step(thread, StageQuery, began, text, results[at].Err)
+	}
+
 	queue := make(chan int)
 	// Closed once, by whichever thread first finds the pool empty. Every thread
 	// watches it, and so does the hand-out below: with fifty threads reading one
@@ -264,6 +299,27 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 		wg.Add(1)
 		go func(thread int) {
 			defer wg.Done()
+
+			// A parsing job walks its queries page by page, and that is the one
+			// kind where a thread holds several at once: the pause belongs to
+			// the identity carrying a walk, and a thread with one walk in hand
+			// would stand still through it. The other two kinds ask once per
+			// query — an index check is a single page, and a position check
+			// takes its own identity for each page it looks at — so there is
+			// nothing to interleave and they go on as they were.
+			switch j.Kind {
+			case Index, Position:
+			default:
+				(&crew{
+					r: r, a: attempt, j: j, thread: thread, pages: pages,
+					queue: queue, starved: starved,
+					starve:  func() { starveOnce.Do(func() { close(starved) }) },
+					results: results,
+					settle:  func(ctx context.Context, at int, began time.Time) { settle(ctx, thread, at, began) },
+				}).work(ctx)
+				return
+			}
+
 			first := true
 			for i := range queue {
 				text := j.Queries[i].Text
@@ -300,38 +356,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 					return
 				}
 				r.step(thread, StageAsk, asked, text, results[i].Err)
-
-				// Before the sink and not after the job: what is written is
-				// what is kept, and a result written with no address stays
-				// without one.
-				//
-				// What gets looked up is decided by what was captured and not
-				// by how the query ended — a walk that failed on its fourth
-				// page still hands back three, and those results are as worth
-				// completing as any others. A lookup that fails is not the
-				// query failing: the capture stands, and the address is the
-				// one thing that could not be had.
-				if j.Addresses {
-					looked := time.Now()
-					filled := r.resolveQuery(ctx, &results[i], resolveWorkers)
-					r.step(thread, StageResolve, looked, text, firstOf(filled.Errs))
-				}
-
-				if r.Sink != nil {
-					// The failures go to the sink as well as the successes.
-					// A query whose failure was never written down is one a
-					// job picked up again takes up again, for as long as it
-					// keeps failing.
-					wrote := time.Now()
-					sinkErr := r.Sink.Record(ctx, results[i])
-					r.step(thread, StageRecord, wrote, text, sinkErr)
-					if sinkErr != nil && results[i].Err == nil {
-						// A job whose results are not being written is not a
-						// job that succeeded, whatever the walk returned.
-						results[i].Err = fmt.Errorf("run: recording %q: %w", j.Queries[i].Text, sinkErr)
-					}
-				}
-				r.step(thread, StageQuery, began, text, results[i].Err)
+				settle(ctx, thread, i, began)
 			}
 		}(w)
 	}

@@ -1528,7 +1528,29 @@ func (p *Pool) Sleep(ctx context.Context, d time.Duration) error {
 // Acquire leases the coldest ready port of any template, waiting until one is
 // available or ctx is done. Always Release the lease.
 func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
-	return p.acquire(ctx, "")
+	return p.acquire(ctx, "", true)
+}
+
+// TryAcquire leases a port if one is free this instant and answers
+// ErrPoolExhausted if none is. It never waits.
+//
+// It is for a caller that has other work: a thread holding several queries at
+// once asks for another identity only to fill time it would otherwise stand
+// still in, and a thread that queued for one would be doing the opposite of
+// what it asked for.
+func (p *Pool) TryAcquire(ctx context.Context) (*Lease, error) {
+	return p.acquire(ctx, "", false)
+}
+
+// TryAcquireSpec is TryAcquire for a named template.
+func (p *Pool) TryAcquireSpec(ctx context.Context, name string) (*Lease, error) {
+	if name == "" {
+		return p.acquire(ctx, "", false)
+	}
+	if !p.hasSpec(name) {
+		return nil, fmt.Errorf("%w: %q", ErrUnknownSpec, name)
+	}
+	return p.acquire(ctx, name, false)
 }
 
 // AcquireSpec leases the coldest ready port opened under the named template.
@@ -1539,15 +1561,15 @@ func (p *Pool) Acquire(ctx context.Context) (*Lease, error) {
 // pool answers ErrPoolExhausted as well: shutting down is not a misspelling.
 func (p *Pool) AcquireSpec(ctx context.Context, name string) (*Lease, error) {
 	if name == "" {
-		return p.acquire(ctx, "")
+		return p.acquire(ctx, "", true)
 	}
 	if !p.hasSpec(name) {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSpec, name)
 	}
-	return p.acquire(ctx, name)
+	return p.acquire(ctx, name, true)
 }
 
-func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
+func (p *Pool) acquire(ctx context.Context, specName string, wait bool) (*Lease, error) {
 	asked := p.cfg.Now()
 	// One port per caller, not one per turn of the loop below. The loop goes
 	// round for every wait, and a pool that grew on each of those would spend
@@ -1564,11 +1586,11 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 			// rested longest, so take below picks up what this opens.
 			grown = p.growByOne(ctx)
 		}
-		pt, wait, err := p.take(specName)
+		pt, until, err := p.take(specName)
 		if err != nil {
 			// A closed pool is never waited for: there is nothing coming, and a
 			// job being stopped would hang on its own shutdown.
-			if !p.cfg.WaitForIdentity || !errors.Is(err, ErrPoolExhausted) || p.isClosed() {
+			if !wait || !p.cfg.WaitForIdentity || !errors.Is(err, ErrPoolExhausted) || p.isClosed() {
 				return nil, err
 			}
 			// Everything is set aside for now. Queue rather than refuse: the
@@ -1611,11 +1633,17 @@ func (p *Pool) acquire(ctx context.Context, specName string) (*Lease, error) {
 			}
 			return &Lease{pt: pt, pool: p}, nil
 		}
-		if wait <= 0 {
-			wait = 5 * time.Millisecond // every matching port is leased right now
+		if !wait {
+			// Every matching port is leased or cooling. A caller that will not
+			// queue is told so, in the words a caller that queued and gave up
+			// would have been told.
+			return nil, ErrPoolExhausted
+		}
+		if until <= 0 {
+			until = 5 * time.Millisecond // every matching port is leased right now
 		}
 		p.waiting(1)
-		err = p.cfg.Sleep(ctx, wait)
+		err = p.cfg.Sleep(ctx, until)
 		p.waiting(-1)
 		if err != nil {
 			return nil, err

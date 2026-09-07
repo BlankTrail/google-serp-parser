@@ -62,7 +62,7 @@ func SearchFrom(ctx context.Context, s Searcher, q Query, from, to int, fn func(
 		if fn != nil && fn(n, serp) {
 			return nil
 		}
-		if serp.HasPagination && serp.MaxOffset <= (n-1)*offsetPerPage {
+		if LastPage(n, serp) {
 			return nil
 		}
 	}
@@ -88,4 +88,18 @@ func SearchDepth(ctx context.Context, s Searcher, q Query, pages int) ([]SERP, e
 		return false
 	})
 	return out, err
+}
+
+// LastPage reports whether page n is the end of the walk: it carried nothing,
+// or the pagination bar on it does not reach past it.
+//
+// It is exported because a caller that takes the pages itself — a thread
+// holding several queries at once and stepping each of them — has to stop where
+// SearchFrom stops, and two copies of that rule would be two answers to how
+// deep a query goes.
+func LastPage(n int, serp SERP) bool {
+	if len(serp.Results) == 0 {
+		return true
+	}
+	return serp.HasPagination && serp.MaxOffset <= (n-1)*offsetPerPage
 }

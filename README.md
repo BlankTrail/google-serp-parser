@@ -303,6 +303,19 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   queries: ten thousand queries done says nothing about how much there is.
 - **A walk through the interface** on a machine nothing has been run on: seven
   stops, one sentence each, standing beside the thing they are about.
+- **A thread works several queries at once, a page at a time.** The pause a
+  reader sets is the gap between two requests on one identity, and it was being
+  taken between two *queries* — so a query walked to a hundred pages was a
+  hundred requests through one identity with nothing between them, and the
+  number that was set applied to none of them. It is now taken where it belongs,
+  which on a hundred-page walk is ninety-nine places it never used to be. And
+  the thread no longer stands still through it: it holds several walks at once,
+  each on an identity of its own, and works the others while one rests. A query
+  keeps its identity for the whole of its walk, which is the one thing that does
+  not change — a visitor paging through results does not change address between
+  page one and page two. How many a thread holds is nobody's setting: it takes
+  another whenever it is about to wait and the pool has one spare, so the count
+  settles wherever the pause and the speed of the answers put it.
 - **The hidden addresses are read through ports of their own.** Some regions
   put no address in the markup: the link is a redirector and the address is read
   out of the `Location` header it answers with. Those lookups were going out

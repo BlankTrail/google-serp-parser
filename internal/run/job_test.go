@@ -347,34 +347,49 @@ func TestRunner_CountsAQueryCutOffMidFlightAsAttempted(t *testing.T) {
 	}
 }
 
-func TestRunner_PausesBetweenTheRequestsOfOneThread(t *testing.T) {
+func TestRunner_LeavesThePauseBetweenTwoRequestsOnOneIdentity(t *testing.T) {
 	// The pool derives the pause but does not apply it: it cannot know when the
 	// caller is about to ask again. The runner is that caller, and without this
-	// the delay a user configured does nothing at all.
-	const pace = 90 * time.Second
-	var paused atomic.Int64
-
-	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
-	f := poolFacing(t, o.addr(), 2, func(c *blanktrail.PoolConfig) {
+	// the delay a reader configured does nothing at all.
+	//
+	// It is between two requests on one identity and not between two queries on
+	// one thread, which is where it used to be. A query taken to a hundred
+	// pages is a hundred requests through one identity, and a pause taken
+	// between queries applied to none of them.
+	const pace = 60 * time.Millisecond
+	var asked []time.Time
+	var say sync.Mutex
+	o := newOrigin(t, func(*http.Request, int) string {
+		say.Lock()
+		asked = append(asked, time.Now())
+		say.Unlock()
+		return serpBodyWithBar("example.com")
+	})
+	f := poolFacing(t, o.addr(), 1, func(c *blanktrail.PoolConfig) {
 		c.DelayMin, c.DelayMax = pace, pace
-		c.Sleep = func(ctx context.Context, d time.Duration) error {
-			if d == pace {
-				paused.Add(1)
-			}
-			return ctx.Err()
-		}
 	})
 
-	queries := usQueries(4)
 	r := &Runner{Pool: f.Pool, Threads: 1}
-	rep := r.Run(context.Background(), Job{Queries: queries, Pages: 1})
-
-	if rep.Done != len(queries) {
-		t.Fatalf("Done=%d, want %d", rep.Done, len(queries))
+	rep := r.Run(context.Background(), Job{Queries: usQueries(1), Pages: 4})
+	if rep.Done != 1 {
+		t.Fatalf("Done=%d, want 1 (failed %d: %v)", rep.Done, rep.Failed, rep.Results[0].Err)
 	}
-	if got, want := paused.Load(), int64(len(queries)-1); got != want {
-		t.Errorf("%d pauses over %d queries on one thread, want %d - one between each pair",
-			got, len(queries), want)
+	if n := len(rep.Results[0].Pages); n != 4 {
+		t.Fatalf("collected %d pages, want the 4 the job asked for", n)
+	}
+
+	say.Lock()
+	defer say.Unlock()
+	// Four result pages through one identity, so three gaps, and every one of
+	// them is a pause the reader asked for.
+	if len(asked) < 4 {
+		t.Fatalf("the origin was asked for %d result pages, want four", len(asked))
+	}
+	for i := 1; i < len(asked); i++ {
+		if gap := asked[i].Sub(asked[i-1]); gap < pace/2 {
+			t.Errorf("request %d came %v after the one before it, want at least the %v pause",
+				i+1, gap.Round(time.Millisecond), pace)
+		}
 	}
 }
 
@@ -392,8 +407,11 @@ func TestRunner_GivesUpOnWorkNobodyIsLeftToTakeWhenACancellationLandsInAPause(t 
 	var once sync.Once
 	f := poolFacing(t, o.addr(), 1, func(c *blanktrail.PoolConfig) {
 		c.DelayMin, c.DelayMax = pace, pace
+		// The one identity has to be resting for the thread to be waiting on
+		// it, which is the moment this test is about.
+		c.Cooldown = pace
 		c.Sleep = func(sctx context.Context, d time.Duration) error {
-			if d == pace {
+			if d > 0 {
 				once.Do(func() { close(paused) })
 				<-sctx.Done()
 			}
@@ -653,5 +671,66 @@ func TestRunner_StopsWhenThePoolHasNothingLeftInsteadOfSpendingTheList(t *testin
 	}
 	if got := len(sink.ordinals()); got != 0 {
 		t.Errorf("the sink was told about %d queries that were never asked", got)
+	}
+}
+
+func TestRunner_WorksOtherIdentitiesRatherThanStandStillThroughAPause(t *testing.T) {
+	// The pause belongs to the identity, so a thread walking one query stands
+	// still through every gap in it. Holding several walks, it works the others
+	// — and it decides how many to hold by taking another whenever it is about
+	// to wait and the pool has one to spare.
+	//
+	// Four queries of three pages each, on one thread, over four identities.
+	// Walked one at a time that is eight pauses; interleaved it is two, because
+	// the pauses of one walk are the other walks' working time.
+	const pace = 250 * time.Millisecond
+	o := newOrigin(t, func(*http.Request, int) string { return serpBodyWithBar("example.com") })
+	f := poolFacing(t, o.addr(), 4, func(c *blanktrail.PoolConfig) {
+		c.DelayMin, c.DelayMax = pace, pace
+	})
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	began := time.Now()
+	rep := r.Run(context.Background(), Job{Queries: usQueries(4), Pages: 3})
+	took := time.Since(began)
+
+	if rep.Done != 4 {
+		t.Fatalf("Done=%d, want 4 (failed %d)", rep.Done, rep.Failed)
+	}
+	for i := range rep.Results {
+		if n := len(rep.Results[i].Pages); n != 3 {
+			t.Fatalf("query %d came back with %d pages, want 3", i+1, n)
+		}
+	}
+	if took >= 5*pace {
+		t.Errorf("four three-page walks on one thread took %v, want nearer the two pauses one walk owes than the eight four of them owe",
+			took.Round(time.Millisecond))
+	}
+}
+
+func TestRunner_FinishesTheListOnAPoolSmallerThanTheWork(t *testing.T) {
+	// A thread takes another query only when the pool has an identity spare and
+	// never queues for one: queueing is what holding several was for the
+	// avoidance of. On a pool narrower than the list that has to keep working
+	// rather than wait on a port that is already its own.
+	const pace = 30 * time.Millisecond
+	o := newOrigin(t, func(*http.Request, int) string { return serpBodyWithBar("example.com") })
+	f := poolFacing(t, o.addr(), 2, func(c *blanktrail.PoolConfig) {
+		c.DelayMin, c.DelayMax = pace, pace
+	})
+
+	// A deadline, because the failure this guards against is a thread waiting
+	// on itself, and a test that hangs says less than one that fails.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	rep := r.Run(ctx, Job{Queries: usQueries(6), Pages: 2})
+
+	if rep.Done != 6 {
+		t.Fatalf("Done=%d untried=%d failed=%d, want all six through a pool of two", rep.Done, rep.Untried, rep.Failed)
+	}
+	if got := f.portsUsed(); got > 2 {
+		t.Errorf("the thread used %d identities, want no more than the 2 the pool holds", got)
 	}
 }
