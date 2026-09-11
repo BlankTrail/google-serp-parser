@@ -766,7 +766,7 @@ func TestRunner_PutsAnIdentitySentToTheChallengeOutOfTheRotation(t *testing.T) {
 	}}}
 
 	r := &Runner{Pool: f.Pool, Threads: 1}
-	got, err := r.readAddress(context.Background(), res, spot{page: 0, at: 1})
+	got, err := r.readAddress(context.Background(), f.Pool, res, spot{page: 0, at: 1})
 	if err != nil {
 		t.Fatalf("readAddress: %v", err)
 	}
@@ -803,7 +803,8 @@ func TestRunner_ReadsTheAddressesThroughTheirOwnIdentities(t *testing.T) {
 		Pages:     []google.SERP{{Origin: d.URL, Results: links}},
 	}}}
 
-	r := &Runner{Pool: searching.Pool, Addresses: reading.Pool, Threads: 1}
+	r := &Runner{Pool: searching.Pool, Threads: 1,
+		Addresses: func(context.Context) (*blanktrail.Pool, error) { return reading.Pool, nil }}
 	got := r.ResolveLinks(context.Background(), &rep, 2)
 
 	if got.Resolved != len(links) {

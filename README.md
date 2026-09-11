@@ -246,7 +246,7 @@ before you start it.
 | Result page | Desktop or mobile |
 | Dropping duplicates | Keep everything, one row per URL, or one per host |
 | Threads | How many phrases are taken at once |
-| Ports per thread | Identities opened per thread. Threads × ports is the size of the pool. Three by default, which measured fastest |
+| Ports per thread | Identities opened per thread. Threads × ports is the size of the pool. One by default: a thread works its other walks through the pause it owes one identity, so a second buys no overlap, and every identity in play is one more the licensed challenge solver has to carry |
 | Use the whole proxy list | A port of its own for every address the list can spare, opened as the run asks for identities, until the list or the service runs out. Ports per thread means nothing while it is ticked |
 | Tries per phrase | How many identities one phrase may be carried to before it is called failed |
 | Pause on one identity, seconds | The gap before an identity is asked again. Five by default — an identity asked every two seconds answered a dozen requests before it was challenged, one asked every five around forty. Nought means nought |
@@ -566,7 +566,7 @@ measured to it:
 |---|---|
 | Proxy profile | Which set of exits the job goes out through. Changeable afterwards on the job's own page |
 | Threads | Queries taken at once |
-| Ports per thread | Identities opened per thread. Threads × ports = pool size. Three by default, which is what measured fastest |
+| Ports per thread | Identities opened per thread. Threads × ports = pool size. One by default — see the settings table above for why |
 | Use the whole proxy list | A port of its own for every address the list can spare, until the list or the service runs out. Ports per thread means nothing while it is ticked |
 | Tries per phrase | How many identities one phrase may be taken to |
 | Pause on one identity, seconds | Gap before an identity is asked again. Five by default: an identity asked every two seconds answered twelve requests before it was challenged, one asked every five around forty. **Nought means none** |

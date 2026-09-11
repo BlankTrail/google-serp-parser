@@ -80,6 +80,14 @@ func (r *Runner) resolveQuery(ctx context.Context, res *QueryResult, workers int
 		workers = 1
 	}
 
+	// Asked here and not per attempt: this is the first place that knows an
+	// address really has to be read, and one ask a query is what lets whoever
+	// holds these ports widen the set as the lookups queue for one.
+	pool, err := r.addresses(ctx)
+	if err != nil {
+		return google.ResolveReport{Errs: []error{err}}
+	}
+
 	// A pool with nothing to give is the one failure that stops the rest: it
 	// says nothing about any address, and asking again cannot change it.
 	ctx, stop := context.WithCancel(ctx)
@@ -96,7 +104,7 @@ func (r *Runner) resolveQuery(ctx context.Context, res *QueryResult, workers int
 		go func() {
 			defer wg.Done()
 			for one := range jobs {
-				got, err := r.readAddress(ctx, res, one)
+				got, err := r.readAddress(ctx, pool, res, one)
 				mu.Lock()
 				gather(&total, got)
 				if err != nil && starved == nil {
@@ -132,7 +140,7 @@ func (r *Runner) resolveQuery(ctx context.Context, res *QueryResult, workers int
 // readAddress reads one address, carrying it to another identity for as long as
 // it is allowed. The error it returns is the pool having no identity to give,
 // which is not something about this address.
-func (r *Runner) readAddress(ctx context.Context, res *QueryResult, one spot) (google.ResolveReport, error) {
+func (r *Runner) readAddress(ctx context.Context, pool *blanktrail.Pool, res *QueryResult, one spot) (google.ResolveReport, error) {
 	var total google.ResolveReport
 	page := &res.Pages[one.page]
 	// The one result, in place: what is written into it is written into the
@@ -143,7 +151,7 @@ func (r *Runner) readAddress(ctx context.Context, res *QueryResult, one spot) (g
 		if ctx.Err() != nil {
 			return total, nil
 		}
-		lease, err := r.addresses().Acquire(ctx)
+		lease, err := pool.Acquire(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				// The pool was fine; this worker was stopped because another
@@ -180,15 +188,15 @@ func (r *Runner) readAddress(ctx context.Context, res *QueryResult, one spot) (g
 
 // addresses is the pool the lookups go through.
 //
-// It is a pool of its own where the caller opened one, and the run's own where
-// nobody did. What that pool is opened as belongs to whoever opens it; what it
-// is for is settled here — strangers, one per request, with nothing kept
-// between them.
-func (r *Runner) addresses() *blanktrail.Pool {
-	if r.Addresses != nil {
-		return r.Addresses
+// It is a pool of its own where the caller has one to give, and the run's own
+// where nobody does. What that pool is opened as, and when, belongs to whoever
+// opens it; what it is for is settled here — strangers, one per request, with
+// nothing kept between them.
+func (r *Runner) addresses(ctx context.Context) (*blanktrail.Pool, error) {
+	if r.Addresses == nil {
+		return r.Pool, nil
 	}
-	return r.Pool
+	return r.Addresses(ctx)
 }
 
 // whatIsMissing lists every result of every page whose address is still

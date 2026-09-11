@@ -91,10 +91,12 @@ type poolFacts struct {
 // that job rather than by starting the server again.
 type poolEngine struct {
 	pool *blanktrail.Pool
-	// addresses is the second set of ports, the one the hidden addresses are
-	// read through. It is nil where the caller opened only one set, and the
-	// lookups then go out through pool as they always did.
-	addresses *blanktrail.Pool
+	// addresses hands out the second set of ports, the one the hidden addresses
+	// are read through. It opens nothing until a job actually has an address to
+	// read, so a region that states them in the markup costs no port at all. It
+	// is nil where the caller has only one set to give, and the lookups then go
+	// out through pool as they always did.
+	addresses *blanktrail.Growing
 	threads   int
 	// watch, when set, is told every stage a thread of the run passes through,
 	// so a slow job can be taken apart second by second rather than guessed at.
@@ -104,8 +106,11 @@ type poolEngine struct {
 // Run builds a runner around the pool this job was raised. A runner is a few
 // fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
-	return (&run.Runner{Pool: e.pool, Addresses: e.addresses, Threads: e.threads,
-		Sink: sink, Watch: e.watch}).Run(ctx, j)
+	r := &run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch}
+	if e.addresses != nil {
+		r.Addresses = e.addresses.Identities
+	}
+	return r.Run(ctx, j)
 }
 
 // Close gives up the identities this job was raised. It runs when the job has
@@ -118,7 +123,8 @@ func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Repo
 func (e *poolEngine) Close() error {
 	// The ports the addresses were read through are this job's alone — nothing
 	// stands warm on them and nothing else will want them — so they are closed
-	// whole whatever happens to the others.
+	// whole whatever happens to the others. A set nothing ever asked for closes
+	// without a word to the service.
 	if e.addresses != nil {
 		_ = e.addresses.Close()
 	}
@@ -159,8 +165,12 @@ type Dial func(ctx context.Context, prof store.Profile, ports, threads int, devi
 // 9 of 9 and 11 of 11, at the same cost. Addresses is nil where the caller
 // opened one set, and the lookups then go out through Search.
 type Identities struct {
-	Search    *blanktrail.Pool
-	Addresses *blanktrail.Pool
+	Search *blanktrail.Pool
+	// Addresses opens its ports the first time a job actually has an address to
+	// read and widens the set while the lookups queue for one, so a job on a
+	// region that states its addresses opens none of them at all. Nil sends the
+	// lookups through Search.
+	Addresses *blanktrail.Growing
 }
 
 // OpenPool opens the identities one job asked to run on. It is Dial as a caller

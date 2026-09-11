@@ -67,10 +67,11 @@ func listenOn(asked string, saved settings.Settings, out io.Writer) string {
 
 // The pool a job runs on when neither the caller nor this machine's own
 // settings say otherwise. They are the run command's defaults, so a job set up
-// in the browser costs what the same job costs from the command line.
+// in the browser costs what the same job costs from the command line — see
+// defaultPortsPerThread for why one port a thread rather than the three it was.
 const (
 	defaultThreads = 2
-	defaultPorts   = 3
+	defaultPorts   = 1
 )
 
 // settingsName is what the file the interface saves its settings in is called.
@@ -616,26 +617,32 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 	// same cost in attempts. So these carry neither, and the solver — which a
 	// tariff holds only so many of — is left to the searches that need it.
 	//
-	// They are the same size as the pool above and for a measured reason: on a
-	// region that hides its addresses every result wants a lookup, so this is
-	// where most of a job's requests go. There is no cooldown worth keeping on
-	// them either — nothing is carried between two lookups, so there is no
-	// session for a rest to protect.
+	// Nothing is opened here. Whether this job needs any of these ports is not
+	// knowable yet: it depends on what Google answers with, and most regions
+	// put the address in the markup, where reading it costs no request at all.
+	// So the set opens its first port when the first address actually has to be
+	// read and widens while the lookups queue for one — up to the size of the
+	// pool above, which is where it would end on a region that hides every
+	// address, because that is where most of a job's requests then go.
+	//
+	// There is no cooldown worth keeping on them either: nothing is carried
+	// between two lookups, so there is no session for a rest to protect.
 	plain := cfg
 	plain.WholeList = false
-	plain.Threads, plain.PortsPerThread = threads, ports
 	plain.Spec.JSSolver = false
 	plain.Spec.KeepSessions = false
 	plain.Specs = nil
 	plain.Cooldown = time.Millisecond
-	addresses, err := blanktrail.NewPool(ctx, plain)
-	if err != nil {
-		// The searches can go on without them; the addresses then go out the
-		// way they always did, through the ports above.
-		o.logger(io.Discard).Info("the ports for reading addresses would not open", "why", o.clean(err.Error()))
-		return web.Identities{Search: pool}, nil
+	most := threads * ports
+	if most < 1 {
+		most = 1
 	}
-	return web.Identities{Search: pool, Addresses: addresses}, nil
+	return web.Identities{Search: pool, Addresses: blanktrail.NewGrowing(most,
+		func(ctx context.Context, n int) (*blanktrail.Pool, error) {
+			one := plain
+			one.Threads, one.PortsPerThread = n, 1
+			return blanktrail.NewPool(ctx, one)
+		})}, nil
 }
 
 // rests is where the addresses this machine has found dead are kept between

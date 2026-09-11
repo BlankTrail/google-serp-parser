@@ -1379,18 +1379,19 @@ func TestTheFirstProfile_CarriesTheSettingsFileAndFallsBackToTheDefaults(t *test
 	}
 }
 
-func TestDial_OpensPlainPortsForTheAddressesAJobKeeps(t *testing.T) {
-	// A job that keeps addresses gets a second set of ports to read them
-	// through, and they are made of less than the searching ones: no challenge
-	// solver and no cookie jar.
+func TestDial_OpensPlainPortsForTheAddressesOnlyOnceOneHasToBeRead(t *testing.T) {
+	// A job that keeps addresses is given a second set of ports, and they are
+	// made of less than the searching ones: no challenge solver and no cookie
+	// jar. The reason is measured — a hidden address is read out of a Location
+	// header and needs neither: the same links through a searching port, a port
+	// with the solver off and a port with neither read 9 of 9, 9 of 9 and 11 of
+	// 11 at the same cost in attempts.
 	//
-	// The reason is measured. A hidden address is read out of a Location header
-	// and needs neither: the same links through a searching port, a port with
-	// the solver off and a port with neither read 9 of 9, 9 of 9 and 11 of 11
-	// at the same cost in attempts. What it saves is the solver, of which a
-	// tariff holds only so many, and the cookie jar of a session built for
-	// searching — on a region that hides its addresses the lookups are most of
-	// the requests a job makes, and all of them were going through both.
+	// None of them is opened before something asks. Whether a job needs any is
+	// not knowable when it starts: it depends on what Google answers with, and
+	// most regions state the address in the markup, where reading it costs no
+	// request at all. Ports are what a tariff holds a fixed number of, for
+	// everything on the machine.
 	fake := fakebt.New(t)
 	fake.SetCA(testCAPEM)
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
@@ -1407,7 +1408,18 @@ func TestDial_OpensPlainPortsForTheAddressesAJobKeeps(t *testing.T) {
 		}
 	})
 	if want.Addresses == nil {
-		t.Fatal("a job that keeps addresses was given no ports to read them through")
+		t.Fatal("a job that keeps addresses was given nowhere to read them from")
+	}
+	if want.Addresses.Opened() != nil {
+		t.Error("ports for reading addresses were opened before anything asked for one")
+	}
+	if got := len(fake.OpenPorts()); got != 2 {
+		t.Fatalf("%d ports are open, want the two the searches run on", got)
+	}
+
+	// And now one has to be read.
+	if _, err := want.Addresses.Identities(t.Context()); err != nil {
+		t.Fatalf("asking for an identity to read an address through: %v", err)
 	}
 
 	var solving, plain int
@@ -1428,8 +1440,8 @@ func TestDial_OpensPlainPortsForTheAddressesAJobKeeps(t *testing.T) {
 	if solving != 2 {
 		t.Errorf("%d ports were opened with the solver, want the two the searches run on", solving)
 	}
-	if plain != 2 {
-		t.Errorf("%d ports were opened without it, want the two the addresses are read through", plain)
+	if plain != 1 {
+		t.Errorf("%d ports were opened without it, want the one the first address wanted", plain)
 	}
 }
 

@@ -93,16 +93,28 @@ const defaultCooldown = 5
 
 // defaultPortsPerThread is how many identities the form offers a thread.
 //
-// Three, so that a five-second gap on each identity still lets a thread ask
-// something every second or two. Measured at ten threads for twenty minutes an
-// arm, both arms at the same minute, on a live list: three ports a thread
-// answered 259 against 164 for one port, and 154 against 54 in the second half
-// once the identities were warm.
+// One, and it used to be three. The three was measured — ten threads for
+// twenty minutes an arm, both arms at the same minute on a live list: three
+// ports a thread answered 259 against 164 for one, and 154 against 54 in the
+// second half once the identities were warm — and what that measured no longer
+// exists. A thread then took one query, walked it to the end, and stood still
+// through the pause it owed; the extra ports were what let the next query start
+// while the last one rested. A thread now holds several walks at once and takes
+// another identity only when it is about to stand still, so the overlap those
+// ports were bought for is had without them.
 //
-// It is three rather than more because every identity is bought twice — once in
-// the minutes its first request costs, and again in the addresses it holds out
-// of the pool while it is unproven.
-const defaultPortsPerThread = 3
+// What they still cost is the thing that ends a run. Every identity in play is
+// one more that has to be challenged and solved, and the solver is licensed:
+// measured on a live run of a hundred threads at three ports each, three
+// hundred identities against ten Challenge Breaker processes climbed to 1307
+// pages a minute and fell to 105 within six, with every port warm, none set
+// aside and no thread waiting for an egress. Nothing was failing; everything
+// was queueing for a solver. Runs since, at one identity a thread, showed no
+// advantage to the three in speed or in challenges met.
+//
+// It is a default and not a rule: an operator whose service has solver
+// processes to spare says so in the box.
+const defaultPortsPerThread = 1
 
 // defaultTries is what the form offers when nobody has said otherwise. It is
 // the run layer's own number, spelled here so the box a reader sees and the

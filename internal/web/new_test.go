@@ -809,17 +809,19 @@ func TestNewForm_AsksForTheDesktopPageUnlessSomebodySaysOtherwise(t *testing.T) 
 }
 
 func TestNewJob_OffersTheNumbersThatWereMeasured(t *testing.T) {
-	// Three identities a thread and five seconds between two requests on one of
-	// them. Both are measured and both are in the code's own comments: an
-	// identity asked every two seconds answered twelve requests before it was
-	// challenged and one asked every five answered around forty, and three ports
-	// a thread out-ran one by 259 answers to 164 over twenty minutes.
+	// One identity a thread and five seconds between two requests on it. Both
+	// are measured and both are in the code's own comments: an identity asked
+	// every two seconds answered twelve requests before it was challenged and
+	// one asked every five answered around forty, and three ports a thread —
+	// which is what this offered while a thread stood still through its own
+	// pause — buy nothing now that a thread works its other walks through it,
+	// while every identity in play is one more the licensed solver has to carry.
 	//
 	// A default nobody meets is a default that does not matter, so this checks
 	// the page a reader actually opens rather than the struct behind it.
 	page := get(t, testServer(t), "/new").Body.String()
 	for _, want := range []string{
-		`id="ports" name="ports" type="number" min="1" value="3"`,
+		`id="ports" name="ports" type="number" min="1" value="1"`,
 		`id="cooldown" name="cooldown" type="number" min="0" value="5"`,
 	} {
 		if !strings.Contains(page, want) {

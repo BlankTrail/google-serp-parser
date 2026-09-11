@@ -171,22 +171,27 @@ type Report struct {
 type Runner struct {
 	// Pool leases the identities. Required.
 	Pool *blanktrail.Pool
-	// Addresses leases the identities the hidden addresses are read through.
+	// Addresses hands out the identities the hidden addresses are read through.
 	//
-	// Nil sends them through Pool, which is what a caller holding one set of
-	// ports means. Where it is set it should be ports opened for the purpose:
-	// reading a hidden address is a GET to a redirector answered with a
-	// Location header, and measured against the live list it needs neither the
-	// challenge solver, nor a cookie jar, nor any continuity with whoever
-	// captured the page — the same links through three kinds of port read 9 of
-	// 9, 9 of 9 and 11 of 11 at the same cost in attempts.
+	// It is asked the first time an address actually has to be read, and again
+	// on every query that has any — so a region that states its addresses in
+	// the markup never asks at all, and whoever holds these ports can widen the
+	// set as the lookups start queueing for one. Nil sends them through Pool,
+	// which is what a caller holding one set of ports means.
+	//
+	// They should be ports opened for the purpose. Reading a hidden address is
+	// a GET to a redirector answered with a Location header, and measured
+	// against the live list it needs neither the challenge solver, nor a cookie
+	// jar, nor any continuity with whoever captured the page — the same links
+	// through three kinds of port read 9 of 9, 9 of 9 and 11 of 11 at the same
+	// cost in attempts.
 	//
 	// What separating them buys is not speed. On a region that hides its
 	// addresses the lookups are most of the requests a job makes, and every one
 	// of them was going out through a port carrying the challenge solver — a
 	// licensed thing, of which a tariff holds only so many — and writing into
 	// the cookie jar of a session built for searching.
-	Addresses *blanktrail.Pool
+	Addresses func(ctx context.Context) (*blanktrail.Pool, error)
 	// Threads is how many queries are taken at once. Non-positive means one.
 	Threads int
 	// Sink is handed every query as it finishes, so a job that ends badly still
