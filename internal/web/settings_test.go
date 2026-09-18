@@ -45,14 +45,13 @@ type stubConnect struct {
 	err     error
 }
 
-func (c *stubConnect) open(_ context.Context, saved settings.Settings, prof store.Profile,
-	ports, threads int, _ string, cooldown time.Duration, _, _ bool) (Identities, error) {
+func (c *stubConnect) open(_ context.Context, saved settings.Settings, want Wanted) (Identities, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.with = append(c.with, saved)
-	c.through = append(c.through, prof)
-	c.sizes = append(c.sizes, [2]int{ports, threads})
-	c.gaps = append(c.gaps, cooldown)
+	c.through = append(c.through, want.Profile)
+	c.sizes = append(c.sizes, [2]int{want.Ports, want.Threads})
+	c.gaps = append(c.gaps, want.Cooldown)
 	if c.err != nil {
 		return Identities{}, c.err
 	}

@@ -69,6 +69,12 @@ type JobSummary struct {
 	// written off, and zero is a job that named none — the same reading as the
 	// two above.
 	Tries int
+	// Browser, OS and Release name the identity this job's ports wore, and
+	// nothing named is a job spread over every browser and system this program
+	// knows — see JobSpec.Browser.
+	Browser string
+	OS      string
+	Release int
 	// Fields is what each result of this job keeps, and empty is everything.
 	Fields Fields
 	// ProfileID is the proxy profile this job runs through, and nought is a job
@@ -99,7 +105,8 @@ const jobSummaryQuery = `
 	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind, j.target,
 	       j.unique_by, j.dropped,
 	       j.pages, j.country, j.language, j.device,
-	       j.ports, j.threads, j.tries, j.cooldown_ms, j.fields, j.profile_id, j.whole_pool, j.plan_ready,
+	       j.ports, j.threads, j.tries, j.cooldown_ms, j.fields, j.profile_id, j.whole_pool,
+	       j.browser, j.os, j.browser_release, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
 	       sum(CASE WHEN q.state = 'failed'  THEN 1 ELSE 0 END),
@@ -201,7 +208,8 @@ func scanSummary(row scanner) (JobSummary, error) {
 	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind, &sum.Target,
 		&sum.UniqueBy, &sum.Dropped,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.Device,
-		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &sum.Fields, &sum.ProfileID, &sum.WholePool, &sum.PlanReady,
+		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &sum.Fields, &sum.ProfileID, &sum.WholePool,
+		&sum.Browser, &sum.OS, &sum.Release, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobSummary{}, err

@@ -74,7 +74,7 @@ func TestSpread_IsEveryBrowserOnEverySystemItShipsOn(t *testing.T) {
 	// Chrome on Windows is one identity three hundred times over.
 	cl, _ := holding(t, 152, 153)
 
-	got, err := Spread(context.Background(), cl, DeviceDesktop, 2, 0)
+	got, err := Spread(context.Background(), cl, DeviceDesktop, Worn{}, 2, 0)
 	if err != nil {
 		t.Fatalf("Spread: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestSpread_PutsSafariOnMacOSAndNowhereElse(t *testing.T) {
 	// Windows or Linux, and a fleet carrying one is a fleet with a tell in it.
 	cl, _ := holding(t, 153)
 
-	got, err := Spread(context.Background(), cl, DeviceDesktop, 1, 0)
+	got, err := Spread(context.Background(), cl, DeviceDesktop, Worn{}, 1, 0)
 	if err != nil {
 		t.Fatalf("Spread: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestSpread_IsCutToTheNumberOfPortsRatherThanRefused(t *testing.T) {
 	// which is why the cut is a draw rather than the first of the list.
 	cl, _ := holding(t, 150, 151, 152, 153)
 
-	got, err := Spread(context.Background(), cl, DeviceDesktop, 4, 3)
+	got, err := Spread(context.Background(), cl, DeviceDesktop, Worn{}, 4, 3)
 	if err != nil {
 		t.Fatalf("Spread: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestSpread_IsPhonesForAPhoneJob(t *testing.T) {
 	// are phones. Nothing in the desktop set belongs in it.
 	cl, _ := holding(t, 153)
 
-	got, err := Spread(context.Background(), cl, DeviceMobile, 1, 0)
+	got, err := Spread(context.Background(), cl, DeviceMobile, Worn{}, 1, 0)
 	if err != nil {
 		t.Fatalf("Spread: %v", err)
 	}
@@ -164,5 +164,217 @@ func TestSpread_IsPhonesForAPhoneJob(t *testing.T) {
 	}
 	if len(got) != len(mobilePairs) {
 		t.Errorf("the phone spread holds %d templates, want %d", len(got), len(mobilePairs))
+	}
+}
+
+func TestShips_RefusesAnIdentityThatNeverExisted(t *testing.T) {
+	// The form offering these is two boxes, and two boxes can be set to a pair
+	// nobody has. Safari on Windows is the one somebody will actually pick, and
+	// a run on it is a run whose fingerprint says it is a browser that does not
+	// exist there — which is the one thing an identity must never say.
+	for _, c := range []struct {
+		device, browser, os string
+		want                bool
+	}{
+		{DeviceDesktop, "", "", true},               // the whole spread
+		{DeviceDesktop, "chrome", "windows", true},  //
+		{DeviceDesktop, "safari", "macos", true},    //
+		{DeviceDesktop, "safari", "windows", false}, // Safari does not ship there
+		{DeviceDesktop, "edge", "linux", false},     // nor does Edge
+		{DeviceDesktop, "chrome", "", true},         // a browser, on whatever it ships on
+		{DeviceDesktop, "", "linux", true},          // a system, under whatever ships on it
+		{DeviceDesktop, "", "android", false},       // a phone system on a desktop job
+		{DeviceDesktop, "opera", "windows", false},  // a browser this program has no matrix for
+		{DeviceMobile, "safari", "ios", true},       //
+		{DeviceMobile, "edge", "android", true},     //
+		{DeviceMobile, "edge", "ios", false},        // Edge does not ship there
+		{DeviceMobile, "", "windows", false},        // a desktop system on a phone job
+	} {
+		if got := Ships(c.device, c.browser, c.os); got != c.want {
+			t.Errorf("Ships(%q, %q, %q) = %v, want %v", c.device, c.browser, c.os, got, c.want)
+		}
+	}
+}
+
+func TestBrowsersAndSystems_AreWhatTheMatrixHolds(t *testing.T) {
+	// A chooser is offered from the same table the spread is built from, so a
+	// screen cannot offer a browser no port will ever open under.
+	browsers, systems := Browsers(), Systems()
+	for _, p := range append(append([]pair{}, desktopPairs...), mobilePairs...) {
+		if !has(browsers, p.browser) {
+			t.Errorf("the matrix opens ports under %q and no chooser offers it", p.browser)
+		}
+		if !has(systems, p.os) {
+			t.Errorf("the matrix opens ports on %q and no chooser offers it", p.os)
+		}
+	}
+	// And nothing beyond it: a name on the list that no pair holds is a choice
+	// that opens nothing.
+	for _, name := range browsers {
+		if !Ships(DeviceDesktop, name, "") && !Ships(DeviceMobile, name, "") {
+			t.Errorf("the chooser offers the browser %q, which ships nowhere", name)
+		}
+	}
+	for _, name := range systems {
+		if !Ships(DeviceDesktop, "", name) && !Ships(DeviceMobile, "", name) {
+			t.Errorf("the chooser offers the system %q, which nothing runs on", name)
+		}
+	}
+	// Each of them once. A list with Chrome in it three times is a list nobody
+	// reads twice.
+	if len(browsers) != len(distinct(browsers)) || len(systems) != len(distinct(systems)) {
+		t.Errorf("the choosers repeat themselves: %v / %v", browsers, systems)
+	}
+}
+
+func has(list []string, want string) bool {
+	for _, one := range list {
+		if one == want {
+			return true
+		}
+	}
+	return false
+}
+
+func distinct(list []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, one := range list {
+		if !seen[one] {
+			seen[one] = true
+			out = append(out, one)
+		}
+	}
+	return out
+}
+
+func TestSpread_IsNarrowedByWhatTheJobNamed(t *testing.T) {
+	// The three boxes on the form. Naming none of them is the whole matrix,
+	// which is what the tests above are about; this is what naming part of it
+	// does, and the part that matters is that naming one side does not silently
+	// pin the other. A job that asked for Firefox asked for Firefox — on
+	// whatever Firefox ships on.
+	cl, _ := holding(t, 152, 153)
+
+	firefox, err := Spread(context.Background(), cl, DeviceDesktop, Worn{Browser: "firefox"}, 2, 0)
+	if err != nil {
+		t.Fatalf("Spread on a browser: %v", err)
+	}
+	// Three systems at two releases.
+	if len(firefox) != 6 {
+		t.Errorf("a job naming firefox is spread over %d templates, want its three systems at two releases", len(firefox))
+	}
+	for _, s := range firefox {
+		if !strings.HasPrefix(s.Spec.Browser, "firefox_") {
+			t.Errorf("a job naming firefox was given %q", s.Spec.Browser)
+		}
+	}
+
+	mac, err := Spread(context.Background(), cl, DeviceDesktop, Worn{OS: "macos"}, 1, 0)
+	if err != nil {
+		t.Fatalf("Spread on a system: %v", err)
+	}
+	// Every browser that ships on a Mac, which is the four of them.
+	if len(mac) != 4 {
+		t.Errorf("a job naming macos is spread over %d templates, want every browser that ships there", len(mac))
+	}
+	for _, s := range mac {
+		if s.Spec.OS != "macos" {
+			t.Errorf("a job naming macos was given a port on %q", s.Spec.OS)
+		}
+	}
+
+	// All three named is one identity, and the release is taken as it stands.
+	one, err := Spread(context.Background(), cl, DeviceDesktop, Worn{Browser: "safari", OS: "macos", Release: 26}, 10, 0)
+	if err != nil {
+		t.Fatalf("Spread on all three: %v", err)
+	}
+	if len(one) != 1 || one[0].Spec.Browser != "safari_26" || one[0].Spec.OS != "macos" {
+		t.Errorf("a job naming all three was spread over %d templates: %v", len(one), one)
+	}
+}
+
+func TestSpread_AsksTheServiceForNoVersionsWhenTheJobNamedOne(t *testing.T) {
+	// A named release is the caller saying which build. Listing the ones the
+	// service holds would be four requests whose answer is thrown away, and
+	// worse, it invites this to replace the named build with a held one — which
+	// would be a run reporting a version it did not use.
+	cl, f := holding(t, 152, 153)
+	before := listings(f)
+
+	got, err := Spread(context.Background(), cl, DeviceDesktop, Worn{Browser: "chrome", Release: 999}, 10, 0)
+	if err != nil {
+		t.Fatalf("Spread: %v", err)
+	}
+	if n := listings(f) - before; n != 0 {
+		t.Errorf("the service was asked for its versions %d times for a job that named one", n)
+	}
+	for _, s := range got {
+		if s.Spec.Browser != "chrome_999" {
+			t.Errorf("a job naming chrome 999 was given %q", s.Spec.Browser)
+		}
+	}
+}
+
+func TestSpread_SaysSoWhenTheIdentityShipsNowhere(t *testing.T) {
+	// Safari on Windows. The form refuses it before it gets here, and this is
+	// the other door: a run started from the command line or the API arrives
+	// with the same pair and has to be told, rather than opening a pool of
+	// nothing or of something else.
+	cl, _ := holding(t, 153)
+	_, err := Spread(context.Background(), cl, DeviceDesktop, Worn{Browser: "safari", OS: "windows"}, 1, 0)
+	if err == nil {
+		t.Fatal("a spread of Safari on Windows was allowed")
+	}
+	if !strings.Contains(err.Error(), "safari") || !strings.Contains(err.Error(), "windows") {
+		t.Errorf("the refusal is %q, which does not name the pair that was asked for", err)
+	}
+}
+
+// listings is how many times the service has been asked what it holds.
+func listings(f *fakebt.Server) int {
+	n := 0
+	for _, one := range f.Requests() {
+		if strings.HasPrefix(one.Path, "/api/v1/profiles") {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSpread_GoesOnWithoutAServiceThatWillNotSayWhatItHolds(t *testing.T) {
+	// A listing that fails costs the spread over releases and nothing else. The
+	// browsers and the systems need no service to know, and a browser named
+	// without a release is read by the service as the newest it has — so the
+	// run goes out on a real fingerprint rather than not going out at all.
+	//
+	// It is not a failure being swallowed. The reasons a listing fails are the
+	// service being unreachable or not having that endpoint, and the first is
+	// about to be said out loud by the ports refusing to open through the same
+	// connection.
+	f := fakebt.New(t)
+	// One per browser the matrix asks about, and one over.
+	for i := 0; i < 5; i++ {
+		f.FailNext("/api/v1/profiles", 500, "the listing is not available")
+	}
+	cl, err := NewClient(f.URL(), f.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	got, err := Spread(context.Background(), cl, DeviceDesktop, Worn{}, 10, 0)
+	if err != nil {
+		t.Fatalf("Spread: %v", err)
+	}
+	if len(got) != len(desktopPairs) {
+		t.Fatalf("the spread holds %d templates, want one per pair with no release named", len(got))
+	}
+	for _, s := range got {
+		if strings.ContainsRune(s.Spec.Browser, '_') {
+			t.Errorf("template %q names the release %q, which no listing answered", s.Name, s.Spec.Browser)
+		}
+		if s.Spec.OS == "" {
+			t.Errorf("template %q carries no system", s.Name)
+		}
 	}
 }

@@ -642,9 +642,8 @@ func (s *Server) takeIntoUse(saved settings.Settings) error {
 	// next job to start is what uses it — which is why saving settings no longer
 	// asks anybody what to do about the job that is running: it runs on the pool
 	// it raised for itself and is not touched.
-	return s.sup.Reconnect(func(ctx context.Context, prof store.Profile, ports, threads int,
-		device string, cooldown time.Duration, wholePool, wantsAddresses bool) (Identities, error) {
-		return s.connect(ctx, saved, prof, ports, threads, device, cooldown, wholePool, wantsAddresses)
+	return s.sup.Reconnect(func(ctx context.Context, want Wanted) (Identities, error) {
+		return s.connect(ctx, saved, want)
 	})
 }
 

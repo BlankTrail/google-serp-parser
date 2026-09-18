@@ -203,6 +203,9 @@ type poolShape struct {
 	Ports, Threads int
 	Profile        int64
 	WholePool      bool
+	// Worn is the identity the job asked its ports to wear, which is the zero
+	// value for a job that named none of it.
+	Worn blanktrail.Worn
 }
 
 // raisedPools stands where the pools go.
@@ -228,10 +231,12 @@ type raisedPools struct {
 }
 
 // raise is the Dial a supervisor is built on.
-func (r *raisedPools) raise(_ context.Context, prof store.Profile, ports, threads int, _ string,
-	_ time.Duration, wholePool, _ bool) (engine, error) {
+func (r *raisedPools) raise(_ context.Context, want Wanted) (engine, error) {
 	r.mu.Lock()
-	r.asked = append(r.asked, poolShape{Ports: ports, Threads: threads, Profile: prof.ID, WholePool: wholePool})
+	r.asked = append(r.asked, poolShape{
+		Ports: want.Ports, Threads: want.Threads, Profile: want.Profile.ID,
+		WholePool: want.WholePool, Worn: want.Worn,
+	})
 	if r.refuse != nil {
 		err := r.refuse
 		r.mu.Unlock()
@@ -474,13 +479,12 @@ func standInPools(t *testing.T) (OpenPool, *fakebt.Server) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	return func(ctx context.Context, _ store.Profile, ports, threads int, device string,
-		_ time.Duration, _, _ bool) (Identities, error) {
+	return func(ctx context.Context, want Wanted) (Identities, error) {
 		pool, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
-			Specs:            blanktrail.SpecsFor(device),
+			Specs:            blanktrail.SpecsFor(want.Device),
 			Client:           cl,
-			Threads:          threads,
-			PortsPerThread:   ports,
+			Threads:          want.Threads,
+			PortsPerThread:   want.Ports,
 			Spec:             blanktrail.DefaultPortSpec(),
 			Channels:         []blanktrail.Channel{blanktrail.NewDirectChannel("direct")},
 			Insecure:         true,
@@ -507,7 +511,7 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	open, fake := standInPools(t)
 	ctx := t.Context()
 
-	proof, err := open(ctx, store.Profile{}, 2, 1, blanktrail.DeviceDesktop, 0, false, false)
+	proof, err := open(ctx, Wanted{Ports: 2, Threads: 1, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening a pool: %v", err)
 	}
@@ -525,12 +529,11 @@ func TestSupervisor_HandsTheIdentitiesBackToTheServiceWhenTheJobThatAskedForThem
 	// supervisor that never opened a pool at all would leave behind.
 	var counting sync.Mutex
 	opened := 0
-	count := func(ctx context.Context, prof store.Profile, ports, threads int, device string,
-		_ time.Duration, _, _ bool) (Identities, error) {
+	count := func(ctx context.Context, want Wanted) (Identities, error) {
 		counting.Lock()
 		opened++
 		counting.Unlock()
-		return open(ctx, prof, ports, threads, device, 0, false, false)
+		return open(ctx, want)
 	}
 	raised := func() int {
 		counting.Lock()
@@ -982,7 +985,7 @@ func TestReconnect_ChangesWhereTheNextJobsPoolComesFrom(t *testing.T) {
 	// the only way it can is by changing what raises their pools.
 	v, _, _ := heldSupervisor(t)
 	next := &heldEngine{}
-	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+	if err := v.Reconnect(func(context.Context, Wanted) (Identities, error) {
 		return Identities{}, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1001,7 +1004,7 @@ func TestReconnect_LeavesTheJobInFlightOnThePoolItRaised(t *testing.T) {
 	id := enqueue(t, v, "one", "a")
 	waitUntilRunning(t, v, id)
 
-	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+	if err := v.Reconnect(func(context.Context, Wanted) (Identities, error) {
 		return Identities{}, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1021,7 +1024,7 @@ func TestReconnect_GivesUpAStandingSetOfIdentitiesNobodyIsInside(t *testing.T) {
 	// follow raise their own, those ports are nobody's, and left open they are
 	// held for as long as the process runs.
 	v, _, standing := heldSupervisor(t)
-	if err := v.Reconnect(func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+	if err := v.Reconnect(func(context.Context, Wanted) (Identities, error) {
 		return Identities{}, nil
 	}); err != nil {
 		t.Fatalf("Reconnect: %v", err)
@@ -1047,7 +1050,7 @@ func TestSupervisor_RefusesARaiseThatCameBackWithNeitherAPoolNorAReason(t *testi
 	// that caused it. It is refused where it happens instead, and the job stays
 	// there to be carried on.
 	st := testStore(t)
-	v := start(st, dialing(func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (Identities, error) {
+	v := start(st, dialing(func(context.Context, Wanted) (Identities, error) {
 		return Identities{}, nil
 	}, nil), 1, 1)
 	t.Cleanup(func() { _ = v.Close() })
@@ -1211,9 +1214,9 @@ func TestSupervisor_RaisesThePoolAsTheKindOfPageTheJobAskedFor(t *testing.T) {
 	st := testStore(t)
 	var asked []string
 	var mu sync.Mutex
-	v := start(st, source{raise: func(_ context.Context, _ store.Profile, _, _ int, device string, _ time.Duration, _, _ bool) (engine, error) {
+	v := start(st, source{raise: func(_ context.Context, want Wanted) (engine, error) {
 		mu.Lock()
-		asked = append(asked, device)
+		asked = append(asked, want.Device)
 		mu.Unlock()
 		return &heldEngine{}, nil
 	}}, 1, 1)
@@ -1423,5 +1426,31 @@ func TestSupervisor_TellsThePoolWhenAJobSpendsTheWholeList(t *testing.T) {
 	got := pools.shapes()[0]
 	if !got.WholePool {
 		t.Errorf("the pool was asked for as %+v, want the whole list the job named", got)
+	}
+}
+
+func TestSupervisor_TellsThePoolWhatIdentityTheJobAskedItsPortsToWear(t *testing.T) {
+	// Written down with the job and read back when its identities are raised.
+	// A supervisor that dropped it would open the run on the spread over
+	// everything while the job's own page said it was pinned to one browser —
+	// and the results would be a report about a fingerprint that never ran.
+	st := testStore(t)
+	if _, err := st.CreateJob(t.Context(),
+		store.JobSpec{Name: "pinned", Pages: 1, Browser: "safari", OS: "macos", Release: 26},
+		[]string{"a"}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	pools := &raisedPools{}
+	v := start(st, source{raise: pools.raise}, 1, 1)
+	t.Cleanup(func() { _ = v.Close() })
+	if err := v.Start(1); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitUntil(t, "the pool for the job is asked for", func() bool { return len(pools.shapes()) > 0 })
+
+	want := blanktrail.Worn{Browser: "safari", OS: "macos", Release: 26}
+	if got := pools.shapes()[0].Worn; got != want {
+		t.Errorf("the pool was asked for as %+v, want %+v", got, want)
 	}
 }

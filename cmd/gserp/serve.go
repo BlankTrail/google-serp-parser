@@ -368,7 +368,9 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 		if err != nil && !errors.Is(err, store.ErrNoProfile) {
 			return nil, err
 		}
-		got, err := o.dial(ctx, saved, prof, 1, want, device, 0, false, false)
+		got, err := o.dial(ctx, saved, web.Wanted{
+			Profile: prof, Threads: 1, Ports: want, Device: device,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -440,8 +442,7 @@ func deviceOr(device string) string {
 // back as an error, and the queue puts it in the log against the job it belongs
 // to.
 func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet) web.OpenPool {
-	return func(ctx context.Context, prof store.Profile, ports, threads int, device string,
-		cooldown time.Duration, wholePool, wantsAddresses bool) (web.Identities, error) {
+	return func(ctx context.Context, want web.Wanted) (web.Identities, error) {
 		// A job of the kind the standing identities were opened for runs on them,
 		// grown to its own size. It gives the growth back when it ends and the
 		// standing ones stay warm for the next.
@@ -452,7 +453,8 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 		// They are a pool of a fixed size, opened before anybody asked for this,
 		// and growing it one address at a time would leave the machine's warm
 		// ones scattered through a job's ports when the job ended.
-		if pool, mine, err := warm.raiseFor(ctx, ports, threads, device, wholePool || wantsAddresses); err != nil {
+		if pool, mine, err := warm.raiseFor(ctx, want.Ports, want.Threads, want.Device,
+			want.WholePool || want.Addresses || want.Worn != (blanktrail.Worn{})); err != nil {
 			return web.Identities{}, err
 		} else if mine {
 			// The job's own pause, and nothing else's.
@@ -473,27 +475,27 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			// Nought is nought. A job that names no pause is a job that wants none,
 			// and deriving one for it is this program pacing a run nobody asked to
 			// have paced.
-			pool.PaceAt(cooldown)
+			pool.PaceAt(want.Cooldown)
 			return web.Identities{Search: pool}, nil
 		}
 		if fromEnv {
-			cfg := poolConfig(threads, ports, wholePool)
-			cfg.Specs = blanktrail.SpecsFor(device)
+			cfg := poolConfig(want.Threads, want.Ports, want.WholePool)
+			cfg.Specs = blanktrail.SpecsFor(want.Device)
 			cfg.Trace = o.tracer()
 			cfg.OnLease = o.leaseTracer()
 			pool, err := openPool(ctx, io.Discard, cfg)
 			if err != nil {
 				return web.Identities{}, err
 			}
-			pool.PaceAt(cooldown)
+			pool.PaceAt(want.Cooldown)
 			return web.Identities{Search: pool}, nil
 		}
-		want, err := o.dial(ctx, saved, prof, threads, ports, device, cooldown, wholePool, wantsAddresses)
+		got, err := o.dial(ctx, saved, want)
 		if err != nil {
 			return web.Identities{}, err
 		}
-		want.Search.PaceAt(cooldown)
-		return want, nil
+		got.Search.PaceAt(want.Cooldown)
+		return got, nil
 	}
 }
 
@@ -508,12 +510,11 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 // started with: somebody who has this moment typed a port count into the
 // settings has said which they want, and a flag from last week that quietly won
 // would make the box on the screen a box that does nothing.
-func (o serveOptions) connect(ctx context.Context, saved settings.Settings, prof store.Profile,
-	ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (web.Identities, error) {
+func (o serveOptions) connect(ctx context.Context, saved settings.Settings, want web.Wanted) (web.Identities, error) {
 	// The size and the kind of result page come from the job, through the
 	// supervisor, and the connection from the settings. Neither knows the other's
 	// half, and this is where the two are put together.
-	return o.dial(ctx, saved, prof, threads, ports, device, cooldown, wholePool, wantsAddresses)
+	return o.dial(ctx, saved, want)
 }
 
 // dial opens a pool against the connection described, after the check that says
@@ -522,19 +523,20 @@ func (o serveOptions) connect(ctx context.Context, saved settings.Settings, prof
 // The check is the one gserp doctor runs, for the reason it is run before a run
 // from the command line: the most common way a job is dead on arrival is one a
 // single request would have shown.
-func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof store.Profile,
-	threads, ports int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (web.Identities, error) {
+func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want web.Wanted) (web.Identities, error) {
 	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 	if err != nil {
 		return web.Identities{}, o.scrubbed(err)
 	}
+	prof := want.Profile
+	threads, ports := want.Threads, want.Ports
 	if threads < 1 {
 		threads = o.Threads
 	}
 	if ports < 1 {
 		ports = o.Ports
 	}
-	cfg := poolConfig(threads, ports, wholePool)
+	cfg := poolConfig(threads, ports, want.WholePool)
 	cfg.Spec.Protocol = prof.Protocol
 	// What this profile's ports are made of, beyond where they go out.
 	cfg.Spec.VDNSMode = prof.VDNSMode
@@ -542,25 +544,37 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 	cfg.Spec.EnableHTTP3 = prof.HTTP3
 	cfg.MaxPerUpstream = prof.ThreadsPerUpstream
 	cfg.RenewAfterInterval = prof.RenewEvery
-	// Which kind of result page this job asked for. Desktop opens every port
-	// under the one default template, as this program always has; mobile hands
-	// the pool two named templates and it spreads the ports over both, so a run
-	// on phones is a run on more than one phone.
-	cfg.Specs = blanktrail.SpecsFor(device)
-	// Both places, and they are two: SpecsFor answers nil for a desktop job and
-	// two named templates for a mobile one, and a pool given templates ignores
-	// the single spec above. Setting only one of the two loses the protocol on
-	// one kind of job and on no other, which is as quiet as a fault gets.
+	// What the ports of this job are made of: every browser and system this
+	// program knows, at the newest ten releases of each the service holds,
+	// narrowed by whatever of the three the job named.
+	//
+	// It is asked of the service rather than written out here, because the
+	// releases are the service's and change under this program: a table of them
+	// is out of date the week after it is written, and a filter naming a build
+	// nobody holds is a filter that quietly matches something else.
+	cfg.Specs, err = blanktrail.Spread(ctx, client, want.Device, want.Worn,
+		blanktrail.ReleasesPerBrowser, cfg.Size())
+	if err != nil {
+		return web.Identities{}, o.scrubbed(err)
+	}
+	// Both places, and they are two: a pool given templates ignores the single
+	// spec above, so what is set only there is lost on every job. The templates
+	// carry a browser and a system and nothing else about where the port goes
+	// out or what it is made of; the profile's half is copied onto each.
 	for i := range cfg.Specs {
-		cfg.Specs[i].Spec.Protocol = prof.Protocol
+		one := &cfg.Specs[i].Spec
+		one.Protocol = prof.Protocol
+		one.VDNSMode = prof.VDNSMode
+		one.JSSolver = prof.Solver
+		one.EnableHTTP3 = prof.HTTP3
 	}
 	cfg.Trace = o.tracer()
 	cfg.OnLease = o.leaseTracer()
 	// The gap between two requests on one identity is the job's. Nought is a job
 	// that named none, and the pool then derives it from the ports and the pause
 	// range — which is the one place that number is worked out.
-	if cooldown > 0 {
-		cfg.Cooldown = cooldown
+	if want.Cooldown > 0 {
+		cfg.Cooldown = want.Cooldown
 	}
 
 	report, err := o.checked(ctx, client, cfg.Size())
@@ -604,7 +618,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 	if err != nil {
 		return web.Identities{}, o.scrubbed(err)
 	}
-	if !wantsAddresses {
+	if !want.Addresses {
 		// A job that keeps no address has nothing to look up, and ports opened
 		// for it would stand idle for the length of the run.
 		return web.Identities{Search: pool}, nil

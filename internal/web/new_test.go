@@ -1002,3 +1002,94 @@ func TestJobPage_RefusesThePortsBoxWhileTheWholeListIsTicked(t *testing.T) {
 		t.Errorf("the ports box is offered as %q, want it refused while the whole list is ticked", box)
 	}
 }
+
+func TestNewForm_LeavesTheIdentityToTheSpreadOverEveryBrowserAndSystem(t *testing.T) {
+	// The default, and it is the one that matters: a job that pinned a browser
+	// runs every one of its ports as that browser, and three hundred ports that
+	// are all the newest Chrome on Windows are one identity three hundred times
+	// over. Nothing named is the spread, so a form nobody touched opens a fleet.
+	form := blankForm()
+	if form.Browser != "" || form.OS != "" || form.Release != 0 {
+		t.Fatalf("a new job asks for %q/%q/%d, want the spread over all of them",
+			form.Browser, form.OS, form.Release)
+	}
+
+	body := get(t, testServer(t), "/new").Body.String()
+	// Both boxes offer the whole matrix, so a choice made here is one a port can
+	// actually be opened under.
+	for _, browser := range blanktrail.Browsers() {
+		if !strings.Contains(body, `<option value="`+browser+`"`) {
+			t.Errorf("the form offers no %q, which the spread opens ports as", browser)
+		}
+	}
+	for _, os := range blanktrail.Systems() {
+		if !strings.Contains(body, `<option value="`+os+`"`) {
+			t.Errorf("the form offers no %q, which the spread opens ports on", os)
+		}
+	}
+	// And each leads with the empty choice, which is what the spread is.
+	for _, box := range []string{"browser", "os"} {
+		where := strings.Index(body, `<select id="`+box+`"`)
+		if where < 0 {
+			t.Fatalf("the form has no %s box", box)
+		}
+		if first := strings.Index(body[where:], "<option"); !strings.HasPrefix(body[where+first:], `<option value=""`) {
+			t.Errorf("the %s box does not start on the choice that is all of them: %s",
+				box, body[where+first:where+first+80])
+		}
+	}
+}
+
+func TestNewForm_FilesTheIdentityTheFormNamed(t *testing.T) {
+	// The other half: what the boxes say has to reach the job, because the ports
+	// are opened from it and nothing downstream can work out what was meant.
+	form := jobForm{Name: "pinned", Queries: "a", Browser: "safari", OS: "macos", Release: 26}
+	spec := form.spec()
+	if spec.Browser != "safari" || spec.OS != "macos" || spec.Release != 26 {
+		t.Errorf("the job was filed as %q/%q/%d, want what the form named",
+			spec.Browser, spec.OS, spec.Release)
+	}
+}
+
+func TestNewForm_RefusesAnIdentityThatNeverExisted(t *testing.T) {
+	// Two boxes can be set to a pair nobody has, and Safari on Windows is the
+	// one somebody will actually pick. Run, every port of the job would go out
+	// claiming to be a browser that does not ship there — which is the one thing
+	// a fingerprint must never say — or the service would quietly open something
+	// else and the report would name a fleet that never ran.
+	form := jobForm{
+		Name: "impossible", Queries: "a", Kind: store.KindParse, Unique: string(store.UniqueOff), Pages: 1,
+		Device: blanktrail.DeviceDesktop, Browser: "safari", OS: "windows",
+	}
+	_, complaints := form.parse()
+	if !hasComplaint(complaints, "form.identity.unknown") {
+		t.Errorf("Safari on Windows was taken without a word: %v", complaints)
+	}
+
+	// And the pair that does ship is taken.
+	form.OS = "macos"
+	if _, complaints := form.parse(); hasComplaint(complaints, "form.identity.unknown") {
+		t.Errorf("Safari on macOS was refused: %v", complaints)
+	}
+
+	// A version with no browser to be a version of is the same fault from the
+	// other side: the number travels to the service inside the browser's name,
+	// so with no browser named there is nowhere for it to go.
+	loose := jobForm{
+		Name: "loose", Queries: "a", Kind: store.KindParse, Unique: string(store.UniqueOff), Pages: 1,
+		Device: blanktrail.DeviceDesktop, Release: 153,
+	}
+	if _, complaints := loose.parse(); !hasComplaint(complaints, "form.release.needsabrowser") {
+		t.Errorf("a version with no browser was taken without a word: %v", complaints)
+	}
+}
+
+// hasComplaint says whether the form said this about what was posted.
+func hasComplaint(complaints []string, want string) bool {
+	for _, one := range complaints {
+		if one == want {
+			return true
+		}
+	}
+	return false
+}

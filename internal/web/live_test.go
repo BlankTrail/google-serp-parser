@@ -427,9 +427,8 @@ func livePool(ctx context.Context, t *testing.T, ports, threads int, device stri
 // longer is. It costs a warm-up per job, and that cost is one of the things
 // this file exists to report.
 func liveRaise(t *testing.T) OpenPool {
-	return func(ctx context.Context, _ store.Profile, ports, threads int, device string,
-		_ time.Duration, _, _ bool) (Identities, error) {
-		return Identities{Search: livePool(ctx, t, ports, threads, device)}, nil
+	return func(ctx context.Context, want Wanted) (Identities, error) {
+		return Identities{Search: livePool(ctx, t, want.Ports, want.Threads, want.Device)}, nil
 	}
 }
 
@@ -1332,8 +1331,8 @@ func liveSettingsServer(ctx context.Context, t *testing.T) (string, *store.Store
 // liveConnect opens the ports a connection just saved describes, doing what the
 // command does: the check first, then the ports, then the list behind them.
 func liveConnect(t *testing.T) Connect {
-	return func(ctx context.Context, saved settings.Settings, _ store.Profile, ports, threads int,
-		device string, _ time.Duration, _, _ bool) (Identities, error) {
+	return func(ctx context.Context, saved settings.Settings, want Wanted) (Identities, error) {
+		ports, threads := want.Ports, want.Threads
 		client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
 		if err != nil {
 			return Identities{}, err

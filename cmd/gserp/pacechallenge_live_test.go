@@ -16,6 +16,7 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/web"
 )
 
 // envPaceGaps and envPaceBudget let the operator set the arms of the
@@ -99,7 +100,7 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 		}
 		ports = n
 	}
-	want, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, ports, blanktrail.DeviceDesktop, 0, false, false)
+	want, err := o.dial(ctx, saved, web.Wanted{Profile: theFirstProfile(saved, true), Threads: 1, Ports: ports, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the identities: %v", o.clean(err.Error()))
 	}

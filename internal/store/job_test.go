@@ -826,3 +826,85 @@ func wholePoolOf(t *testing.T, s *Store, id int64) bool {
 	}
 	return sum.WholePool
 }
+
+func TestCreateJob_CarriesTheIdentityItsPortsWear(t *testing.T) {
+	// A browser and a system are not a preference about how the run is done,
+	// the way the pool numbers are. They are part of what the results are:
+	// Google answers a Safari on a Mac differently from a Chrome on Windows,
+	// and a job that asked for one and ran on the other is a report about a
+	// question nobody asked. So it has to survive the write, and it has to come
+	// back on both doors a job is read by — the one a screen lists jobs
+	// through, and the one a run resumed by name comes in at.
+	s := testStore(t)
+	spec := JobSpec{Name: "safari", Pages: 1, Browser: "safari", OS: "macos", Release: 26}
+	id, err := s.CreateJob(context.Background(), spec, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	sum, err := s.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Browser != "safari" || sum.OS != "macos" || sum.Release != 26 {
+		t.Errorf("the listing reads %q/%q/%d, want the safari 26 on macos that was asked for",
+			sum.Browser, sum.OS, sum.Release)
+	}
+
+	held, err := s.LastUnfinished(context.Background(), "safari")
+	if err != nil {
+		t.Fatalf("LastUnfinished: %v", err)
+	}
+	if held.Spec.Browser != "safari" || held.Spec.OS != "macos" || held.Spec.Release != 26 {
+		t.Errorf("a run taken up again reads %q/%q/%d, want what the job was written with",
+			held.Spec.Browser, held.Spec.OS, held.Spec.Release)
+	}
+}
+
+func TestOpenPlan_CarriesTheIdentityItsPortsWear(t *testing.T) {
+	// The other door. A list too large to hold is written through this one, and
+	// a job of a million queries is exactly the job whose identity matters —
+	// it is the one that will be running for hours.
+	s := testStore(t)
+	plan, err := s.OpenPlan(context.Background(), JobSpec{
+		Name: "big", Pages: 1, Browser: "firefox", OS: "linux", Release: 145,
+	})
+	if err != nil {
+		t.Fatalf("OpenPlan: %v", err)
+	}
+	if err := plan.Add(context.Background(), "a"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := plan.Ready(context.Background()); err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+
+	sum, err := s.Progress(context.Background(), plan.JobID())
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Browser != "firefox" || sum.OS != "linux" || sum.Release != 145 {
+		t.Errorf("a streamed job reads %q/%q/%d, want the firefox 145 on linux it was opened with",
+			sum.Browser, sum.OS, sum.Release)
+	}
+}
+
+func TestCreateJob_NamingNoIdentityIsNotNamingOne(t *testing.T) {
+	// Nothing named is the spread over everything, and it has to read back as
+	// nothing rather than as some browser this package picked. Every job
+	// written before the columns existed carries it, and a store that filled in
+	// a default here would silently turn those runs into single-identity ones.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(), JobSpec{Name: "plain", Pages: 1}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	sum, err := s.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Progress: %v", err)
+	}
+	if sum.Browser != "" || sum.OS != "" || sum.Release != 0 {
+		t.Errorf("a job that named nothing reads %q/%q/%d, want nothing named",
+			sum.Browser, sum.OS, sum.Release)
+	}
+}

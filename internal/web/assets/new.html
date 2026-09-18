@@ -150,6 +150,40 @@
 </ul>
 <p class="empty">{{.T "form.pool.why"}}</p>
 </fieldset>
+{{/* What the ports are made of. It stands on its own rather than among the
+     pool numbers because it is not a number and not a preference about speed:
+     it is part of what the results are, the way the kind of page is. Empty in
+     all three is the spread over everything, which is what the form starts on
+     and what most jobs should run as. */}}
+<fieldset>
+<legend>{{.T "form.identity"}}</legend>
+<div class="row">
+<div class="field">
+<label for="browser">{{.T "form.browser"}}</label>
+<select id="browser" name="browser">
+{{range .Browsers}}<option value="{{.Code}}"{{if eq .Code $.Form.Browser}} selected{{end}}>{{if .Code}}{{.Name}}{{else}}{{$.T "form.browser.any"}}{{end}}</option>
+{{end}}</select>
+</div>
+<div class="field">
+<label for="os">{{.T "form.os"}}</label>
+<select id="os" name="os">
+{{range .Systems}}<option value="{{.Code}}"{{if eq .Code $.Form.OS}} selected{{end}}>{{if .Code}}{{.Name}}{{else}}{{$.T "form.os.any"}}{{end}}</option>
+{{end}}</select>
+</div>
+{{/* A number and not a chooser, because the versions a browser has are the
+     service's and change under this page: a list drawn here would be a list
+     of the builds it held the day the page was opened. */}}
+<div class="field">
+<label for="release">{{.T "form.release"}}</label>
+<input id="release" name="release" type="number" min="0" size="6"
+       placeholder="{{.T "form.release.any"}}" value="{{if .Form.Release}}{{.Form.Release}}{{end}}">
+</div>
+</div>
+<ul class="notes">
+<li>{{.T "form.release.why"}}</li>
+</ul>
+<p class="empty">{{.T "form.identity.why"}}</p>
+</fieldset>
 {{/* One form, and a switch saying where the phrases come from. Two forms
      doing one thing made the reader choose between them before they knew what
      the difference was; the switch names it. The whole form is sent as parts so

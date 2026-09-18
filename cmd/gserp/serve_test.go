@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -594,7 +595,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 
 	// A job that named no size reaches here already stood in for, so what this end
 	// is asked for is the pair this server was started with.
-	own, err := raise(t.Context(), store.Profile{}, opts.Ports, opts.Threads, blanktrail.DeviceDesktop, 0, false, false)
+	own, err := raise(t.Context(), web.Wanted{Ports: opts.Ports, Threads: opts.Threads, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("raising the pool of a job that named no size: %v", err)
 	}
@@ -608,7 +609,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 		t.Fatalf("%d ports are still open after that pool was given up", got)
 	}
 
-	named, err := raise(t.Context(), store.Profile{}, 2, 1, blanktrail.DeviceDesktop, 0, false, false)
+	named, err := raise(t.Context(), web.Wanted{Ports: 2, Threads: 1, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("raising the pool a job named: %v", err)
 	}
@@ -869,7 +870,7 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false, false)
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -880,7 +881,7 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	pool, err := raise(t.Context(), store.Profile{}, 10, 10, blanktrail.DeviceDesktop, 0, false, false)
+	pool, err := raise(t.Context(), web.Wanted{Ports: 10, Threads: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("raising a job of a hundred on ten standing: %v", err)
 	}
@@ -917,7 +918,7 @@ func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 4, blanktrail.DeviceDesktop, 0, false, false)
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 4, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -926,7 +927,7 @@ func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.
 
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	own, err := raise(t.Context(), store.Profile{}, 2, 1, blanktrail.DeviceMobile, 0, false, false)
+	own, err := raise(t.Context(), web.Wanted{Ports: 2, Threads: 1, Device: blanktrail.DeviceMobile})
 	if err != nil {
 		t.Fatalf("raising a phone job beside the standing desktops: %v", err)
 	}
@@ -953,7 +954,7 @@ func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *t
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false, false)
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -962,7 +963,7 @@ func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *t
 
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	if _, err := raise(t.Context(), store.Profile{}, 1, 2, blanktrail.DeviceDesktop, 0, false, false); err != nil {
+	if _, err := raise(t.Context(), web.Wanted{Ports: 1, Threads: 2, Device: blanktrail.DeviceDesktop}); err != nil {
 		t.Fatalf("raising a job of two: %v", err)
 	}
 	if got := len(fake.OpenPorts()); got != 10 {
@@ -1157,7 +1158,7 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false, false)
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -1167,7 +1168,7 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 	running := true
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, error) {
-		got, err := opts.dial(ctx, saved, store.Profile{}, 1, want, device, 0, false, false)
+		got, err := opts.dial(ctx, saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: want, Device: device})
 		if err != nil {
 			return nil, err
 		}
@@ -1219,7 +1220,7 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 	saved, _ := opts.saved(io.Discard)
 
 	// Opened the way the standing set is opened: one thread, ten identities.
-	standing, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 10, blanktrail.DeviceDesktop, 0, false, false)
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -1235,7 +1236,7 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 
 	// A job that names no pause wants none: nought is nought, and the identities
 	// it was given are handed out as fast as they come free.
-	if _, err := raise(t.Context(), store.Profile{}, 2, 50, blanktrail.DeviceDesktop, 0, false, false); err != nil {
+	if _, err := raise(t.Context(), web.Wanted{Ports: 2, Threads: 50, Device: blanktrail.DeviceDesktop}); err != nil {
 		t.Fatalf("raising a job of fifty on two: %v", err)
 	}
 	if got := standing.Search.Cooldown(); got != 0 {
@@ -1249,7 +1250,7 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 	}
 
 	// And a job that named a pause of its own is paced by that.
-	if _, err := raise(t.Context(), store.Profile{}, 2, 50, blanktrail.DeviceDesktop, 3*time.Second, false, false); err != nil {
+	if _, err := raise(t.Context(), web.Wanted{Ports: 2, Threads: 50, Device: blanktrail.DeviceDesktop, Cooldown: 3 * time.Second}); err != nil {
 		t.Fatalf("raising a job that named its own pause: %v", err)
 	}
 	if got := standing.Search.Cooldown(); got != 3*time.Second {
@@ -1325,7 +1326,7 @@ func TestDial_CarriesHowOftenAPortChangesIdentityIntoThePool(t *testing.T) {
 	saved, _ := opts.saved(io.Discard)
 
 	prof := store.Profile{RenewEvery: 10 * time.Minute}
-	pool, err := opts.dial(t.Context(), saved, prof, 1, 2, blanktrail.DeviceDesktop, 0, false, false)
+	pool, err := opts.dial(t.Context(), saved, web.Wanted{Profile: prof, Threads: 1, Ports: 2, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the identities: %v", err)
 	}
@@ -1397,7 +1398,7 @@ func TestDial_OpensPlainPortsForTheAddressesOnlyOnceOneHasToBeRead(t *testing.T)
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	saved, _ := opts.saved(io.Discard)
 
-	want, err := opts.dial(t.Context(), saved, store.NewProfile(), 1, 2, blanktrail.DeviceDesktop, 0, false, true)
+	want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.NewProfile(), Threads: 1, Ports: 2, Device: blanktrail.DeviceDesktop, Addresses: true})
 	if err != nil {
 		t.Fatalf("opening the identities of a job that keeps addresses: %v", err)
 	}
@@ -1453,7 +1454,7 @@ func TestDial_OpensNoAddressPortsForAJobThatKeepsNone(t *testing.T) {
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	saved, _ := opts.saved(io.Discard)
 
-	want, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 2, blanktrail.DeviceDesktop, 0, false, false)
+	want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 2, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the identities: %v", err)
 	}
@@ -1484,7 +1485,7 @@ func TestDial_OpensThePortsThisProfileSaysToOpen(t *testing.T) {
 	prof.Solver = false
 	prof.HTTP3 = true
 
-	want, err := opts.dial(t.Context(), saved, prof, 1, 1, blanktrail.DeviceDesktop, 0, false, false)
+	want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: prof, Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the identities: %v", err)
 	}
@@ -1509,4 +1510,111 @@ func TestDial_OpensThePortsThisProfileSaysToOpen(t *testing.T) {
 	if opened == 0 {
 		t.Fatal("no port was opened at all")
 	}
+}
+
+func TestDial_SpreadsAJobsPortsOverTheBrowsersAndSystemsItNamedNoneOf(t *testing.T) {
+	// The default, and the point of it: a job that named no browser is not a
+	// job that wants three hundred ports of the same one. What it wants is a
+	// fleet — every browser this program knows, on every system it ships on,
+	// at the releases the service holds — and that is what a network of any
+	// size actually looks like to Google.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	var held []fakebt.StoredProfile
+	for _, browser := range []string{"chrome", "firefox", "edge", "safari"} {
+		for _, v := range []int{152, 153} {
+			held = append(held, fakebt.StoredProfile{
+				Name:    fmt.Sprintf("%s_%d", browser, v),
+				Browser: browser,
+				Version: fmt.Sprintf("%d.0.1234.5", v),
+			})
+		}
+	}
+	fake.SetProfiles(held...)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	saved, _ := opts.saved(io.Discard)
+
+	want, err := opts.dial(t.Context(), saved, web.Wanted{
+		Profile: store.NewProfile(), Threads: 6, Ports: 1, Device: blanktrail.DeviceDesktop,
+	})
+	if err != nil {
+		t.Fatalf("opening the identities: %v", err)
+	}
+	t.Cleanup(func() { _ = want.Search.Close() })
+
+	browsers, systems := map[string]bool{}, map[string]bool{}
+	opened := 0
+	for _, r := range fake.Requests() {
+		if r.Path != "/api/v1/ports/open" {
+			continue
+		}
+		opened++
+		var asked struct {
+			Browser string `json:"browser"`
+			OS      string `json:"os"`
+		}
+		if err := json.Unmarshal([]byte(r.Body), &asked); err != nil {
+			t.Fatalf("reading what a port was opened as: %v", err)
+		}
+		browsers[asked.Browser] = true
+		systems[asked.OS] = true
+	}
+	if opened != 6 {
+		t.Fatalf("%d ports were opened for a job of six", opened)
+	}
+	// Six ports cannot cover nine combinations, and which six they are is drawn
+	// at random so that two such jobs are not the same six. What is asked is
+	// that they are not one identity six times over.
+	if len(browsers) < 2 || len(systems) < 2 {
+		t.Errorf("six ports were opened as %v on %v, which is not a spread", keysOf(browsers), keysOf(systems))
+	}
+	for browser := range browsers {
+		if !strings.Contains(browser, "_15") {
+			t.Errorf("a port was opened as %q, which names no release the service holds", browser)
+		}
+	}
+}
+
+func TestDial_OpensEveryPortAsTheOneIdentityAJobNamed(t *testing.T) {
+	// The other end of the same choice. A job that named all three is a job
+	// somebody pinned deliberately — to reproduce a report, or because that is
+	// the fingerprint the results are wanted through — and a spread would make
+	// that setting a suggestion.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	saved, _ := opts.saved(io.Discard)
+
+	want, err := opts.dial(t.Context(), saved, web.Wanted{
+		Profile: store.NewProfile(), Threads: 4, Ports: 1, Device: blanktrail.DeviceDesktop,
+		Worn: blanktrail.Worn{Browser: "safari", OS: "macos", Release: 26},
+	})
+	if err != nil {
+		t.Fatalf("opening the identities: %v", err)
+	}
+	t.Cleanup(func() { _ = want.Search.Close() })
+
+	opened := 0
+	for _, r := range fake.Requests() {
+		if r.Path != "/api/v1/ports/open" {
+			continue
+		}
+		opened++
+		if !strings.Contains(r.Body, `"browser":"safari_26"`) || !strings.Contains(r.Body, `"os":"macos"`) {
+			t.Errorf("a port of a pinned job was opened as %s", r.Body)
+		}
+	}
+	if opened != 4 {
+		t.Fatalf("%d ports were opened for a job of four", opened)
+	}
+}
+
+// keysOf is a set as a list, for a message that has to name what was seen.
+func keysOf(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for one := range set {
+		out = append(out, one)
+	}
+	sort.Strings(out)
+	return out
 }

@@ -1118,3 +1118,34 @@ func TestJobPage_CountsWhatTheRunHasBroughtBackBeforeItIsWrittenDown(t *testing.
 		t.Errorf("the screen shows %q collected after the run handed those results over", got)
 	}
 }
+
+func TestJobPage_SaysWhatIdentityTheJobsPortsWore(t *testing.T) {
+	// A run pinned to one browser and a run spread over every browser produce
+	// different results from the same list of phrases, and nothing in the rows
+	// afterwards says which it was. The page is where that is answered — beside
+	// the country and the kind of page, which are the other two settings that
+	// are what the results are rather than how fast they were gathered.
+	s := testServer(t)
+	pinned, err := s.store.CreateJob(t.Context(),
+		store.JobSpec{Name: "pinned", Pages: 1, Browser: "safari", OS: "macos", Release: 26},
+		[]string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	body := get(t, s, jobPath(pinned)).Body.String()
+	if !strings.Contains(body, "Safari 26 · macOS") {
+		t.Errorf("the page of a pinned job does not say what its ports wore:\n%s", body)
+	}
+
+	// And a job that named none of it is drawn as a dash rather than as a list
+	// of everything: the list is the same on every such job, and what is being
+	// asked here is whether this one was pinned.
+	spread, err := s.store.CreateJob(t.Context(),
+		store.JobSpec{Name: "spread", Pages: 1}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if body := get(t, s, jobPath(spread)).Body.String(); strings.Contains(body, "Safari") {
+		t.Errorf("the page of a job that named nothing names a browser:\n%s", body)
+	}
+}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/web"
 )
 
 // TestWarmCost_LiveWhatASecondRequestOnOneIdentityCosts measures the whole
@@ -45,7 +46,7 @@ func TestWarmCost_LiveWhatASecondRequestOnOneIdentityCosts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	defer cancel()
 
-	want, err := o.dial(ctx, saved, theFirstProfile(saved, true), 1, 6, blanktrail.DeviceDesktop, 0, false, false)
+	want, err := o.dial(ctx, saved, web.Wanted{Profile: theFirstProfile(saved, true), Threads: 1, Ports: 6, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening two identities: %v", o.clean(err.Error()))
 	}

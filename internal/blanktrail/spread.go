@@ -145,8 +145,68 @@ func pairsFor(device string) []pair {
 	return desktopPairs
 }
 
-// Spread is the templates a pool opens its ports under when the job named no
-// browser of its own: every browser this program knows on every system it ships
+// Worn is the identity a job asked its ports to wear. Anything left empty is
+// every value this program knows for it, so the zero Worn is the whole matrix
+// and a fully named one is a single identity.
+//
+// Release is a number rather than a version string because that is what a
+// browser filter carries — the service reads "chrome_153" as the browser and
+// the release — and nought is the newest the service holds.
+type Worn struct {
+	Browser string
+	OS      string
+	Release int
+}
+
+// String is the identity written out, for the one place it is said aloud: the
+// refusal when nothing in the matrix matches it.
+func (w Worn) String() string {
+	var parts []string
+	if w.Browser != "" {
+		name := w.Browser
+		if w.Release > 0 {
+			name = fmt.Sprintf("%s %d", name, w.Release)
+		}
+		parts = append(parts, name)
+	}
+	if w.OS != "" {
+		parts = append(parts, w.OS)
+	}
+	if len(parts) == 0 {
+		return "every browser and system"
+	}
+	return strings.Join(parts, " on ")
+}
+
+// narrow is the pairs this identity leaves standing. Naming neither side
+// leaves all of them, which is what makes the zero value the whole matrix.
+func (w Worn) narrow(pairs []pair) []pair {
+	browser, os := strings.ToLower(strings.TrimSpace(w.Browser)), strings.ToLower(strings.TrimSpace(w.OS))
+	if browser == "" && os == "" {
+		return pairs
+	}
+	var out []pair
+	for _, p := range pairs {
+		if (browser == "" || p.browser == browser) && (os == "" || p.os == os) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ReleasesPerBrowser is how many releases of one browser a spread that names no
+// version draws on.
+//
+// Ten, and it is a number about how a fleet looks rather than about this
+// program: real traffic to Google from a network of any size is not all on the
+// build that shipped this week — it is this one and the nine before it, in
+// whatever proportion people update — and a run whose every port is the newest
+// release is a run that is one identity however many ports it has. Further back
+// than ten is a fleet that never updates, which reads as its own kind of
+// strange.
+const ReleasesPerBrowser = 10
+
+// Spread is the templates a pool opens its ports under: every browser this program knows on every system it ships
 // on, each at the newest few releases the service holds.
 //
 // What it is for is that a run of three hundred identities that are all the
@@ -160,36 +220,57 @@ func pairsFor(device string) []pair {
 // and refuses to open at all when it has fewer ports than templates — so a job
 // of two ports is given two of the combinations rather than a refusal, drawn at
 // random so that two such jobs are not the same two.
-func Spread(ctx context.Context, cl *Client, device string, releases, ports int) ([]NamedSpec, error) {
+func Spread(ctx context.Context, cl *Client, device string, want Worn, releases, ports int) ([]NamedSpec, error) {
 	if releases < 1 {
 		releases = 1
 	}
-	pairs := pairsFor(device)
+	pairs := want.narrow(pairsFor(device))
+	if len(pairs) == 0 {
+		return nil, fmt.Errorf("blanktrail: %s is not a browser and system a %s port is opened as", want, device)
+	}
 
 	// One listing per browser rather than one per combination: the versions a
 	// browser has do not depend on the system it is asked for.
+	//
+	// A named release is taken as it stands and nothing is listed at all. It is
+	// the caller saying which build, and a build the service does not hold is
+	// theirs to be told about by the port that will not open, rather than
+	// quietly replaced here with one it does.
 	versions := map[string][]int{}
 	for _, p := range pairs {
 		if _, done := versions[p.browser]; done {
 			continue
 		}
+		if want.Release > 0 {
+			versions[p.browser] = []int{want.Release}
+			continue
+		}
+		// A service that will not say what it holds is not a reason to refuse
+		// the job. What is lost is the spread over releases, and what is left is
+		// a browser named without one — which the service reads as the newest it
+		// has, so the run goes out on a real fingerprint either way. The reasons
+		// a listing fails are the service being unreachable or not having that
+		// endpoint, and the first of the two is about to be reported by the
+		// ports refusing to open, loudly, through the same connection.
 		held, err := cl.NewestVersions(ctx, p.browser, releases)
 		if err != nil {
-			return nil, err
+			held = nil
 		}
 		versions[p.browser] = held
 	}
 
 	var out []NamedSpec
 	for _, p := range pairs {
-		for _, v := range versions[p.browser] {
-			spec := DefaultPortSpec()
-			spec.Browser = fmt.Sprintf("%s_%d", p.browser, v)
-			spec.OS = p.os
-			out = append(out, NamedSpec{
-				Name: fmt.Sprintf("%s_%d_%s", p.browser, v, p.os),
-				Spec: spec,
-			})
+		held := versions[p.browser]
+		if len(held) == 0 {
+			// Nothing known about this browser's releases, so it is asked for by
+			// name alone.
+			out = append(out, template(p.browser, p.browser, p.os))
+			continue
+		}
+		for _, v := range held {
+			out = append(out, template(fmt.Sprintf("%s_%d", p.browser, v),
+				fmt.Sprintf("%s_%d", p.browser, v), p.os))
 		}
 	}
 	if len(out) == 0 {
@@ -204,4 +285,64 @@ func Spread(ctx context.Context, cl *Client, device string, releases, ports int)
 		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	}
 	return out, nil
+}
+
+// Browsers is every browser this program knows a fingerprint for, in the order
+// a chooser offers them.
+//
+// It is read off the same table Spread walks rather than written out again,
+// because a screen offering a browser the matrix has never heard of offers a
+// job that opens no port at all.
+func Browsers() []string { return namesIn(func(p pair) string { return p.browser }) }
+
+// Systems is every system this program knows, desktop ones first.
+//
+// Both kinds are in one list because the form that offers it also offers the
+// kind of result page, and the two are separate boxes: a reader who picks
+// Android and leaves the page on desktop is told so by Ships, which is a better
+// answer than a list that silently rearranged itself.
+func Systems() []string { return namesIn(func(p pair) string { return p.os }) }
+
+// namesIn is every distinct value one side of the pairs table takes, desktop
+// before mobile, in the order the tables are written.
+func namesIn(of func(pair) string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range append(append([]pair{}, desktopPairs...), mobilePairs...) {
+		if name := of(p); !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// Ships says whether what a job named is something Spread would open a port
+// for: a browser on a system, on the kind of result page asked for.
+//
+// Naming neither is the whole spread and is always allowed. Naming one of the
+// two is allowed where anything at all is opened under it — Android on a
+// desktop job is not, and neither is Safari on a job that never reaches macOS
+// or iOS. Naming both is allowed only for a pair that exists in the world,
+// which is the point: an identity that never existed reads as itself.
+func Ships(device, browser, os string) bool {
+	browser, os = strings.ToLower(strings.TrimSpace(browser)), strings.ToLower(strings.TrimSpace(os))
+	if browser == "" && os == "" {
+		return true
+	}
+	for _, p := range pairsFor(device) {
+		if (browser == "" || p.browser == browser) && (os == "" || p.os == os) {
+			return true
+		}
+	}
+	return false
+}
+
+// template is one port of a spread: what to call it, and the browser filter and
+// system it is opened under.
+func template(name, browser, os string) NamedSpec {
+	spec := DefaultPortSpec()
+	spec.Browser = browser
+	spec.OS = os
+	return NamedSpec{Name: name + "_" + os, Spec: spec}
 }

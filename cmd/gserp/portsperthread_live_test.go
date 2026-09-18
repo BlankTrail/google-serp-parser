@@ -15,6 +15,7 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/web"
 )
 
 // envPPTThreads, envPPTPorts and envPPTMinutes set the shape of the comparison.
@@ -81,7 +82,7 @@ func TestPortsPerThread_LiveWhetherASpareIdentityPaysForItself(t *testing.T) {
 		arms.Add(1)
 		go func(i, perThread int) {
 			defer arms.Done()
-			want, err := o.dial(ctx, saved, theFirstProfile(saved, true), threads, perThread, blanktrail.DeviceDesktop, 0, false, false)
+			want, err := o.dial(ctx, saved, web.Wanted{Profile: theFirstProfile(saved, true), Threads: threads, Ports: perThread, Device: blanktrail.DeviceDesktop})
 			if err != nil {
 				say.Lock()
 				t.Errorf("%d ports a thread: opening the identities: %v", perThread, o.clean(err.Error()))

@@ -4,6 +4,7 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,6 +69,16 @@ type jobSetup struct {
 	// Device is which kind of result page this job asked Google for, as the key
 	// of what to call it: every phrase on every page goes through the catalogue.
 	Device string
+	// Identity is what this job's ports were made of, written out — "Safari 26
+	// · macOS". It is empty for a job that named none of the three, which is
+	// the spread over every browser and system, and the page draws that as a
+	// dash: the list behind it is the same on every such job, and what a reader
+	// is looking for here is whether this one was pinned.
+	//
+	// It is put together here rather than in the markup because it is three
+	// fields any of which can be absent, and a template asking that question is
+	// a template with a paragraph of logic in it.
+	Identity string
 	// Ports, Threads, Tries and Pause are the pool this job runs on, and the
 	// four things about it that can still be changed. Everything above them is what
 	// the job is: the depth, the country and the filter are settled by the work
@@ -250,6 +261,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Country:     sum.Country,
 			Language:    sum.Language,
 			Device:      device,
+			Identity:    identityOf(sum.Browser, sum.OS, sum.Release),
 			Profiles:    profilesOffered(s.profilesFor(r), sum.ProfileID),
 			Ports:       sum.Ports,
 			Threads:     sum.Threads,
@@ -472,4 +484,35 @@ func (s *Server) profilesFor(r *http.Request) []store.Profile {
 		return nil
 	}
 	return all
+}
+
+// identityOf writes out what a job's ports were made of, and nothing at all
+// for a job that named none of it.
+//
+// The words are the matrix's own, spelled the way the form offers them. A part
+// the job did not name is left out rather than written as "any": this line is
+// read beside the others, and "Chrome · any" invites the question of what the
+// rest was, which is the one thing nobody chose.
+func identityOf(browser, os string, release int) string {
+	var parts []string
+	if browser != "" {
+		name := writtenOut(browser)
+		if release > 0 {
+			name = fmt.Sprintf("%s %d", name, release)
+		}
+		parts = append(parts, name)
+	}
+	if os != "" {
+		parts = append(parts, writtenOut(os))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// writtenOut is how one of the matrix's words is spelled on a screen, falling
+// back to the word itself.
+func writtenOut(code string) string {
+	if name, known := writtenAs[code]; known {
+		return name
+	}
+	return code
 }

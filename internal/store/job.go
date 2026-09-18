@@ -155,6 +155,28 @@ type JobSpec struct {
 	// there is no number of ports per thread to name — and the screen that
 	// offers it says so by refusing the box.
 	WholePool bool
+	// Browser, OS and Release name the identity this job's ports wear: a browser
+	// ("chrome"), a system ("windows"), and a release number (153).
+	//
+	// Nothing named is what every job written before this existed carries, and
+	// it is the default a form offers: the ports are then spread over every
+	// browser and system this program knows, at the newest few releases the
+	// service holds. What that is for is that three hundred ports which are all
+	// the newest Chrome on Windows are one identity three hundred times over.
+	// Naming one of the three narrows the spread; naming all three runs the job
+	// on a single identity.
+	//
+	// A release of nought is the newest the service holds, which is a different
+	// thing from a release nobody has: a number written here a month ago names a
+	// build that has since been replaced, and a filter naming a build the
+	// service does not hold is a filter that quietly matches something else.
+	//
+	// They are the job's and not the profile's because they belong with Device
+	// rather than with the proxies: which browser asked is part of what the
+	// results are, and Google answers a phone differently from a desktop.
+	Browser string
+	OS      string
+	Release int
 	// Fields is what each result of this job keeps. Empty is everything, which
 	// is what a job that never chose means and what every job written before the
 	// choice existed carries.
@@ -261,11 +283,12 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, whole_pool, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, whole_pool, browser, os, browser_release, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
 		spec.Device, spec.Country, spec.Language, ports, threads, tries,
-		spec.Cooldown.Milliseconds(), string(spec.Fields), spec.ProfileID, spec.WholePool)
+		spec.Cooldown.Milliseconds(), string(spec.Fields), spec.ProfileID, spec.WholePool,
+		spec.Browser, spec.OS, spec.Release)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -369,14 +392,15 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 	// has to know which unit the column is written in.
 	var cooldownMS int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, whole_pool
+		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, whole_pool, browser, os, browser_release
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
 			&j.Spec.Device, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads,
-			&j.Spec.Tries, &cooldownMS, &j.Spec.Fields, &j.Spec.ProfileID, &j.Spec.WholePool)
+			&j.Spec.Tries, &cooldownMS, &j.Spec.Fields, &j.Spec.ProfileID, &j.Spec.WholePool,
+			&j.Spec.Browser, &j.Spec.OS, &j.Spec.Release)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}

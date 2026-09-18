@@ -140,20 +140,46 @@ func (e *poolEngine) Pool() poolFacts {
 	return poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown(), Pool: e.pool}
 }
 
+// Wanted is everything one job asks of the identities it will run on.
+//
+// It is one struct rather than eight arguments because most of them are the
+// same shape: three strings, two booleans and two numbers, in an order nothing
+// enforces. A caller handing the device where the browser goes, or the whole
+// list where the addresses go, would compile and would be found by whoever read
+// the trace of a run that came out wrong.
+//
+// The numbers are the job's own, already stood in for where the job named
+// nothing, so whatever is behind this is told a size it can act on rather than
+// a zero it has to interpret a second time.
+type Wanted struct {
+	// Profile is where the exits come from. It is passed rather than looked up
+	// behind this: which addresses a job runs through is a property of the job,
+	// read once when its turn comes, so a profile edited between two jobs takes
+	// effect on the second and not in the middle of the first.
+	Profile store.Profile
+	Ports   int
+	Threads int
+	// Device is which kind of result page the job asks Google for, and Worn is
+	// what its ports are made of within that. The zero Worn is every browser
+	// and system this program knows, which is what a job that named none of
+	// them asked for.
+	Device string
+	Worn   blanktrail.Worn
+	// Cooldown is the gap the job leaves between two requests on one identity.
+	Cooldown time.Duration
+	// WholePool says the job spends the whole proxy list rather than a fixed
+	// number of ports, and Addresses that it keeps the address of each result —
+	// which is what decides whether the second set of ports is worth opening at
+	// all.
+	WholePool bool
+	Addresses bool
+}
+
 // Dial raises the identities one job asked to run on.
 //
-// The two numbers are that job's own, already stood in for where the job named
-// nothing, so whatever is behind this is told a size it can act on rather than a
-// zero it has to interpret a second time.
-//
-// The context is the job's: a job stopped while its pool is still going up stops
-// there, rather than after ports it will never use have been opened.
-//
-// The profile is where the exits come from, and it is passed rather than looked
-// up behind this: which addresses a job runs through is a property of the job,
-// read once when its turn comes, so a profile edited between two jobs takes
-// effect on the second and not in the middle of the first.
-type Dial func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (engine, error)
+// The context is the job's: a job stopped while its pool is still going up
+// stops there, rather than after ports it will never use have been opened.
+type Dial func(ctx context.Context, want Wanted) (engine, error)
 
 // Identities are the ports one job runs on.
 //
@@ -179,7 +205,7 @@ type Identities struct {
 // command that starts this server, and an interface with a second opinion about
 // that would give a job set up here a different cost from the same job set up
 // there.
-type OpenPool func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (Identities, error)
+type OpenPool func(ctx context.Context, want Wanted) (Identities, error)
 
 // source is where the pool for the next job comes from.
 //
@@ -204,10 +230,8 @@ func standing(eng engine) source {
 		return source{}
 	}
 	return source{
-		raise: func(context.Context, store.Profile, int, int, string, time.Duration, bool, bool) (engine, error) {
-			return eng, nil
-		},
-		held: eng,
+		raise: func(context.Context, Wanted) (engine, error) { return eng, nil },
+		held:  eng,
 	}
 }
 
@@ -216,8 +240,8 @@ func dialing(open OpenPool, watch run.Watch) source {
 	if open == nil {
 		return source{}
 	}
-	return source{raise: func(ctx context.Context, prof store.Profile, ports, threads int, device string, cooldown time.Duration, wholePool, wantsAddresses bool) (engine, error) {
-		want, err := open(ctx, prof, ports, threads, device, cooldown, wholePool, wantsAddresses)
+	return source{raise: func(ctx context.Context, asked Wanted) (engine, error) {
+		want, err := open(ctx, asked)
 		if err != nil {
 			return nil, err
 		}
@@ -232,7 +256,7 @@ func dialing(open OpenPool, watch run.Watch) source {
 		// estimate: two answers to how wide this job runs would put a figure on the
 		// screen that no run ever matched.
 		return &poolEngine{pool: want.Search, addresses: want.Addresses,
-			threads: threads, watch: watch}, nil
+			threads: asked.Threads, watch: watch}, nil
 	}}
 }
 
@@ -791,7 +815,16 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 		defaults := store.NewProfile()
 		prof.VDNSMode, prof.Solver, prof.HTTP3 = defaults.VDNSMode, defaults.Solver, defaults.HTTP3
 	}
-	eng, err := src.raise(ctx, prof, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown, sum.WholePool, sum.Fields.Keeps(store.FieldURL))
+	eng, err := src.raise(ctx, Wanted{
+		Profile:   prof,
+		Ports:     asked(sum.Ports, v.ports),
+		Threads:   asked(sum.Threads, v.threads),
+		Device:    sum.Device,
+		Worn:      blanktrail.Worn{Browser: sum.Browser, OS: sum.OS, Release: sum.Release},
+		Cooldown:  sum.Cooldown,
+		WholePool: sum.WholePool,
+		Addresses: sum.Fields.Keeps(store.FieldURL),
+	})
 	if err != nil {
 		return nil, err
 	}

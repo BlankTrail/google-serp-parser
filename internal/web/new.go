@@ -52,6 +52,17 @@ type jobForm struct {
 	// set, and the form refuses that box rather than leaving a number on it
 	// that nothing will read.
 	WholePool bool
+	// Browser, OS and Release are the identity this job's ports wear. Nothing
+	// named in any of the three is the spread over every browser and system
+	// this program knows, which is the default and what most jobs should run
+	// on; naming all three runs the whole job on one identity.
+	//
+	// Release is a number because that is what a browser filter carries — the
+	// service reads "chrome_153" as the browser and the release — and nought is
+	// the newest it holds rather than a release nobody has.
+	Browser string
+	OS      string
+	Release int
 	// Cooldown is how long one identity rests between two requests, in seconds,
 	// because that is the unit a person setting it thinks in. Nought is a job
 	// that named none, and the pool then works one out from its own size.
@@ -352,6 +363,22 @@ func (f jobForm) faults() []string {
 	if f.depth() < 1 {
 		complaints = append(complaints, "form.pages.positive")
 	}
+	// An identity that never existed is refused here, because this is the only
+	// place that can see both halves of it. Safari on Windows is the pair
+	// somebody will actually pick out of two boxes, and a run on it goes out
+	// saying it is a browser that does not ship there — which is the one thing
+	// a fingerprint must never say. Opened, it would be a port under a profile
+	// the service had to invent.
+	if !blanktrail.Ships(f.Device, f.Browser, f.OS) {
+		complaints = append(complaints, "form.identity.unknown")
+	}
+	// A release with no browser to be a release of is the same kind of fault
+	// from the other side: the number reaches the service as part of a browser
+	// name, so with no browser named there is nowhere for it to go and it would
+	// be dropped without a word.
+	if f.Release != 0 && strings.TrimSpace(f.Browser) == "" {
+		complaints = append(complaints, "form.release.needsabrowser")
+	}
 	complaints = append(complaints, f.keepFaults()...)
 	return complaints
 }
@@ -417,6 +444,9 @@ func (f jobForm) spec() store.JobSpec {
 		Country:   f.Country,
 		Language:  f.Language,
 		Device:    f.Device,
+		Browser:   f.Browser,
+		OS:        f.OS,
+		Release:   f.Release,
 		Ports:     f.Ports,
 		Threads:   f.Threads,
 		Tries:     f.Tries,
@@ -443,6 +473,9 @@ func formOf(r *http.Request) jobForm {
 		Country:   strings.TrimSpace(r.FormValue("country")),
 		Language:  strings.TrimSpace(r.FormValue("language")),
 		Device:    strings.TrimSpace(r.FormValue("device")),
+		Browser:   strings.TrimSpace(r.FormValue("browser")),
+		OS:        strings.TrimSpace(r.FormValue("os")),
+		Release:   atoi("release"),
 		Pages:     atoi("pages"),
 		Threads:   atoi("threads"),
 		Ports:     atoi("ports"),
@@ -482,6 +515,12 @@ type newPage struct {
 	// where the reader learns that the choice exists at all, and that the exits
 	// are set on the proxies screen rather than here.
 	Profiles []profileChoice
+	// Browsers and Systems are the identity the ports are opened under, and the
+	// lists are the matrix itself: a screen cannot offer a browser no port
+	// would ever be opened for. Each has an empty first entry, which is the
+	// spread over all of them and is what the form starts on.
+	Browsers []named
+	Systems  []named
 	// Countries and Languages are what the two boxes offer when they are
 	// clicked. They are a shortcut and not a gate — the boxes take a code, and
 	// anything either list leaves out can still be typed — so they are offered
@@ -586,6 +625,8 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		Kinds:      kinds(),
 		Filters:    filters(),
 		Devices:    devicesOffered(form.Device),
+		Browsers:   browsersOffered(),
+		Systems:    systemsOffered(),
 		Sources:    sources(),
 		Keeps:      keeps(form),
 		Countries:  google.Countries(),
@@ -695,4 +736,43 @@ func deviceKey(device string) (string, bool) {
 		return "form.device." + device, true
 	}
 	return device, false
+}
+
+// named is one value a chooser offers, with the name it is written by.
+//
+// The name is not a phrase in the catalogue, and the reason is that these are
+// product names: Chrome is Chrome and macOS is macOS on both of this program's
+// languages, the way the country and language lists are written in one form
+// and left there. What would go through the catalogue is a sentence about
+// them, and there is none — the label above the box is the sentence.
+type named struct {
+	Code string
+	Name string
+}
+
+// writtenAs is how the matrix's own words are spelled on a screen. A name the
+// table leaves out is offered as it is written in the matrix, so a browser
+// added there still reaches the form rather than disappearing from it.
+var writtenAs = map[string]string{
+	"chrome": "Chrome", "firefox": "Firefox", "edge": "Edge", "safari": "Safari",
+	"windows": "Windows", "macos": "macOS", "linux": "Linux",
+	"android": "Android", "ios": "iOS",
+}
+
+// browsersOffered and systemsOffered are the two identity boxes, each led by
+// the empty choice that is every one of them at once.
+func browsersOffered() []named { return offer(blanktrail.Browsers()) }
+func systemsOffered() []named  { return offer(blanktrail.Systems()) }
+
+func offer(codes []string) []named {
+	out := make([]named, 0, len(codes)+1)
+	out = append(out, named{Code: "", Name: ""})
+	for _, code := range codes {
+		name, known := writtenAs[code]
+		if !known {
+			name = code
+		}
+		out = append(out, named{Code: code, Name: name})
+	}
+	return out
 }

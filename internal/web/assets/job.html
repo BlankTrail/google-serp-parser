@@ -94,6 +94,11 @@
 <div><dt>{{.T "form.country"}}</dt><dd>{{if .Job.Country}}{{.Job.Country}}{{else}}—{{end}}</dd></div>
 <div><dt>{{.T "form.language"}}</dt><dd>{{if .Job.Language}}{{.Job.Language}}{{else}}—{{end}}</dd></div>
 <div><dt>{{.T "form.device"}}</dt><dd>{{.T .Job.Device}}</dd></div>
+{{/* What the ports were made of. A run that named nothing is drawn as a dash
+     rather than as a list of everything: the list is the same on every such
+     job, and what a reader wants from this line is whether this one was
+     pinned. */}}
+<div><dt>{{.T "form.identity"}}</dt><dd>{{if .Job.Identity}}{{.Job.Identity}}{{else}}—{{end}}</dd></div>
 </dl>
 
 {{/* The three that can still be changed, and only those. What stands above
