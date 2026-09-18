@@ -782,6 +782,15 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 	if err != nil && !errors.Is(err, store.ErrNoProfile) {
 		return nil, err
 	}
+	if prof.ID == 0 {
+		// No profile of its own, so the settings that are not about where it
+		// goes out come from the same place a new profile's do. The zero struct
+		// is not them: two of those settings are booleans whose useful answer is
+		// true, and a job falling back onto zeroes would run every search
+		// without the solver that carries it through a challenge.
+		defaults := store.NewProfile()
+		prof.VDNSMode, prof.Solver, prof.HTTP3 = defaults.VDNSMode, defaults.Solver, defaults.HTTP3
+	}
 	eng, err := src.raise(ctx, prof, asked(sum.Ports, v.ports), asked(sum.Threads, v.threads), sum.Device, sum.Cooldown, sum.WholePool, sum.Fields.Keeps(store.FieldURL))
 	if err != nil {
 		return nil, err

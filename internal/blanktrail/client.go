@@ -171,6 +171,17 @@ type PortSpec struct {
 
 	LeakGuard string // "", off, warn, enforce
 
+	// VDNSMode is where a port resolves names: "" for the service's own answer
+	// — on where the port has a tunnel, off where it does not — "on_leak" for
+	// only when the exit would leak the query, "forced" always, and "off"
+	// never.
+	//
+	// Empty is not the same as "off", and the difference is the whole point of
+	// the thing: a port resolving through this machine while its traffic leaves
+	// from somewhere else is a request that says two different things about
+	// where it came from.
+	VDNSMode string
+
 	// UpstreamTLSInsecure trusts a self-signed certificate on an https:// proxy.
 	// It has no effect on any other scheme: the certificate it is about belongs
 	// to the leg between this control service and the proxy itself, which only
@@ -317,6 +328,7 @@ type openPortRequest struct {
 	RequestTimeoutSeconds *int    `json:"request_timeout_seconds,omitempty"`
 	TimeoutSeconds        *int    `json:"timeout_seconds,omitempty"`
 	LeakGuard             string  `json:"leak_guard,omitempty"`
+	VDNSMode              string  `json:"vdns_mode,omitempty"`
 	UpstreamTLSInsecure   *bool   `json:"upstream_tls_insecure,omitempty"`
 	AllowMITMUpstream     *bool   `json:"allow_mitm_upstream,omitempty"`
 }
@@ -341,6 +353,7 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 		ForceIPv4Egress: &v4,
 		InjectECS:       &ecs,
 		LeakGuard:       s.LeakGuard,
+		VDNSMode:        s.VDNSMode,
 	}
 	if s.UpstreamTLSInsecure {
 		v := true

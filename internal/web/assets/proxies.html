@@ -212,6 +212,26 @@
 </select>
 </div>
 </div>
+{{/* What the ports of this profile are made of, beyond where they go out. The
+     three are the service's own settings on a port, and they are here rather
+     than on a job because they belong to the exits: a profile going out through
+     a list of proxies and one going out through gateways want different answers
+     to all three. */}}
+<div class="row">
+<div class="field">
+<label for="vdns_mode">{{.T "proxies.vdns"}}</label>
+<select id="vdns_mode" name="vdns_mode">
+{{range .VDNSModes}}<option value="{{.Code}}"{{if eq $.Form.VDNS .Code}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+<label class="under"><input name="js_solver" type="checkbox" value="1"{{if .Form.Solver}} checked{{end}}> {{.T "proxies.solver"}}</label>
+<label class="under"><input name="http3" type="checkbox" value="1"{{if .Form.HTTP3}} checked{{end}}> {{.T "proxies.http3"}}</label>
+</div>
+</div>
+<ul class="notes">
+<li>{{.T "proxies.vdns.why"}}</li>
+<li>{{.T "proxies.solver.why"}}</li>
+<li>{{.T "proxies.http3.why"}}</li>
+</ul>
 {{/* The configurations the service holds, ticked one by one or by the
      subscription they arrived with. They are drawn only when the saved source
      is the gateways: this screen redraws itself every few seconds while a job

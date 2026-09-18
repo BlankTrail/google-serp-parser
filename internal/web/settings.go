@@ -39,6 +39,10 @@ const (
 	sourceField  = "source"
 	whereField   = "source_at"
 	refreshField = "source_refresh"
+	// What the ports of a profile are made of, beyond where they go out.
+	vdnsField   = "vdns_mode"
+	solverField = "js_solver"
+	http3Field  = "http3"
 	// The two the profiles brought: which profile a form is about, and what it
 	// is called.
 	profileField = "profile"

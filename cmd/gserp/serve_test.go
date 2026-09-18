@@ -1397,7 +1397,7 @@ func TestDial_OpensPlainPortsForTheAddressesOnlyOnceOneHasToBeRead(t *testing.T)
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	saved, _ := opts.saved(io.Discard)
 
-	want, err := opts.dial(t.Context(), saved, store.Profile{}, 1, 2, blanktrail.DeviceDesktop, 0, false, true)
+	want, err := opts.dial(t.Context(), saved, store.NewProfile(), 1, 2, blanktrail.DeviceDesktop, 0, false, true)
 	if err != nil {
 		t.Fatalf("opening the identities of a job that keeps addresses: %v", err)
 	}
@@ -1464,5 +1464,49 @@ func TestDial_OpensNoAddressPortsForAJobThatKeepsNone(t *testing.T) {
 	}
 	if got := len(fake.OpenPorts()); got != 2 {
 		t.Errorf("%d ports are open, want the two the searches run on", got)
+	}
+}
+
+func TestDial_OpensThePortsThisProfileSaysToOpen(t *testing.T) {
+	// Three settings the service takes on a port, and they belong to the
+	// profile: a set of exits going out through a list of proxies and one going
+	// out through gateways want different answers to all three. A profile that
+	// held them and a pool that opened ports without them would be a screen
+	// saying one thing and a run doing another.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	saved, _ := opts.saved(io.Discard)
+
+	prof := store.NewProfile()
+	prof.Name = "exits"
+	prof.VDNSMode = blanktrail.VDNSForced
+	prof.Solver = false
+	prof.HTTP3 = true
+
+	want, err := opts.dial(t.Context(), saved, prof, 1, 1, blanktrail.DeviceDesktop, 0, false, false)
+	if err != nil {
+		t.Fatalf("opening the identities: %v", err)
+	}
+	t.Cleanup(func() { _ = want.Search.Close() })
+
+	var opened int
+	for _, r := range fake.Requests() {
+		if r.Path != "/api/v1/ports/open" {
+			continue
+		}
+		opened++
+		for _, said := range []string{
+			`"js_solver":false`,
+			`"enable_http3":true`,
+			`"vdns_mode":"forced"`,
+		} {
+			if !strings.Contains(r.Body, said) {
+				t.Errorf("a port was opened without %s: %s", said, r.Body)
+			}
+		}
+	}
+	if opened == 0 {
+		t.Fatal("no port was opened at all")
 	}
 }

@@ -40,7 +40,24 @@ type profileForm struct {
 	// Gateways are the configuration names ticked, when the source is the
 	// gateways.
 	Gateways []string
+
+	// What the ports of this profile are made of, beyond where they go out.
+	// VDNS is where they resolve names, Solver says the challenge solver is on
+	// them, and HTTP3 lets them re-originate over HTTP/3.
+	VDNS   string
+	Solver bool
+	HTTP3  bool
 }
+
+// newProfile is the profile a form that is making one is laid over.
+//
+// It is not the zero value, and the difference is the solver: a profile written
+// from zeroes would have it off, because that is what a false boolean is, and
+// the one place that says it should be on — the column's own default — is not
+// consulted by a row this program hands over whole. A search Google challenges
+// produces nothing without the solver, so off is a decision somebody makes and
+// not one a zero value makes for them.
+func newProfile() store.Profile { return store.NewProfile() }
 
 // profileShowing is a profile as the boxes that would hold it.
 func profileShowing(p store.Profile) profileForm {
@@ -55,6 +72,9 @@ func profileShowing(p store.Profile) profileForm {
 		PerUpstream: strconv.Itoa(atLeastOne(p.ThreadsPerUpstream)),
 		Wire:        blanktrail.ProtocolOr(p.Protocol),
 		Gateways:    p.Gateways,
+		VDNS:        p.VDNSMode,
+		Solver:      p.Solver,
+		HTTP3:       p.HTTP3,
 	}
 }
 
@@ -71,6 +91,11 @@ func profileFrom(r former) profileForm {
 		Renew:       strings.TrimSpace(r.FormValue(renewField)),
 		PerUpstream: strings.TrimSpace(r.FormValue(perUpField)),
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
+		// These three are on the form whenever it is shown, so a box that sent
+		// nothing is a box somebody unticked rather than one that was not there.
+		VDNS:   strings.TrimSpace(r.FormValue(vdnsField)),
+		Solver: r.FormValue(solverField) != "",
+		HTTP3:  r.FormValue(http3Field) != "",
 	}
 }
 
@@ -89,6 +114,14 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 		b.complaints = append(b.complaints, "proxies.profile.needs.name")
 	}
 	next.Protocol = blanktrail.ProtocolOr(f.Wire)
+	next.Solver, next.HTTP3 = f.Solver, f.HTTP3
+	if next.VDNSMode = f.VDNS; !blanktrail.KnownVDNSMode(next.VDNSMode) {
+		// Refused here rather than sent on: the service answers an unknown mode
+		// with a refusal naming the four it takes, and a port that will not open
+		// because a form let a typo through is a fault a long way from its cause.
+		next.VDNSMode = p.VDNSMode
+		b.complaints = append(b.complaints, "proxies.vdns.unknown")
+	}
 	// One is the floor rather than the default alone: nought identities through
 	// an egress is a pool that hands out nothing at all.
 	next.ThreadsPerUpstream = atLeastOne(b.none(f.PerUpstream, p.ThreadsPerUpstream, "settings.perupstream.count"))

@@ -536,6 +536,10 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, prof st
 	}
 	cfg := poolConfig(threads, ports, wholePool)
 	cfg.Spec.Protocol = prof.Protocol
+	// What this profile's ports are made of, beyond where they go out.
+	cfg.Spec.VDNSMode = prof.VDNSMode
+	cfg.Spec.JSSolver = prof.Solver
+	cfg.Spec.EnableHTTP3 = prof.HTTP3
 	cfg.MaxPerUpstream = prof.ThreadsPerUpstream
 	cfg.RenewAfterInterval = prof.RenewEvery
 	// Which kind of result page this job asked for. Desktop opens every port
@@ -756,6 +760,8 @@ func theFirstProfile(saved settings.Settings, hadSettings bool) store.Profile {
 	if !hadSettings {
 		saved = settings.Defaults()
 	}
+	first := store.NewProfile()
+	first.Name = firstProfileName
 	return store.Profile{
 		Name:               firstProfileName,
 		Kind:               saved.Proxy.Kind,
@@ -767,6 +773,13 @@ func theFirstProfile(saved settings.Settings, hadSettings bool) store.Profile {
 		Protocol:           saved.PortProtocol,
 		Gateways:           saved.Proxy.Gateways,
 		Default:            true,
+		// What the ports of it are made of, from the one place those answers
+		// live: a false boolean is a decision, and the one a zero struct makes
+		// here is to run every search without the thing that carries it through
+		// a challenge.
+		VDNSMode: first.VDNSMode,
+		Solver:   first.Solver,
+		HTTP3:    first.HTTP3,
 	}
 }
 

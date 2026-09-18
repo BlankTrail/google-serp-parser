@@ -130,6 +130,9 @@ type proxiesPage struct {
 	// list, and a reading that sent them to another screen to act on it would be
 	// a reading nobody acts on.
 	Form profileForm
+	// VDNSModes are the four answers to where a port resolves names, each with
+	// the phrase the screen says it in.
+	VDNSModes []labelled
 	// Profiles are the named sets of exits this machine has, the default one
 	// first, and they stand above everything else on the screen. Which addresses
 	// the work goes out through is the first thing to set up and the first thing
@@ -184,6 +187,28 @@ type profileRow struct {
 	// named none runs through; Editing marks the one the form below is showing.
 	Default bool
 	Editing bool
+}
+
+// labelled is one value a chooser offers: what it sets, and the phrase the
+// screen says it in.
+type labelled struct {
+	Code  string
+	Label string
+}
+
+// vdnsOffered is the four answers to where a port resolves names, in the order
+// the form offers them. The automatic one is first because it is the one nobody
+// has to think about.
+func vdnsOffered() []labelled {
+	out := make([]labelled, 0, len(blanktrail.VDNSModes()))
+	for _, mode := range blanktrail.VDNSModes() {
+		name := mode
+		if name == blanktrail.VDNSAuto {
+			name = "auto"
+		}
+		out = append(out, labelled{Code: mode, Label: "proxies.vdns." + name})
+	}
+	return out
 }
 
 // profileRows are the profiles as the list draws them.
@@ -290,6 +315,7 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 		view.Form.Source = sourceFile
 	}
 	view.Sources = sourcesOffered(view.Form.Source)
+	view.VDNSModes = vdnsOffered()
 	view.OnGateways = view.Form.Source == sourceGateways
 	if view.OnGateways {
 		if list, taken, err := s.askForGateways(r.Context(), saved, false); err != nil {
@@ -346,7 +372,7 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 	form := profileFrom(r)
 	form.Gateways = ticked(r, gatewayField)
 
-	was := store.Profile{}
+	was := newProfile()
 	if form.ID != 0 {
 		p, err := s.store.Profile(r.Context(), form.ID)
 		if err != nil {

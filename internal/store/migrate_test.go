@@ -109,6 +109,10 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// What a profile's ports are made of, which the sixteenth step brought.
+		`ALTER TABLE proxy_profiles DROP COLUMN http3`,
+		`ALTER TABLE proxy_profiles DROP COLUMN js_solver`,
+		`ALTER TABLE proxy_profiles DROP COLUMN vdns_mode`,
 		// Whether a job spends the whole list, which the fifteenth step brought.
 		`ALTER TABLE jobs DROP COLUMN whole_pool`,
 		// The index on the page a result belongs to, which the fourteenth step

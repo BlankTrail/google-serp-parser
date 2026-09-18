@@ -64,6 +64,47 @@ type Profile struct {
 	// Default marks the one profile the warm identities are raised on, that the
 	// API's own search goes through, and that a job naming none runs on.
 	Default bool
+
+	// VDNSMode is where a port of this profile resolves names: empty for the
+	// proxy's own answer — on where the port has a tunnel, off where it does
+	// not — "on_leak" for only when the exit would leak the query, "forced"
+	// always, and "off" never.
+	//
+	// Empty is the default and is not the same as "off": a port resolving
+	// through this machine while its traffic leaves somewhere else is a
+	// request that says two different things about where it is from.
+	VDNSMode string
+	// Solver says the challenge solver is on this profile's ports. It is on by
+	// default, because a search Google challenges is a search that produces
+	// nothing without it — and off is for ports that carry something else, where
+	// a licensed solver process spent on them is one a search cannot have.
+	Solver bool
+	// HTTP3 lets a port re-originate over HTTP/3 where the target offers it.
+	//
+	// Off by default, and the reason is the egress rather than the setting: the
+	// proxy re-originates over HTTP/3 only on an egress that can carry UDP,
+	// which a SOCKS5 upstream from a list is not. On a profile that goes out
+	// through such a list it is a switch with nothing behind it.
+	HTTP3 bool
+}
+
+// NewProfile is a profile with nothing named and everything else as it ships.
+//
+// It exists because two of this profile's settings are booleans whose useful
+// default is true, and a zero value says false. Every place that needs "a
+// profile nobody has filled in" — a form making one, a job whose profile was
+// deleted, the first profile a fresh machine writes — has to start from the
+// same three answers, and a zero struct is not them: it would run every search
+// without the solver that carries it through a challenge, and nothing on any
+// screen would say so.
+func NewProfile() Profile {
+	return Profile{
+		// Empty is the service's own answer to where names are resolved: through
+		// the exit where the port has one, here where it has none.
+		VDNSMode: "",
+		Solver:   true,
+		HTTP3:    false,
+	}
 }
 
 // Empty reports whether this profile names no way out at all, so a job run on
@@ -96,7 +137,8 @@ func (p Profile) Empty() bool {
 // column added to the table cannot be added to one query and forgotten in
 // another.
 const profileColumns = `id, name, kind, location, refresh_ms, ban_ms,
-	threads_per_upstream, renew_ms, protocol, gateways, is_default`
+	threads_per_upstream, renew_ms, protocol, gateways, is_default,
+	vdns_mode, js_solver, http3`
 
 // scanProfile reads one row in the order profileColumns names.
 func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
@@ -104,7 +146,8 @@ func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
 	var refreshMS, banMS, renewMS int64
 	var gateways string
 	if err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.Location, &refreshMS, &banMS,
-		&p.ThreadsPerUpstream, &renewMS, &p.Protocol, &gateways, &p.Default); err != nil {
+		&p.ThreadsPerUpstream, &renewMS, &p.Protocol, &gateways, &p.Default,
+		&p.VDNSMode, &p.Solver, &p.HTTP3); err != nil {
 		return Profile{}, err
 	}
 	p.Refresh = time.Duration(refreshMS) * time.Millisecond
@@ -242,11 +285,13 @@ func (s *Store) CreateProfile(ctx context.Context, p Profile) (int64, error) {
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
-			threads_per_upstream, renew_ms, protocol, gateways, is_default)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			threads_per_upstream, renew_ms, protocol, gateways, is_default,
+			vdns_mode, js_solver, http3)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
-		p.RenewEvery.Milliseconds(), p.Protocol, gatewayLines(p.Gateways), p.Default)
+		p.RenewEvery.Milliseconds(), p.Protocol, gatewayLines(p.Gateways), p.Default,
+		p.VDNSMode, p.Solver, p.HTTP3)
 	if err != nil {
 		return 0, nameOr(err, "store: writing a proxy profile")
 	}
@@ -316,11 +361,12 @@ func (s *Store) SaveProfile(ctx context.Context, p Profile) error {
 		UPDATE proxy_profiles
 		   SET name = ?, kind = ?, location = ?, refresh_ms = ?, ban_ms = ?,
 		       threads_per_upstream = ?, renew_ms = ?, protocol = ?, gateways = ?,
-		       is_default = ?
+		       is_default = ?, vdns_mode = ?, js_solver = ?, http3 = ?
 		 WHERE id = ?`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
-		p.RenewEvery.Milliseconds(), p.Protocol, gatewayLines(p.Gateways), p.Default, p.ID)
+		p.RenewEvery.Milliseconds(), p.Protocol, gatewayLines(p.Gateways), p.Default,
+		p.VDNSMode, p.Solver, p.HTTP3, p.ID)
 	if err != nil {
 		return nameOr(err, fmt.Sprintf("store: saving proxy profile %d", p.ID))
 	}

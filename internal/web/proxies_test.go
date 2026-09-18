@@ -694,3 +694,56 @@ func TestProxies_MovesTheDefaultMarkAndRefusesToDeleteTheLast(t *testing.T) {
 		t.Errorf("%d profiles after the refusal, want the one that was kept", len(all))
 	}
 }
+
+func TestProfileForm_OffersWhatThePortsAreMadeOfBeyondWhereTheyGoOut(t *testing.T) {
+	// Three settings the service takes when a port is opened, and which this
+	// program never offered: where a port resolves names, whether the challenge
+	// solver is on it, and whether it may re-originate over HTTP/3.
+	//
+	// They are on the profile rather than on a job because they belong to the
+	// exits: a profile going out through a list of proxies and one going out
+	// through gateways want different answers to all three.
+	s := testServer(t)
+	fresh := store.NewProfile()
+	fresh.Name = "exits"
+	if _, err := s.store.CreateProfile(t.Context(), fresh); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	all, err := s.store.Profiles(t.Context())
+	if err != nil || len(all) == 0 {
+		t.Fatalf("Profiles: %v, %d", err, len(all))
+	}
+
+	body := get(t, s, proxiesAt+"?"+profileField+"="+strconv.FormatInt(all[0].ID, 10)).Body.String()
+	for _, want := range []string{
+		`name="vdns_mode"`, `name="js_solver"`, `name="http3"`,
+		`value="on_leak"`, `value="forced"`, `value="off"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the profile form offers no %s", want)
+		}
+	}
+	// The solver is ticked, because that is what a profile ships as.
+	at := strings.Index(body, `name="js_solver"`)
+	if at < 0 {
+		t.Fatal("no solver box at all")
+	}
+	if box := body[at : at+strings.Index(body[at:], ">")]; !strings.Contains(box, "checked") {
+		t.Errorf("the solver box is offered as %q, want it ticked on a new profile", box)
+	}
+}
+
+func TestNewProfile_TurnsTheSolverOnRatherThanLeavingItToAZeroValue(t *testing.T) {
+	// A false boolean is a decision, and the one a zero struct makes here is to
+	// run every search without the thing that carries it through a challenge.
+	// Every place that needs "a profile nobody has filled in" starts here.
+	if got := store.NewProfile(); !got.Solver {
+		t.Error("a profile nobody has filled in runs without the challenge solver")
+	}
+	if got := store.NewProfile(); got.HTTP3 {
+		t.Error("a profile nobody has filled in allows HTTP/3, which its egress cannot carry")
+	}
+	if got := store.NewProfile(); got.VDNSMode != "" {
+		t.Errorf("a profile nobody has filled in resolves names as %q, want the service's own answer", got.VDNSMode)
+	}
+}
