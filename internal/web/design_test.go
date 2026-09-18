@@ -657,7 +657,11 @@ func TestStyles_LetEveryBoxNarrowWithTheWindow(t *testing.T) {
 }
 
 // formPages are the two screens a reader fills in rather than reads.
-var formPages = []string{"assets/new.html", "assets/proxies.html"}
+var formPages = []string{
+	"assets/new.html", "assets/proxies.html",
+	"assets/settings.html", "assets/job.html",
+	"assets/history.html",
+}
 
 func TestForms_FoldTheirExplanationsRatherThanPrintingThemUnderEveryBox(t *testing.T) {
 	// Every note this interface had was printed under the boxes it was about,

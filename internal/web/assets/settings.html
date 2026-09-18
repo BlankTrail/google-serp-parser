@@ -49,10 +49,12 @@
      characters, which name it and cannot be used as it, and they are shown
      beside the box rather than in it: a value in the box is a value the next
      save would write back as the key itself. */}}
-<input id="api_key" name="api_key" type="password" value="" autocomplete="off">
+<input id="api_key" name="api_key" type="password" value="" autocomplete="off"
+       placeholder="{{.T "settings.key.keep"}}">
 </div>
+{{/* What is saved, by the few characters that name it. It stays in the open
+     because it is the state of this machine rather than an explanation. */}}
 {{if .KeyTail}}<p class="empty">{{.T "settings.key.saved"}} {{.KeyTail}}</p>{{end}}
-<p class="empty">{{.T "settings.key.keep"}}</p>
 </fieldset>
 
 {{/* The identities this machine keeps open between jobs. What it buys is
@@ -74,7 +76,10 @@
 {{end}}</select>
 </div>
 </div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
 <p class="empty">{{.T "settings.hot.why"}}</p>
+</details>
 </fieldset>
 
 {{/* Reaching the interface from another machine. It is off, and it is off
@@ -83,9 +88,9 @@
      and everything every job has collected. */}}
 <fieldset>
 <legend>{{.T "settings.lan"}}</legend>
-<div class="row">
+<div class="row aligned">
 <div class="field">
-<label for="lan_access">
+<label class="switch" for="lan_access">
 <input id="lan_access" name="lan_access" type="checkbox" value="1"{{if .Form.LAN}} checked{{end}}>
 {{.T "settings.lan.open"}}</label>
 </div>
@@ -95,12 +100,16 @@
 </div>
 </div>
 {{if .Form.LANLocked}}<p class="empty">{{.T "settings.lan.saved"}}</p>{{end}}
-<p class="empty">{{.T "settings.lan.why"}}</p>
 <p class="empty">{{.T "settings.lan.plain"}}</p>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<p class="empty">{{.T "settings.lan.why"}}</p>
+</details>
 </fieldset>
 
-<fieldset>
-<legend>{{.T "settings.language"}}</legend>
+{{/* One setting, standing on its own rather than inside a group: a box
+     labelled "language" inside a group called "language" is the same word twice
+     in an inch. */}}
 <div class="field">
 <label for="language">{{.T "settings.language"}}</label>
 {{/* Each language is offered by the name it calls itself: whoever is choosing
@@ -114,13 +123,12 @@
 {{range .Tongues}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{if .Name}}{{.Name}}{{else}}{{$.T .Key}}{{end}}</option>
 {{end}}</select>
 </div>
-</fieldset>
 
 {{/* Two presses: save what is on the screen, and check it without saving it.
      The check carries the same boxes to a different address rather than living
      in a form of its own, so what is checked is what is on the screen. */}}
 <div class="actions">
-<button type="submit">{{.T "settings.save"}}</button>
+<button type="submit" class="primary">{{.T "settings.save"}}</button>
 <button type="submit" formaction="/settings/check">{{.T "settings.check"}}</button>
 </div>
 

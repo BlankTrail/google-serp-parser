@@ -638,6 +638,12 @@ legend {
 	flex: 3 1 22rem;
 }
 
+/* And the other way: a box that holds one character is not a box the width of
+   the card. */
+input.narrow {
+	max-width: 5rem;
+}
+
 /* Boxes that belong together stand together and wrap as one line runs out. */
 /* Aligned to the top rather than the bottom, so the labels of a row line up
    with each other. Bottom alignment lines up the boxes instead, which is the

@@ -112,6 +112,8 @@
      than only on the form that sets a job up, because the answer changes: a
      list that was refused all afternoon is a job to point somewhere else and
      carry on, not a job to set up again. */}}
+<fieldset>
+<legend>{{.T "job.reshape.group"}}</legend>
 {{if .Job.Profiles}}<div class="row">
 <div class="field">
 <label for="profile">{{.T "form.profile"}}</label>
@@ -139,11 +141,19 @@
 <input id="cooldown" name="cooldown" type="number" min="0" value="{{.Job.Pause}}">
 </div>
 </div>
-<div class="actions"><button type="submit">{{.T "job.reshape"}}</button></div>
-<p class="empty">{{.T "job.reshape.why"}}</p>
-<p class="empty">{{.T "job.reshape.total"}}</p>
-<p class="empty">{{.T "form.wholepool.why"}}</p>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<ul class="notes">
+<li>{{.T "job.reshape.why"}}</li>
+<li>{{.T "job.reshape.total"}}</li>
+<li>{{.T "form.wholepool.why"}}</li>
+</ul>
+</details>
+{{/* What came of the last press. It is the answer to something the reader has
+     just done and stands in the open. */}}
 {{if .Reshaped}}<p class="empty">{{.T .Reshaped}}</p>{{end}}
+</fieldset>
+<div class="actions"><button type="submit" class="primary">{{.T "job.reshape"}}</button></div>
 </form>
 </section>
 
@@ -157,9 +167,12 @@
 <input type="hidden" name="job" value="{{.Progress.ID}}">
 <div class="field">
 <label for="sep">{{.T "job.export.sep"}}</label>
-<input id="sep" name="sep" size="4" maxlength="1" value="" placeholder="TAB">
+<input id="sep" name="sep" class="narrow" size="4" maxlength="1" value="" placeholder="TAB">
 </div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
 <p class="empty">{{.T "job.export.sep.why"}}</p>
+</details>
 <div class="actions">
 {{range .Formats}}<button type="submit" name="format" value="{{.}}">{{.}}</button>
 {{end}}</div>
