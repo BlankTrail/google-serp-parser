@@ -716,20 +716,74 @@ func TestProfileForm_OffersWhatThePortsAreMadeOfBeyondWhereTheyGoOut(t *testing.
 
 	body := get(t, s, proxiesAt+"?"+profileField+"="+strconv.FormatInt(all[0].ID, 10)).Body.String()
 	for _, want := range []string{
-		`name="vdns_mode"`, `name="js_solver"`, `name="http3"`,
-		`value="on_leak"`, `value="forced"`, `value="off"`,
+		`name="vdns"`, `name="vdns_mode"`, `name="js_solver"`, `name="http3"`,
+		`value="on_leak"`, `value="forced"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the profile form offers no %s", want)
 		}
 	}
-	// The solver is ticked, because that is what a profile ships as.
-	at := strings.Index(body, `name="js_solver"`)
-	if at < 0 {
-		t.Fatal("no solver box at all")
+	// vDNS is a switch and a list of ways of being on, not one list of four.
+	// Held in one, "off" was a fourth entry that a reader looking for it had to
+	// recognise among three phrasings of "on" — and the screenshot that came
+	// back said they had not found it.
+	if strings.Contains(body, `value="off"`) {
+		t.Error("the mode list still carries off, which is the switch beside it")
 	}
-	if box := body[at : at+strings.Index(body[at:], ">")]; !strings.Contains(box, "checked") {
-		t.Errorf("the solver box is offered as %q, want it ticked on a new profile", box)
+	// Both of the boxes a profile ships with are ticked: the solver, without
+	// which a challenged search produces nothing, and vDNS, without which the
+	// port's names are resolved somewhere other than where its traffic leaves.
+	for _, box := range []string{`name="js_solver"`, `name="vdns"`} {
+		at := strings.Index(body, box)
+		if at < 0 {
+			t.Fatalf("no %s box at all", box)
+		}
+		if tag := body[at : at+strings.Index(body[at:], ">")]; !strings.Contains(tag, "checked") {
+			t.Errorf("the %s box is offered as %q, want it ticked on a new profile", box, tag)
+		}
+	}
+	// And the mode beside the switch is the automatic one, which is the answer
+	// nobody has to think about.
+	at := strings.Index(body, `name="vdns_mode"`)
+	rest := body[at:]
+	if first := strings.Index(rest, "<option"); !strings.Contains(rest[first:first+60], "selected") {
+		t.Errorf("the mode list does not start on the automatic way: %s", rest[first:first+60])
+	}
+}
+
+func TestProfileForm_TurnsVDNSOffWithTheSwitchRatherThanWithTheList(t *testing.T) {
+	// The switch is the whole answer to whether names go through the exit. A
+	// reader who turns it off has not also said which way it should be on, and
+	// the list under it still shows whatever it was showing — so the switch has
+	// to win over it, or unticking the box would save the mode it happens to be
+	// displaying.
+	off := profileForm{Name: "exits", VDNSOn: false, VDNS: blanktrail.VDNSForced}
+	got, complaints := off.onto(store.NewProfile())
+	if len(complaints) != 0 {
+		t.Fatalf("turning vDNS off was refused: %v", complaints)
+	}
+	if got.VDNSMode != blanktrail.VDNSOff {
+		t.Errorf("the profile was saved as %q, want vDNS off", got.VDNSMode)
+	}
+
+	// And back on, at the way the list was showing.
+	on := profileForm{Name: "exits", VDNSOn: true, VDNS: blanktrail.VDNSForced}
+	if got, _ := on.onto(store.NewProfile()); got.VDNSMode != blanktrail.VDNSForced {
+		t.Errorf("the profile was saved as %q, want the way the list named", got.VDNSMode)
+	}
+
+	// A profile saved with vDNS off still shows a way of being on beside the
+	// switch, because the list is on the screen whether or not the switch is.
+	// Empty there would be a fifth entry meaning "off" in a list that no longer
+	// has one.
+	stored := store.NewProfile()
+	stored.VDNSMode = blanktrail.VDNSOff
+	shown := profileShowing(stored)
+	if shown.VDNSOn {
+		t.Error("a profile with vDNS off is drawn with the switch on")
+	}
+	if shown.VDNS != blanktrail.VDNSAuto {
+		t.Errorf("the list beside the off switch shows %q, want the automatic way", shown.VDNS)
 	}
 }
 

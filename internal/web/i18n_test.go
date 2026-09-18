@@ -47,6 +47,11 @@ var sameInBoth = map[string]bool{
 	"settings.source.form.after":  true,
 	"settings.source.form.before": true,
 	"settings.source.form.at":     true,
+	// Two settings of the service, named on its own screens by these words in
+	// every language it is shipped in. An operator who has turned Challenge
+	// Breaker on there is looking for the same two words here.
+	"proxies.solver": true,
+	"proxies.http3":  true,
 }
 
 func TestCatalogue_SaysNothingTwiceTheSameWay(t *testing.T) {

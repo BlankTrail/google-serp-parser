@@ -558,6 +558,86 @@ legend {
 	gap: 0.85rem;
 }
 
+/* A form's own explanation, folded away.
+
+   Every note this interface has was printed under the boxes it was about, and
+   on a screen with a dozen settings that is a page of prose a reader scrolls
+   past every time to reach a number they came to change. Folded, the settings
+   fit on one screen and the prose is a click away for whoever has not met one
+   before — which is once, and not on every visit afterwards.
+
+   It is a details element and not a script: the browser already has this
+   control, it works before a line of JavaScript has run, and it is the one the
+   reader's own machine draws. */
+.help {
+	font-size: var(--small);
+}
+
+.help summary {
+	color: var(--quiet);
+	cursor: pointer;
+	width: fit-content;
+}
+
+.help summary:hover {
+	color: var(--ink);
+}
+
+/* The notes stand off the line that opened them, and are the width of a column
+   of text rather than of the card: a sentence running the whole width of a wide
+   window is a sentence the eye loses the start of. */
+.help > * {
+	margin: 0.5rem 0 0;
+	max-width: 62ch;
+}
+
+/* A tick that is a setting in its own right rather than a note under a box: it
+   stands in the line of boxes, at the height a box stands at, so a row of them
+   reads as a row of settings. */
+.switch {
+	align-items: center;
+	display: flex;
+	gap: 0.45rem;
+	min-height: 2rem;
+}
+
+.switch input {
+	margin: 0;
+}
+
+/* A row holding a tick beside a box that has a label above it.
+
+   Rows line up by their tops, which is right while every field is a label and a
+   box — and wrong here: the tick has no label, so a top-aligned row puts it
+   opposite the word above the box rather than opposite the box it belongs
+   with. Aligned by their feet, the tick stands next to the control it governs. */
+.row.aligned {
+	align-items: end;
+}
+
+/* The one press on a screen that writes something.
+
+   It is filled rather than coloured, because the accent belongs to the bar and
+   to the walk — a second coloured thing on a screen is two accents and an eye
+   told nothing by either. Filled against outlined is enough: there is one of
+   these to a form, and everything beside it is a way out. */
+.primary {
+	background: var(--ink);
+	border-color: var(--ink);
+	color: var(--surface);
+}
+
+.primary:hover {
+	background: var(--ink);
+	opacity: 0.85;
+}
+
+/* A box holding an address is longer than a box holding a number, and a row of
+   equal columns gives an address the width of a number. */
+.field.wide {
+	flex: 3 1 22rem;
+}
+
 /* Boxes that belong together stand together and wrap as one line runs out. */
 /* Aligned to the top rather than the bottom, so the labels of a row line up
    with each other. Bottom alignment lines up the boxes instead, which is the

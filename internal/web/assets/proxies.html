@@ -168,6 +168,8 @@
 <input id="profile_name" name="profile_name" value="{{.Form.Name}}" required>
 </div>
 </div>
+<fieldset>
+<legend>{{.T "proxies.source"}}</legend>
 <div class="row">
 <div class="field">
 <label for="source">{{.T "settings.source.where"}}</label>
@@ -175,13 +177,13 @@
 {{range .Sources}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{$.T .Key}}</option>
 {{end}}</select>
 </div>
-<div class="field">
+<div class="field wide">
 <label for="source_at">{{.T "settings.source.at"}}</label>
 {{/* The chooser stands beside the box and not under it. Boxes on one line are
      lined up by their feet, so a box with something under it stands a line
      higher than the ones next to it and the line reads as broken. */}}
 <span class="beside">
-<input id="source_at" name="source_at" size="34" value="{{.Form.Where}}">
+<input id="source_at" name="source_at" value="{{.Form.Where}}">
 {{/* The chooser is a link rather than a button: it leaves the form to look at
      this machine, and a form that submitted to get there would save settings
      nobody had finished filling in. */}}
@@ -192,6 +194,28 @@
 <label for="source_refresh">{{.T "settings.source.refresh"}}</label>
 <input id="source_refresh" name="source_refresh" type="number" min="0" value="{{.Form.Refresh}}">
 </div>
+</div>
+{{/* What a list may look like, said here rather than found out by writing one:
+     a file read and understood line by line reports nothing on this page, so a
+     list in a form this program does not read is a list that is simply smaller
+     than it looks. It is folded away because it is a reference, read once by
+     whoever is writing a list and never again. */}}
+<details class="help">
+<summary>{{.T "settings.source.forms"}}</summary>
+<ul class="notes forms">
+<li>{{.T "settings.source.form.plain"}}</li>
+<li>{{.T "settings.source.form.after"}}</li>
+<li>{{.T "settings.source.form.before"}}</li>
+<li>{{.T "settings.source.form.at"}}</li>
+</ul>
+<p class="empty">{{.T "settings.source.scheme"}}</p>
+<p class="empty">{{.T "settings.source.skipped"}}</p>
+</details>
+</fieldset>
+
+<fieldset>
+<legend>{{.T "proxies.spending"}}</legend>
+<div class="row">
 <div class="field">
 <label for="ban_minutes">{{.T "settings.ban"}}</label>
 <input id="ban_minutes" name="ban_minutes" type="number" min="0" value="{{.Form.Ban}}">
@@ -212,26 +236,60 @@
 </select>
 </div>
 </div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<ul class="notes">
+<li>{{.T "settings.ban.why"}}</li>
+<li>{{.T "settings.perupstream.why"}}</li>
+<li>{{.T "settings.renew.why"}}</li>
+<li>{{.T "settings.wire.why"}}</li>
+</ul>
+</details>
+</fieldset>
+
 {{/* What the ports of this profile are made of, beyond where they go out. The
      three are the service's own settings on a port, and they are here rather
      than on a job because they belong to the exits: a profile going out through
      a list of proxies and one going out through gateways want different answers
-     to all three. */}}
-<div class="row">
+     to all three.
+
+     vDNS is a switch and a list rather than one list of four, because it is two
+     questions. Held in one, "off" had to be recognised among three phrasings of
+     "on", and a reader looking for it did not find it. */}}
+<fieldset>
+<legend>{{.T "proxies.madeof"}}</legend>
+{{/* The switch and the list it governs stand on one line, in that order: the
+     list means nothing until the switch is on, and a reader meets them in the
+     order they are answered. The other two are settings of their own and stand
+     under it. */}}
+<div class="row aligned">
+<div class="field">
+<label class="switch"><input id="vdns" name="vdns" type="checkbox" value="1"{{if .Form.VDNSOn}} checked{{end}}> {{.T "proxies.vdns.on"}}</label>
+</div>
 <div class="field">
 <label for="vdns_mode">{{.T "proxies.vdns"}}</label>
-<select id="vdns_mode" name="vdns_mode">
+<select id="vdns_mode" name="vdns_mode"{{if not .Form.VDNSOn}} disabled{{end}}>
 {{range .VDNSModes}}<option value="{{.Code}}"{{if eq $.Form.VDNS .Code}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
-<label class="under"><input name="js_solver" type="checkbox" value="1"{{if .Form.Solver}} checked{{end}}> {{.T "proxies.solver"}}</label>
-<label class="under"><input name="http3" type="checkbox" value="1"{{if .Form.HTTP3}} checked{{end}}> {{.T "proxies.http3"}}</label>
 </div>
 </div>
+<div class="row">
+<div class="field">
+<label class="switch"><input name="js_solver" type="checkbox" value="1"{{if .Form.Solver}} checked{{end}}> {{.T "proxies.solver"}}</label>
+</div>
+<div class="field">
+<label class="switch"><input name="http3" type="checkbox" value="1"{{if .Form.HTTP3}} checked{{end}}> {{.T "proxies.http3"}}</label>
+</div>
+</div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{.T "proxies.vdns.why"}}</li>
 <li>{{.T "proxies.solver.why"}}</li>
 <li>{{.T "proxies.http3.why"}}</li>
 </ul>
+</details>
+</fieldset>
 {{/* The configurations the service holds, ticked one by one or by the
      subscription they arrived with. They are drawn only when the saved source
      is the gateways: this screen redraws itself every few seconds while a job
@@ -282,27 +340,10 @@
      button: nothing is written by it, and a button that writes nothing among
      buttons that do is a press somebody makes by mistake once. */}}
 <div class="actions">
-<button type="submit">{{.T "settings.save"}}</button>
+<button type="submit" class="primary">{{.T "settings.save"}}</button>
 <a href="/proxies">{{.T "proxies.profile.cancel"}}</a>
 </div>
 </form>
-<p class="empty">{{.T "settings.perupstream.why"}}</p>
-<p class="empty">{{.T "settings.ban.why"}}</p>
-<p class="empty">{{.T "settings.renew.why"}}</p>
-<p class="empty">{{.T "settings.wire.why"}}</p>
-{{/* What a list may look like, said here rather than found out by writing one:
-     a file read and understood line by line reports nothing on this page, so a
-     list in a form this program does not read is a list that is simply smaller
-     than it looks. */}}
-<p class="empty">{{.T "settings.source.forms"}}</p>
-<ul class="notes forms">
-<li>{{.T "settings.source.form.plain"}}</li>
-<li>{{.T "settings.source.form.after"}}</li>
-<li>{{.T "settings.source.form.before"}}</li>
-<li>{{.T "settings.source.form.at"}}</li>
-</ul>
-<p class="empty">{{.T "settings.source.scheme"}}</p>
-<p class="empty">{{.T "settings.source.skipped"}}</p>
 </section>
 {{end}}
 {{end}}

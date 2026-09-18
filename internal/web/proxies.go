@@ -202,6 +202,13 @@ type labelled struct {
 func vdnsOffered() []labelled {
 	out := make([]labelled, 0, len(blanktrail.VDNSModes()))
 	for _, mode := range blanktrail.VDNSModes() {
+		// Off is the switch beside this list rather than an entry in it. Left
+		// in, a reader looking for "off" had to find it among three phrasings
+		// of "on", and the list could say one thing while the switch said the
+		// other.
+		if mode == blanktrail.VDNSOff {
+			continue
+		}
 		name := mode
 		if name == blanktrail.VDNSAuto {
 			name = "auto"

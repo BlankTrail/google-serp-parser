@@ -25,11 +25,6 @@
 {{range .Kinds}}<option value="{{.Value}}"{{if eq .Value $.Form.Kind}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
 </div>
-<ul class="notes">
-<li>{{.T "form.kind.parse.why"}}</li>
-<li>{{.T "form.kind.position.why"}}</li>
-<li>{{.T "form.kind.index.why"}}</li>
-</ul>
 {{/* The site a position check is about. It stands with the kind that asks for
      it and is drawn whatever the kind is chosen, because there is no script on
      this page to show it when one is: a box that appeared and disappeared would
@@ -38,7 +33,19 @@
 <label for="target">{{.T "form.target"}}</label>
 <input id="target" name="target" value="{{.Form.Target}}">
 </div>
-<p class="empty">{{.T "form.target.why"}}</p>
+{{/* One fold for the kind and the site, because they are one question: the
+     site is what one of the three kinds is about and means nothing to the other
+     two. Two folds standing under one another, both offering to explain, read
+     as a page that explains itself twice. */}}
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<ul class="notes">
+<li>{{.T "form.kind.parse.why"}}</li>
+<li>{{.T "form.kind.position.why"}}</li>
+<li>{{.T "form.kind.index.why"}}</li>
+<li>{{.T "form.target.why"}}</li>
+</ul>
+</details>
 <div class="row">
 <div class="field">
 <label for="pages">{{.T "form.pages"}}</label>
@@ -86,7 +93,10 @@
 {{range .Filters}}<option value="{{.Value}}"{{if eq .Value $.Form.Unique}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
 </div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
 <p class="empty">{{.T "form.unique.why"}}</p>
+</details>
 {{/* What each result keeps. Everything is ticked to begin with, because that
      is what somebody who has not thought about room means; unticking is a
      decision about room, and the sentence under it names the two things that
@@ -102,7 +112,10 @@
 <div class="field"><label><input type="checkbox" name="keep" value="{{.Value}}"{{if .Ticked}} checked{{end}}> {{$.T .Label}}</label></div>
 {{end}}
 </div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
 <p class="empty">{{.T "form.keep.why"}}</p>
+</details>
 </fieldset>
 {{/* The pool this job runs on. It is the job's own: a pool is raised for it
      when it starts and taken down when it lets go, so these are not a machine
@@ -143,12 +156,15 @@
 <input id="cooldown" name="cooldown" type="number" min="0" value="{{.Form.Cooldown}}">
 </div>
 </div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{.T "form.tries.why"}}</li>
 <li>{{.T "form.pause.why"}}</li>
 <li>{{.T "form.wholepool.why"}}</li>
 </ul>
 <p class="empty">{{.T "form.pool.why"}}</p>
+</details>
 </fieldset>
 {{/* What the ports are made of. It stands on its own rather than among the
      pool numbers because it is not a number and not a preference about speed:
@@ -179,10 +195,13 @@
        placeholder="{{.T "form.release.any"}}" value="{{if .Form.Release}}{{.Form.Release}}{{end}}">
 </div>
 </div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{.T "form.release.why"}}</li>
 </ul>
 <p class="empty">{{.T "form.identity.why"}}</p>
+</details>
 </fieldset>
 {{/* One form, and a switch saying where the phrases come from. Two forms
      doing one thing made the reader choose between them before they knew what
@@ -209,9 +228,12 @@
 <label for="list">{{.T "form.list"}}</label>
 <input id="list" name="list" type="file">
 </div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
 <p class="empty">{{.T "form.from.why"}}</p>
+</details>
 <div class="actions">
-<button type="submit">{{.T "form.start"}}</button>
+<button type="submit" class="primary">{{.T "form.start"}}</button>
 </div>
 </form>
 {{end}}

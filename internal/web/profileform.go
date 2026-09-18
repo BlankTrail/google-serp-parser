@@ -42,8 +42,16 @@ type profileForm struct {
 	Gateways []string
 
 	// What the ports of this profile are made of, beyond where they go out.
-	// VDNS is where they resolve names, Solver says the challenge solver is on
-	// them, and HTTP3 lets them re-originate over HTTP/3.
+	//
+	// VDNSOn says names are resolved through the exit at all and VDNS which of
+	// the three ways; Solver says the challenge solver is on them; HTTP3 lets
+	// them re-originate over HTTP/3.
+	//
+	// The switch and the mode are two controls because they are two questions,
+	// and one list holding both made the answer to the first unreadable: a
+	// reader looking for "off" had to recognise it among three phrasings of
+	// "on". Off is now the switch, and the list holds only ways of being on.
+	VDNSOn bool
 	VDNS   string
 	Solver bool
 	HTTP3  bool
@@ -72,7 +80,8 @@ func profileShowing(p store.Profile) profileForm {
 		PerUpstream: strconv.Itoa(atLeastOne(p.ThreadsPerUpstream)),
 		Wire:        blanktrail.ProtocolOr(p.Protocol),
 		Gateways:    p.Gateways,
-		VDNS:        p.VDNSMode,
+		VDNSOn:      p.VDNSMode != blanktrail.VDNSOff,
+		VDNS:        vdnsModeOr(p.VDNSMode),
 		Solver:      p.Solver,
 		HTTP3:       p.HTTP3,
 	}
@@ -93,6 +102,7 @@ func profileFrom(r former) profileForm {
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
 		// These three are on the form whenever it is shown, so a box that sent
 		// nothing is a box somebody unticked rather than one that was not there.
+		VDNSOn: r.FormValue(vdnsOnField) != "",
 		VDNS:   strings.TrimSpace(r.FormValue(vdnsField)),
 		Solver: r.FormValue(solverField) != "",
 		HTTP3:  r.FormValue(http3Field) != "",
@@ -115,12 +125,22 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 	}
 	next.Protocol = blanktrail.ProtocolOr(f.Wire)
 	next.Solver, next.HTTP3 = f.Solver, f.HTTP3
-	if next.VDNSMode = f.VDNS; !blanktrail.KnownVDNSMode(next.VDNSMode) {
+	// The switch wins over the list. A reader who turned vDNS off did not also
+	// say which way it should be on, and the list under the switch still holds
+	// whatever it was showing when they turned it off.
+	switch {
+	case !f.VDNSOn:
+		next.VDNSMode = blanktrail.VDNSOff
+	case !blanktrail.KnownVDNSMode(f.VDNS) || f.VDNS == blanktrail.VDNSOff:
 		// Refused here rather than sent on: the service answers an unknown mode
 		// with a refusal naming the four it takes, and a port that will not open
 		// because a form let a typo through is a fault a long way from its cause.
+		// Off among the ways of being on is the same kind of nonsense, arriving
+		// from a form nobody drew.
 		next.VDNSMode = p.VDNSMode
 		b.complaints = append(b.complaints, "proxies.vdns.unknown")
+	default:
+		next.VDNSMode = f.VDNS
 	}
 	// One is the floor rather than the default alone: nought identities through
 	// an egress is a pool that hands out nothing at all.
@@ -163,4 +183,17 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 // reading can be exercised without standing up a request.
 type former interface {
 	FormValue(string) string
+}
+
+// vdnsModeOr is the way of resolving names a form shows beside the switch.
+//
+// A profile with vDNS off still has to show something in that list, because the
+// list is on the screen whether or not the switch is on. It shows the automatic
+// one, which is what turning the switch back on without touching the list then
+// means — and what a new profile starts on.
+func vdnsModeOr(mode string) string {
+	if mode == blanktrail.VDNSOff || !blanktrail.KnownVDNSMode(mode) {
+		return blanktrail.VDNSAuto
+	}
+	return mode
 }

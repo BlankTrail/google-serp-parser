@@ -655,3 +655,69 @@ func TestStyles_LetEveryBoxNarrowWithTheWindow(t *testing.T) {
 		}
 	}
 }
+
+// formPages are the two screens a reader fills in rather than reads.
+var formPages = []string{"assets/new.html", "assets/proxies.html"}
+
+func TestForms_FoldTheirExplanationsRatherThanPrintingThemUnderEveryBox(t *testing.T) {
+	// Every note this interface had was printed under the boxes it was about,
+	// and on a screen of a dozen settings that is a page of prose to scroll past
+	// on every visit to reach a number. The screenshot that came back said so:
+	// four boxes and eleven paragraphs under them.
+	//
+	// So a screen shows its settings and folds what they mean. It is a details
+	// element rather than a script, because the browser has that control
+	// already and it works before a line of JavaScript has run.
+	// Inside a form, which is where the complaint was. A card may still say in
+	// one line what it is for, and a table may still head a column "why"; what
+	// may not stand among the boxes is a paragraph about one of them.
+	for _, name := range formPages {
+		body := embeddedFiles(t)[name]
+		folded, within := 0, 0
+		for i, line := range strings.Split(body, "\n") {
+			folded += strings.Count(line, "<details") - strings.Count(line, "</details>")
+			within += strings.Count(line, "<form") - strings.Count(line, "</form>")
+			if folded < 0 {
+				t.Fatalf("%s closes a fold nothing opened, at line %d", name, i+1)
+			}
+			// A phrase named ".why" is this interface's word for an
+			// explanation. Nothing else on these screens is one.
+			if strings.Contains(line, `.why"`) && within > 0 && folded == 0 {
+				t.Errorf("%s prints an explanation among the boxes at line %d: %s",
+					name, i+1, strings.TrimSpace(line))
+			}
+		}
+		if folded != 0 {
+			t.Errorf("%s leaves a fold open", name)
+		}
+	}
+}
+
+func TestForms_HaveOnePressThatWritesSomething(t *testing.T) {
+	// A form with three buttons of the same weight is a form where the reader
+	// has to read all three. There is one press that acts, it is filled, and
+	// everything beside it is a way out — a link, because a button that writes
+	// nothing among buttons that do is a press somebody makes by mistake once.
+	//
+	// Filled and not coloured: the accent belongs to the bar and to the walk,
+	// and a second coloured thing on a screen is two accents and an eye told
+	// nothing by either.
+	for _, name := range formPages {
+		body := embeddedFiles(t)[name]
+		if n := strings.Count(body, `class="primary"`); n != 1 {
+			t.Errorf("%s carries %d presses drawn as the one that acts, want 1", name, n)
+		}
+	}
+	// And it is the one that submits.
+	for _, name := range formPages {
+		body := embeddedFiles(t)[name]
+		at := strings.Index(body, `class="primary"`)
+		if at < 0 {
+			continue
+		}
+		opens := strings.LastIndex(body[:at], "<")
+		if tag := body[opens:at]; !strings.Contains(tag, "submit") {
+			t.Errorf("%s draws something that is not a submit as the press that acts: %s", name, tag)
+		}
+	}
+}
