@@ -245,9 +245,22 @@ func (c *crew) step(ctx context.Context, f *flight) bool {
 	// belongs: between two requests on one identity, which on a walk of a
 	// hundred pages is ninety-nine places it never used to be.
 	f.ready = time.Now().Add(c.r.Pool.NextDelay())
-	f.pages = append(f.pages, serp)
 	f.err = nil
 	f.next++
+
+	// A page that carried nothing is how the walk learned there is no more of
+	// this query, not a page of it. Google answers a page past the end of the
+	// results as an ordinary page with no results on it, so every query whose
+	// results run out before the depth asked for ends on one — which is most
+	// of them, because the depth is set once for a list and the lists are not
+	// all equally deep. Kept, it would put a row in the history for a page
+	// holding no result, report four pages where three were captured, and
+	// count the request that found the end into the pages a minute the screens
+	// report.
+	if len(serp.Results) == 0 {
+		return true
+	}
+	f.pages = append(f.pages, serp)
 	return google.LastPage(f.next-1, serp) || f.next > c.pages
 }
 

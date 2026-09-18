@@ -734,3 +734,73 @@ func TestRunner_FinishesTheListOnAPoolSmallerThanTheWork(t *testing.T) {
 		t.Errorf("the thread used %d identities, want no more than the 2 the pool holds", got)
 	}
 }
+
+func TestRunner_StopsWhereTheResultsRunOutWithoutRecordingTheEmptyPage(t *testing.T) {
+	// A job asks for ten pages and the query has three. What ends the walk is
+	// the page itself — either a pagination bar that reaches no further, or a
+	// page carrying nothing — and both mean the same thing: this query is done,
+	// not failed.
+	//
+	// The page that carried nothing is not one of the pages. It is how the walk
+	// learned there were no more, and recording it puts a row in the history
+	// for a page that holds no result, makes the job report four pages where
+	// three were captured, and counts that empty request into the rate the
+	// screens report as pages a minute.
+	o := newOrigin(t, func(r *http.Request, _ int) string {
+		// The bar reaches onwards on every page, so nothing but the empty page
+		// itself can end this walk. That is the case worth testing: a bar this
+		// parser could not read is walked past by design, so a query whose
+		// results run out is found by asking one page too many.
+		if strings.Contains(r.URL.RawQuery, "start=30") {
+			return emptyBody
+		}
+		return serpBodyWithBar("example.com")
+	})
+	f := poolFacing(t, o.addr(), 2)
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	rep := r.Run(context.Background(), Job{Queries: usQueries(1), Pages: 10})
+
+	if rep.Done != 1 || rep.Failed != 0 {
+		t.Fatalf("Done=%d Failed=%d, want the query done: %v", rep.Done, rep.Failed, rep.Results[0].Err)
+	}
+	if n := len(rep.Results[0].Pages); n != 3 {
+		t.Errorf("the query kept %d pages, want the 3 that carried results", n)
+	}
+	for i, page := range rep.Results[0].Pages {
+		if len(page.Results) == 0 {
+			t.Errorf("page %d was kept and carries nothing", i+1)
+		}
+	}
+	// Four searches: the three pages and the one that found the end. The fourth
+	// is what the walk costs to learn where it stops, and it is not a page.
+	if got := o.searches.Load(); got != 4 {
+		t.Errorf("%d searches, want the 3 pages and the one that found the end", got)
+	}
+}
+
+func TestRunner_StopsOnAPaginationBarThatReachesNoFurther(t *testing.T) {
+	// The other way a walk ends early, and the cheaper one: the page in hand
+	// says there is nothing past it, so the walk stops without spending a
+	// request to find out. A job asking for ten pages of a query with two makes
+	// two requests, not three.
+	o := newOrigin(t, func(*http.Request, int) string {
+		// A bar whose furthest offset is 10, which is page two.
+		return serpBody("example.com") +
+			`<div role="navigation"><a href="/search?q=x&amp;start=10">2</a></div>`
+	})
+	f := poolFacing(t, o.addr(), 2)
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	rep := r.Run(context.Background(), Job{Queries: usQueries(1), Pages: 10})
+
+	if rep.Done != 1 || rep.Failed != 0 {
+		t.Fatalf("Done=%d Failed=%d, want the query done: %v", rep.Done, rep.Failed, rep.Results[0].Err)
+	}
+	if n := len(rep.Results[0].Pages); n != 2 {
+		t.Errorf("the query kept %d pages, want the 2 the bar reaches", n)
+	}
+	if got := o.searches.Load(); got != 2 {
+		t.Errorf("%d searches, want 2 - the bar said where the walk ends", got)
+	}
+}
