@@ -336,12 +336,16 @@
 {{end}}
 {{if .Missing}}<p class="empty">{{.T "proxies.gateways.missing"}} {{.Missing}}</p>{{end}}
 {{end}}
-{{/* Save, and the way out without saving. The second is a link and not a
-     button: nothing is written by it, and a button that writes nothing among
-     buttons that do is a press somebody makes by mistake once. */}}
+{{/* Save, and the way out without saving.
+
+     It stays an anchor, because what it does is leave this page rather than
+     send the form — a button inside a form submits it unless it is told not to,
+     and the way out is not a submission. What it is not is a word of prose
+     among the presses: it is drawn as the secondary button every interface puts
+     beside a primary one, because that is where a reader's eye goes for it. */}}
 <div class="actions">
 <button type="submit" class="primary">{{.T "settings.save"}}</button>
-<a href="/proxies">{{.T "proxies.profile.cancel"}}</a>
+<a class="press" href="/proxies">{{.T "proxies.profile.cancel"}}</a>
 </div>
 </form>
 </section>

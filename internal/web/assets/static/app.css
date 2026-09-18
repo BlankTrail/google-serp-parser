@@ -632,6 +632,27 @@ legend {
 	opacity: 0.85;
 }
 
+/* A link drawn as the button beside a primary one.
+
+   Cancel leaves the page rather than sending the form, so it is an anchor and
+   not a button — but a reader looking for "cancel" looks for a button, and a
+   sentence in the place a button belongs is a sentence they read twice before
+   pressing. It carries the button's shape and none of its weight. */
+.press {
+	background: var(--surface);
+	border: var(--hairline-width) solid var(--hairline);
+	border-radius: var(--radius-control);
+	color: var(--ink);
+	font-size: 0.9rem;
+	padding: 0.45rem 0.95rem;
+	text-decoration: none;
+}
+
+.press:hover {
+	background: var(--sunken);
+	text-decoration: none;
+}
+
 /* A box holding an address is longer than a box holding a number, and a row of
    equal columns gives an address the width of a number. */
 .field.wide {
