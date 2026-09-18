@@ -31,6 +31,7 @@ package run
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -51,7 +52,12 @@ const (
 	// query after query, and the pause is between requests rather than between
 	// queries.
 	pagingBudget = 60
-	pagingArms   = 2 // identities per arm
+	// pagingArms is identities per arm. Four rather than two, because two could
+	// not tell the arms apart: the first run of this measured 4.7 and 28.1
+	// seconds of identity time per answer inside one arm, which is a wider
+	// spread than anything between the arms. What an identity gets is mostly
+	// which address it got.
+	pagingArms = 4
 	// pagingSlow is how long an answer takes when the identity was sent to a
 	// challenge and the solver got it through. Anything at or past it is a
 	// challenge rather than a page.
@@ -76,7 +82,7 @@ func TestLivePaging_WhatTheGapBetweenTwoPagesIsWorth(t *testing.T) {
 
 	type arm struct {
 		gap   time.Duration
-		walks [][]ask
+		walks []walked
 	}
 	arms := make([]*arm, 0, len(pagingGaps))
 	for _, gap := range pagingGaps {
@@ -88,7 +94,7 @@ func TestLivePaging_WhatTheGapBetweenTwoPagesIsWorth(t *testing.T) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	for _, a := range arms {
-		a.walks = make([][]ask, pagingArms)
+		a.walks = make([]walked, pagingArms)
 		for i := 0; i < pagingArms; i++ {
 			wg.Add(1)
 			go func(a *arm, i int) {
@@ -115,13 +121,13 @@ func TestLivePaging_WhatTheGapBetweenTwoPagesIsWorth(t *testing.T) {
 
 // walkOneIdentity spends one identity's budget on queries taken to depth,
 // pausing gap between every request, and says what each one cost.
-func walkOneIdentity(ctx context.Context, t *testing.T, pool *blanktrail.Pool, gap time.Duration) []ask {
+func walkOneIdentity(ctx context.Context, t *testing.T, pool *blanktrail.Pool, gap time.Duration) walked {
 	var lease *blanktrail.Lease
 	var session *google.Session
 	for try := 1; try <= 20; try++ {
 		l, err := pool.Acquire(ctx)
 		if err != nil {
-			return nil
+			return walked{}
 		}
 		cl := l.Client()
 		s := google.NewSession(cl.Transport)
@@ -135,9 +141,10 @@ func walkOneIdentity(ctx context.Context, t *testing.T, pool *blanktrail.Pool, g
 		break
 	}
 	if lease == nil {
-		return nil
+		return walked{}
 	}
 	defer lease.Release()
+	out := walked{egress: lease.Egress().String()}
 
 	began := time.Now()
 	var walk []ask
@@ -148,7 +155,8 @@ func walkOneIdentity(ctx context.Context, t *testing.T, pool *blanktrail.Pool, g
 		for page := 1; page <= pagingDepth && len(walk) < pagingBudget; page++ {
 			if gap > 0 {
 				if err := pool.Sleep(ctx, gap); err != nil {
-					return walk
+					out.asks = walk
+					return out
 				}
 			}
 			at := time.Since(began)
@@ -160,7 +168,8 @@ func walkOneIdentity(ctx context.Context, t *testing.T, pool *blanktrail.Pool, g
 				// Three refusals in a row is an identity that is finished, and
 				// going on would measure a dead port rather than a gap.
 				if n := len(walk); n >= 3 && walk[n-2].err != nil && walk[n-3].err != nil {
-					return walk
+					out.asks = walk
+					return out
 				}
 				continue
 			}
@@ -170,13 +179,24 @@ func walkOneIdentity(ctx context.Context, t *testing.T, pool *blanktrail.Pool, g
 			}
 		}
 	}
-	return walk
+	out.asks = walk
+	return out
+}
+
+// walked is one identity's whole turn: what it was asked and which address
+// carried it. The address is in it because the first run of this measurement
+// could not tell an arm from an address, and naming the address is the only way
+// a reader of the log can.
+type walked struct {
+	egress string
+	asks   []ask
 }
 
 // sayWalk writes down one walk: every page, and where it turned.
-func sayWalk(t *testing.T, gap time.Duration, n int, walk []ask) {
+func sayWalk(t *testing.T, gap time.Duration, n int, one walked) {
 	t.Helper()
 	name := pagingArmName(gap)
+	walk := one.asks
 	if len(walk) == 0 {
 		logf(t, "MEASUREMENT %s, identity %d: no identity carried the first page", name, n)
 		return
@@ -186,11 +206,13 @@ func sayWalk(t *testing.T, gap time.Duration, n int, walk []ask) {
 	firstSlow, firstRefusal := -1, -1
 	var series []string
 	var carried time.Duration
+	why := map[string]int{}
 	for i, one := range walk {
 		carried += one.took
 		switch {
 		case one.err != nil:
 			refused++
+			why[refusalKind(one.err)]++
 			if firstRefusal < 0 {
 				firstRefusal = i + 1
 			}
@@ -208,8 +230,9 @@ func sayWalk(t *testing.T, gap time.Duration, n int, walk []ask) {
 		}
 	}
 
-	logf(t, "MEASUREMENT %s, identity %d: %d asked, %d answered, %d past %v, %d refused, over %v",
-		name, n, len(walk), answered, slow, pagingSlow, refused, walk[len(walk)-1].at.Round(time.Second))
+	logf(t, "MEASUREMENT %s, identity %d on %s: %d asked, %d answered, %d past %v, %d refused %v, over %v",
+		name, n, one.egress, len(walk), answered, slow, pagingSlow, refused, why,
+		walk[len(walk)-1].at.Round(time.Second))
 	logf(t, "MEASUREMENT %s, identity %d: first slow page %d, first refused page %d, %.1fs of identity time per answer",
 		name, n, firstSlow, firstRefusal, carried.Seconds()/float64(max(answered, 1)))
 	logf(t, "MEASUREMENT %s, identity %d: seconds per page: %s", name, n, strings.Join(series, " "))
@@ -221,22 +244,42 @@ func sayWalk(t *testing.T, gap time.Duration, n int, walk []ask) {
 // too short is paid for in challenges, which are answers that took six seconds
 // instead of one, and in refusals, which are pages nobody got; a gap that is
 // too long is paid for in waiting. Both come out here as the same unit.
-func sayArm(t *testing.T, gap time.Duration, walks [][]ask) {
+func sayArm(t *testing.T, gap time.Duration, walks []walked) {
 	t.Helper()
 	var asked, answered, slow, refused, withResults int
 	var wall time.Duration
 	live := 0
-	for _, walk := range walks {
+	why := map[string]int{}
+	// beforeChallenge is how many requests each identity answered before the
+	// first one that took a challenge to answer. It is the statistic the pause
+	// was chosen on in the first place, and the one a gap is supposed to move.
+	var beforeChallenge []int
+	for _, w := range walks {
+		walk := w.asks
 		if len(walk) == 0 {
 			continue
 		}
 		live++
 		wall += walk[len(walk)-1].at + walk[len(walk)-1].took
+		// Up to the first challenge, and a refusal on the way does not end the
+		// count: an address that dropped one connection has said nothing about
+		// whether Google is still answering this identity.
+		clean := 0
+		for _, one := range walk {
+			if one.took >= pagingSlow {
+				break
+			}
+			if one.err == nil {
+				clean++
+			}
+		}
+		beforeChallenge = append(beforeChallenge, clean)
 		for _, one := range walk {
 			asked++
 			switch {
 			case one.err != nil:
 				refused++
+				why[refusalKind(one.err)]++
 			default:
 				answered++
 				if one.took >= pagingSlow {
@@ -255,12 +298,14 @@ func sayArm(t *testing.T, gap time.Duration, walks [][]ask) {
 	// Per identity: the wall clock is summed over the identities, so dividing
 	// the pages by it is already per identity.
 	perMinute := float64(withResults) / wall.Minutes()
-	logf(t, "MEASUREMENT %s: %d identities, %d asked, %d answered (%d of them past %v), %d refused, %d pages with results",
-		pagingArmName(gap), live, asked, answered, slow, pagingSlow, refused, withResults)
+	sort.Ints(beforeChallenge)
+	logf(t, "MEASUREMENT %s: %d identities, %d asked, %d answered (%d of them past %v), %d refused %v, %d pages with results",
+		pagingArmName(gap), live, asked, answered, slow, pagingSlow, refused, why, withResults)
 	logf(t, "MEASUREMENT %s: %.1f pages a minute per identity, %.0f%% of requests refused, %.0f%% of answers challenged",
 		pagingArmName(gap), perMinute,
 		100*float64(refused)/float64(max(asked, 1)),
 		100*float64(slow)/float64(max(answered, 1)))
+	logf(t, "MEASUREMENT %s: clean answers before the first challenge, per identity: %v", pagingArmName(gap), beforeChallenge)
 }
 
 func pagingArmName(gap time.Duration) string {
@@ -268,4 +313,19 @@ func pagingArmName(gap time.Duration) string {
 		return "no pause between pages"
 	}
 	return fmt.Sprintf("%v between pages", gap)
+}
+
+// refusalKind is what a refusal was, in the words this program judges answers
+// by, so an arm's failures can be read as Google refusing or as the address
+// under it dying. The first run of this measurement could not tell the two
+// apart, and three identities across three arms died at the eleventh request
+// with nothing saying why.
+func refusalKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	if class, judged := google.ClassOf(err); judged {
+		return string(class)
+	}
+	return "no answer"
 }
