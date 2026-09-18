@@ -1256,8 +1256,16 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 	if got := standing.Search.Cooldown(); got != 3*time.Second {
 		t.Errorf("the pool is paced at %s, want the three seconds the job named", got)
 	}
-	if got := standing.Search.NextDelay(); got != 3*time.Second {
-		t.Errorf("a thread waits %s between queries, want the three seconds the job named", got)
+	// The number the job named is the floor rather than the interval: a request
+	// every three seconds to the millisecond is a description of the program
+	// making them, and the gap is drawn from a narrow range above the number so
+	// that it is not one. What must never happen is asking sooner than the job
+	// said, which is the half of it that was measured.
+	for i := 0; i < 50; i++ {
+		got := standing.Search.NextDelay()
+		if got < 3*time.Second || got > 4*time.Second {
+			t.Fatalf("a thread waits %s between queries, want it drawn from the three seconds the job named", got)
+		}
 	}
 }
 

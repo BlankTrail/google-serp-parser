@@ -3073,3 +3073,49 @@ func TestPool_ClosesAPortTheListCannotPutAnAddressBehind(t *testing.T) {
 		t.Errorf("Closures=%d, want the one port that lost its address", st.Closures)
 	}
 }
+
+func TestPaceAt_DrawsTheGapFromARangeRatherThanBeatingTime(t *testing.T) {
+	// A request every five seconds to the millisecond is a description of the
+	// program making them. It is the pattern this whole program exists not to
+	// have, and it got thirty times louder when a thread began pacing the pages
+	// of a query rather than only the queries.
+	//
+	// The number stays the floor, because that is the half of it that was
+	// measured: an identity asked sooner than the number is the one that buys
+	// challenges.
+	pool := &Pool{}
+	pool.PaceAt(5 * time.Second)
+
+	if got := pool.Cooldown(); got != 5*time.Second {
+		t.Errorf("the pool reports a pause of %v, want the 5s it was told — the screens show this number", got)
+	}
+
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 200; i++ {
+		d := pool.NextDelay()
+		if d < 5*time.Second {
+			t.Fatalf("a gap of %v was drawn, which is sooner than the pause that was asked for", d)
+		}
+		if d > 6*time.Second {
+			t.Fatalf("a gap of %v was drawn, which is further out than the pause it is spread from", d)
+		}
+		seen[d] = true
+	}
+	// Two hundred draws inside a second of nanoseconds landing on one value is
+	// a metronome however it is written.
+	if len(seen) < 2 {
+		t.Errorf("200 gaps took %d distinct values, so the run keeps time", len(seen))
+	}
+}
+
+func TestPaceAt_KeepsNoPauseAsNoPause(t *testing.T) {
+	// Nought is a job that wants none, and spreading nought upward would be
+	// this program pacing a run nobody asked to have paced.
+	pool := &Pool{}
+	pool.PaceAt(0)
+	for i := 0; i < 20; i++ {
+		if d := pool.NextDelay(); d != 0 {
+			t.Fatalf("a job that asked for no pause was given %v", d)
+		}
+	}
+}

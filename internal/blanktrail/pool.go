@@ -1487,15 +1487,32 @@ func (p *Pool) RenewEvery() time.Duration { return p.cfg.RenewAfterInterval }
 // seconds after every query would be keeping a pause nobody asked for — measured
 // on a live run, that pause was 6529 seconds of 14520 spent on queries, which is
 // the largest thing left once the queueing is gone.
+// The number is the floor and not the interval. A run that asked every five
+// seconds exactly asked at 5.000, 10.000, 15.000 — and a request every N
+// seconds to the millisecond is a description of the program making them, which
+// is the one thing this program spends its whole effort not being. It matters
+// more since a thread began pacing the pages of a query: on a job of thirty
+// pages that metronome used to beat once a query and now beats thirty times.
+//
+// The floor is where the number stays because that is what was measured: an
+// identity asked every two seconds answered a dozen requests before Google
+// challenged it and one asked every five answered around forty, so asking
+// sooner than the number is the thing that costs. The spread goes upward from
+// it and is kept narrow — a fifth — because nothing measures how wide it should
+// be, and a wide one would quietly slow every run by the width.
 func (p *Pool) PaceAt(d time.Duration) {
 	if d < 0 {
 		d = 0
 	}
 	p.mu.Lock()
 	p.cool = d
-	p.cfg.DelayMin, p.cfg.DelayMax = d, d
+	p.cfg.DelayMin, p.cfg.DelayMax = d, d+d/pacingSpread
 	p.mu.Unlock()
 }
+
+// pacingSpread is what the pause is divided by to get how far above it the
+// gaps are drawn. Five, so a pause of five seconds is drawn from five to six.
+const pacingSpread = 5
 
 // NextDelay returns a random pause inside the configured delay range. Callers
 // use it to pace their own requests; a perfectly even interval is itself a
