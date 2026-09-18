@@ -122,17 +122,20 @@ type PortSpec struct {
 	EnableHTTP3    bool // re-originate over HTTP/3 where the target offers it
 
 	// ForceIPv4Egress keeps the leg out of the proxy on IPv4, and InjectECS
-	// tells the resolver which subnet the traffic will leave from. Both are on
-	// by default where a port is opened by hand, and this client says nothing
-	// about either.
+	// tells the resolver which subnet the traffic will leave from. The service
+	// turns both on for a port opened by hand, and this client turns both off:
+	// they are sent on every open as the false they are here, not left out.
 	//
-	// That is deliberate for now rather than settled. Turning them on, together
-	// with the leak guard off, was tried on a live list and answered 5 queries
-	// in 30 against 14 for the profile this client already had — which is
-	// evidence against, on a sample small enough that it may be the addresses
-	// each arm happened to draw rather than the profile. What settles it is a
-	// wider run, and until there is one the defaults stay where the measuring
-	// found them.
+	// Saying so matters, because the comment here used to claim this client said
+	// nothing about either — and a field left out is a field the service sets to
+	// true. What is measured is the off state, not the absent one.
+	//
+	// Off for now rather than settled. Turning them on, together with the leak
+	// guard off, was tried on a live list and answered 5 queries in 30 against
+	// 14 for the profile this client already had — which is evidence against, on
+	// a sample small enough that it may be the addresses each arm happened to
+	// draw rather than the profile. What settles it is a wider run, and until
+	// there is one the defaults stay where the measuring found them.
 	ForceIPv4Egress bool
 	InjectECS       bool
 

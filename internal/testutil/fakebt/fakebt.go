@@ -74,6 +74,11 @@ type Server struct {
 	mu       sync.Mutex
 	license  License
 	gateways []Gateway
+	// held are the fingerprints the service says it holds, for the listing. The
+	// map above is a different thing with a nearly identical name: that one is
+	// what each open port is wearing, this one is the catalogue.
+	held []StoredProfile
+
 	// maxPorts is the ceiling the service reports, and elsewhere is how many
 	// ports it says are held by something other than the caller. Both are nought
 	// until a test says otherwise, which is a service with room to spare.
@@ -300,6 +305,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.serveSuggest(w)
 	case "/api/v1/ports":
 		s.serveList(w)
+	case "/api/v1/profiles":
+		s.serveProfiles(w, r)
 	case "/api/v1/ports/open":
 		s.serveOpen(w, body)
 	case "/api/v1/ports/close":
@@ -442,6 +449,42 @@ func (s *Server) serveList(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ports": list, "total_open": len(list) + elsewhere, "max_ports": ceiling,
 	})
+}
+
+// serveProfiles answers the fingerprint listing, filtered by browser the way the
+// service filters it.
+func (s *Server) serveProfiles(w http.ResponseWriter, r *http.Request) {
+	want := strings.ToLower(r.URL.Query().Get("browser"))
+	s.mu.Lock()
+	held := append([]StoredProfile(nil), s.held...)
+	s.mu.Unlock()
+
+	out := make([]map[string]any, 0, len(held))
+	for _, p := range held {
+		if want != "" && strings.ToLower(p.Browser) != want {
+			continue
+		}
+		out = append(out, map[string]any{
+			"id": len(out) + 1, "name": p.Name, "browser": p.Browser,
+			"version": p.Version, "user_agent": "", "created_at": "2026-01-01T00:00:00Z",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"profiles": out, "total": len(out), "limit": len(out), "offset": 0,
+	})
+}
+
+// StoredProfile is one fingerprint the fake says it holds.
+type StoredProfile struct{ Name, Browser, Version string }
+
+// SetProfiles gives the fake a set of fingerprints to report.
+//
+// A service with none is a service nothing can be spread over, and a test that
+// wanted a spread would then be measuring the empty case by accident.
+func (s *Server) SetProfiles(held ...StoredProfile) {
+	s.mu.Lock()
+	s.held = append([]StoredProfile(nil), held...)
+	s.mu.Unlock()
 }
 
 // SetPortRoom makes the service report a ceiling of its own and a number of

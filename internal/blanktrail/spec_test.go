@@ -355,3 +355,32 @@ func TestPlanSpecs_EqualWeightsBreakTiesInDeclarationOrder(t *testing.T) {
 		t.Errorf("counts=%v, want a=2 b=2 c=1 (spares go to the earliest declared)", counts)
 	}
 }
+
+func TestPortSpec_SaysOutLoudThatItTurnsOffWhatTheServiceTurnsOn(t *testing.T) {
+	// The service turns egress_force_ipv4 and ecs_enabled on for a port opened
+	// by hand, and a field left out of the request is a field it turns on. This
+	// client sends both as false on every open — which is a decision, and one
+	// the comment beside the fields once said it was not making.
+	//
+	// It is a test rather than a comment alone because the difference between
+	// "absent" and "false" is invisible in the struct and decides what the port
+	// does: it is what the live arm measured, and a later edit that stopped
+	// sending them would quietly move every port onto the other setting.
+	req := DefaultPortSpec().request(20000, Egress{Upstream: "socks5://198.51.100.1:1080"})
+
+	for _, f := range []struct {
+		what string
+		got  *bool
+	}{
+		{"egress_force_ipv4", req.ForceIPv4Egress},
+		{"ecs_enabled", req.InjectECS},
+	} {
+		if f.got == nil {
+			t.Errorf("%s is left out of the open, so the service turns it on", f.what)
+			continue
+		}
+		if *f.got {
+			t.Errorf("%s is sent as true; the measured arm is the off one", f.what)
+		}
+	}
+}
