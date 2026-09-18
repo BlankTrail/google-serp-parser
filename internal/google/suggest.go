@@ -64,7 +64,12 @@ func (s *Suggester) suggestFrom(ctx context.Context, target string, q Query) ([]
 	// on the request, and both come from the one query so they cannot
 	// disagree. Completions in a language the client claims not to prefer are
 	// a contradiction this program would be creating.
-	req.Header.Set("Accept-Language", q.AcceptLanguage())
+	if want := q.AcceptLanguage(); want != "" {
+		// Empty is a job that named no language: it asks Google nothing about
+		// one, and a header of this program's own would answer the question it
+		// deliberately did not ask.
+		req.Header.Set("Accept-Language", want)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

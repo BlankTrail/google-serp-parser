@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
@@ -130,13 +131,21 @@ const choseField = "chose"
 
 // defaultCountry and defaultLanguage are what a new job asks Google for.
 //
-// They are written here rather than left to Google because an unqualified
-// search is answered from what Google works out about the identity making it,
-// and a pool holds identities in many places: the same list would then come
-// back as a different page each run, with nothing on the page saying so.
+// Neither, and the form says so in words: the results are whatever Google
+// answers the identity making the request. The country and the language then
+// appear in no part of the URL, and the request is the one a browser at that
+// exit would make.
+//
+// They used to be "us" and "en", so that the same list came back as the same
+// page every run whichever identity carried it. That is a real thing to want
+// and it is still a box away — but it is the wrong default, because it is not
+// what the identity is: a pool spread over a hundred countries, every one of
+// them asking for the United States in English, is a hundred requests that
+// disagree with where they came from. What Google is told should be what the
+// exit already says.
 const (
-	defaultCountry  = "us"
-	defaultLanguage = "en"
+	defaultCountry  = ""
+	defaultLanguage = ""
 )
 
 func blankForm() jobForm {
@@ -149,12 +158,8 @@ func blankForm() jobForm {
 		// Typed in, because that is what somebody opening this page has in hand;
 		// a file is chosen by somebody who already has one.
 		From: fromBox,
-		// The English-language results, asked for plainly. Google answers an
-		// unqualified search with whatever it works out about where the request
-		// came from, so the same list run twice through two identities comes back
-		// as two different pages — and nothing on the page says why. Naming the
-		// country and the language makes the answer the same one every time, and
-		// it is the answer nearly everybody opening this page came for.
+		// Neither named, so nothing about either reaches the URL and the answer
+		// is the one the exit would be given — see defaultCountry.
 		Country:  defaultCountry,
 		Language: defaultLanguage,
 		// The desktop, because that is the page most people mean when they say
@@ -477,6 +482,12 @@ type newPage struct {
 	// where the reader learns that the choice exists at all, and that the exits
 	// are set on the proxies screen rather than here.
 	Profiles []profileChoice
+	// Countries and Languages are what the two boxes offer when they are
+	// clicked. They are a shortcut and not a gate — the boxes take a code, and
+	// anything either list leaves out can still be typed — so they are offered
+	// as a list beside the box rather than as a chooser instead of it.
+	Countries []google.Choice
+	Languages []google.Choice
 }
 
 // profileChoice is one profile as the form offers it.
@@ -577,6 +588,8 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		Devices:    devicesOffered(form.Device),
 		Sources:    sources(),
 		Keeps:      keeps(form),
+		Countries:  google.Countries(),
+		Languages:  google.Languages(),
 		Chose:      choseField,
 		Profiles:   profilesOffered(offered, form.Profile),
 	})

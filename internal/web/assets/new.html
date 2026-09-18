@@ -44,13 +44,26 @@
 <label for="pages">{{.T "form.pages"}}</label>
 <input id="pages" name="pages" type="number" min="1" value="{{.Form.Pages}}">
 </div>
+{{/* A code, with the ones anybody reaches for offered beside the box. It is a
+     list and not a chooser because the box takes anything Google takes, and a
+     chooser would turn every code the list leaves out into one nobody can ask
+     for. Empty is the default and means both are left out of the URL, so the
+     answer is the one the exit would be given. */}}
 <div class="field">
 <label for="country">{{.T "form.country"}}</label>
-<input id="country" name="country" size="4" value="{{.Form.Country}}">
+<input id="country" name="country" size="12" list="countries" autocomplete="off"
+       placeholder="{{.T "form.byexit"}}" value="{{.Form.Country}}">
+<datalist id="countries">
+{{range .Countries}}<option value="{{.Code}}" label="{{.Name}}"></option>
+{{end}}</datalist>
 </div>
 <div class="field">
 <label for="language">{{.T "form.language"}}</label>
-<input id="language" name="language" size="4" value="{{.Form.Language}}">
+<input id="language" name="language" size="12" list="languages" autocomplete="off"
+       placeholder="{{.T "form.byexit"}}" value="{{.Form.Language}}">
+<datalist id="languages">
+{{range .Languages}}<option value="{{.Code}}" label="{{.Name}}"></option>
+{{end}}</datalist>
 </div>
 {{/* Which page Google is asked for. It is a choice and not a box to type in,
      because there are two answers and a typed one that is neither would be a
@@ -113,12 +126,13 @@
 <label for="threads">{{.T "form.threads"}}</label>
 <input id="threads" name="threads" type="number" min="1" value="{{.Form.Threads}}">
 </div>
+{{/* The tick stands under the box it takes the meaning out of, because that is
+     what it is about: a job spending the whole list has no number of ports a
+     thread to name, and the box is refused while it is ticked. */}}
 <div class="field">
 <label for="ports">{{.T "form.ports"}}</label>
 <input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}"{{if .Form.WholePool}} disabled{{end}}>
-</div>
-<div class="field">
-<label><input id="wholepool" name="wholepool" type="checkbox" value="1"{{if .Form.WholePool}} checked{{end}}> {{.T "form.wholepool"}}</label>
+<label class="under"><input id="wholepool" name="wholepool" type="checkbox" value="1"{{if .Form.WholePool}} checked{{end}}> {{.T "form.wholepool"}}</label>
 </div>
 <div class="field">
 <label for="tries">{{.T "form.tries"}}</label>

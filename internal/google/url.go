@@ -99,15 +99,24 @@ func (q Query) URL() (string, error) {
 	return u.String(), nil
 }
 
-// AcceptLanguage is the header value this capture must send.
+// AcceptLanguage is the header value this capture must send, and empty where it
+// must send none of its own.
 //
-// Setting this header is this program's own responsibility, and it has to
-// agree with hl: a page requested in one language by a client claiming to
-// prefer another is a mismatch this program would be creating.
+// Setting this header is this program's own responsibility where the job named
+// a language, and it has to agree with hl: a page requested in one language by
+// a client claiming to prefer another is a mismatch this program would be
+// creating.
+//
+// A job that named no language is the other case, and the same rule reaches the
+// opposite answer. It asks Google nothing about language — hl is not in the URL
+// either — so the answer is whatever the exit is given, and a header claiming a
+// preference for English would be this program putting back exactly the
+// disagreement leaving hl out was for. Empty, so the caller sends nothing and
+// whatever the proxy writes for the identity it is wearing stands.
 func (q Query) AcceptLanguage() string {
 	lang := strings.TrimSpace(q.Language)
 	if lang == "" {
-		return "en-US,en;q=0.9"
+		return ""
 	}
 
 	base, region := lang, ""

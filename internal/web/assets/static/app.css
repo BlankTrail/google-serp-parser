@@ -559,8 +559,13 @@ legend {
 }
 
 /* Boxes that belong together stand together and wrap as one line runs out. */
+/* Aligned to the top rather than the bottom, so the labels of a row line up
+   with each other. Bottom alignment lines up the boxes instead, which is the
+   same thing while every field is one label and one box — and stops being it
+   the moment a field carries a note under its box, because the bottom of that
+   field is then the note and its box rides up above the rest of the row. */
 .row {
-	align-items: end;
+	align-items: start;
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.75rem;
@@ -577,6 +582,23 @@ legend {
 	flex-direction: column;
 	gap: 0.25rem;
 	min-width: 0;
+}
+
+/* A tick that belongs to the box above it rather than beside it: it takes the
+   meaning out of that box, so standing it in a column of its own would leave
+   the reader to work out which box it was about. It reads as a note under the
+   value, in the size the notes are in. */
+.field .under {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	font-size: 0.85rem;
+	color: var(--quiet);
+	white-space: nowrap;
+}
+
+.field .under input {
+	margin: 0;
 }
 
 /* How a job was set up: a label and its value, one setting to a line, in as

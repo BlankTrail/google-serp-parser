@@ -123,9 +123,7 @@
 <div class="field">
 <label for="ports">{{.T "form.ports"}}</label>
 <input id="ports" name="ports" type="number" min="1" value="{{.Job.Ports}}"{{if .Job.WholePool}} disabled{{end}}>
-</div>
-<div class="field">
-<label><input id="wholepool" name="wholepool" type="checkbox" value="1"{{if .Job.WholePool}} checked{{end}}> {{.T "form.wholepool"}}</label>
+<label class="under"><input id="wholepool" name="wholepool" type="checkbox" value="1"{{if .Job.WholePool}} checked{{end}}> {{.T "form.wholepool"}}</label>
 </div>
 <div class="field">
 <label for="tries">{{.T "form.tries"}}</label>

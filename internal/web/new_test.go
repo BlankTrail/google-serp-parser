@@ -741,27 +741,47 @@ func TestStyle_LeavesHiddenMeaningHidden(t *testing.T) {
 	}
 }
 
-func TestNewForm_AsksGoogleForOneAnswerRatherThanWhicheverTheIdentitySuggests(t *testing.T) {
-	// An unqualified search is answered from what Google works out about the
-	// identity making it, and a pool holds identities in many places. Left blank,
-	// the same list comes back as a different page each run and nothing on the
-	// page says why.
+func TestNewForm_LeavesTheCountryAndTheLanguageToTheExitItGoesOutThrough(t *testing.T) {
+	// Named, they reach the URL as gl and hl, and every identity of a pool then
+	// asks for the same country in the same language whatever country it goes
+	// out from — which is a request that disagrees with itself. Left out, the
+	// URL carries neither and Google answers what it answers a browser at that
+	// exit.
+	//
+	// It is still a box away for whoever wants one answer for the whole list
+	// however it was carried, which is a real thing to want and not the default.
 	form := blankForm()
-	if form.Country == "" || form.Language == "" {
-		t.Fatalf("a new job asks for country %q and language %q, so its results are "+
-			"whatever the identity happened to suggest", form.Country, form.Language)
+	if form.Country != "" || form.Language != "" {
+		t.Fatalf("a new job asks for country %q and language %q, want neither named",
+			form.Country, form.Language)
 	}
 
-	// And they reach the boxes, since a default nothing carries onto the page is
-	// a default nobody has.
 	body := get(t, testServer(t), "/new").Body.String()
-	for _, box := range []struct{ name, want string }{
-		{"country", form.Country},
-		{"language", form.Language},
-	} {
-		tag := openingTag(t, body, `input id="`+box.name+`"`)
-		if !strings.Contains(tag, `value="`+box.want+`"`) {
-			t.Errorf("the %s box does not hold %q: <%s>", box.name, box.want, tag)
+	for _, box := range []string{"country", "language"} {
+		tag := openingTag(t, body, `input id="`+box+`"`)
+		if !strings.Contains(tag, `value=""`) {
+			t.Errorf("the %s box is not empty: <%s>", box, tag)
+		}
+		// And the box says what empty means, because a blank box with no word
+		// on it reads as something nobody filled in.
+		if !strings.Contains(tag, "placeholder=") {
+			t.Errorf("the %s box says nothing about what leaving it empty does: <%s>", box, tag)
+		}
+		// The shortcut beside it, so the codes are a click rather than a thing
+		// to know.
+		if !strings.Contains(tag, `list="`) {
+			t.Errorf("the %s box offers no list to choose from: <%s>", box, tag)
+		}
+	}
+	for _, want := range []string{`<datalist id="countries">`, `<datalist id="languages">`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the form carries no %s", want)
+		}
+	}
+	// A handful of the codes a reader would look for, in the list they belong to.
+	for _, want := range []string{`<option value="ru"`, `<option value="de"`, `<option value="ja"`} {
+		if strings.Count(body, want) < 1 {
+			t.Errorf("the lists offer no %s", want)
 		}
 	}
 }

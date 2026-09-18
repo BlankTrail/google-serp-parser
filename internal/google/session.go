@@ -131,7 +131,12 @@ func (s *Session) get(ctx context.Context, target string, q Query) (body []byte,
 	// Setting Accept-Language is this program's own responsibility: it is the
 	// one navigation header set here that depends on the query, and it must
 	// agree with hl.
-	req.Header.Set("Accept-Language", q.AcceptLanguage())
+	if want := q.AcceptLanguage(); want != "" {
+		// Empty is a job that named no language: it asks Google nothing about
+		// one, and a header of this program's own would answer the question it
+		// deliberately did not ask.
+		req.Header.Set("Accept-Language", want)
+	}
 	// And so is Accept, on the evidence. Measured through a real port: a Chrome
 	// identity arrives with the full Chrome list already on it, and a Safari one
 	// arrives with no Accept at all — a request no browser has ever made. Setting

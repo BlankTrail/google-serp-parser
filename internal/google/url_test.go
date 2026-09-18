@@ -49,16 +49,22 @@ func TestQuery_LanguageIsIndependentOfCountry(t *testing.T) {
 }
 
 func TestQuery_AcceptLanguageMatchesTheLanguageAxis(t *testing.T) {
-	// Setting this header is the parser's own responsibility, and it has to
-	// agree with hl, or the page language and the client's declared language
-	// disagree on every request.
+	// Setting this header is the parser's own responsibility where the job named
+	// a language, and it has to agree with hl, or the page language and the
+	// client's declared language disagree on every request.
+	//
+	// A job that named none is the same rule reaching the opposite answer: hl is
+	// not in the URL either, so the answer is whatever the exit is given, and a
+	// header claiming English would put back exactly the disagreement leaving hl
+	// out was for. Empty means the caller sends none of its own.
 	cases := []struct {
 		name     string
 		language string
 		country  string
 		want     string
 	}{
-		{"empty language", "", "", "en-US,en;q=0.9"},
+		{"empty language", "", "", ""},
+		{"empty language with a country", "", "ru", ""},
 		{"language carries a region", "pt-BR", "", "pt-BR,pt;q=0.9"},
 		{"bare language with a country", "ru", "ru", "ru-RU,ru;q=0.9"},
 		{"bare language with no country", "ru", "", "ru"},
