@@ -97,7 +97,9 @@ type poolEngine struct {
 	// is nil where the caller has only one set to give, and the lookups then go
 	// out through pool as they always did.
 	addresses *blanktrail.Growing
-	threads   int
+	// brake slows the run while the challenge solver is behind.
+	brake   *blanktrail.Brake
+	threads int
 	// watch, when set, is told every stage a thread of the run passes through,
 	// so a slow job can be taken apart second by second rather than guessed at.
 	watch run.Watch
@@ -106,7 +108,7 @@ type poolEngine struct {
 // Run builds a runner around the pool this job was raised. A runner is a few
 // fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
-	r := &run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch}
+	r := &run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch, Brake: e.brake}
 	if e.addresses != nil {
 		r.Addresses = e.addresses.Identities
 	}
@@ -197,6 +199,11 @@ type Identities struct {
 	// region that states its addresses opens none of them at all. Nil sends the
 	// lookups through Search.
 	Addresses *blanktrail.Growing
+	// Brake slows the run while the challenge solver is behind. It belongs with
+	// the ports rather than with the job because what it reads is the service's
+	// own queue — which carries the work of everything on this machine, not of
+	// this job alone. Nil is a run with no brake.
+	Brake *blanktrail.Brake
 }
 
 // OpenPool opens the identities one job asked to run on. It is Dial as a caller
@@ -255,7 +262,7 @@ func dialing(open OpenPool, watch run.Watch) source {
 		// because that number paces the job and is what the screen puts into its
 		// estimate: two answers to how wide this job runs would put a figure on the
 		// screen that no run ever matched.
-		return &poolEngine{pool: want.Search, addresses: want.Addresses,
+		return &poolEngine{pool: want.Search, addresses: want.Addresses, brake: want.Brake,
 			threads: asked.Threads, watch: watch}, nil
 	}}
 }

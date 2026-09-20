@@ -76,6 +76,15 @@ type Attempt struct {
 	// means defaultTries.
 	Tries int
 
+	// Brake slows this attempt down while the challenge solver is behind.
+	//
+	// It is held before the request rather than after it, because the point is
+	// to make fewer requests while the queue is deep: a pause taken after the
+	// request has joined the queue is a pause that changed nothing about the
+	// queue. Nil is a run with no brake, which is what every run did before
+	// there was one.
+	Brake *blanktrail.Brake
+
 	mu       sync.Mutex
 	sessions map[int]heldSession
 }
@@ -224,6 +233,13 @@ type boundSearcher struct {
 }
 
 func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP, error) {
+	// The other door a request goes out by — a thread stepping one page of a
+	// walk it already holds the identity for. Both are braked, or a job of the
+	// kind that walks would be the one kind that could still start an
+	// avalanche.
+	if err := b.attempt.Brake.Hold(ctx); err != nil {
+		return google.SERP{}, err
+	}
 	serp, err := b.attempt.sessionFor(b.lease).Search(ctx, q)
 	b.attempt.caught(serp, err)
 	return serp, err
@@ -252,6 +268,9 @@ func (a *Attempt) once(ctx context.Context, q google.Query) (google.SERP, error)
 	}
 	defer lease.Release()
 
+	if err := a.Brake.Hold(ctx); err != nil {
+		return google.SERP{}, err
+	}
 	serp, err := a.sessionFor(lease).Search(ctx, q)
 	a.caught(serp, err)
 	if err == nil {

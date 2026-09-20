@@ -171,6 +171,13 @@ type Report struct {
 type Runner struct {
 	// Pool leases the identities. Required.
 	Pool *blanktrail.Pool
+	// Brake slows the run while the challenge solver is behind.
+	//
+	// A tariff holds a fixed number of solver processes and a challenge takes
+	// tens of seconds, so a run that outruns them piles up: every request that
+	// meets a challenge joins a queue, holds its identity while it waits, and
+	// the threads behind it go on making more. Nil is a run with no brake.
+	Brake *blanktrail.Brake
 	// Addresses hands out the identities the hidden addresses are read through.
 	//
 	// It is asked the first time an address actually has to be read, and again
@@ -255,7 +262,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	// One Attempt for the whole job. It keeps a session per port, and a port is
 	// leased to one thread at a time, so the threads never meet inside it.
 	attempt := &Attempt{Pool: r.Pool, SpecName: j.SpecName, Tries: j.Tries, Mobile: j.Mobile,
-		Asking: j.Asking, Captured: j.Captured}
+		Asking: j.Asking, Captured: j.Captured, Brake: r.Brake}
 
 	// What a finished query goes through, wherever it was finished: its
 	// addresses read, its results written down, and the stages reported. It is

@@ -804,3 +804,41 @@ func TestRunner_StopsOnAPaginationBarThatReachesNoFurther(t *testing.T) {
 		t.Errorf("%d searches, want 2 - the bar said where the walk ends", got)
 	}
 }
+
+func TestRunner_HoldsEveryRequestBehindTheBrakeWhileTheSolverIsBehind(t *testing.T) {
+	// A tariff holds a fixed number of solver processes and a challenge takes
+	// tens of seconds. A run that outruns them piles up: every request that
+	// meets one joins the queue, holds its identity while it waits, and the
+	// threads behind it go on making more.
+	//
+	// Both doors a request goes out by are braked — the one a query takes when
+	// it leases an identity, and the one a thread takes stepping a page of a
+	// walk it already holds. A job of the kind that walks would otherwise be
+	// the one kind that could still start an avalanche.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBodyWithBar("example.com") })
+	f := poolFacing(t, o.addr(), 2)
+
+	var held atomic.Int64
+	brake := blanktrail.NewBrake(func(context.Context) (blanktrail.SolverQueue, error) {
+		return blanktrail.SolverQueue{Queued: 3, Running: 10}, nil
+	})
+	blanktrail.BrakeSleepsWith(brake, func(context.Context, time.Duration) error {
+		held.Add(1)
+		return nil
+	})
+
+	r := &Runner{Pool: f.Pool, Threads: 1, Brake: brake}
+	rep := r.Run(context.Background(), Job{Queries: usQueries(1), Pages: 3})
+
+	if rep.Done != 1 {
+		t.Fatalf("Done=%d, want 1: %v", rep.Done, rep.Results[0].Err)
+	}
+	// Three pages, three holds. Fewer would mean a page went out around the
+	// brake; the count is exact because the searches are.
+	if got, want := held.Load(), o.searches.Load(); got != want {
+		t.Errorf("%d requests were held and %d were made", got, want)
+	}
+	if got := held.Load(); got == 0 {
+		t.Error("nothing was held at all, so this test measured nothing")
+	}
+}

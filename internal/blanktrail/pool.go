@@ -2458,9 +2458,17 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 // did not report: the point is to catch a profile that contradicts the template,
 // not to quarantine a healthy port because a response omitted a key. Comparison
 // is case-insensitive — which spelling the API returns is not something to
-// quarantine a port over either.
+// quarantine a port over either. Browser is a filter when opening a port
+// (chrome_153), but the profile response reports its family (chrome). The API
+// applies the release filter; this guard compares the family and OS it reports.
 func profileMatchesSpec(spec PortSpec, prof Profile) error {
-	if spec.Browser != "" && prof.Browser != "" && !strings.EqualFold(spec.Browser, prof.Browser) {
+	browser := spec.Browser
+	if i := strings.LastIndexByte(browser, '_'); i >= 0 {
+		if _, err := strconv.Atoi(browser[i+1:]); err == nil {
+			browser = browser[:i]
+		}
+	}
+	if browser != "" && prof.Browser != "" && !strings.EqualFold(browser, prof.Browser) {
 		return fmt.Errorf("profile is browser %q but the port was opened for %q", prof.Browser, spec.Browser)
 	}
 	if spec.OS != "" && prof.OS != "" && !strings.EqualFold(spec.OS, prof.OS) {

@@ -476,7 +476,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			// and deriving one for it is this program pacing a run nobody asked to
 			// have paced.
 			pool.PaceAt(want.Cooldown)
-			return web.Identities{Search: pool}, nil
+			return web.Identities{Search: pool, Brake: o.brakeOn(saved)}, nil
 		}
 		if fromEnv {
 			cfg := poolConfig(want.Threads, want.Ports, want.WholePool)
@@ -488,7 +488,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 				return web.Identities{}, err
 			}
 			pool.PaceAt(want.Cooldown)
-			return web.Identities{Search: pool}, nil
+			return web.Identities{Search: pool, Brake: o.brakeOn(saved)}, nil
 		}
 		got, err := o.dial(ctx, saved, want)
 		if err != nil {
@@ -497,6 +497,21 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 		got.Search.PaceAt(want.Cooldown)
 		return got, nil
 	}
+}
+
+// brakeOn is the brake for a pool this function did not open the client for.
+//
+// The two paths above raise their ports another way — one on the identities
+// this machine keeps warm, one on a connection from the environment — and both
+// still meet the same challenge solver, whose processes are the machine's and
+// not the pool's. A connection that cannot be built gives a brake that holds
+// nothing rather than no brake at all.
+func (o serveOptions) brakeOn(saved settings.Settings) *blanktrail.Brake {
+	client, err := blanktrail.NewClient(saved.ControlURL, saved.APIKey)
+	if err != nil {
+		return blanktrail.NewBrake(nil)
+	}
+	return blanktrail.BrakeOn(client)
 }
 
 // connect opens the ports a connection just saved in the browser describes.
@@ -618,10 +633,17 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	if err != nil {
 		return web.Identities{}, o.scrubbed(err)
 	}
+	// The brake reads the challenge solver's queue through the same connection
+	// the ports were opened through. What it watches is the service's own
+	// number, which carries the work of everything on this machine rather than
+	// of this job alone — which is the point: the processes are shared, so the
+	// pressure on them has to be read where it is felt.
+	brake := blanktrail.BrakeOn(client)
+
 	if !want.Addresses {
 		// A job that keeps no address has nothing to look up, and ports opened
 		// for it would stand idle for the length of the run.
-		return web.Identities{Search: pool}, nil
+		return web.Identities{Search: pool, Brake: brake}, nil
 	}
 
 	// The second set: the ports the hidden addresses are read through.
@@ -655,7 +677,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	if most < 1 {
 		most = 1
 	}
-	return web.Identities{Search: pool, Addresses: blanktrail.NewGrowing(most,
+	return web.Identities{Search: pool, Brake: brake, Addresses: blanktrail.NewGrowing(most,
 		func(ctx context.Context, n int) (*blanktrail.Pool, error) {
 			one := plain
 			one.Threads, one.PortsPerThread = n, 1

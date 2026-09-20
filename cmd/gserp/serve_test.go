@@ -1626,3 +1626,41 @@ func keysOf(set map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+func TestDial_GivesTheRunABrakeOnTheSolverQueue(t *testing.T) {
+	// A tariff holds a fixed number of solver processes and a challenge takes
+	// tens of seconds to get through one. A run that outruns them piles up:
+	// every request that meets a challenge joins the queue, holds its identity
+	// while it waits, and the threads behind it go on making more.
+	//
+	// The brake reads the service's own queue, which carries the work of
+	// everything on this machine rather than of this job alone. That is the
+	// point of reading it there: the processes are shared, so the pressure on
+	// them has to be read where it is felt.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	fake.SetSolverQueue(fakebt.SolverQueue{Queued: 4, Running: 10, MaxLen: 256})
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	saved, _ := opts.saved(io.Discard)
+
+	want, err := opts.dial(t.Context(), saved, web.Wanted{
+		Profile: store.NewProfile(), Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop,
+	})
+	if err != nil {
+		t.Fatalf("opening the identities: %v", err)
+	}
+	t.Cleanup(func() { _ = want.Search.Close() })
+
+	if want.Brake == nil {
+		t.Fatal("the identities came back with no brake at all")
+	}
+	if err := want.Brake.Hold(t.Context()); err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	if got := want.Brake.Queue(); got.Queued != 4 {
+		t.Errorf("the brake read a queue of %+v, want the four the service reports", got)
+	}
+	if got := want.Brake.Holding(); got <= 0 {
+		t.Errorf("the brake is holding %v against a queue of four", got)
+	}
+}

@@ -99,6 +99,9 @@ type Server struct {
 	seen         []Recorded
 	nextPort     int
 
+	// solverQueue is what the service reports the challenge solver has in hand.
+	solverQueue SolverQueue
+
 	// integrationKey is the developer's key a program has stamped in, which is
 	// how the service is told whose work brought the user.
 	integrationKey string
@@ -307,6 +310,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.serveList(w)
 	case "/api/v1/profiles":
 		s.serveProfiles(w, r)
+	case "/api/v1/solver/queue":
+		s.serveSolverQueue(w)
 	case "/api/v1/ports/open":
 		s.serveOpen(w, body)
 	case "/api/v1/ports/close":
@@ -474,6 +479,34 @@ func (s *Server) serveProfiles(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// serveSolverQueue answers how much work the challenge solver has in hand.
+func (s *Server) serveSolverQueue(w http.ResponseWriter) {
+	s.mu.Lock()
+	queue := s.solverQueue
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":   []any{},
+		"queued":  queue.Queued,
+		"running": queue.Running,
+		"max_len": queue.MaxLen,
+	})
+}
+
+// SolverQueue is what the fake reports the solver has in hand.
+type SolverQueue struct{ Queued, Running, MaxLen int }
+
+// SetSolverQueue makes the service report a queue of its own.
+//
+// It cannot be produced by asking this fake for pages, because the queue is a
+// property of the real solver rather than of anything this program does: it is
+// what a tariff's processes are up against, including work from other programs
+// on the same machine.
+func (s *Server) SetSolverQueue(q SolverQueue) {
+	s.mu.Lock()
+	s.solverQueue = q
+	s.mu.Unlock()
+}
+
 // StoredProfile is one fingerprint the fake says it holds.
 type StoredProfile struct{ Name, Browser, Version string }
 
@@ -618,10 +651,18 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 		}
 		s.profiles[port] = prof
 		s.mu.Unlock()
+		// The real API reports the browser family, while the open filter can
+		// include a release (chrome_153). Echoing that filter hid renewal bugs.
+		browser := prof.Browser
+		if i := strings.LastIndexByte(browser, '_'); i >= 0 {
+			if _, err := strconv.Atoi(browser[i+1:]); err == nil {
+				browser = browser[:i]
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]string{
 			"name":       prof.Browser + "_145_" + prof.OS + "_" + strconv.Itoa(1000+n),
 			"user_agent": "Mozilla/5.0 (" + prof.OS + ") " + prof.Browser + "/145.0.0.0",
-			"browser":    prof.Browser,
+			"browser":    browser,
 			"os":         prof.OS,
 		})
 	case "upstream":
