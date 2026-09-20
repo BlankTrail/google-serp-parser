@@ -488,3 +488,39 @@ func TestPortSpec_OpensAndDialsOverSOCKS5UnlessHTTPWasNamed(t *testing.T) {
 		}
 	}
 }
+
+func TestWearProfile_PutsANamedFingerprintOnALivePort(t *testing.T) {
+	// How a session is resumed. A session is a fingerprint and a set of
+	// cookies; the cookies are this program's to keep, and the fingerprint is
+	// the service's, named by a profile it holds. Putting that name on a port
+	// that is already open is what lets a session move between ports without
+	// either of them being reopened — and reopening is the thing to avoid,
+	// because a port is opened on an address and an address that has answered
+	// is the scarce thing.
+	f := fakebt.New(t)
+	cl, err := NewClient(f.URL(), f.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx := context.Background()
+	port, err := cl.SuggestPort(ctx)
+	if err != nil {
+		t.Fatalf("SuggestPort: %v", err)
+	}
+	if _, err := cl.OpenPort(ctx, port, DefaultPortSpec(), Egress{}); err != nil {
+		t.Fatalf("OpenPort: %v", err)
+	}
+
+	got, err := cl.WearProfile(ctx, port, "Firefox_155_lin")
+	if err != nil {
+		t.Fatalf("WearProfile: %v", err)
+	}
+	if got.Name != "Firefox_155_lin" {
+		t.Errorf("the port came back wearing %q, want the profile that was asked for", got.Name)
+	}
+	// And the service says the same thing when asked afterwards, which is what
+	// makes it the port's state rather than one answer.
+	if held := f.ProfileOf(port); held.Name != "Firefox_155_lin" {
+		t.Errorf("the service holds the port as wearing %q", held.Name)
+	}
+}

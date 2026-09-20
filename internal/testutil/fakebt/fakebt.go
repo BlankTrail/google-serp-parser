@@ -59,6 +59,10 @@ type Recorded struct {
 type Profile struct {
 	Browser string
 	OS      string
+	// Name is the fingerprint the port is wearing by the name the service
+	// holds it under. It is empty on a port opened by a filter rather than by
+	// a name, and it is what putting a named profile on a live port sets.
+	Name string
 }
 
 type failure struct {
@@ -637,6 +641,30 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 	}
 
 	switch action {
+	case "config":
+		// One named fingerprint put on a live port. The fake remembers it, so
+		// asking what the port is wearing afterwards answers what was asked
+		// for rather than what it was opened with — which is the whole of what
+		// resuming a session on another port turns on.
+		var req struct {
+			Mode            string `json:"mode"`
+			SpecificProfile string `json:"specific_profile"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil || req.SpecificProfile == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "specific_profile is required"})
+			return
+		}
+		s.mu.Lock()
+		prof := s.profiles[port]
+		prof.Name = req.SpecificProfile
+		s.profiles[port] = prof
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"port": port, "status": "reconfigured",
+			"current_profile": map[string]any{
+				"name": prof.Name, "browser": prof.Browser, "os": prof.OS,
+			},
+		})
 	case "rotate":
 		// A rotation hands the port a fresh fingerprint of the same kind it was
 		// opened with, and the fake remembers it: hard-coding chrome/windows

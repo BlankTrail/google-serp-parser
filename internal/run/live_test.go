@@ -180,7 +180,21 @@ var (
 	poolSkip  string
 	poolFatal string
 	poolLines []string
+	// poolClient is the connection the pool was opened through, kept for the
+	// measurements that ask the service something the pool does not carry —
+	// which fingerprint a port is wearing, and what the challenge solver has in
+	// hand.
+	poolClient *blanktrail.Client
 )
+
+// liveClient is the connection the pool was opened through.
+func liveClient(t *testing.T) *blanktrail.Client {
+	t.Helper()
+	if poolClient == nil {
+		t.Skip("the pool was opened without a client to ask the service with")
+	}
+	return poolClient
+}
 
 // TestMain closes the run's pool once every test is finished with it.
 func TestMain(m *testing.M) {
@@ -224,6 +238,7 @@ func openLivePool(ctx context.Context, control, key string, ups []blanktrail.Ups
 		poolFatal = fmt.Sprintf("control client: %v", err)
 		return
 	}
+	poolClient = client
 	pre := blanktrail.Preflight(ctx, client, blanktrail.PreflightInput{
 		Domains: []string{"www.google.com", "google.com"},
 		Ports:   livePorts,

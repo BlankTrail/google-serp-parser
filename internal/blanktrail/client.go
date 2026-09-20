@@ -584,3 +584,52 @@ func newAPIError(status int, path string, raw []byte) *APIError {
 	}
 	return e
 }
+
+// WearProfile puts one named fingerprint on a port that is already open, and
+// says what the port is wearing afterwards.
+//
+// It is how a session is resumed. A session is a fingerprint and a set of
+// cookies, and the cookies are this program's to keep; the fingerprint is the
+// service's, named by a profile it holds. Putting it on a live port is what
+// lets a session move between ports without either of them being reopened —
+// and reopening is what this avoids: a port is opened on an address, and an
+// address that has answered is the scarce thing.
+//
+// Checked against the live service before it was written: PUT /config on an
+// open port answered "reconfigured" and the profile it came back wearing was
+// the one that was asked for, twice in a row for the same name.
+//
+// The body names the profile and nothing else. The service merges it into the
+// port's live configuration, so everything not named here is what the port
+// already had — which is the whole reason this is a merge and not an open.
+func (c *Client) WearProfile(ctx context.Context, port int, profile string) (Profile, error) {
+	body := struct {
+		Mode            string `json:"mode"`
+		SpecificProfile string `json:"specific_profile"`
+	}{Mode: "specific", SpecificProfile: profile}
+
+	var out struct {
+		Profile Profile `json:"current_profile"`
+	}
+	path := fmt.Sprintf("/api/v1/port/%d/config", port)
+	if err := c.doJSON(ctx, http.MethodPut, path, body, &out); err != nil {
+		return Profile{}, err
+	}
+	return out.Profile, nil
+}
+
+// PortProfile is the fingerprint a port is wearing this moment, by the name the
+// service holds it under.
+//
+// It is read rather than remembered because a port's fingerprint changes under
+// this program: a rotation replaces it, and so does putting another one on.
+// What it is for is a session: a session is a name and a set of cookies, and
+// the name has to come from the service that holds it.
+func (c *Client) PortProfile(ctx context.Context, port int) (Profile, error) {
+	var out Profile
+	path := fmt.Sprintf("/api/v1/port/%d/profile", port)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return Profile{}, err
+	}
+	return out, nil
+}
