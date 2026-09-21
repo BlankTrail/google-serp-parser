@@ -585,28 +585,39 @@ func newAPIError(status int, path string, raw []byte) *APIError {
 	return e
 }
 
-// WearProfile puts one named fingerprint on a port that is already open, and
-// says what the port is wearing afterwards.
+// WearSession puts one of this program's own sessions on a port that is
+// already open, and says what the port is wearing afterwards.
 //
-// It is how a session is resumed. A session is a fingerprint and a set of
-// cookies, and the cookies are this program's to keep; the fingerprint is the
-// service's, named by a profile it holds. Putting it on a live port is what
-// lets a session move between ports without either of them being reopened —
-// and reopening is what this avoids: a port is opened on an address, and an
-// address that has answered is the scarce thing.
+// Two things go over in one call, because they are one decision. The
+// fingerprint is named — the service holds the profiles, and a session is one
+// of them plus a set of cookies — and keep_sessions is turned off, which is how
+// the service is told that the session belongs to whoever is calling: with it
+// off the port keeps neither the solver's pin nor a jar of its own, and the
+// cookies won by passing a challenge come back with the response. With it on
+// the port keeps both, as it always did.
 //
-// Checked against the live service before it was written: PUT /config on an
-// open port answered "reconfigured" and the profile it came back wearing was
-// the one that was asked for, twice in a row for the same name.
+// A port carrying a session of ours must have it off, so a call that set the
+// fingerprint and left the flag alone would be a call that produced a port
+// carrying two sessions: ours in the header and the port's underneath.
 //
-// The body names the profile and nothing else. The service merges it into the
-// port's live configuration, so everything not named here is what the port
-// already had — which is the whole reason this is a merge and not an open.
-func (c *Client) WearProfile(ctx context.Context, port int, profile string) (Profile, error) {
+// An empty profile leaves the fingerprint as it is and only moves the flag,
+// which is what a port being made ready for a session it has not been given yet
+// wants.
+//
+// Checked against the live service: PUT /config on an open port answered
+// "reconfigured" and the profile it came back wearing was the one asked for,
+// twice running for the same name. Nothing is reopened, which is the point — a
+// port is opened on an address, and an address that has answered is the scarce
+// thing.
+func (c *Client) WearSession(ctx context.Context, port int, profile string) (Profile, error) {
 	body := struct {
-		Mode            string `json:"mode"`
-		SpecificProfile string `json:"specific_profile"`
-	}{Mode: "specific", SpecificProfile: profile}
+		Mode            string `json:"mode,omitempty"`
+		SpecificProfile string `json:"specific_profile,omitempty"`
+		KeepSessions    bool   `json:"keep_sessions"`
+	}{KeepSessions: false}
+	if profile != "" {
+		body.Mode, body.SpecificProfile = "specific", profile
+	}
 
 	var out struct {
 		Profile Profile `json:"current_profile"`
@@ -618,11 +629,27 @@ func (c *Client) WearProfile(ctx context.Context, port int, profile string) (Pro
 	return out.Profile, nil
 }
 
+// ResetSolverSessions clears what the challenge solver left on a port: the
+// fingerprint it pinned and the cookies it won.
+//
+// It is what makes a port reusable by another session. A port that has carried
+// one session and is handed to the next without this would put the first one's
+// clearance under the second one's cookies, and the second session would be
+// two sessions to whoever is reading them.
+//
+// It is also how a port is made clean on purpose — a measurement that wants an
+// address known to work and a session known to be new asks once to prove the
+// address, then resets.
+func (c *Client) ResetSolverSessions(ctx context.Context, port int) error {
+	path := fmt.Sprintf("/api/v1/port/%d/reset_solver_sessions", port)
+	return c.doJSON(ctx, http.MethodPost, path, nil, nil)
+}
+
 // PortProfile is the fingerprint a port is wearing this moment, by the name the
 // service holds it under.
 //
 // It is read rather than remembered because a port's fingerprint changes under
-// this program: a rotation replaces it, and so does putting another one on.
+// this program: a rotation replaces it, and so does putting a session on it.
 // What it is for is a session: a session is a name and a set of cookies, and
 // the name has to come from the service that holds it.
 func (c *Client) PortProfile(ctx context.Context, port int) (Profile, error) {

@@ -6,34 +6,38 @@ package run
 
 // Does a session survive being moved to another port?
 //
-// This is the question the whole of a session store turns on. The design is
-// that this program keeps the sessions — a fingerprint, named by a profile the
-// service holds, and a set of cookies — and hands one to whichever thread wants
-// it, on whichever port that thread happens to be holding. Ports stop being
-// identities and become wires.
+// This is the question a session store turns on. The design is that this
+// program keeps the sessions — a fingerprint, named by a profile the service
+// holds, and a set of cookies — and hands one to whichever thread wants it, on
+// whichever port that thread is holding. Ports stop being identities and become
+// wires.
 //
-// It only works if a session presented on a second port is the same session to
-// Google. What makes that doubtful is the clearance cookie: a challenge is
-// solved by the service, on a port, and with keep_sessions off the port merges
-// its own solved clearance over the request's for those names. That pin belongs
-// to the port. Whether our copy of it, replayed from our own jar onto a port
-// that has never solved anything, is accepted is not something the code can be
-// read for.
+// The service was changed for it: a port with keep_sessions off now keeps
+// neither the solver's pin nor its jar, the cookies won by passing a challenge
+// come back with the response, and reset_solver_sessions clears both off a port
+// so the next session starts on a clean one. So the question is no longer
+// whether the cookies can be had. It is whether they are the session.
 //
-// Three arms on one profile, in order:
+// Three arms, all on one profile, each on an address proved to answer and a
+// port proved clean:
 //
-//	settle — a port, our own cookie jar, asked until a challenge is met and
-//	         passed. That is a session, and its cookies are ours.
-//	moved  — a second port wearing the same profile, our jar carried over.
-//	bare   — a third port wearing the same profile and an empty jar.
+//	settle — asked until a challenge is met and passed. That is a session, and
+//	         its cookies are now this program's.
+//	moved  — another port, the same profile put on it, that jar carried over.
+//	bare   — another port, the same profile, and nothing carried.
 //
-// If moved answers quickly and bare pays for a challenge, a session is portable
-// and the store is worth building. If both pay, a session belongs to its port
-// and the design has to change before a line of it is written.
+// A session is portable if moved answers without paying for a challenge and
+// bare pays for one. If both pay, the cookies are not the session and the store
+// has to be built around a session that stays where it was made.
+//
+// Every arm is given an address that has already answered and a port that has
+// then been cleared, so an arm that fails is failing on what it is about rather
+// than on a dead proxy — which is what the first two runs of this measured
+// instead: one arm answered nothing at all.
 //
 //	go test -tags live -run TestLiveSessionMove -timeout 40m ./internal/run/ -v
 //
-// It holds three identities and spends about thirty requests.
+// It holds three identities and spends about twenty requests.
 
 import (
 	"context"
@@ -53,8 +57,12 @@ import (
 // challenge costs tens.
 const sessionMoveSlow = 6 * time.Second
 
-// sessionMoveAsks is how many searches an arm makes after it is settled.
-const sessionMoveAsks = 3
+// sessionMoveAsks is how many searches an arm makes.
+const sessionMoveAsks = 4
+
+// sessionMoveTries is how many addresses an arm works through to find one that
+// answers. On a large cheap list three addresses in four carry nothing.
+const sessionMoveTries = 12
 
 func TestLiveSessionMove_WhetherASessionIsPortableBetweenPorts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
@@ -65,9 +73,9 @@ func TestLiveSessionMove_WhetherASessionIsPortableBetweenPorts(t *testing.T) {
 	// The first port, and the profile every arm will wear. It is read off the
 	// port rather than chosen, because what matters is that all three wear the
 	// same one — not which one it is.
-	first, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Skipf("no identity to settle a session on: %v", err)
+	first, ok := workingPort(ctx, t, pool, client, "settle")
+	if !ok {
+		t.Skip("no address answered, so there is nothing to settle a session on")
 	}
 	defer first.Release()
 
@@ -75,7 +83,7 @@ func TestLiveSessionMove_WhetherASessionIsPortableBetweenPorts(t *testing.T) {
 	if err != nil || profile.Name == "" {
 		t.Skipf("the port does not say which profile it wears: %v (%+v)", err, profile)
 	}
-	logf(t, "MEASUREMENT the session is settled on profile %s", profile.Name)
+	logf(t, "MEASUREMENT every arm wears %s", profile.Name)
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -87,18 +95,15 @@ func TestLiveSessionMove_WhetherASessionIsPortableBetweenPorts(t *testing.T) {
 	}
 	kept := cookiesIn(t, jar)
 	logf(t, "MEASUREMENT the settled session holds %d cookies for google.com", len(kept))
-	if len(kept) == 0 {
-		logf(t, "MEASUREMENT no cookie reached this program at all, so nothing can be carried")
+	for _, one := range kept {
+		logf(t, "MEASUREMENT   cookie %s (%d characters)", one.Name, len(one.Value))
 	}
 
-	// The move. A second port, the same profile put on it, and the jar the
-	// first port filled.
+	// The move. Another port, the same profile put on it, and the jar the first
+	// port filled.
 	moved := arm(ctx, t, pool, client, "moved", profile.Name, kept)
-	bare := asked{name: "bare"}
-	if !testing.Short() {
-		// The control. A third port, the same profile, and nothing carried.
-		bare = arm(ctx, t, pool, client, "bare", profile.Name, nil)
-	}
+	// The control. Another port, the same profile, and nothing carried.
+	bare := arm(ctx, t, pool, client, "bare", profile.Name, nil)
 
 	logf(t, "MEASUREMENT %s", "----------------------------------------------------------")
 	for _, r := range []asked{settled, moved, bare} {
@@ -106,22 +111,94 @@ func TestLiveSessionMove_WhetherASessionIsPortableBetweenPorts(t *testing.T) {
 			r.name, r.made, r.answered, r.slow, r.median.Round(time.Millisecond),
 			r.setCookies, r.responses)
 	}
-	logf(t, "MEASUREMENT a session is portable if moved went through the solver and bare did not")
+	logf(t, "MEASUREMENT a session is portable if moved paid for no challenge and bare paid for one")
 }
 
-// arm takes a fresh identity, puts the named profile on it, seeds a jar with
-// what was carried, and asks through it.
+// workingPort leases identities until one answers a search, then clears what
+// that search left on it.
+//
+// Both halves matter. Without the first, an arm can be handed an address that
+// carries nothing, and its numbers then say so rather than saying anything
+// about sessions — which is what the first two runs of this measured. Without
+// the second, the arm starts on a port that has already been through whatever
+// the proving request met, so a control arm would not be one.
+func workingPort(ctx context.Context, t *testing.T, pool *blanktrail.Pool,
+	client *blanktrail.Client, name string) (*blanktrail.Lease, bool) {
+	t.Helper()
+	for try := 1; try <= sessionMoveTries; try++ {
+		lease, err := pool.Acquire(ctx)
+		if err != nil {
+			logf(t, "MEASUREMENT %s: no identity to try: %v", name, err)
+			return nil, false
+		}
+		// The port is put into our-session mode before anything is asked
+		// through it. With keep_sessions off it keeps neither the solver's pin
+		// nor a jar of its own, which is the mode the whole measurement is
+		// about; the pool opens its ports with it on, as every run does today.
+		if _, err := client.WearSession(ctx, lease.Port(), ""); err != nil {
+			logf(t, "MEASUREMENT %s: port %d would not take our session: %v", name, lease.Port(), err)
+			// Which half failed: the connection to the service, or this one
+			// call on this one port. A reading that goes through says the
+			// service is there and the port is the problem.
+			if q, qerr := client.SolverQueue(ctx); qerr != nil {
+				logf(t, "MEASUREMENT %s: the service is not answering at all: %v", name, qerr)
+			} else {
+				logf(t, "MEASUREMENT %s: the service answers (queue %+v), so it is this port", name, q)
+			}
+			if prof, perr := client.PortProfile(ctx, lease.Port()); perr != nil {
+				logf(t, "MEASUREMENT %s: port %d has no profile to read: %v", name, lease.Port(), perr)
+			} else {
+				logf(t, "MEASUREMENT %s: port %d wears %s", name, lease.Port(), prof.Name)
+			}
+			lease.Release()
+			return nil, false
+		}
+		// A jar, even for the proving request. In our-session mode the port
+		// keeps none, and a search session visits the front page before it
+		// searches: without a jar the cookies that page sets are dropped and
+		// the search arrives carrying nothing. Measured: twelve addresses in a
+		// row answered nothing that way, and the same addresses answer with a
+		// jar. In this mode a jar is not an improvement, it is the session.
+		proving, err := cookiejar.New(nil)
+		if err != nil {
+			t.Fatalf("cookiejar: %v", err)
+		}
+		cl := lease.Client()
+		s := google.NewSession(cl.Transport)
+		s.Client.Timeout = cl.Timeout
+		s.Client.Jar = proving
+		began := time.Now()
+		if _, err := s.Search(ctx, google.Query{Text: phrases[0], Country: "ru", Language: "ru"}); err != nil {
+			logf(t, "MEASUREMENT %s: address %d did not answer", name, try)
+			_ = lease.Reject(ctx)
+			lease.Release()
+			continue
+		}
+		logf(t, "MEASUREMENT %s: address proved in %v, clearing the port",
+			name, time.Since(began).Round(time.Millisecond))
+		if err := client.ResetSolverSessions(ctx, lease.Port()); err != nil {
+			logf(t, "MEASUREMENT %s: the port could not be cleared: %v", name, err)
+			lease.Release()
+			return nil, false
+		}
+		return lease, true
+	}
+	logf(t, "MEASUREMENT %s: no address answered in %d tries", name, sessionMoveTries)
+	return nil, false
+}
+
+// arm takes an identity that has answered and been cleared, puts the named
+// profile on it, seeds a jar with what was carried, and asks through it.
 func arm(ctx context.Context, t *testing.T, pool *blanktrail.Pool, client *blanktrail.Client,
 	name, profile string, carry []*http.Cookie) asked {
 	t.Helper()
-	lease, err := pool.Acquire(ctx)
-	if err != nil {
-		logf(t, "MEASUREMENT %s: no identity to ask through: %v", name, err)
+	lease, ok := workingPort(ctx, t, pool, client, name)
+	if !ok {
 		return asked{name: name}
 	}
 	defer lease.Release()
 
-	worn, err := client.WearProfile(ctx, lease.Port(), profile)
+	worn, err := client.WearSession(ctx, lease.Port(), profile)
 	if err != nil {
 		logf(t, "MEASUREMENT %s: the profile could not be put on the port: %v", name, err)
 		return asked{name: name}
@@ -136,6 +213,7 @@ func arm(ctx context.Context, t *testing.T, pool *blanktrail.Pool, client *blank
 	}
 	if len(carry) > 0 {
 		jar.SetCookies(googleAt(t), carry)
+		logf(t, "MEASUREMENT %s: %d cookies carried onto the port", name, len(carry))
 	}
 	return askThrough(ctx, t, name, lease, jar, sessionMoveAsks)
 }
@@ -156,16 +234,15 @@ type asked struct {
 
 // askThrough makes n searches through one lease on one jar, and says what they
 // cost. The jar is this program's rather than the port's, which is the whole
-// point: the port is opened with keep_sessions off, so the cookies that come
-// back reach here and the ones that go out come from here.
+// point: the port keeps neither pin nor jar, so the cookies that come back
+// reach here and the ones that go out come from here.
 func askThrough(ctx context.Context, t *testing.T, name string, lease *blanktrail.Lease,
 	jar http.CookieJar, n int) asked {
 	t.Helper()
 	cl := lease.Client()
 	// Wrapped so the raw Set-Cookie of every response is counted. An empty jar
-	// has two explanations — the far end set nothing, or the port kept it — and
-	// they lead to different programs. This is the only place that can tell
-	// them apart.
+	// has two explanations — the far end set nothing, or something between
+	// kept it — and they lead to different programs.
 	watched := &countsCookies{under: cl.Transport}
 	s := google.NewSession(watched)
 	s.Client.Timeout = cl.Timeout

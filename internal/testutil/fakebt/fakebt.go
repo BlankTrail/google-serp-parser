@@ -98,10 +98,13 @@ type Server struct {
 	deadGateways map[string]bool
 	profiles     map[int]Profile
 	rotates      map[int]int
-	rotateDrift  bool
-	fails        map[string][]failure
-	seen         []Recorded
-	nextPort     int
+	// resets counts how often the solver's pin and cookies were cleared off
+	// each port.
+	resets      map[int]int
+	rotateDrift bool
+	fails       map[string][]failure
+	seen        []Recorded
+	nextPort    int
 
 	// solverQueue is what the service reports the challenge solver has in hand.
 	solverQueue SolverQueue
@@ -127,6 +130,7 @@ func New(t *testing.T) *Server {
 		ports:    map[int]string{},
 		profiles: map[int]Profile{},
 		rotates:  map[int]int{},
+		resets:   map[int]int{},
 		fails:    map[string][]failure{},
 		nextPort: freePort(),
 	}
@@ -511,6 +515,13 @@ func (s *Server) SetSolverQueue(q SolverQueue) {
 	s.mu.Unlock()
 }
 
+// ResetsOf is how often the solver's pin and cookies were cleared off a port.
+func (s *Server) ResetsOf(port int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resets[port]
+}
+
 // StoredProfile is one fingerprint the fake says it holds.
 type StoredProfile struct{ Name, Browser, Version string }
 
@@ -641,6 +652,15 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 	}
 
 	switch action {
+	case "reset_solver_sessions":
+		// What the solver left on the port: the fingerprint it pinned and the
+		// cookies it won. The fake counts the resets, because what a caller
+		// has to get right is resetting a port before another session is put
+		// on it — and a count is the only way a test can see that happen.
+		s.mu.Lock()
+		s.resets[port]++
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"port": port, "reset": true})
 	case "config":
 		// One named fingerprint put on a live port. The fake remembers it, so
 		// asking what the port is wearing afterwards answers what was asked

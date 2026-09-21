@@ -489,7 +489,7 @@ func TestPortSpec_OpensAndDialsOverSOCKS5UnlessHTTPWasNamed(t *testing.T) {
 	}
 }
 
-func TestWearProfile_PutsANamedFingerprintOnALivePort(t *testing.T) {
+func TestWearSession_PutsOneOfOurOwnSessionsOnALivePort(t *testing.T) {
 	// How a session is resumed. A session is a fingerprint and a set of
 	// cookies; the cookies are this program's to keep, and the fingerprint is
 	// the service's, named by a profile it holds. Putting that name on a port
@@ -511,9 +511,9 @@ func TestWearProfile_PutsANamedFingerprintOnALivePort(t *testing.T) {
 		t.Fatalf("OpenPort: %v", err)
 	}
 
-	got, err := cl.WearProfile(ctx, port, "Firefox_155_lin")
+	got, err := cl.WearSession(ctx, port, "Firefox_155_lin")
 	if err != nil {
-		t.Fatalf("WearProfile: %v", err)
+		t.Fatalf("WearSession: %v", err)
 	}
 	if got.Name != "Firefox_155_lin" {
 		t.Errorf("the port came back wearing %q, want the profile that was asked for", got.Name)
@@ -522,5 +522,35 @@ func TestWearProfile_PutsANamedFingerprintOnALivePort(t *testing.T) {
 	// makes it the port's state rather than one answer.
 	if held := f.ProfileOf(port); held.Name != "Firefox_155_lin" {
 		t.Errorf("the service holds the port as wearing %q", held.Name)
+	}
+}
+
+func TestResetSolverSessions_ClearsWhatTheSolverLeftOnAPort(t *testing.T) {
+	// What makes a port reusable by another session. A port that carried one
+	// session and is handed to the next without this would put the first one's
+	// clearance under the second one's cookies, and the second session would
+	// be two sessions to whoever is reading them.
+	f := fakebt.New(t)
+	cl, err := NewClient(f.URL(), f.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx := context.Background()
+	port, err := cl.SuggestPort(ctx)
+	if err != nil {
+		t.Fatalf("SuggestPort: %v", err)
+	}
+	if _, err := cl.OpenPort(ctx, port, DefaultPortSpec(), Egress{}); err != nil {
+		t.Fatalf("OpenPort: %v", err)
+	}
+
+	if got := f.ResetsOf(port); got != 0 {
+		t.Fatalf("a port that was just opened has been reset %d times", got)
+	}
+	if err := cl.ResetSolverSessions(ctx, port); err != nil {
+		t.Fatalf("ResetSolverSessions: %v", err)
+	}
+	if got := f.ResetsOf(port); got != 1 {
+		t.Errorf("the port was reset %d times, want once", got)
 	}
 }
