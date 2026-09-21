@@ -343,3 +343,38 @@ func TestHeld_CannotBeGivenBackTwice(t *testing.T) {
 		t.Errorf("%d sessions are held after the stale handle, want the other thread's one", held)
 	}
 }
+
+func TestHeld_SavesThePagesOfAWalkWithoutLettingTheSessionGo(t *testing.T) {
+	// A query walked page by page keeps one session for all its pages, so it
+	// cannot give the session back after each one — but a run can end between
+	// two pages, and a clearance won on page one and never written down is one
+	// the next run pays for again.
+	h, w := newHistory(), newWearer("Chrome_153_win")
+	c := &clock{at: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
+	k := newKeeperAt(h, w, time.Minute, c)
+	ctx := context.Background()
+
+	s, _ := k.Take(ctx, 20001)
+	s.Jar.SetCookies(at(t, "https://www.google.ru/"), []*http.Cookie{{Name: "GOOGLE_ABUSE_EXEMPTION", Value: "page-one", Path: "/"}})
+	if err := s.Save(ctx); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// Written down…
+	back, _ := ReadJar(h.answered[s.ID])
+	if got := names(back, at(t, "https://www.google.ru/")); got["GOOGLE_ABUSE_EXEMPTION"] != "page-one" {
+		t.Errorf("after the first page the history holds %v", got)
+	}
+	// …and still held: another thread asking now gets a different session.
+	other, _ := k.Take(ctx, 20002)
+	if other.ID == s.ID {
+		t.Error("a session saved mid-walk was handed to another thread")
+	}
+	// The walk goes on and ends normally.
+	if err := s.Answered(ctx); err != nil {
+		t.Errorf("the walk could not give its session back after saving it: %v", err)
+	}
+	// And a handle that has been given back cannot save.
+	if err := s.Save(ctx); !errors.Is(err, ErrNotHeld) {
+		t.Errorf("a session given back could still be saved: %v", err)
+	}
+}

@@ -228,6 +228,40 @@ func (h *Held) Answered(ctx context.Context) error {
 	return h.keeper.answered(ctx, h)
 }
 
+// Save writes the session's cookies down after an answer and keeps holding it.
+//
+// It is for a query walked page by page. The walk keeps one session for all
+// its pages — a visitor paging through results does not become someone else
+// between page one and page two — so it cannot give the session back after
+// every page; but a run can end between two pages, and a clearance won on page
+// one and never written down is a clearance the next run pays for again.
+func (h *Held) Save(ctx context.Context) error {
+	return h.keeper.save(ctx, h)
+}
+
+func (k *Keeper) save(ctx context.Context, h *Held) error {
+	k.mu.Lock()
+	s, ok := k.known[h.ID]
+	if h.done || !ok || !s.held {
+		k.mu.Unlock()
+		return ErrNotHeld
+	}
+	k.mu.Unlock()
+
+	now := k.now()
+	written, err := s.jar.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	if err := k.history.SessionAnswered(ctx, s.record.ID, written, now); err != nil {
+		return err
+	}
+	k.mu.Lock()
+	s.record.UsedAt, s.record.Failures = now, 0
+	k.mu.Unlock()
+	return nil
+}
+
 // Failed gives the session back after a refusal. It says whether the session
 // was given up — at the second refusal in a row.
 func (h *Held) Failed(ctx context.Context) (bool, error) {
