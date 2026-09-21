@@ -59,9 +59,11 @@ import (
 )
 
 // sessionMoveSlow is how long an answer takes when it went through the solver.
-// A request through an identity that has answered costs one to two seconds; a
-// challenge costs tens.
-const sessionMoveSlow = 6 * time.Second
+//
+// Thirty seconds. Measured on this stand, a challenge solved costs 1m39s to
+// 1m58s and a warm request costs 2.7s to 7.0s; six seconds, which this was,
+// counted two warm answers of 6.3s and 7.0s as challenges.
+const sessionMoveSlow = 30 * time.Second
 
 // sessionMoveAsks is how many searches an arm makes.
 const sessionMoveAsks = 4
@@ -94,19 +96,24 @@ func TestLiveSessionMove_WhetherASessionIsPortableBetweenPorts(t *testing.T) {
 		logf(t, "MEASUREMENT the settled session holds %d cookies for %s: %v", len(held), host, names)
 	}
 
-	// The move: the very jar the settled session filled, every host of it,
-	// which is what a session store would hand over.
+	// The move that keeps the address: another port, the settled session's own
+	// upstream put on it, the same profile, the same jar. The last run of this
+	// found the clearance does not survive a change of address — a moved
+	// session paid 1m40s, the empty control 1m54s — which is what the pool's
+	// own notes say: clearance binds to IP, UA and TLS at once. So this is the
+	// arm the design turns on: if a port is only a wire, a session that brings
+	// its address with it should need no challenge at all.
+	sameIP := sameAddress(ctx, t, pool, client, lease, profile, jar)
+	// The move to another address: the jar, the profile, a different upstream.
 	moved := arm(ctx, t, pool, client, "moved", profile, jar)
-	// The control: the same profile and nothing carried.
-	bare := arm(ctx, t, pool, client, "bare", profile, nil)
 
 	logf(t, "MEASUREMENT %s", "----------------------------------------------------------")
-	for _, r := range []asked{settled, moved, bare} {
+	for _, r := range []asked{settled, sameIP, moved} {
 		logf(t, "MEASUREMENT %s: port %d, %d asked, %d answered, %d through the solver, median %v, %d Set-Cookie over %d responses",
 			r.name, r.port, r.made, r.answered, r.slow, r.median.Round(time.Millisecond),
 			r.setCookies, r.responses)
 	}
-	logf(t, "MEASUREMENT a session is portable if moved paid for no challenge and bare paid for one")
+	logf(t, "MEASUREMENT a session is portable between ports if same-ip paid for no challenge")
 }
 
 // settle tries addresses until one gets an answered page, and asks on through
@@ -188,6 +195,41 @@ func arm(ctx context.Context, t *testing.T, pool *blanktrail.Pool, client *blank
 	}
 	logf(t, "MEASUREMENT %s: no address reached Google in %d tries", name, sessionMoveTries)
 	return asked{name: name}
+}
+
+// sameAddress takes another port, puts the settled session's own upstream on it,
+// then its profile, and asks through it with the settled jar. The upstream is
+// read off the settled lease and handed to the service; it is never written to
+// the log, because it carries the proxy's credentials.
+func sameAddress(ctx context.Context, t *testing.T, pool *blanktrail.Pool, client *blanktrail.Client,
+	settled *blanktrail.Lease, profile string, jar http.CookieJar) asked {
+	t.Helper()
+	upstream := settled.Egress().Upstream
+	if upstream == "" {
+		logf(t, "MEASUREMENT same-ip: the settled session has no upstream to carry")
+		return asked{name: "same-ip"}
+	}
+	lease, err := pool.Acquire(ctx)
+	if err != nil {
+		logf(t, "MEASUREMENT same-ip: no identity to try: %v", err)
+		return asked{name: "same-ip"}
+	}
+	defer lease.Release()
+	if lease.Port() == settled.Port() {
+		logf(t, "MEASUREMENT same-ip: the pool handed back the settled port itself")
+		return asked{name: "same-ip"}
+	}
+	if err := client.SetUpstream(ctx, lease.Port(), upstream); err != nil {
+		logf(t, "MEASUREMENT same-ip: port %d would not take the settled address", lease.Port())
+		return asked{name: "same-ip"}
+	}
+	worn, err := client.WearSession(ctx, lease.Port(), profile)
+	if err != nil {
+		logf(t, "MEASUREMENT same-ip: port %d would not take the session: %v", lease.Port(), err)
+		return asked{name: "same-ip"}
+	}
+	logf(t, "MEASUREMENT same-ip: port %d carries the settled address and wears %s", lease.Port(), worn.Name)
+	return askThrough(ctx, t, "same-ip", lease, jar, sessionMoveAsks)
 }
 
 // asked is what one arm cost.
