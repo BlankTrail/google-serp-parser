@@ -93,16 +93,25 @@ func TestLiveSessionMove_WhetherASessionIsPortableBetweenPorts(t *testing.T) {
 	if settled.answered == 0 {
 		t.Skip("the first port answered nothing, so there is no session to move")
 	}
-	kept := cookiesIn(t, jar)
-	logf(t, "MEASUREMENT the settled session holds %d cookies for google.com", len(kept))
-	for _, one := range kept {
-		logf(t, "MEASUREMENT   cookie %s (%d characters)", one.Name, len(one.Value))
+	// What the session is made of, host by host. A search for Russia goes to
+	// google.ru, and that is where the clearance is set: the first run of this
+	// carried only what the jar held for google.com — four cookies, and not the
+	// two the challenge was won with — and so moved a session that was missing
+	// the one part of it that mattered.
+	for _, host := range sessionHosts {
+		held := jar.Cookies(hostAt(t, host))
+		names := make([]string, 0, len(held))
+		for _, one := range held {
+			names = append(names, one.Name)
+		}
+		logf(t, "MEASUREMENT the settled session holds %d cookies for %s: %v", len(held), host, names)
 	}
 
-	// The move. Another port, the same profile put on it, and the jar the first
-	// port filled.
-	moved := arm(ctx, t, pool, client, "moved", profile.Name, kept)
-	// The control. Another port, the same profile, and nothing carried.
+	// The move. Another port, the same profile put on it, and the very jar the
+	// first port filled — the whole of it, every host, which is what a session
+	// store would hand over.
+	moved := arm(ctx, t, pool, client, "moved", profile.Name, jar)
+	// The control. Another port, the same profile, and a jar with nothing in it.
 	bare := arm(ctx, t, pool, client, "bare", profile.Name, nil)
 
 	logf(t, "MEASUREMENT %s", "----------------------------------------------------------")
@@ -190,7 +199,7 @@ func workingPort(ctx context.Context, t *testing.T, pool *blanktrail.Pool,
 // arm takes an identity that has answered and been cleared, puts the named
 // profile on it, seeds a jar with what was carried, and asks through it.
 func arm(ctx context.Context, t *testing.T, pool *blanktrail.Pool, client *blanktrail.Client,
-	name, profile string, carry []*http.Cookie) asked {
+	name, profile string, carry http.CookieJar) asked {
 	t.Helper()
 	lease, ok := workingPort(ctx, t, pool, client, name)
 	if !ok {
@@ -207,13 +216,15 @@ func arm(ctx context.Context, t *testing.T, pool *blanktrail.Pool, client *blank
 		logf(t, "MEASUREMENT %s: the port wears %q after being asked for %q", name, worn.Name, profile)
 	}
 
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("cookiejar: %v", err)
-	}
-	if len(carry) > 0 {
-		jar.SetCookies(googleAt(t), carry)
-		logf(t, "MEASUREMENT %s: %d cookies carried onto the port", name, len(carry))
+	jar := carry
+	if jar == nil {
+		fresh, err := cookiejar.New(nil)
+		if err != nil {
+			t.Fatalf("cookiejar: %v", err)
+		}
+		jar = fresh
+	} else {
+		logf(t, "MEASUREMENT %s: the settled session's jar carried onto the port", name)
 	}
 	return askThrough(ctx, t, name, lease, jar, sessionMoveAsks)
 }
@@ -299,15 +310,14 @@ func (c *countsCookies) RoundTrip(r *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// cookiesIn is what a jar holds for Google, as cookies to put in another jar.
-func cookiesIn(t *testing.T, jar http.CookieJar) []*http.Cookie {
-	t.Helper()
-	return jar.Cookies(googleAt(t))
-}
+// sessionHosts are the hosts a Russian search session sets cookies on: the
+// country's own domain, where the search and its clearance live, and the
+// .com one the consent flow can pass through.
+var sessionHosts = []string{"www.google.ru", "www.google.com"}
 
-func googleAt(t *testing.T) *url.URL {
+func hostAt(t *testing.T, host string) *url.URL {
 	t.Helper()
-	at, err := url.Parse("https://www.google.com/")
+	at, err := url.Parse("https://" + host + "/")
 	if err != nil {
 		t.Fatalf("parsing the address: %v", err)
 	}

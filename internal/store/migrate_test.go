@@ -109,6 +109,9 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// The sessions this program keeps, which the eighteenth step brought.
+		`DROP INDEX sessions_by_device_and_use`,
+		`DROP TABLE sessions`,
 		// Which identity a job's ports wear, which the seventeenth step brought.
 		`ALTER TABLE jobs DROP COLUMN browser_release`,
 		`ALTER TABLE jobs DROP COLUMN os`,
