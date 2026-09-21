@@ -1024,3 +1024,27 @@ func TestRotor_WithNoRestNothingIsEverPutAway(t *testing.T) {
 		t.Errorf("%d of two addresses were offered after one was marked dead", len(seen))
 	}
 }
+
+func TestRotor_BenchesOneLoginWithoutTheOthersOnItsHostAndPort(t *testing.T) {
+	// A provider that sets the exit by the login sells one host and port for
+	// every exit it has. One login that did not carry a request says nothing
+	// about the others, and a key without the login benched the whole list at
+	// the first failure.
+	ups := []Upstream{
+		{Scheme: "socks5", Host: "gw.example", Port: "1080", User: "user-session-1", Pass: "pw"},
+		{Scheme: "socks5", Host: "gw.example", Port: "1080", User: "user-session-2", Pass: "pw"},
+	}
+	r := NewStaticRotor(ups, WithRest(time.Hour))
+	r.MarkDead(ups[0])
+
+	got, ok := r.NextFree()
+	if !ok {
+		t.Fatal("one login put away left nothing to hand out")
+	}
+	if got.User != ups[1].User {
+		t.Errorf("handed out %q, want the login that did not fail", got.User)
+	}
+	if n := r.RestingHere(); n != 1 {
+		t.Errorf("%d addresses are resting, want the one login that failed", n)
+	}
+}

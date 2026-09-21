@@ -39,8 +39,22 @@ func (u Upstream) URL() string {
 	return uu.String()
 }
 
-// Key identifies an upstream by scheme and address, ignoring credentials.
-func (u Upstream) Key() string { return u.Scheme + "|" + net.JoinHostPort(u.Host, u.Port) }
+// Key identifies an upstream by the whole of it: scheme, login, password, host
+// and port.
+//
+// It used to leave the login and password out, on the reading that one host and
+// port is one machine. That reading is wrong for a whole class of lists: a
+// provider that sells one host and port and sets the exit by the login — a
+// session id or a country written into the user name — puts every exit it has
+// behind one host:port, and a key without the login made them all one address.
+// One login that failed put the whole list on the bench, and a session kept
+// against a host:port could not be told from another session on another exit
+// of it.
+//
+// It is the address exactly as this program writes it everywhere else, so a
+// record one part of the program keeps is found under the same text by any
+// other — the pool counts what each egress carries by that text already.
+func (u Upstream) Key() string { return u.URL() }
 
 var validSchemes = map[string]bool{
 	"http": true, "https": true,
