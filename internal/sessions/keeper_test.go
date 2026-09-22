@@ -49,7 +49,8 @@ func (h *history) NewSession(_ context.Context, s store.Session) (int64, error) 
 	return s.ID, nil
 }
 
-func (h *history) SessionAnswered(_ context.Context, id int64, cookies []byte, at time.Time) error {
+func (h *history) SessionAnswered(_ context.Context, id int64, a store.Answer, at time.Time) error {
+	cookies := a.Cookies
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	s, ok := h.sessions[id]

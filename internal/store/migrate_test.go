@@ -109,6 +109,11 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// What a session carries beyond its fingerprint, which the nineteenth
+		// step brought.
+		`ALTER TABLE sessions DROP COLUMN release`,
+		`ALTER TABLE sessions DROP COLUMN tickets`,
+		`ALTER TABLE sessions DROP COLUMN exit`,
 		// The sessions this program keeps, which the eighteenth step brought.
 		`DROP INDEX sessions_by_device_and_use`,
 		`DROP TABLE sessions`,

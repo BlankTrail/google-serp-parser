@@ -73,7 +73,7 @@ func TestSessions_OffersTheOneUsedLastFirst(t *testing.T) {
 	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	old, _ := s.NewSession(ctx, Session{Profile: "old", Device: "desktop", CreatedAt: base})
 	warm, _ := s.NewSession(ctx, Session{Profile: "warm", Device: "desktop", CreatedAt: base})
-	if err := s.SessionAnswered(ctx, warm, nil, base.Add(11*time.Hour)); err != nil {
+	if err := s.SessionAnswered(ctx, warm, Answer{}, base.Add(11*time.Hour)); err != nil {
 		t.Fatalf("SessionAnswered: %v", err)
 	}
 
@@ -99,7 +99,7 @@ func TestSessions_GivesASessionUpAtTheSecondRefusalInARow(t *testing.T) {
 		t.Fatalf("the first refusal: dropped=%v err=%v, want the session kept", dropped, err)
 	}
 	// An answer in between: the refusal before it was the address.
-	if err := s.SessionAnswered(ctx, id, nil, now.Add(time.Minute)); err != nil {
+	if err := s.SessionAnswered(ctx, id, Answer{}, now.Add(time.Minute)); err != nil {
 		t.Fatalf("SessionAnswered: %v", err)
 	}
 	if dropped, err := s.SessionFailed(ctx, id, now.Add(2*time.Minute)); err != nil || dropped {
@@ -149,4 +149,49 @@ func ids(all []Session) []int64 {
 		out = append(out, one.ID)
 	}
 	return out
+}
+
+func TestSessions_KeepWhereTheyGoOutTheirTicketsAndTheirRelease(t *testing.T) {
+	// A session is put back on a port the way it left one: on its own exit,
+	// resuming TLS with its own tickets, wearing a fingerprint of the release a
+	// job asked for. All three have to come back from the history as they went
+	// in — and an answer has to move all three at once, because a request can
+	// carry a session to another address on its way.
+	s := testStore(t)
+	ctx := context.Background()
+	made := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	id, err := s.NewSession(ctx, Session{
+		Profile: "Chrome_153_win", Device: "desktop", Release: 153,
+		Exit:    "addr:socks5://user-session-1:pw@gw.example:1080",
+		Tickets: []byte(`[{"host":"www.google.ru","tickets":[]}]`), CreatedAt: made,
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	one := onlySession(t, s)
+	if one.ID != id || one.Release != 153 || one.Exit != "addr:socks5://user-session-1:pw@gw.example:1080" ||
+		string(one.Tickets) != `[{"host":"www.google.ru","tickets":[]}]` {
+		t.Fatalf("the session read back as %+v", one)
+	}
+
+	moved := Answer{Cookies: []byte(`[]`), Tickets: []byte(`[{"host":"www.google.com","tickets":[]}]`),
+		Exit: "addr:socks5://user-session-2:pw@gw.example:1080"}
+	if err := s.SessionAnswered(ctx, id, moved, made.Add(time.Minute)); err != nil {
+		t.Fatalf("SessionAnswered: %v", err)
+	}
+	one = onlySession(t, s)
+	if one.Exit != moved.Exit || string(one.Tickets) != string(moved.Tickets) {
+		t.Errorf("after the answer the session is at %q with %s, want %q with %s",
+			one.Exit, one.Tickets, moved.Exit, moved.Tickets)
+	}
+}
+
+// onlySession reads back the one desktop session a test wrote.
+func onlySession(t *testing.T, s *Store) Session {
+	t.Helper()
+	got, err := s.Sessions(context.Background(), "desktop", time.Time{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Sessions: %d sessions, err %v; want exactly one", len(got), err)
+	}
+	return got[0]
 }

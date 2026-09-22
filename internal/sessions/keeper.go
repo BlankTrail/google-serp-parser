@@ -24,7 +24,7 @@ const KeptFor = 12 * time.Hour
 type History interface {
 	Sessions(ctx context.Context, device string, since time.Time) ([]store.Session, error)
 	NewSession(ctx context.Context, s store.Session) (int64, error)
-	SessionAnswered(ctx context.Context, id int64, cookies []byte, at time.Time) error
+	SessionAnswered(ctx context.Context, id int64, a store.Answer, at time.Time) error
 	SessionFailed(ctx context.Context, id int64, at time.Time) (bool, error)
 	DropStaleSessions(ctx context.Context, before time.Time) (int, error)
 }
@@ -253,7 +253,7 @@ func (k *Keeper) save(ctx context.Context, h *Held) error {
 	if err != nil {
 		return err
 	}
-	if err := k.history.SessionAnswered(ctx, s.record.ID, written, now); err != nil {
+	if err := k.history.SessionAnswered(ctx, s.record.ID, store.Answer{Cookies: written}, now); err != nil {
 		return err
 	}
 	k.mu.Lock()
@@ -278,7 +278,7 @@ func (k *Keeper) answered(ctx context.Context, h *Held) error {
 	if err != nil {
 		return err
 	}
-	if err := k.history.SessionAnswered(ctx, s.record.ID, written, now); err != nil {
+	if err := k.history.SessionAnswered(ctx, s.record.ID, store.Answer{Cookies: written}, now); err != nil {
 		return err
 	}
 	k.mu.Lock()
