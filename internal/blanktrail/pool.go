@@ -218,6 +218,22 @@ type PoolConfig struct {
 	// not a person. An operator who knows their list can carry more, and says so
 	// here.
 	MaxPerUpstream int
+	// Sessions says the ports are places a session is put on, rather than
+	// identities of their own.
+	//
+	// A session is a fingerprint, a jar of cookies, a set of TLS tickets and an
+	// exit, kept by the program and put on whichever port is free. Three things
+	// the pool does for identities it then leaves to the sessions: the pause
+	// between two requests is a session's rest, not a port's; how many work
+	// through one address at once is counted over sessions, because a free
+	// port's address is about to change; and where a port moves when a request
+	// has to be carried elsewhere is chosen by Choose.
+	Sessions bool
+	// Choose picks, in a pool of sessions, the address a port moves to when a
+	// request has to be carried to another. It is handed the addresses the list
+	// offers — never the one being left — and the limit on sessions per address,
+	// and says which. Nil moves the port the way a pool of identities does.
+	Choose func(candidates []string, limit int) (string, bool)
 
 	// AddressesPerRequest is how many addresses one request may be carried to
 	// when they fail to carry it at all (default 15).
@@ -412,6 +428,16 @@ type poolPort struct {
 	revivals      int
 	renewedAt     time.Time
 	session       uint64 // bumped whenever the port's identity changes
+}
+
+// changedIdentity records that what the port presents has changed under it, so
+// whatever was keyed to the old identity — the warm mark, a search session held
+// per port — is not handed to the new one.
+func (pt *poolPort) changedIdentity() {
+	pt.mu.Lock()
+	pt.session++
+	pt.answered = false
+	pt.mu.Unlock()
 }
 
 func (pt *poolPort) egress() Egress {
@@ -677,6 +703,11 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		cool = DeriveCooldown(cfg.PortsPerThread, cfg.DelayMin, cfg.DelayMax)
 	default:
 		cool = DefaultCooldown
+	}
+	if cfg.Sessions {
+		// The pause is the session's. A port that kept one of its own would
+		// stand a thread still behind a session that is not on it any more.
+		cool = 0
 	}
 
 	channels := cfg.Channels
@@ -1505,7 +1536,12 @@ func (p *Pool) PaceAt(d time.Duration) {
 		d = 0
 	}
 	p.mu.Lock()
-	p.cool = d
+	if !p.cfg.Sessions {
+		// In a pool of sessions the rest between two uses of a session is the
+		// keeper's to hold; what is left here is the pause between two pages of
+		// a walk.
+		p.cool = d
+	}
 	p.cfg.DelayMin, p.cfg.DelayMax = d, d+d/pacingSpread
 	p.mu.Unlock()
 }
@@ -1765,7 +1801,11 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		// and a limit meant to stop one address carrying too much at once would,
 		// applied to it, let one identity work and stand the rest of the pool
 		// still for as long as the job ran.
-		if eg := pt.egress(); !eg.IsDirect() && carrying[eg.String()] >= atOnce {
+		//
+		// In a pool of sessions a free port's address is about to change — the
+		// session put on it says where it goes — and the sessions keep the
+		// limit themselves.
+		if eg := pt.egress(); !p.cfg.Sessions && !eg.IsDirect() && carrying[eg.String()] >= atOnce {
 			// This egress is already carrying as many identities as it may. The
 			// port is free and stays free: what is busy is the address behind
 			// it.
@@ -2076,6 +2116,11 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 		return fmt.Errorf("blanktrail: port %d is not in the pool", num)
 	}
 	cur := pt.egress()
+	if p.cfg.Sessions && p.cfg.Choose != nil {
+		if free, ok := pt.ch.(interface{ Free() []Egress }); ok {
+			return p.moveBySessions(ctx, pt, cur, free.Free())
+		}
+	}
 	if p.cfg.WholeList {
 		// The address is what this port was for. Another one that is free takes
 		// its place; if none is, the port goes rather than standing on an
@@ -2097,6 +2142,25 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 		return err
 	}
 	return p.putEgress(ctx, pt, next)
+}
+
+// moveBySessions moves a port of a pool of sessions to the address the
+// sessions' rule picks, among those the list offers and other than the one it
+// is leaving. The session being carried follows the request there; the rule is
+// what keeps it from following it onto an address already carrying more than
+// its share.
+func (p *Pool) moveBySessions(ctx context.Context, pt *poolPort, cur Egress, free []Egress) error {
+	candidates := make([]string, 0, len(free))
+	for _, eg := range free {
+		if eg.Upstream != cur.Upstream {
+			candidates = append(candidates, eg.Upstream)
+		}
+	}
+	next, ok := p.cfg.Choose(candidates, p.cfg.MaxPerUpstream)
+	if !ok {
+		return fmt.Errorf("blanktrail: no address is free to move port %d to", pt.num)
+	}
+	return p.putEgress(ctx, pt, Egress{Upstream: next})
 }
 
 // putEgress moves a port onto an address that has already been chosen, and says

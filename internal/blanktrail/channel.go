@@ -88,6 +88,20 @@ func (c *listChannel) NextFree() (Egress, bool) {
 	return Egress{Upstream: u.URL()}, true
 }
 
+// Free is every address of the list that is not resting.
+func (c *listChannel) Free() []Egress {
+	ups := c.rotor.Free()
+	out := make([]Egress, len(ups))
+	for i, u := range ups {
+		out[i] = Egress{Upstream: u.URL()}
+	}
+	return out
+}
+
+// Holds says whether the list holds the address and it is not resting. The
+// address is an egress's Upstream, which is the rotor's key.
+func (c *listChannel) Holds(address string) bool { return c.rotor.Holds(address) }
+
 func (c *listChannel) Renew(_ context.Context, _ Egress) (Egress, error) {
 	eg, ok := c.Next()
 	if !ok {

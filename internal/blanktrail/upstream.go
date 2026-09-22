@@ -277,8 +277,12 @@ func httpGet(ctx context.Context, rawURL string) ([]byte, error) {
 // (optionally) reloads the list on an interval while keeping its cursor
 // position stable.
 type Rotor struct {
-	mu          sync.Mutex
-	ups         []listed
+	mu  sync.Mutex
+	ups []listed
+	// held is the key of every address in the list, so asking whether the list
+	// holds one does not walk fifteen thousand of them. It is rebuilt wherever
+	// ups is, through setList.
+	held        map[string]bool
 	pos         int
 	fails       map[string]int
 	benched     map[string]time.Time // key -> when its rest began
@@ -419,7 +423,6 @@ func NewRotor(ctx context.Context, src Source, opts ...RotorOption) (*Rotor, err
 
 func newRotor(ups []Upstream, src Source, opts ...RotorOption) *Rotor {
 	r := &Rotor{
-		ups:      withKeys(ups),
 		fails:    map[string]int{},
 		benched:  map[string]time.Time{},
 		maxFails: 3,
@@ -427,10 +430,21 @@ func newRotor(ups []Upstream, src Source, opts ...RotorOption) *Rotor {
 		now:      time.Now,
 		src:      src,
 	}
+	r.setList(ups)
 	for _, o := range opts {
 		o(r)
 	}
 	return r
+}
+
+// setList replaces the list and the index of it together. Called with the lock
+// held, or before the rotor is shared.
+func (r *Rotor) setList(ups []Upstream) {
+	r.ups = withKeys(ups)
+	r.held = make(map[string]bool, len(r.ups))
+	for _, l := range r.ups {
+		r.held[l.key] = true
+	}
 }
 
 // Len reports the current number of upstreams.
@@ -507,6 +521,37 @@ func (r *Rotor) NextFree() (Upstream, bool) {
 		}
 	}
 	return Upstream{}, false
+}
+
+// Free is every address of the list that is not resting, in list order.
+//
+// It is what a pool of sessions chooses from. Next hands addresses out in turn,
+// which is right for a port that is an identity of its own; a session is given
+// the address carrying the fewest sessions, and that is a choice over all of
+// them rather than the next one along.
+func (r *Rotor) Free() []Upstream {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releaseRested(r.now())
+	out := make([]Upstream, 0, len(r.ups))
+	for _, l := range r.ups {
+		if _, resting := r.benched[l.key]; !resting {
+			out = append(out, l.up)
+		}
+	}
+	return out
+}
+
+// Holds says whether the list holds the address with this key and it is not
+// resting.
+func (r *Rotor) Holds(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releaseRested(r.now())
+	if _, resting := r.benched[key]; resting {
+		return false
+	}
+	return r.held[key]
 }
 
 // refreshNextRelease recomputes the earliest instant a rest ends. Called with
@@ -810,7 +855,7 @@ func (r *Rotor) reconcile(ups []Upstream) {
 		}
 	}
 	r.refreshNextRelease()
-	r.ups = withKeys(ups)
+	r.setList(ups)
 	if len(ups) > 0 {
 		r.pos %= len(ups)
 	} else {
