@@ -9,10 +9,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 )
 
 // ErrNoIdentityLeft is returned when a query was refused by every identity it
@@ -85,8 +87,22 @@ type Attempt struct {
 	// there was one.
 	Brake *blanktrail.Brake
 
+	// Keeper, when set, is where this attempt takes its sessions: a session is
+	// ours — fingerprint, cookies, TLS tickets, exit — and a port is only the
+	// place it is put on. Nil keeps the older arrangement, in which a port is the
+	// identity and its cookies are the proxy's.
+	Keeper *sessions.Keeper
+	// Want is what the sessions this attempt takes have to be. Read only with
+	// Keeper.
+	Want sessions.Want
+
 	mu       sync.Mutex
 	sessions map[int]heldSession
+	// searches is each kept session's search state — its visit to the front
+	// page and its Referer chain. It belongs to the session and goes wherever
+	// the session goes, which is why it is keyed by the session rather than by
+	// the port.
+	searches map[int64]*google.Session
 }
 
 // heldSession is one port's search session, tagged with the identity it was
@@ -200,17 +216,41 @@ func (a *Attempt) walkOnce(ctx context.Context, q google.Query, from, to int) ([
 	}
 	defer lease.Release()
 
+	var held *sessions.Held
+	port := leasePort{lease}
+	if a.Keeper != nil {
+		if held, err = a.takeSession(ctx, port); err != nil {
+			return nil, err
+		}
+	}
+
 	var out []google.SERP
-	err = google.SearchFrom(ctx, boundSearcher{attempt: a, lease: lease}, q, from, to,
+	err = google.SearchFrom(ctx, boundSearcher{attempt: a, lease: lease, held: held}, q, from, to,
 		func(_ int, serp google.SERP) bool {
-			// This identity has brought back a page, which is what makes it warm:
-			// the next request through it costs seconds where the first cost
-			// minutes. It is said here rather than at the end of the walk because
-			// a walk refused on page seven has still proved the identity on six.
-			lease.Answered()
+			if held != nil {
+				// Written down page by page: a run can end between two pages,
+				// and a clearance won on page one and never written down is
+				// paid for again.
+				_ = held.Save(ctx, port)
+			} else {
+				// This identity has brought back a page, which is what makes it
+				// warm: the next request through it costs seconds where the
+				// first cost minutes. It is said here rather than at the end of
+				// the walk because a walk refused on page seven has still proved
+				// the identity on six.
+				lease.Answered()
+			}
 			out = append(out, serp)
 			return false
 		})
+	if held != nil {
+		if err == nil {
+			_ = held.Answered(ctx, port)
+		} else {
+			a.letGoAfter(ctx, held)
+		}
+		return out, err
+	}
 	if err == nil {
 		return out, nil
 	}
@@ -230,6 +270,9 @@ func (a *Attempt) walkOnce(ctx context.Context, q google.Query, from, to int) ([
 type boundSearcher struct {
 	attempt *Attempt
 	lease   *blanktrail.Lease
+	// held is the kept session the walk is carried by, in a run that keeps
+	// sessions; nil asks through the port's own identity.
+	held *sessions.Held
 }
 
 func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP, error) {
@@ -240,7 +283,13 @@ func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP,
 	if err := b.attempt.Brake.Hold(ctx); err != nil {
 		return google.SERP{}, err
 	}
-	serp, err := b.attempt.sessionFor(b.lease).Search(ctx, q)
+	var search *google.Session
+	if b.held != nil {
+		search = b.attempt.searchFor(b.held, b.lease)
+	} else {
+		search = b.attempt.sessionFor(b.lease)
+	}
+	serp, err := search.Search(ctx, q)
 	b.attempt.caught(serp, err)
 	return serp, err
 }
@@ -267,6 +316,9 @@ func (a *Attempt) once(ctx context.Context, q google.Query) (google.SERP, error)
 		return google.SERP{}, err
 	}
 	defer lease.Release()
+	if a.Keeper != nil {
+		return a.onceWithSession(ctx, lease, q)
+	}
 
 	if err := a.Brake.Hold(ctx); err != nil {
 		return google.SERP{}, err
@@ -288,6 +340,78 @@ func (a *Attempt) once(ctx context.Context, q google.Query) (google.SERP, error)
 		}
 	}
 	return google.SERP{}, err
+}
+
+// onceWithSession asks one query through a kept session put on the leased port.
+func (a *Attempt) onceWithSession(ctx context.Context, lease *blanktrail.Lease, q google.Query) (google.SERP, error) {
+	port := leasePort{lease}
+	held, err := a.takeSession(ctx, port)
+	if err != nil {
+		return google.SERP{}, err
+	}
+	if err := a.Brake.Hold(ctx); err != nil {
+		held.PutBack()
+		return google.SERP{}, err
+	}
+	serp, err := a.searchFor(held, lease).Search(ctx, q)
+	a.caught(serp, err)
+	if err != nil {
+		a.letGoAfter(ctx, held)
+		return google.SERP{}, err
+	}
+	// Written down before the port is let go of: the tickets are read off the
+	// port, and a port given back is about to be another session's. A session
+	// the history would not take costs its next use a challenge, not this query
+	// its answer, so the answer stands either way.
+	_ = held.Answered(ctx, port)
+	return serp, nil
+}
+
+// takeSession puts a session on the port, waiting while every address is
+// working as many sessions as it may. That is a queue and not a failure: a try
+// spent on it is a try the query never had.
+func (a *Attempt) takeSession(ctx context.Context, port leasePort) (*sessions.Held, error) {
+	for {
+		held, err := a.Keeper.Take(ctx, port, a.Want)
+		if !errors.Is(err, sessions.ErrNoAddress) {
+			return held, err
+		}
+		if err := a.Pool.Sleep(ctx, waitingForAnIdentity); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// letGoAfter gives a session back after a request that brought no page. A
+// request the caller's own context ended is not the session failing; anything
+// else — a refusal Google read and judged, or a request no address carried — is
+// one more failure in a row.
+func (a *Attempt) letGoAfter(ctx context.Context, held *sessions.Held) {
+	if ctx.Err() != nil {
+		held.PutBack()
+		return
+	}
+	_, _ = held.Failed(ctx)
+}
+
+// searchFor is a kept session's search state, bound for this request to the port
+// it is on and to the session's own jar.
+func (a *Attempt) searchFor(held *sessions.Held, l *blanktrail.Lease) *google.Session {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.searches == nil {
+		a.searches = map[int64]*google.Session{}
+	}
+	s, ok := a.searches[held.ID]
+	if !ok {
+		s = &google.Session{Mobile: a.Mobile, Asking: a.Asking}
+		a.searches[held.ID] = s
+	}
+	c := l.Client()
+	// The bound the pool was given for one request travels with the client, as
+	// it does in sessionFor.
+	s.Client = &http.Client{Transport: c.Transport, Timeout: c.Timeout, Jar: held.Jar}
+	return s
 }
 
 // sessionFor returns the session belonging to this lease's identity, opening

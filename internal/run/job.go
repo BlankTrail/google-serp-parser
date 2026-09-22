@@ -11,6 +11,7 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 )
 
 // Sink is where a finished query is written down while the job is still
@@ -178,6 +179,10 @@ type Runner struct {
 	// meets a challenge joins a queue, holds its identity while it waits, and
 	// the threads behind it go on making more. Nil is a run with no brake.
 	Brake *blanktrail.Brake
+	// Keeper is where the run takes its sessions, and Want what they have to be.
+	// Nil keeps the arrangement in which a port is the identity.
+	Keeper *sessions.Keeper
+	Want   sessions.Want
 	// Addresses hands out the identities the hidden addresses are read through.
 	//
 	// It is asked the first time an address actually has to be read, and again
@@ -262,7 +267,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	// One Attempt for the whole job. It keeps a session per port, and a port is
 	// leased to one thread at a time, so the threads never meet inside it.
 	attempt := &Attempt{Pool: r.Pool, SpecName: j.SpecName, Tries: j.Tries, Mobile: j.Mobile,
-		Asking: j.Asking, Captured: j.Captured, Brake: r.Brake}
+		Asking: j.Asking, Captured: j.Captured, Brake: r.Brake, Keeper: r.Keeper, Want: r.Want}
 
 	// What a finished query goes through, wherever it was finished: its
 	// addresses read, its results written down, and the stages reported. It is
