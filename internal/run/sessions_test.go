@@ -112,8 +112,14 @@ func TestAttempt_ReusesAKeptSessionAndSendsItsCookiesBack(t *testing.T) {
 	}
 }
 
+// wallBody is Google refusing the session itself: the page it answers a client
+// it has decided against with. It is not the JavaScript check, which is the
+// address's to pass and is answered for elsewhere.
+const wallBody = `<!doctype html><html><body><p>Our systems have detected unusual traffic ` +
+	`from your computer network.</p></body></html>`
+
 func TestAttempt_CountsARefusalAgainstTheSessionAndGivesItUpAtTheSecond(t *testing.T) {
-	o := newCookieOrigin(t, func(int) string { return shellBody })
+	o := newCookieOrigin(t, func(int) string { return wallBody })
 	f := poolFacing(t, o.addr(), 1, inSessions)
 	h := sessions.NewMemory()
 	a := &Attempt{Pool: f.Pool, Keeper: sessions.NewKeeper(h), Want: searchDesktop, Tries: 2}
@@ -262,5 +268,40 @@ func TestRunner_CarriesAJobThroughARestartOfTheService(t *testing.T) {
 		if !slices.ContainsFunc(after, func(a store.Session) bool { return a.ID == s.ID }) {
 			t.Errorf("session %d did not survive the restart", s.ID)
 		}
+	}
+}
+
+func TestAttempt_AShellBlamesTheAddressAndTakesTheSessionOffIt(t *testing.T) {
+	// The JavaScript check Google sets on an address is the address's to pass:
+	// the service passes it in a browser of its own through that same address,
+	// and a shell is that browser failing to. So the address is blamed and the
+	// session is taken off it, with nothing held against the session — one
+	// given up for this would be a session lost to a road, its clearance with
+	// it, while the address it could not travel went on being handed out.
+	o := newCookieOrigin(t, func(int) string { return shellBody })
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	h := sessions.NewMemory()
+	a := &Attempt{Pool: f.Pool, Keeper: sessions.NewKeeper(h), Want: searchDesktop, Tries: 1}
+
+	if _, err := a.Search(context.Background(), usQuery("x")); err == nil {
+		t.Fatal("a shell was taken for an answer")
+	}
+	all, err := h.Sessions(context.Background(), "desktop", time.Time{})
+	if err != nil {
+		t.Fatalf("reading the sessions: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("the history holds %d sessions, want the one the search made kept", len(all))
+	}
+	if all[0].Failures != 0 {
+		t.Errorf("the session carries %d refusals, want none: the address failed the check, not the session",
+			all[0].Failures)
+	}
+	if all[0].Exit != "" {
+		t.Errorf("the session is still written down at %q, want it off the address that could not pass the check",
+			all[0].Exit)
+	}
+	if got := f.Pool.Stats().Rejections; got == 0 {
+		t.Error("the address was not blamed for a check it could not pass")
 	}
 }

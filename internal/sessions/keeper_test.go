@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -790,5 +791,85 @@ func TestKeeper_RestsASessionBetweenThePauseAndHalfAgainMore(t *testing.T) {
 	later, _ := k.Take(ctx, listPort(3, "a", "a", "b"), minute)
 	if later.ID != s.ID {
 		t.Errorf("at ninety-one seconds got session %d, want the rested one (%d)", later.ID, s.ID)
+	}
+}
+
+func TestHeld_ElsewhereTakesASessionOffItsAddressAndHoldsNothingAgainstIt(t *testing.T) {
+	// The check Google sets on an address is the address's to pass. A session
+	// taken off it keeps everything it had — its cookies, its fingerprint, its
+	// count of refusals at nought — and is given the next free address when it
+	// is taken again.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+	held, err := k.Take(ctx, listPort(1, "a", "a", "b"), desktop)
+	if err != nil || held.ID != s.ID {
+		t.Fatalf("taking the session again: %v (got %d, want %d)", err, held.ID, s.ID)
+	}
+	if err := held.Elsewhere(ctx); err != nil {
+		t.Fatalf("Elsewhere: %v", err)
+	}
+	kept, ok := h.Get(s.ID)
+	if !ok {
+		t.Fatal("the session is not in the history")
+	}
+	if kept.Exit != "" {
+		t.Errorf("the session is written down at %q, want it off the address that could not carry it", kept.Exit)
+	}
+	if kept.Failures != 0 {
+		t.Errorf("the session carries %d refusals, want none: the address failed, not the session", kept.Failures)
+	}
+	if !strings.Contains(string(kept.Cookies), "GOOGLE_ABUSE_EXEMPTION") {
+		t.Errorf("the session was written down with %s, want the cookies it still holds", kept.Cookies)
+	}
+	if len(kept.Tickets) != 0 {
+		t.Errorf("the session kept %d bytes of tickets, want none: they are the old exit's", len(kept.Tickets))
+	}
+
+	// And it is free again: the next taking puts it on an address that is free.
+	c.pass(time.Minute)
+	p := listPort(2, "b", "a", "b")
+	back, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if back.ID != s.ID || p.Exit() == addrExit+"a" {
+		t.Errorf("got session %d on %q, want %d somewhere other than the address it was taken off", back.ID, p.Exit(), s.ID)
+	}
+}
+
+func TestHeld_ElsewhereLeavesASessionOnItsGateway(t *testing.T) {
+	// A gateway is the whole of what such a session is: moved to another exit it
+	// would be another session, and there is nowhere to take it.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := gatewayPort(7, "nl-one")
+	s, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if err := s.Answered(ctx, p); err != nil {
+		t.Fatalf("Answered: %v", err)
+	}
+	c.pass(time.Minute)
+	again, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if again.ID != s.ID {
+		t.Fatalf("the gateway's session was taken again as %d, want the same one (%d)", again.ID, s.ID)
+	}
+	if err := again.Elsewhere(ctx); err != nil {
+		t.Fatalf("Elsewhere: %v", err)
+	}
+	kept, ok := h.Get(s.ID)
+	if !ok {
+		t.Fatal("the session is not in the history")
+	}
+	if kept.Exit != gateExit+"nl-one" {
+		t.Errorf("the session on a gateway is written down at %q, want it left on its gateway", kept.Exit)
 	}
 }

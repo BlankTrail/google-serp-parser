@@ -560,6 +560,59 @@ func (k *Keeper) write(ctx context.Context, h *Held, p Port, giveBack bool) erro
 	return nil
 }
 
+// Elsewhere gives the session back and takes it off the address it went out
+// through, holding nothing against it.
+//
+// It is for an address that could not carry the session past a check Google set
+// on it. Such a check is the address's to pass — the service passes it in a
+// browser of its own through that same address — and an address whose browser
+// could not open a connection to pass it once will not pass it for the next
+// request either. The session is not what failed: its cookies, its tickets and
+// its fingerprint are what they were, and only where it goes out is decided
+// afresh the next time it is taken.
+//
+// The tickets go with the address. They are what that exit's TLS handed out and
+// mean nothing at another.
+//
+// A session on a gateway stays where it is. The gateway is the whole of what
+// such a session is — moved to another exit it would be another session — so
+// there is nowhere to take it.
+func (h *Held) Elsewhere(ctx context.Context) error { return h.keeper.elsewhere(ctx, h) }
+
+func (k *Keeper) elsewhere(ctx context.Context, h *Held) error {
+	k.mu.Lock()
+	s, ok := k.known[h.ID]
+	if h.done || !ok || !s.held {
+		k.mu.Unlock()
+		return ErrNotHeld
+	}
+	h.done, s.held = true, false
+	exit := s.record.Exit
+	k.mu.Unlock()
+	if onGateway(exit) {
+		return nil
+	}
+	written, err := s.jar.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	at := k.now()
+	if err := k.history.SessionAnswered(ctx, h.ID, store.Answer{Cookies: written}, at); err != nil {
+		return err
+	}
+	k.mu.Lock()
+	s.record.UsedAt, s.record.Failures, s.record.Tickets, s.record.Exit = at, 0, nil, ""
+	s.record.Cookies = written
+	s.spread = k.rand() * restSpread
+	if a, ok := addressOf(exit); ok {
+		// The address carried a request and is spent for the pause all the
+		// same: what it could not do was pass the check at the end of it.
+		k.used[a] = at
+	}
+	k.mu.Unlock()
+	return nil
+}
+
 func (k *Keeper) failed(ctx context.Context, h *Held) (bool, error) {
 	k.mu.Lock()
 	s, ok := k.known[h.ID]

@@ -248,7 +248,7 @@ func (a *Attempt) walkOnce(ctx context.Context, q google.Query, from, to int) ([
 		if err == nil {
 			_ = held.Answered(ctx, port)
 		} else {
-			a.letGoAfter(ctx, held, err)
+			a.letGoAfter(ctx, held, lease, err)
 		}
 		return out, err
 	}
@@ -371,7 +371,7 @@ func (a *Attempt) onceWithSession(ctx context.Context, lease *blanktrail.Lease, 
 	serp, err := a.searchFor(held, lease).Search(ctx, q)
 	a.caught(serp, err)
 	if err != nil {
-		a.letGoAfter(ctx, held, err)
+		a.letGoAfter(ctx, held, lease, err)
 		return google.SERP{}, err
 	}
 	// Written down before the port is let go of: the tickets are read off the
@@ -405,23 +405,42 @@ func (a *Attempt) takeSession(ctx context.Context, port leasePort) (*sessions.He
 	}
 }
 
-// letGoAfter gives a session back after a request that brought no page.
+// letGoAfter gives a session back after a request that brought no page. There
+// are three kinds of nothing and each is somebody else's.
 //
-// Only a refusal Google read and judged is held against the session. A request
-// no address carried, a port that did not answer, the service being away: the
-// session never reached Google, and counting those against it gave the whole
-// of a history up within the minute the service was restarting.
-func letGoAfter(ctx context.Context, held *sessions.Held, err error) {
-	if _, judged := google.ClassOf(err); judged && ctx.Err() == nil {
+// The JavaScript shell is the address's. It is the check Google sets on a
+// client it wants to see run a script, and the service passes it in a browser
+// of its own through the same address — so a shell is that browser failing to:
+// measured on a wingate list, every shell came after the solver's browser could
+// not open a connection through the exit, and the service handed the check back
+// as the answer ten seconds later. The address is blamed, the session is taken
+// off it, and nothing is held against the session — one given up for this would
+// be a session lost to a road, its clearance with it.
+//
+// Any other refusal Google read and judged is the session's, and counts.
+//
+// Everything else — no address carried the request, a port did not answer, the
+// service was away — never reached Google at all, and the session is put back
+// as it was: counting those against it gave the whole of a history up within
+// the minute the service was restarting.
+func letGoAfter(ctx context.Context, held *sessions.Held, lease *blanktrail.Lease, err error) {
+	class, judged := google.ClassOf(err)
+	switch {
+	case ctx.Err() != nil || !judged:
+		held.PutBack()
+	case class == google.ClassShell:
+		if lease != nil {
+			_ = lease.Reject(ctx)
+		}
+		_ = held.Elsewhere(ctx)
+	default:
 		_, _ = held.Failed(ctx)
-		return
 	}
-	held.PutBack()
 }
 
 // letGoAfter is the attempt's way of saying it; see the function of that name.
-func (a *Attempt) letGoAfter(ctx context.Context, held *sessions.Held, err error) {
-	letGoAfter(ctx, held, err)
+func (a *Attempt) letGoAfter(ctx context.Context, held *sessions.Held, lease *blanktrail.Lease, err error) {
+	letGoAfter(ctx, held, lease, err)
 }
 
 // serviceAwayWait is how long a run waits before asking a service that was away

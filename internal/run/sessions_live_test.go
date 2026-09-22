@@ -234,6 +234,20 @@ func (a *asks) note(err error) {
 	a.judged = append(a.judged, judgedAsk{at: time.Now(), what: what})
 }
 
+// count is how many judged refusals were of one kind, whatever status came with
+// it.
+func (a *asks) count(kind string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, j := range a.judged {
+		if j.what == kind || strings.HasPrefix(j.what, kind+" ") {
+			n++
+		}
+	}
+	return n
+}
+
 // tally is the judged refusals by what they were, most frequent first.
 func (a *asks) tally() string {
 	a.mu.Lock()
@@ -479,11 +493,15 @@ func TestLiveSessions_AreMadeReusedWrittenDownAndFoundAgain(t *testing.T) {
 		"(%d of them had answered), %d waited or were not needed, %d were given up",
 		len(before), clean, challenged, moved, movedAnswered, unused, gone)
 	// The list is the same list throughout, so no address a session answered
-	// through ever left it: such a session waits for its address and is never
-	// carried to another. Only one that had not answered goes where it can.
-	if movedAnswered > 0 {
-		errorf(t, "%d sessions that had answered were carried to another exit while their address was "+
-			"still in the list", movedAnswered)
+	// through ever left it. Such a session waits for its address, and the one
+	// thing that carries it to another is an address that could not pass the
+	// check Google set on it — which is a shell, counted above. More of them
+	// moved than there were shells would be sessions leaving their clearance
+	// behind for nothing.
+	if shells := everyRefusal.count("shell"); movedAnswered > shells {
+		errorf(t, "%d sessions that had answered were carried to another exit, against %d shells: "+
+			"a session that answered leaves its address only for a check the address could not pass",
+			movedAnswered, shells)
 	}
 	sort.Slice(goneIDs, func(i, j int) bool { return goneIDs[i] < goneIDs[j] })
 	for _, id := range goneIDs {

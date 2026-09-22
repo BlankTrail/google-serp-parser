@@ -224,10 +224,10 @@ func (c *crew) step(ctx context.Context, f *flight) bool {
 			return true
 		}
 		if f.held != nil {
-			// Only a refusal Google judged is the session's; a request that
-			// never reached Google puts it back as it was. The address belongs
-			// to sessions and stays where it is.
-			letGoAfter(ctx, f.held, err)
+			// Only a refusal Google judged is the session's, and the check on
+			// an address is the address's; a request that never reached Google
+			// puts the session back as it was.
+			letGoAfter(ctx, f.held, f.lease, err)
 			f.held = nil
 		} else if _, judged := google.ClassOf(err); judged {
 			// Only an answer that was read and judged counts as a refusal. A
