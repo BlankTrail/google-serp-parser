@@ -213,6 +213,15 @@ type PortSpec struct {
 	// by choosing the list. What travels through is a search on a public engine,
 	// carried by an identity that exists to be spent.
 	AllowMITMUpstream bool
+
+	// FirstHop is the leg the port's traffic takes before its address; see
+	// FirstHop. It travels with every open, reopening included — a port the
+	// service lost to a restart comes back on the road it was on — and the
+	// calls that change a port after it is open leave it where it is: measured
+	// on the service, a new address, a session put on the port, a template put
+	// back and a fingerprint rotated all kept the first hop the port was opened
+	// with.
+	FirstHop FirstHop
 }
 
 // The protocols a port may be opened as, and the one a spec that names none
@@ -337,6 +346,11 @@ type openPortRequest struct {
 	VDNSMode              string  `json:"vdns_mode,omitempty"`
 	UpstreamTLSInsecure   *bool   `json:"upstream_tls_insecure,omitempty"`
 	AllowMITMUpstream     *bool   `json:"allow_mitm_upstream,omitempty"`
+	// ChainProxy and ChainGateway are the first hop: a SOCKS5 proxy, or the name
+	// of a gateway the service raises a tunnel for. A port with neither goes to
+	// its address directly.
+	ChainProxy   string `json:"chain_proxy,omitempty"`
+	ChainGateway string `json:"chain_gateway,omitempty"`
 }
 
 func (s PortSpec) request(port int, eg Egress) openPortRequest {
@@ -360,6 +374,8 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 		InjectECS:       &ecs,
 		LeakGuard:       s.LeakGuard,
 		VDNSMode:        s.VDNSMode,
+		ChainProxy:      s.FirstHop.Proxy,
+		ChainGateway:    s.FirstHop.Gateway,
 	}
 	if s.UpstreamTLSInsecure {
 		v := true
