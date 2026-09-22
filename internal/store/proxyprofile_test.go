@@ -54,6 +54,33 @@ func TestCreateProfile_ReadsBackEverythingItWasGiven(t *testing.T) {
 	}
 }
 
+func TestProfiles_KeepTheFirstHopTheyWereGiven(t *testing.T) {
+	// The first hop is the road a profile's ports take to their addresses. A
+	// profile that lost it on the way through the history would send its ports
+	// straight to the addresses it was set up to reach some other way.
+	s := testStore(t)
+	ctx := context.Background()
+	p := aProfile("through a hop")
+	p.FirstHop = "socks5://user:secret@198.51.100.7:2334"
+	id, err := s.CreateProfile(ctx, p)
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	got, err := s.Profile(ctx, id)
+	if err != nil || got.FirstHop != p.FirstHop {
+		t.Fatalf("written with first hop %q, read back %q (%v)", p.FirstHop, got.FirstHop, err)
+	}
+
+	got.FirstHop = "gw:vless-185"
+	if err := s.SaveProfile(ctx, got); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	again, err := s.Profile(ctx, id)
+	if err != nil || again.FirstHop != "gw:vless-185" {
+		t.Errorf("saved with first hop %q, read back %q (%v)", "gw:vless-185", again.FirstHop, err)
+	}
+}
+
 func TestCreateProfile_MakesTheFirstOneTheDefaultWhateverItSays(t *testing.T) {
 	// A database with profiles and no default is one where nothing knows what to
 	// keep warm, what the API's own search goes through, or what a job that

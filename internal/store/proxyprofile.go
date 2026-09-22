@@ -86,6 +86,15 @@ type Profile struct {
 	// which a SOCKS5 upstream from a list is not. On a profile that goes out
 	// through such a list it is a switch with nothing behind it.
 	HTTP3 bool
+	// FirstHop is the road this profile's ports take to their addresses: empty
+	// for straight there, "gw:" and the name of one of the service's gateways,
+	// or a SOCKS5 proxy's address whole, login and password included. It is
+	// kept as text and read by blanktrail.ParseFirstHop, which is also what
+	// refuses one the service could not go through.
+	//
+	// It belongs to a profile whose addresses come from a list. A profile on
+	// gateways has its road set on the gateway itself, in the service.
+	FirstHop string
 }
 
 // NewProfile is a profile with nothing named and everything else as it ships.
@@ -138,7 +147,7 @@ func (p Profile) Empty() bool {
 // another.
 const profileColumns = `id, name, kind, location, refresh_ms, ban_ms,
 	threads_per_upstream, renew_ms, protocol, gateways, is_default,
-	vdns_mode, js_solver, http3`
+	vdns_mode, js_solver, http3, first_hop`
 
 // scanProfile reads one row in the order profileColumns names.
 func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
@@ -147,7 +156,7 @@ func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
 	var gateways string
 	if err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.Location, &refreshMS, &banMS,
 		&p.ThreadsPerUpstream, &renewMS, &p.Protocol, &gateways, &p.Default,
-		&p.VDNSMode, &p.Solver, &p.HTTP3); err != nil {
+		&p.VDNSMode, &p.Solver, &p.HTTP3, &p.FirstHop); err != nil {
 		return Profile{}, err
 	}
 	p.Refresh = time.Duration(refreshMS) * time.Millisecond
@@ -286,12 +295,12 @@ func (s *Store) CreateProfile(ctx context.Context, p Profile) (int64, error) {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
 			threads_per_upstream, renew_ms, protocol, gateways, is_default,
-			vdns_mode, js_solver, http3)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			vdns_mode, js_solver, http3, first_hop)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
 		p.RenewEvery.Milliseconds(), p.Protocol, gatewayLines(p.Gateways), p.Default,
-		p.VDNSMode, p.Solver, p.HTTP3)
+		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop))
 	if err != nil {
 		return 0, nameOr(err, "store: writing a proxy profile")
 	}
@@ -361,12 +370,12 @@ func (s *Store) SaveProfile(ctx context.Context, p Profile) error {
 		UPDATE proxy_profiles
 		   SET name = ?, kind = ?, location = ?, refresh_ms = ?, ban_ms = ?,
 		       threads_per_upstream = ?, renew_ms = ?, protocol = ?, gateways = ?,
-		       is_default = ?, vdns_mode = ?, js_solver = ?, http3 = ?
+		       is_default = ?, vdns_mode = ?, js_solver = ?, http3 = ?, first_hop = ?
 		 WHERE id = ?`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
 		p.RenewEvery.Milliseconds(), p.Protocol, gatewayLines(p.Gateways), p.Default,
-		p.VDNSMode, p.Solver, p.HTTP3, p.ID)
+		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.ID)
 	if err != nil {
 		return nameOr(err, fmt.Sprintf("store: saving proxy profile %d", p.ID))
 	}

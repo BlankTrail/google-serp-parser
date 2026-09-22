@@ -210,6 +210,18 @@ and there are three:
   once. This is where gateways are chosen; nothing is chosen on the BlankTrail
   side. *Refresh* asks the service for the list again and re-measures.
 
+A list — a file or an address — also has a **First hop**: the road its ports
+take to the addresses. *None* goes straight to each address. *SOCKS5 proxy*
+sends every port through that proxy first, written the way an address on a list
+is, login and password included. *BlankTrail gateway* sends them through one of
+the gateways the service holds, chosen from its list. It is for a list this
+machine reaches badly: measured on a wingate list, straight from here the
+challenge solver could not open a connection through any address and every
+search came back as Google's JavaScript check; through a first hop 46 searches in
+48 were answered. The address stays the exit Google sees, so a session made on it
+stays the same session. A profile on gateways has no first hop — a gateway's own
+road is set on it in BlankTrail.
+
 The rest of the form is how that profile's pool behaves — each of these belongs
 to the profile, so two lists can be banned for different lengths and reached over
 different protocols:

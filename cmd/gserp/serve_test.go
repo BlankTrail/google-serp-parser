@@ -1168,12 +1168,12 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 
 	running := true
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
-	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, error) {
+	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, int64, error) {
 		got, err := opts.dial(ctx, saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: want, Device: device})
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		return got.Search, nil
+		return got.Search, 0, nil
 	}
 	warm.running = func() bool { return running }
 

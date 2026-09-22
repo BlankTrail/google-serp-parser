@@ -200,6 +200,44 @@
      list in a form this program does not read is a list that is simply smaller
      than it looks. It is folded away because it is a reference, read once by
      whoever is writing a list and never again. */}}
+{{/* The road the ports take to their addresses. A list this machine reaches
+     badly answers through a first hop: a SOCKS5 proxy, or one of the gateways
+     the service holds, chosen from its list rather than typed. It is not drawn
+     for a profile on gateways, whose road is set on the gateway itself; what it
+     holds there is kept for the day the profile goes back to a list.
+
+     Both boxes stay whichever kind is chosen, so a reader who tries the other
+     kind and comes back finds what they had typed. */}}
+{{if not .OnGateways}}
+<div class="row">
+<div class="field">
+<label for="first_hop">{{.T "proxies.hop"}}</label>
+<select id="first_hop" name="first_hop">
+<option value=""{{if eq .Form.HopKind ""}} selected{{end}}>{{.T "proxies.hop.none"}}</option>
+<option value="socks5"{{if eq .Form.HopKind "socks5"}} selected{{end}}>{{.T "proxies.hop.socks5"}}</option>
+<option value="gateway"{{if eq .Form.HopKind "gateway"}} selected{{end}}>{{.T "proxies.hop.gateway"}}</option>
+</select>
+</div>
+<div class="field wide">
+<label for="first_hop_proxy">{{.T "proxies.hop.proxy"}}</label>
+<input id="first_hop_proxy" name="first_hop_proxy" value="{{.Form.HopProxy}}" placeholder="socks5://login:password@host:port">
+</div>
+<div class="field">
+<label for="first_hop_gateway">{{.T "proxies.hop.gateway.pick"}}</label>
+<select id="first_hop_gateway" name="first_hop_gateway">
+<option value=""{{if eq .Form.HopGateway ""}} selected{{end}}>—</option>
+{{range .HopGateways}}<option value="{{.}}"{{if eq $.Form.HopGateway .}} selected{{end}}>{{.}}</option>
+{{end}}</select>
+</div>
+</div>
+{{if .HopFault}}<p class="empty">{{.T .HopFault}}</p>{{end}}
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<ul class="notes">
+<li>{{.T "proxies.hop.why"}}</li>
+</ul>
+</details>
+{{end}}
 <details class="help">
 <summary>{{.T "settings.source.forms"}}</summary>
 <ul class="notes forms">

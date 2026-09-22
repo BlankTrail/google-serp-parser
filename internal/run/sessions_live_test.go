@@ -344,6 +344,16 @@ func TestLiveSessions_AreMadeReusedWrittenDownAndFoundAgain(t *testing.T) {
 	defer st.Close()
 	book := newSessionBook(st)
 	want := sessions.Want{Device: blanktrail.DeviceDesktop, Pause: time.Minute}
+	spec := blanktrail.DefaultPortSpec()
+	spec.FirstHop = liveFirstHop(t)
+	switch {
+	case spec.FirstHop.Gateway != "":
+		logf(t, "MEASUREMENT the ports go through a first hop: the gateway %s", spec.FirstHop.Gateway)
+	case spec.FirstHop.Proxy != "":
+		logf(t, "MEASUREMENT the ports go through a first hop: a SOCKS5 proxy")
+	default:
+		logf(t, "MEASUREMENT the ports go to their addresses directly")
+	}
 	watchCtx, stopWatch := context.WithCancel(ctx)
 	defer stopWatch()
 	service := watchService(watchCtx, control, key)
@@ -363,7 +373,7 @@ func TestLiveSessions_AreMadeReusedWrittenDownAndFoundAgain(t *testing.T) {
 		k := sessions.NewKeeper(book)
 		seen := &attempts{}
 		p, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
-			Client: client, Threads: 2, PortsPerThread: 2, Spec: blanktrail.DefaultPortSpec(), CA: pre.CA,
+			Client: client, Threads: 2, PortsPerThread: 2, Spec: spec, CA: pre.CA,
 			Channels: []blanktrail.Channel{blanktrail.NewListChannel("list",
 				blanktrail.NewStaticRotor(ups, blanktrail.WithRest(time.Hour)))},
 			Sessions: true, Choose: k.Choose, AddressesPerRequest: 15,
