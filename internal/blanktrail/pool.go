@@ -218,6 +218,22 @@ type PoolConfig struct {
 	// not a person. An operator who knows their list can carry more, and says so
 	// here.
 	MaxPerUpstream int
+	// Sessions says the ports are places a session is put on, rather than
+	// identities of their own.
+	//
+	// A session is a fingerprint, a jar of cookies, a set of TLS tickets and an
+	// exit, kept by the program and put on whichever port is free. Three things
+	// the pool does for identities it then leaves to the sessions: the pause
+	// between two requests is a session's rest, not a port's; how many work
+	// through one address at once is counted over sessions, because a free
+	// port's address is about to change; and where a port moves when a request
+	// has to be carried elsewhere is chosen by Choose.
+	Sessions bool
+	// Choose picks, in a pool of sessions, the address a port moves to when a
+	// request has to be carried to another. It is handed the addresses the list
+	// offers — never the one being left — and the limit on sessions per address,
+	// and says which. Nil moves the port the way a pool of identities does.
+	Choose func(candidates []string, limit int) (string, bool)
 
 	// AddressesPerRequest is how many addresses one request may be carried to
 	// when they fail to carry it at all (default 15).
@@ -411,7 +427,26 @@ type poolPort struct {
 	quarantinedAt time.Time
 	revivals      int
 	renewedAt     time.Time
-	session       uint64 // bumped whenever the port's identity changes
+	// stay says the port keeps its address whatever it meets, for as long as
+	// the lease on it lasts: the session on it has answered through that
+	// address. See Lease.Stay.
+	stay bool
+	// retryAt is the earliest a port whose renewal or revival just failed is
+	// handed out again. It is its own pause because in a pool of sessions a
+	// port keeps none, and a port the service cannot open would otherwise be
+	// asked for again in a tight loop while the service is away.
+	retryAt time.Time
+	session uint64 // bumped whenever the port's identity changes
+}
+
+// changedIdentity records that what the port presents has changed under it, so
+// whatever was keyed to the old identity — the warm mark, a search session held
+// per port — is not handed to the new one.
+func (pt *poolPort) changedIdentity() {
+	pt.mu.Lock()
+	pt.session++
+	pt.answered = false
+	pt.mu.Unlock()
 }
 
 func (pt *poolPort) egress() Egress {
@@ -677,6 +712,11 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		cool = DeriveCooldown(cfg.PortsPerThread, cfg.DelayMin, cfg.DelayMax)
 	default:
 		cool = DefaultCooldown
+	}
+	if cfg.Sessions {
+		// The pause is the session's. A port that kept one of its own would
+		// stand a thread still behind a session that is not on it any more.
+		cool = 0
 	}
 
 	channels := cfg.Channels
@@ -1505,7 +1545,12 @@ func (p *Pool) PaceAt(d time.Duration) {
 		d = 0
 	}
 	p.mu.Lock()
-	p.cool = d
+	if !p.cfg.Sessions {
+		// In a pool of sessions the rest between two uses of a session is the
+		// keeper's to hold; what is left here is the pause between two pages of
+		// a walk.
+		p.cool = d
+	}
 	p.cfg.DelayMin, p.cfg.DelayMax = d, d+d/pacingSpread
 	p.mu.Unlock()
 }
@@ -1625,7 +1670,7 @@ func (p *Pool) acquire(ctx context.Context, specName string, wait bool) (*Lease,
 			if err := p.reviveIfDue(ctx, pt); err != nil {
 				// The port could not be given another egress, so it stays
 				// quarantined. Give it back and take another.
-				p.giveBack(pt)
+				p.setAside(pt)
 				continue
 			}
 			if err := p.renewIfDue(ctx, pt); err != nil {
@@ -1633,7 +1678,7 @@ func (p *Pool) acquire(ctx context.Context, specName string, wait bool) (*Lease,
 				// broken — and quarantined it if it keeps failing — so give it
 				// back and take another rather than hand out a lease on a port
 				// that no longer exists on the proxy.
-				p.giveBack(pt)
+				p.setAside(pt)
 				continue
 			}
 			if p.cfg.OnLease != nil {
@@ -1750,6 +1795,7 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		pt.mu.Lock()
 		quarantined, leased, last := pt.quarantined, pt.leased, pt.lastUsed
 		revivals, since := pt.revivals, pt.quarantinedAt
+		retryAt := pt.retryAt
 		pt.mu.Unlock()
 		// A port that has waited out its quarantine is a candidate again. take
 		// holds p.mu and must not call the control API, so it only decides that
@@ -1761,11 +1807,22 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		if leased {
 			continue
 		}
+		if now.Before(retryAt) {
+			// Its renewal or revival has just failed; it is not asked again yet.
+			if remaining := retryAt.Sub(now); soonest < 0 || remaining < soonest {
+				soonest = remaining
+			}
+			continue
+		}
 		// A direct egress is not counted. There is one of it — this machine —
 		// and a limit meant to stop one address carrying too much at once would,
 		// applied to it, let one identity work and stand the rest of the pool
 		// still for as long as the job ran.
-		if eg := pt.egress(); !eg.IsDirect() && carrying[eg.String()] >= atOnce {
+		//
+		// In a pool of sessions a free port's address is about to change — the
+		// session put on it says where it goes — and the sessions keep the
+		// limit themselves.
+		if eg := pt.egress(); !p.cfg.Sessions && !eg.IsDirect() && carrying[eg.String()] >= atOnce {
 			// This egress is already carrying as many identities as it may. The
 			// port is free and stays free: what is busy is the address behind
 			// it.
@@ -1876,6 +1933,21 @@ func (p *Pool) revivableAt(revivals int, since, now time.Time) bool {
 	return !since.IsZero() && now.Sub(since) >= p.cfg.ReviveAfter
 }
 
+// setAside gives back a port whose renewal or revival has just failed, and keeps
+// it out of the hand-out for failedPortRest.
+func (p *Pool) setAside(pt *poolPort) {
+	p.giveBack(pt)
+	pt.mu.Lock()
+	pt.retryAt = p.cfg.Now().Add(failedPortRest)
+	pt.mu.Unlock()
+}
+
+// failedPortRest is how long a port whose renewal or revival failed is left
+// alone. Two seconds: long enough that a service which is away is not asked
+// again several hundred times a second, short enough that a port comes back
+// within a breath of the service coming back.
+const failedPortRest = 2 * time.Second
+
 // giveBack returns a port taken by take without counting a request against it,
 // and starts its cooldown so a failing port is not retried in a tight loop.
 func (p *Pool) giveBack(pt *poolPort) {
@@ -1978,6 +2050,11 @@ func (l *Lease) Release() {
 		return
 	}
 	l.released = true
+	// What the lease said about keeping its address was about the session it
+	// carried, and goes with it.
+	l.pt.mu.Lock()
+	l.pt.stay = false
+	l.pt.mu.Unlock()
 	l.pool.giveBack(l.pt)
 
 	l.pt.mu.Lock()
@@ -2076,6 +2153,11 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 		return fmt.Errorf("blanktrail: port %d is not in the pool", num)
 	}
 	cur := pt.egress()
+	if p.cfg.Sessions && p.cfg.Choose != nil {
+		if free, ok := pt.ch.(interface{ Free() []Egress }); ok {
+			return p.moveBySessions(ctx, pt, cur, free.Free())
+		}
+	}
 	if p.cfg.WholeList {
 		// The address is what this port was for. Another one that is free takes
 		// its place; if none is, the port goes rather than standing on an
@@ -2097,6 +2179,25 @@ func (p *Pool) rotateEgress(ctx context.Context, num int) error {
 		return err
 	}
 	return p.putEgress(ctx, pt, next)
+}
+
+// moveBySessions moves a port of a pool of sessions to the address the
+// sessions' rule picks, among those the list offers and other than the one it
+// is leaving. The session being carried follows the request there; the rule is
+// what keeps it from following it onto an address already carrying more than
+// its share.
+func (p *Pool) moveBySessions(ctx context.Context, pt *poolPort, cur Egress, free []Egress) error {
+	candidates := make([]string, 0, len(free))
+	for _, eg := range free {
+		if eg.Upstream != cur.Upstream {
+			candidates = append(candidates, eg.Upstream)
+		}
+	}
+	next, ok := p.cfg.Choose(candidates, p.cfg.MaxPerUpstream)
+	if !ok {
+		return fmt.Errorf("blanktrail: no address is free to move port %d to", pt.num)
+	}
+	return p.putEgress(ctx, pt, Egress{Upstream: next})
 }
 
 // putEgress moves a port onto an address that has already been chosen, and says
@@ -2243,7 +2344,23 @@ func (p *Pool) markDeadEgress(num int) {
 }
 
 // hunt is how many addresses one request may be carried to.
-func (p *Pool) hunt() int { return p.cfg.AddressesPerRequest }
+func (p *Pool) hunt(port int) int {
+	if p.stays(port) {
+		return 1
+	}
+	return p.cfg.AddressesPerRequest
+}
+
+// stays says the port keeps its address whatever it meets; see Lease.Stay.
+func (p *Pool) stays(port int) bool {
+	pt := p.port(port)
+	if pt == nil {
+		return false
+	}
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	return pt.stay
+}
 
 // markBadEgress reports that an egress carried its work and the answer was
 // refused, so the channel can count that against the address.
@@ -2331,6 +2448,10 @@ func (p *Pool) reviveIfDue(ctx context.Context, pt *poolPort) error {
 	if err := p.rotateEgress(ctx, pt.num); err != nil {
 		pt.mu.Lock()
 		pt.quarantinedAt = now
+		if Unreachable(err) {
+			// The service was away; nothing was tried, so nothing is spent.
+			pt.revivals--
+		}
 		pt.mu.Unlock()
 		return err
 	}
@@ -2386,7 +2507,7 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	}
 
 	// Past this point the port is torn down, so every failure leaves it closed.
-	if err := p.cl.ClosePort(ctx, pt.num); err != nil {
+	if err := p.cl.ClosePort(ctx, pt.num); err != nil && !notOpen(err) {
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: close: %w", pt.num, err))
 	}
 	if _, err := p.cl.OpenPort(ctx, pt.num, pt.spec, eg); err != nil {
@@ -2477,11 +2598,29 @@ func profileMatchesSpec(spec PortSpec, prof Profile) error {
 	return nil
 }
 
+// notOpen says the service does not have the port — it lost it to a restart, or
+// never opened it — which for a port about to be closed means it is closed
+// already.
+func notOpen(err error) bool {
+	var api *APIError
+	return errors.As(err, &api) && api.Status == http.StatusNotFound
+}
+
 // renewFailed marks a port broken after a failed renewal and quarantines it once
 // it has failed too often. Strikes are shared with exhausted() on purpose: both
 // mean the same thing — this port keeps failing us — and a successful renewal
 // clears the slate.
 func (p *Pool) renewFailed(pt *poolPort, err error) error {
+	if Unreachable(err) {
+		// The service is away — restarting, being updated — and the port
+		// was never asked anything. It stays broken, to be opened again the
+		// first time the service answers, and nothing is held against it: held
+		// against it, a restart of a minute quarantined every port of a pool.
+		pt.mu.Lock()
+		pt.broken = true
+		pt.mu.Unlock()
+		return err
+	}
 	pt.mu.Lock()
 	pt.broken = true
 	pt.strikes++

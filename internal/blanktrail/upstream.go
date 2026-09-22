@@ -39,8 +39,22 @@ func (u Upstream) URL() string {
 	return uu.String()
 }
 
-// Key identifies an upstream by scheme and address, ignoring credentials.
-func (u Upstream) Key() string { return u.Scheme + "|" + net.JoinHostPort(u.Host, u.Port) }
+// Key identifies an upstream by the whole of it: scheme, login, password, host
+// and port.
+//
+// It used to leave the login and password out, on the reading that one host and
+// port is one machine. That reading is wrong for a whole class of lists: a
+// provider that sells one host and port and sets the exit by the login — a
+// session id or a country written into the user name — puts every exit it has
+// behind one host:port, and a key without the login made them all one address.
+// One login that failed put the whole list on the bench, and a session kept
+// against a host:port could not be told from another session on another exit
+// of it.
+//
+// It is the address exactly as this program writes it everywhere else, so a
+// record one part of the program keeps is found under the same text by any
+// other — the pool counts what each egress carries by that text already.
+func (u Upstream) Key() string { return u.URL() }
 
 var validSchemes = map[string]bool{
 	"http": true, "https": true,
@@ -263,8 +277,12 @@ func httpGet(ctx context.Context, rawURL string) ([]byte, error) {
 // (optionally) reloads the list on an interval while keeping its cursor
 // position stable.
 type Rotor struct {
-	mu          sync.Mutex
-	ups         []listed
+	mu  sync.Mutex
+	ups []listed
+	// held is the key of every address in the list, so asking whether the list
+	// holds one does not walk fifteen thousand of them. It is rebuilt wherever
+	// ups is, through setList.
+	held        map[string]bool
 	pos         int
 	fails       map[string]int
 	benched     map[string]time.Time // key -> when its rest began
@@ -405,7 +423,6 @@ func NewRotor(ctx context.Context, src Source, opts ...RotorOption) (*Rotor, err
 
 func newRotor(ups []Upstream, src Source, opts ...RotorOption) *Rotor {
 	r := &Rotor{
-		ups:      withKeys(ups),
 		fails:    map[string]int{},
 		benched:  map[string]time.Time{},
 		maxFails: 3,
@@ -413,10 +430,21 @@ func newRotor(ups []Upstream, src Source, opts ...RotorOption) *Rotor {
 		now:      time.Now,
 		src:      src,
 	}
+	r.setList(ups)
 	for _, o := range opts {
 		o(r)
 	}
 	return r
+}
+
+// setList replaces the list and the index of it together. Called with the lock
+// held, or before the rotor is shared.
+func (r *Rotor) setList(ups []Upstream) {
+	r.ups = withKeys(ups)
+	r.held = make(map[string]bool, len(r.ups))
+	for _, l := range r.ups {
+		r.held[l.key] = true
+	}
 }
 
 // Len reports the current number of upstreams.
@@ -493,6 +521,45 @@ func (r *Rotor) NextFree() (Upstream, bool) {
 		}
 	}
 	return Upstream{}, false
+}
+
+// Free is every address of the list that is not resting, in list order.
+//
+// It is what a pool of sessions chooses from. Next hands addresses out in turn,
+// which is right for a port that is an identity of its own; a session is given
+// the address carrying the fewest sessions, and that is a choice over all of
+// them rather than the next one along.
+func (r *Rotor) Free() []Upstream {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releaseRested(r.now())
+	out := make([]Upstream, 0, len(r.ups))
+	for _, l := range r.ups {
+		if _, resting := r.benched[l.key]; !resting {
+			out = append(out, l.up)
+		}
+	}
+	return out
+}
+
+// Lists says whether the list holds the address with this key at all, resting
+// or not.
+func (r *Rotor) Lists(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.held[key]
+}
+
+// Holds says whether the list holds the address with this key and it is not
+// resting.
+func (r *Rotor) Holds(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releaseRested(r.now())
+	if _, resting := r.benched[key]; resting {
+		return false
+	}
+	return r.held[key]
 }
 
 // refreshNextRelease recomputes the earliest instant a rest ends. Called with
@@ -796,7 +863,7 @@ func (r *Rotor) reconcile(ups []Upstream) {
 		}
 	}
 	r.refreshNextRelease()
-	r.ups = withKeys(ups)
+	r.setList(ups)
 	if len(ups) > 0 {
 		r.pos %= len(ups)
 	} else {

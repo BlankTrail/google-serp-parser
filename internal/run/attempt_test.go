@@ -82,6 +82,9 @@ func (o *origin) addr() string { return o.Listener.Addr().String() }
 // tell a query taken to another port from the same port asked twice.
 type facing struct {
 	Pool *blanktrail.Pool
+	// Fake is the control service the pool was opened through, for a test that
+	// looks at what the ports were told.
+	Fake *fakebt.Server
 
 	mu     sync.Mutex
 	byPort map[int]int
@@ -172,6 +175,7 @@ func poolFacing(t *testing.T, originAddr string, ports int, tune ...func(*blankt
 	}
 
 	f.Pool = p
+	f.Fake = fake
 	return f
 }
 

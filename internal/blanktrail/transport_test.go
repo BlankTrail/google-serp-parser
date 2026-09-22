@@ -88,6 +88,9 @@ type fakeRemedy struct {
 	retries     int
 	rotateOnNth int // attemptFailed returns true on this failure number (0 = never)
 	addresses   int // how many addresses one request may be carried to (0 = five)
+	// staying says the port keeps its address, as the pool says for a port
+	// carrying a session that has answered.
+	staying bool
 }
 
 func (r *fakeRemedy) attemptFailed(int) bool {
@@ -111,12 +114,17 @@ func (r *fakeRemedy) leaveAddress(int) bool {
 func (r *fakeRemedy) exhausted(int)   { r.exhaustedCalls++ }
 func (r *fakeRemedy) maxRetries() int { return r.retries }
 
-func (r *fakeRemedy) hunt() int {
+func (r *fakeRemedy) hunt(int) int {
+	if r.staying {
+		return 1
+	}
 	if r.addresses > 0 {
 		return r.addresses
 	}
 	return 5
 }
+
+func (r *fakeRemedy) stays(int) bool { return r.staying }
 
 func (r *fakeRemedy) wait(_ context.Context, d time.Duration) error {
 	r.waits = append(r.waits, d)
@@ -709,5 +717,45 @@ func TestLadder_StillHoldsARefusalAgainstThePort(t *testing.T) {
 		if rem.failures == 0 || rem.successes != 0 {
 			t.Errorf("%d: failures=%d successes=%d, want it held against the port", status, rem.failures, rem.successes)
 		}
+	}
+}
+
+func TestLadder_KeepsAStayingPortOnItsAddressAndEndsTheRequestThere(t *testing.T) {
+	// A session that has answered through an address holds a clearance for
+	// it. Carried to another address its request would meet a challenge there
+	// and the clearance would be spent; so the address that failed is put to
+	// rest and the request ends, and the session waits for its address.
+	boom := errors.New("read tcp: connection reset by peer")
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		failWith(boom),
+		respond(200, nil, "data"),
+	}}
+	rem := &fakeRemedy{retries: 2, rotateOnNth: 99, staying: true}
+	l := &ladder{rt: rt, port: 20021, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatal("a staying port carried the request on and answered it")
+	}
+	if rem.rotations != 0 {
+		t.Errorf("rotations=%d, want none: the port keeps its address", rem.rotations)
+	}
+	if rem.markedDead != 1 {
+		t.Errorf("markedDead=%d, want the address put to rest all the same", rem.markedDead)
+	}
+}
+
+func TestLadder_DoesNotMoveAStayingPortForARefusedAnswerEither(t *testing.T) {
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		respond(503, nil, "busy"),
+		respond(200, nil, "data"),
+	}}
+	rem := &fakeRemedy{retries: 2, rotateOnNth: 1, staying: true}
+	l := &ladder{rt: rt, port: 20021, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if rem.rotations != 0 {
+		t.Errorf("rotations=%d, want none: the port keeps its address", rem.rotations)
 	}
 }

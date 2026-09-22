@@ -23,6 +23,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/api"
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/settings"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 	"github.com/blanktrail/google-serp-parser/internal/web"
@@ -87,6 +88,11 @@ const translationsName = "gserp-translations"
 
 // serveOptions is everything the command was asked to do.
 type serveOptions struct {
+	// Keeper holds the program's sessions: one for every job, the warmer and the
+	// search answered inside a request, so a session is never in two of them at
+	// once. Nil runs everything with a port as the identity.
+	Keeper *sessions.Keeper
+
 	Addr    string
 	DB      string
 	Threads int
@@ -207,6 +213,10 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	// The history is also where the addresses found dead are kept, so a run
 	// begins knowing what the last one learned.
 	opts.Rests = st
+	// And where the sessions are kept: a job, the warmer and the search API all
+	// take them from this one keeper, and a run next week finds what this one
+	// left.
+	opts.Keeper = sessions.NewKeeper(st)
 
 	// Closed before the history, because a job it ends is written down as it
 	// lets go of it. Close waits for that.
@@ -285,7 +295,7 @@ func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
 	// than opening a pool per request, which is what that address was never for.
 	if pool := warm.Pool(); pool != nil {
 		cfg.Search = api.SearchConfig{
-			Searcher: &run.Attempt{Pool: pool},
+			Searcher: &run.Attempt{Pool: pool, Keeper: o.Keeper, Want: sessions.Want{Device: warm.Device()}},
 			Ports:    pool.Stats().Ports,
 		}
 	}
@@ -349,13 +359,14 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	// interface would be running on one connection and reporting another.
 	fromEnv := os.Getenv(envAPIKey) != ""
 
-	warm := &warmSet{log: o.logger(os.Stderr)}
+	warm := &warmSet{log: o.logger(os.Stderr), keeper: o.Keeper}
 	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, error) {
 		if fromEnv {
 			cfg := poolConfig(1, want, false)
 			cfg.Specs = blanktrail.SpecsFor(device)
 			cfg.Trace = o.tracer()
 			cfg.OnLease = o.leaseTracer()
+			o.ofSessions(&cfg)
 			return openPool(ctx, io.Discard, cfg)
 		}
 		// The standing identities are the default profile's. They are the
@@ -476,19 +487,22 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 			// and deriving one for it is this program pacing a run nobody asked to
 			// have paced.
 			pool.PaceAt(want.Cooldown)
-			return web.Identities{Search: pool, Brake: o.brakeOn(saved)}, nil
+			return web.Identities{Search: pool, Brake: o.brakeOn(saved),
+				Keeper: o.Keeper, Want: sessionsFor(want)}, nil
 		}
 		if fromEnv {
 			cfg := poolConfig(want.Threads, want.Ports, want.WholePool)
 			cfg.Specs = blanktrail.SpecsFor(want.Device)
 			cfg.Trace = o.tracer()
 			cfg.OnLease = o.leaseTracer()
+			o.ofSessions(&cfg)
 			pool, err := openPool(ctx, io.Discard, cfg)
 			if err != nil {
 				return web.Identities{}, err
 			}
 			pool.PaceAt(want.Cooldown)
-			return web.Identities{Search: pool, Brake: o.brakeOn(saved)}, nil
+			return web.Identities{Search: pool, Brake: o.brakeOn(saved),
+				Keeper: o.Keeper, Want: sessionsFor(want)}, nil
 		}
 		got, err := o.dial(ctx, saved, want)
 		if err != nil {
@@ -512,6 +526,23 @@ func (o serveOptions) brakeOn(saved settings.Settings) *blanktrail.Brake {
 		return blanktrail.NewBrake(nil)
 	}
 	return blanktrail.BrakeOn(client)
+}
+
+// sessionsFor is what a job asks of the sessions it runs on: its kind of result
+// page, the identity it named, and its pause.
+func sessionsFor(want web.Wanted) sessions.Want {
+	return sessions.Want{Device: want.Device, Browser: want.Worn.Browser, OS: want.Worn.OS,
+		Release: want.Worn.Release, Pause: want.Cooldown}
+}
+
+// ofSessions makes a pool configuration one of sessions, where there is a
+// keeper to hold them: ports are places, a session's pause is its own, and a
+// request carried to another address goes where the sessions' rule says.
+func (o serveOptions) ofSessions(cfg *blanktrail.PoolConfig) {
+	if o.Keeper == nil {
+		return
+	}
+	cfg.Sessions, cfg.Choose = true, o.Keeper.Choose
 }
 
 // connect opens the ports a connection just saved in the browser describes.
@@ -629,6 +660,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 		cfg.Channels = []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)}
 	}
 
+	o.ofSessions(&cfg)
 	pool, err := blanktrail.NewPool(ctx, cfg)
 	if err != nil {
 		return web.Identities{}, o.scrubbed(err)
@@ -643,7 +675,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	if !want.Addresses {
 		// A job that keeps no address has nothing to look up, and ports opened
 		// for it would stand idle for the length of the run.
-		return web.Identities{Search: pool, Brake: brake}, nil
+		return web.Identities{Search: pool, Brake: brake, Keeper: o.Keeper, Want: sessionsFor(want)}, nil
 	}
 
 	// The second set: the ports the hidden addresses are read through.
@@ -668,6 +700,9 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	// There is no cooldown worth keeping on them either: nothing is carried
 	// between two lookups, so there is no session for a rest to protect.
 	plain := cfg
+	// A lookup carries nothing between two requests, so it has no session to be
+	// put on: these ports are identities of their own, as they always were.
+	plain.Sessions, plain.Choose = false, nil
 	plain.WholeList = false
 	plain.Spec.JSSolver = false
 	plain.Spec.KeepSessions = false
@@ -677,12 +712,13 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	if most < 1 {
 		most = 1
 	}
-	return web.Identities{Search: pool, Brake: brake, Addresses: blanktrail.NewGrowing(most,
-		func(ctx context.Context, n int) (*blanktrail.Pool, error) {
-			one := plain
-			one.Threads, one.PortsPerThread = n, 1
-			return blanktrail.NewPool(ctx, one)
-		})}, nil
+	return web.Identities{Search: pool, Brake: brake, Keeper: o.Keeper, Want: sessionsFor(want),
+		Addresses: blanktrail.NewGrowing(most,
+			func(ctx context.Context, n int) (*blanktrail.Pool, error) {
+				one := plain
+				one.Threads, one.PortsPerThread = n, 1
+				return blanktrail.NewPool(ctx, one)
+			})}, nil
 }
 
 // rests is where the addresses this machine has found dead are kept between
@@ -1115,6 +1151,9 @@ type warmSet struct {
 	// owed is a number and a kind somebody saved while a job was running, to be
 	// brought about when the job lets go. Nil is nothing owed.
 	owed *standing
+	// keeper holds the sessions the standing ports are warmed through; nil
+	// warms the ports themselves.
+	keeper *sessions.Keeper
 }
 
 // standing is a number of identities of one kind: what the settings page last
@@ -1130,6 +1169,13 @@ func (w *warmSet) busy() bool {
 	running := w.running
 	w.mu.Unlock()
 	return running != nil && running()
+}
+
+// Device is the kind of result page the set was opened for.
+func (w *warmSet) Device() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.device
 }
 
 // Pool is what the set holds, for the search that answers inside a request.
@@ -1254,7 +1300,7 @@ func (w *warmSet) start(pool *blanktrail.Pool, device string) {
 	log := w.log
 	w.mu.Unlock()
 
-	go (&run.Warmer{Pool: pool, Log: log}).Run(ctx)
+	go (&run.Warmer{Pool: pool, Log: log, Keeper: w.keeper, Want: sessions.Want{Device: device}}).Run(ctx)
 	go w.keep(ctx)
 }
 

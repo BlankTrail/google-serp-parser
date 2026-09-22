@@ -24,13 +24,14 @@ func newTestClient(t *testing.T) (*Client, *fakebt.Server) {
 	return c, fake
 }
 
-func TestDefaultPortSpec_ArmsChallengeBreakerAndKeepsSessions(t *testing.T) {
+func TestDefaultPortSpec_ArmsChallengeBreakerAndKeepsNoSessionOnThePort(t *testing.T) {
 	s := DefaultPortSpec()
 	if !s.JSSolver {
 		t.Error("JSSolver must default to true: the target is behind a JS challenge")
 	}
-	if !s.KeepSessions {
-		t.Error("KeepSessions must default to true: a port is a session with its own cookie jar")
+	if s.KeepSessions {
+		t.Error("KeepSessions must default to false: the program keeps its own sessions, and a port " +
+			"keeping a jar of its own would carry two — ours in the header and the service's underneath")
 	}
 	if s.Mode != "db" {
 		t.Errorf("Mode=%q, want \"db\": a real profile from the curated database, not a synthetic one", s.Mode)
@@ -257,10 +258,16 @@ func TestClient_OpenPortSendsSpecAndParsesProfile(t *testing.T) {
 	if sent == nil {
 		t.Fatal("no request recorded for /api/v1/ports/open")
 	}
-	for _, key := range []string{"js_solver", "keep_sessions", "h2_spoofing", "spoof_headers"} {
+	for _, key := range []string{"js_solver", "h2_spoofing", "spoof_headers"} {
 		if v, ok := sent[key].(bool); !ok || !v {
 			t.Errorf("open body %s=%v, want true", key, sent[key])
 		}
+	}
+	// Said, and said as false: ports keep no session of their own since the
+	// program keeps its own, and a flag left out would leave the port to the
+	// service's default.
+	if v, ok := sent["keep_sessions"].(bool); !ok || v {
+		t.Errorf("open body keep_sessions=%v, want false and present", sent["keep_sessions"])
 	}
 	if got, _ := sent["upstream"].(string); got != "socks5://user:pass@1.2.3.4:1080" {
 		t.Errorf("open body upstream=%q, want the egress upstream", got)
@@ -552,5 +559,96 @@ func TestResetSolverSessions_ClearsWhatTheSolverLeftOnAPort(t *testing.T) {
 	}
 	if got := f.ResetsOf(port); got != 1 {
 		t.Errorf("the port was reset %d times, want once", got)
+	}
+}
+
+func TestClient_CarriesAPortsTicketsOutAndBackIn(t *testing.T) {
+	// A session is put back on a port with the TLS tickets it left another one
+	// with. Out: what the port holds, without spending it. In: the tickets
+	// replace whatever the port held — a port carrying one session's tickets
+	// into the next session's requests would tie the two together in front of
+	// the server.
+	c, fake := newTestClient(t)
+	ctx := context.Background()
+	info, err := c.OpenPort(ctx, 20021, DefaultPortSpec(), Egress{Upstream: "socks5://1.2.3.4:1080"})
+	if err != nil {
+		t.Fatalf("OpenPort: %v", err)
+	}
+	fake.SetTickets(info.Port, `[{"host":"www.google.ru","tickets":[{"ticket":"dA==","state":"cw=="}]}]`)
+
+	out, err := c.ExportSession(ctx, info.Port)
+	if err != nil {
+		t.Fatalf("ExportSession: %v", err)
+	}
+	if !strings.Contains(string(out.Tickets), "www.google.ru") {
+		t.Fatalf("exported tickets %s, want the port's", out.Tickets)
+	}
+	if fake.TicketsOf(info.Port) == "" {
+		t.Error("exporting spent the port's tickets; it must only read them")
+	}
+
+	got, err := c.ImportSession(ctx, info.Port, "socks5://1.2.3.4:1080", json.RawMessage(`[]`))
+	if err != nil {
+		t.Fatalf("ImportSession: %v", err)
+	}
+	if got.IdentityMismatch {
+		t.Error("the port stands on the address named, yet the import reported a mismatch")
+	}
+	if left := fake.TicketsOf(info.Port); left != "" {
+		t.Errorf("an empty import left %s on the port, want its tickets replaced by none", left)
+	}
+}
+
+func TestClient_SaysWhenAPortStandsOnAnotherAddress(t *testing.T) {
+	c, _ := newTestClient(t)
+	ctx := context.Background()
+	info, _ := c.OpenPort(ctx, 20022, DefaultPortSpec(), Egress{Upstream: "socks5://1.2.3.4:1080"})
+
+	got, err := c.ImportSession(ctx, info.Port, "socks5://5.6.7.8:1080", nil)
+	if err != nil {
+		t.Fatalf("ImportSession: %v", err)
+	}
+	if !got.IdentityMismatch {
+		t.Error("the port stands on another address and the import did not say so")
+	}
+}
+
+func TestClient_NamesAPortThatKeepsNoTickets(t *testing.T) {
+	c, fake := newTestClient(t)
+	ctx := context.Background()
+	info, _ := c.OpenPort(ctx, 20023, DefaultPortSpec(), Egress{Upstream: "socks5://1.2.3.4:1080"})
+	fake.SetResumptionOff(info.Port)
+
+	_, err := c.ImportSession(ctx, info.Port, "", nil)
+	if !errors.Is(err, ErrResumptionOff) {
+		t.Errorf("an import onto a port that keeps no tickets answered %v, want ErrResumptionOff", err)
+	}
+}
+
+func TestClient_GivesAPortAFreshFingerprintFromItsTemplate(t *testing.T) {
+	// A new session is not to wear what the last session on the port wore: the
+	// port goes back to the filter it was opened under and the service picks a
+	// fingerprint within it.
+	c, fake := newTestClient(t)
+	ctx := context.Background()
+	spec := DefaultPortSpec()
+	spec.Browser = "chrome_153"
+	info, _ := c.OpenPort(ctx, 20024, spec, Egress{Upstream: "socks5://1.2.3.4:1080"})
+	if _, err := c.WearSession(ctx, info.Port, "Chrome_150_win"); err != nil {
+		t.Fatalf("WearSession: %v", err)
+	}
+
+	prof, err := c.FreshProfile(ctx, info.Port, spec)
+	if err != nil {
+		t.Fatalf("FreshProfile: %v", err)
+	}
+	if prof.Name == "" || prof.Name == "Chrome_150_win" {
+		t.Errorf("the port came back wearing %q, want a fresh fingerprint", prof.Name)
+	}
+	if fake.RotateCount(info.Port) != 1 {
+		t.Errorf("the service was asked for %d fresh fingerprints, want one", fake.RotateCount(info.Port))
+	}
+	if keep, told := fake.KeepSessionsOf(info.Port); !told || keep {
+		t.Error("putting the port back on its template did not keep keep_sessions off")
 	}
 }

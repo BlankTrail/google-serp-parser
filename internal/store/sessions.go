@@ -26,6 +26,15 @@ type Session struct {
 	// Cookies is the session's jar written down, every host it touched. Empty
 	// is a session nothing has been asked through yet.
 	Cookies []byte
+	// Exit is where the session goes out: "addr:" and the proxy address whole,
+	// login and password included, "gw:" and a gateway's name, or empty for a
+	// session whose address has gone and which takes a new one when next used.
+	Exit string
+	// Tickets are the TLS session tickets the proxy service holds for the
+	// session's hosts, as the service writes them out. Empty is none yet.
+	Tickets []byte
+	// Release is the browser release of the fingerprint; nought is not known.
+	Release int
 
 	CreatedAt time.Time
 	// UsedAt is the last time the session was asked through, and what the time
@@ -60,11 +69,12 @@ func (s *Store) NewSession(ctx context.Context, sess Session) (int64, error) {
 		cookies = []byte("[]")
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions(profile, browser, os, device, cookies, created_at, used_at, failures)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO sessions(profile, browser, os, device, cookies, created_at, used_at, failures,
+		                      exit, tickets, release)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.Profile, sess.Browser, sess.OS, sess.Device, string(cookies),
 		sess.CreatedAt.UTC().Format(time.RFC3339Nano), sess.UsedAt.UTC().Format(time.RFC3339Nano),
-		sess.Failures)
+		sess.Failures, sess.Exit, string(sess.Tickets), sess.Release)
 	if err != nil {
 		return 0, fmt.Errorf("store: writing a session down: %w", err)
 	}
@@ -80,7 +90,8 @@ func (s *Store) NewSession(ctx context.Context, sess Session) (int64, error) {
 // be taking the warm one.
 func (s *Store) Sessions(ctx context.Context, device string, since time.Time) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, profile, browser, os, device, cookies, created_at, used_at, failures
+		`SELECT id, profile, browser, os, device, cookies, created_at, used_at, failures,
+		        exit, tickets, release
 		   FROM sessions
 		  WHERE device = ? AND used_at >= ?
 		  ORDER BY used_at DESC, id DESC`,
@@ -93,12 +104,15 @@ func (s *Store) Sessions(ctx context.Context, device string, since time.Time) ([
 	var out []Session
 	for rows.Next() {
 		var one Session
-		var cookies, created, used string
+		var cookies, created, used, tickets string
 		if err := rows.Scan(&one.ID, &one.Profile, &one.Browser, &one.OS, &one.Device,
-			&cookies, &created, &used, &one.Failures); err != nil {
+			&cookies, &created, &used, &one.Failures, &one.Exit, &tickets, &one.Release); err != nil {
 			return nil, fmt.Errorf("store: reading a session: %w", err)
 		}
 		one.Cookies = []byte(cookies)
+		if tickets != "" {
+			one.Tickets = []byte(tickets)
+		}
 		one.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 		one.UsedAt, _ = time.Parse(time.RFC3339Nano, used)
 		out = append(out, one)
@@ -109,20 +123,33 @@ func (s *Store) Sessions(ctx context.Context, device string, since time.Time) ([
 	return out, nil
 }
 
+// Answer is what a session holds after an answer: its cookies, its TLS tickets
+// and the exit it went out through. They are written together because they
+// change together — a request carried to another address comes back holding a
+// clearance for that address, and a session written down with the new cookies
+// against the old address is a session that pays for the clearance again.
+type Answer struct {
+	Cookies []byte
+	Tickets []byte
+	Exit    string
+}
+
 // SessionAnswered records that a session was asked through and answered: the
-// cookies it holds now, when, and its refusals in a row back to nought.
+// cookies, tickets and exit it holds now, when, and its refusals in a row back
+// to nought.
 //
-// The cookies are written on every answer rather than when the session is let
-// go of, because a run can end between the two — stopped, or the machine gone
-// — and a session whose last clearance was never written down is a session
-// that pays for it again.
-func (s *Store) SessionAnswered(ctx context.Context, id int64, cookies []byte, at time.Time) error {
+// They are written on every answer rather than when the session is let go of,
+// because a run can end between the two — stopped, or the machine gone — and a
+// session whose last clearance was never written down is a session that pays
+// for it again.
+func (s *Store) SessionAnswered(ctx context.Context, id int64, a Answer, at time.Time) error {
+	cookies := a.Cookies
 	if len(cookies) == 0 {
 		cookies = []byte("[]")
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE sessions SET cookies = ?, used_at = ?, failures = 0 WHERE id = ?`,
-		string(cookies), at.UTC().Format(time.RFC3339Nano), id)
+		`UPDATE sessions SET cookies = ?, tickets = ?, exit = ?, used_at = ?, failures = 0 WHERE id = ?`,
+		string(cookies), string(a.Tickets), a.Exit, at.UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return fmt.Errorf("store: recording an answer on session %d: %w", id, err)
 	}

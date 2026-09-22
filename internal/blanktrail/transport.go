@@ -108,9 +108,16 @@ type remedy interface {
 	// leaveAddress records one failure to carry a request and reports whether
 	// this port should move to another address now.
 	leaveAddress(port int) bool
-	// hunt is how many addresses one request may be carried to before it gives
-	// up, which is a different budget from the retries a refused answer gets.
-	hunt() int
+	// hunt is how many addresses one request through this port may be carried
+	// to before it gives up, which is a different budget from the retries a
+	// refused answer gets.
+	hunt(port int) int
+	// stays says the port keeps its address whatever it meets: the session on it
+	// has answered through that address and holds a clearance for it, and
+	// carrying its request to another would spend the clearance for a
+	// challenge somewhere else. An address that fails is still put to rest; the
+	// request simply ends there.
+	stays(port int) bool
 	// exhausted reports that the whole retry budget was spent and the response is
 	// still not usable.
 	exhausted(port int)
@@ -185,10 +192,12 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			// one miss, and one that has never answered is simply dead.
 			if t.rem.leaveAddress(t.port) {
 				t.rem.markDeadEgress(t.port)
-				_ = t.rem.rotateEgress(req.Context(), t.port)
+				if !t.rem.stays(t.port) {
+					_ = t.rem.rotateEgress(req.Context(), t.port)
+				}
 			}
 			hunted++
-			if hunted >= t.rem.hunt() {
+			if hunted >= t.rem.hunt(t.port) {
 				return nil, err
 			}
 			// No backoff here. There is nothing to wait out: either the address
@@ -209,7 +218,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		// caller has said this particular status should not. A dead proxy, a
 		// refused egress and a broken gateway are indistinguishable from here and
 		// have the same remedy; the caller may know better about some statuses.
-		if t.rem.attemptFailedStatus(t.port, resp.StatusCode) {
+		if t.rem.attemptFailedStatus(t.port, resp.StatusCode) && !t.rem.stays(t.port) {
 			_ = t.rem.rotateEgress(req.Context(), t.port)
 		}
 

@@ -5,123 +5,138 @@ package sessions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
-// history is the history in memory, as the store keeps it: the same rule for
-// giving a session up, so a keeper test is testing the keeper and not a second
-// idea of when a session dies.
-type history struct {
-	mu       sync.Mutex
-	next     int64
-	sessions map[int64]store.Session
-	answered map[int64][]byte
-	swept    time.Time
+// port stands for a leased port of the proxy service: it goes out where it was
+// last moved, wears what it was last given, holds the tickets it was last
+// loaded with, and writes down every call in the order it came.
+type port struct {
+	mu        sync.Mutex
+	num       int
+	exit      string
+	list      []string
+	resting   map[string]bool
+	limit     int
+	wearing   string
+	fresh     Fingerprint
+	freshened int
+	tickets   []byte
+	calls     []string
+	elsewhere bool
+	refuse    error
+	// stayed is what the port was last told about keeping its address.
+	stayed bool
 }
 
-func newHistory() *history {
-	return &history{sessions: map[int64]store.Session{}, answered: map[int64][]byte{}}
+func listPort(num int, on string, list ...string) *port {
+	return &port{num: num, exit: addrExit + on, list: list, resting: map[string]bool{},
+		fresh: Fingerprint{Profile: "Chrome_153_win", Browser: "chrome", OS: "windows", Release: 153}}
 }
 
-func (h *history) Sessions(_ context.Context, device string, since time.Time) ([]store.Session, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	var out []store.Session
-	for _, s := range h.sessions {
-		if s.Device == device && !s.UsedAt.Before(since) {
-			out = append(out, s)
+func gatewayPort(num int, gateway string) *port {
+	return &port{num: num, exit: gateExit + gateway, resting: map[string]bool{},
+		fresh: Fingerprint{Profile: "Chrome_153_win", Browser: "chrome", OS: "windows", Release: 153}}
+}
+
+func (p *port) note(call string) { p.calls = append(p.calls, call) }
+
+func (p *port) Number() int { return p.num }
+
+func (p *port) Exit() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exit
+}
+
+func (p *port) Offers(a string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Contains(p.list, a) && !p.resting[a]
+}
+
+func (p *port) Knows(a string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Contains(p.list, a)
+}
+
+func (p *port) Stay(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stayed = on
+}
+
+func (p *port) Candidates() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []string
+	for _, a := range p.list {
+		if !p.resting[a] {
+			out = append(out, a)
 		}
 	}
-	return out, nil
+	return out
 }
 
-func (h *history) NewSession(_ context.Context, s store.Session) (int64, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.next++
-	s.ID = h.next
-	h.sessions[s.ID] = s
-	return s.ID, nil
-}
-
-func (h *history) SessionAnswered(_ context.Context, id int64, cookies []byte, at time.Time) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	s, ok := h.sessions[id]
-	if !ok {
-		return store.ErrNoSession
+func (p *port) Limit() int {
+	if p.limit == 0 {
+		return 1
 	}
-	s.Cookies, s.UsedAt, s.Failures = cookies, at, 0
-	h.sessions[id] = s
-	h.answered[id] = cookies
+	return p.limit
+}
+
+func (p *port) MoveTo(_ context.Context, a string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.note("move " + a)
+	p.exit = addrExit + a
 	return nil
 }
 
-func (h *history) SessionFailed(_ context.Context, id int64, at time.Time) (bool, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	s, ok := h.sessions[id]
-	if !ok {
-		return false, store.ErrNoSession
+func (p *port) Wear(_ context.Context, profile string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.note("wear " + profile)
+	if p.refuse != nil {
+		return p.refuse
 	}
-	s.Failures++
-	s.UsedAt = at
-	if s.Failures >= store.SessionFailuresAllowed {
-		delete(h.sessions, id)
-		return true, nil
-	}
-	h.sessions[id] = s
-	return false, nil
+	p.wearing = profile
+	return nil
 }
 
-func (h *history) DropStaleSessions(_ context.Context, before time.Time) (int, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.swept = before
-	n := 0
-	for id, s := range h.sessions {
-		if s.UsedAt.Before(before) {
-			delete(h.sessions, id)
-			n++
-		}
+func (p *port) Freshen(context.Context) (Fingerprint, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.note("fresh")
+	if p.refuse != nil {
+		return Fingerprint{}, p.refuse
 	}
-	return n, nil
+	p.freshened++
+	fp := p.fresh
+	fp.Profile = fmt.Sprintf("%s_%d", fp.Profile, p.freshened)
+	p.wearing = fp.Profile
+	return fp, nil
 }
 
-// wearer stands for the proxy service: every port wears the profile it was last
-// asked for, and a port asked for nothing wears the one it was opened under.
-type wearer struct {
-	mu      sync.Mutex
-	opened  string
-	wearing map[int]string
-	asked   []string
-	refuse  error
+func (p *port) PutTickets(_ context.Context, a string, t []byte) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.note("tickets " + a)
+	p.tickets = t
+	return p.elsewhere, nil
 }
 
-func newWearer(opened string) *wearer {
-	return &wearer{opened: opened, wearing: map[int]string{}}
-}
-
-func (w *wearer) WearSession(_ context.Context, port int, profile string) (string, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.asked = append(w.asked, profile)
-	if w.refuse != nil {
-		return "", w.refuse
-	}
-	if profile == "" {
-		if got, ok := w.wearing[port]; ok {
-			return got, nil
-		}
-		return w.opened, nil
-	}
-	w.wearing[port] = profile
-	return profile, nil
+func (p *port) TakeTickets(context.Context) ([]byte, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.tickets, nil
 }
 
 // clock is a time a test moves by hand.
@@ -129,252 +144,651 @@ type clock struct{ at time.Time }
 
 func (c *clock) now() time.Time       { return c.at }
 func (c *clock) pass(d time.Duration) { c.at = c.at.Add(d) }
-func newKeeperAt(h History, w Wearer, pause time.Duration, c *clock) *Keeper {
-	k := NewKeeper(h, w, "desktop", pause)
+
+func keeperAt(h History, c *clock) *Keeper {
+	k := NewKeeper(h)
 	k.now = c.now
+	// Every rest is the pause and no more, unless a test says otherwise: the
+	// spread is a test of its own.
+	k.rand = func() float64 { return 0 }
 	return k
 }
 
-func TestKeeper_MakesASessionWhenNoneIsRested(t *testing.T) {
-	// How many sessions there are is not a number anybody sets. A thread that
-	// finds every session held or still resting gets a new one — which is how
-	// a job with a long pause ends up with more sessions than one with a short
-	// pause, without either being worked out in advance.
-	h, w := newHistory(), newWearer("Chrome_153_win")
-	c := &clock{at: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
-	k := newKeeperAt(h, w, 5*time.Second, c)
-	ctx := context.Background()
+var desktop = Want{Device: "desktop", Pause: 5 * time.Second}
 
-	first, err := k.Take(ctx, 20001)
+func startClock() *clock { return &clock{at: time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)} }
+
+// google is where a test's sessions are given cookies.
+var google = &url.URL{Scheme: "https", Host: "www.google.ru", Path: "/"}
+
+func TestKeeper_MakesASessionWhenNoneIsRested(t *testing.T) {
+	// How many sessions there are is not a number anybody sets: a thread that
+	// finds every session held or still resting gets a new one.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	a := listPort(1, "addr-1", "addr-1", "addr-2")
+	b := listPort(2, "addr-2", "addr-1", "addr-2")
+
+	first, err := k.Take(ctx, a, desktop)
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	// The first thread still holds its session, so the second needs another.
-	second, err := k.Take(ctx, 20002)
+	second, err := k.Take(ctx, b, desktop)
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
 	if first.ID == second.ID {
 		t.Fatal("two threads were handed the same session at once")
 	}
-	// A new session is the port as it is: what it wears is written down as the
-	// session's fingerprint.
-	if first.Profile != "Chrome_153_win" {
-		t.Errorf("a new session wears %q, want what the port was wearing", first.Profile)
-	}
 	if all, held := k.Count(); all != 2 || held != 2 {
 		t.Errorf("the keeper knows %d sessions and %d held, want 2 and 2", all, held)
+	}
+	// A new session wears a fresh fingerprint from the port's template, not the
+	// one the last session on the port wore.
+	if first.Profile != "Chrome_153_win_1" {
+		t.Errorf("a new session wears %q, want the fresh fingerprint", first.Profile)
 	}
 }
 
 func TestKeeper_HandsARestedSessionBackOutRatherThanMakingAnother(t *testing.T) {
-	// A session that has rested for the job's pause is handed out again, on
-	// whatever port the thread holds — its fingerprint put on that port first.
-	h, w := newHistory(), newWearer("Chrome_153_win")
-	c := &clock{at: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
-	k := newKeeperAt(h, w, 5*time.Second, c)
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
 	ctx := context.Background()
-
-	s, _ := k.Take(ctx, 20001)
-	s.Jar.SetCookies(at(t, "https://www.google.ru/"), []*http.Cookie{{Name: "GOOGLE_ABUSE_EXEMPTION", Value: "won", Path: "/"}})
-	if err := s.Answered(ctx); err != nil {
+	p := listPort(1, "addr-1", "addr-1", "addr-2")
+	s, _ := k.Take(ctx, p, desktop)
+	if err := s.Answered(ctx, p); err != nil {
 		t.Fatalf("Answered: %v", err)
 	}
 
-	// Still resting: another thread gets a new session instead.
-	early, _ := k.Take(ctx, 20002)
+	c.pass(2 * time.Second)
+	early, _ := k.Take(ctx, listPort(2, "addr-2", "addr-1", "addr-2"), desktop)
 	if early.ID == s.ID {
-		t.Fatal("a session was handed out again before it had rested for the pause")
+		t.Error("a session was handed out before it had rested the pause")
 	}
-	_ = early.Answered(ctx)
-
 	c.pass(5 * time.Second)
-	again, err := k.Take(ctx, 20003)
-	if err != nil {
-		t.Fatalf("Take: %v", err)
-	}
-	if again.ID != s.ID && again.ID != early.ID {
-		t.Fatalf("a rested session was not handed out; a new one was made (%d)", again.ID)
-	}
-	// And the fingerprint was put on the port it is now on.
-	if got := w.wearing[20003]; got != again.Profile {
-		t.Errorf("port 20003 wears %q, want the session's %q", got, again.Profile)
+	again, _ := k.Take(ctx, listPort(3, "addr-1", "addr-1", "addr-2"), desktop)
+	if again.ID != s.ID {
+		t.Errorf("a rested session was not handed out again (got %d, want %d)", again.ID, s.ID)
 	}
 }
 
-func TestKeeper_WritesTheCookiesDownOnEveryAnswer(t *testing.T) {
-	// A run can end between an answer and the moment the session is let go of
-	// — stopped, or the machine gone — and a session whose clearance was never
-	// written down is a session that pays for it again next run.
-	h, w := newHistory(), newWearer("Chrome_153_win")
-	c := &clock{at: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
-	k := newKeeperAt(h, w, time.Second, c)
+func TestKeeper_RestsASessionForThePauseOfWhoeverTakesItNext(t *testing.T) {
+	// The warmer, a job and a search inside a request share sessions and not a
+	// pause. A session is judged against the pause of whoever is asking.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
 	ctx := context.Background()
+	p := listPort(1, "addr-1", "addr-1")
+	s, _ := k.Take(ctx, p, desktop)
+	_ = s.Answered(ctx, p)
+	c.pass(10 * time.Second)
 
-	s, _ := k.Take(ctx, 20001)
-	s.Jar.SetCookies(at(t, "https://www.google.ru/"), []*http.Cookie{{Name: "GOOGLE_ABUSE_EXEMPTION", Value: "won", Path: "/"}})
-	if err := s.Answered(ctx); err != nil {
+	patient := desktop
+	patient.Pause = time.Minute
+	fresh, err := k.Take(ctx, listPort(2, "addr-1", "addr-1", "addr-2"), patient)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if fresh.ID == s.ID {
+		t.Error("a session ten seconds rested was handed to a taker whose pause is a minute")
+	}
+}
+
+func TestKeeper_PutsASessionOnAPortFingerprintFirstAddressSecondTicketsLast(t *testing.T) {
+	// A new fingerprint or a new address wipes the port's tickets. Loaded in any
+	// other order, the tickets are lost without a word.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	first := listPort(1, "addr-1", "addr-1", "addr-2")
+	s, _ := k.Take(ctx, first, desktop)
+	first.tickets = []byte(`[{"host":"www.google.ru"}]`)
+	_ = s.Answered(ctx, first)
+	c.pass(time.Minute)
+
+	next := listPort(2, "addr-2", "addr-1", "addr-2")
+	again, _ := k.Take(ctx, next, desktop)
+	if again.ID != s.ID {
+		t.Fatalf("got session %d, want %d", again.ID, s.ID)
+	}
+	want := []string{"wear Chrome_153_win_1", "move addr-1", "tickets addr-1"}
+	if !slices.Equal(next.calls, want) {
+		t.Errorf("the session went on the port as %q, want %q", next.calls, want)
+	}
+	if string(next.tickets) != `[{"host":"www.google.ru"}]` {
+		t.Errorf("the port was loaded with %s, want the session's tickets", next.tickets)
+	}
+}
+
+func TestKeeper_WipesThePortsTicketsForANewSession(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	p := listPort(1, "addr-1", "addr-1")
+	p.tickets = []byte(`[{"host":"left behind"}]`)
+	if _, err := k.Take(context.Background(), p, desktop); err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if p.tickets != nil {
+		t.Errorf("a new session went out with %s, the last session's tickets", p.tickets)
+	}
+}
+
+func TestKeeper_GivesANewSessionTheAddressWithFewestSessionsThenTheLongestRested(t *testing.T) {
+	// The customer's rule: sessions spread over every address before any
+	// address takes a second; once they have to share, the address with the
+	// fewest goes first, and between equals the one that has rested longest.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	take := func(num int, list ...string) string {
+		p := listPort(num, list[0], list...)
+		s, err := k.Take(ctx, p, desktop)
+		if err != nil {
+			t.Fatalf("Take %d: %v", num, err)
+		}
+		_ = s.Answered(ctx, p)
+		c.pass(time.Second)
+		return p.Exit()
+	}
+	// Session one takes a (nothing on either, a first), two takes b (a carries
+	// one), and three takes a again: both carry one and a has rested longer —
+	// though the third port lists b first, so taking the first in the list
+	// would be told apart from taking the longest rested.
+	got := []string{take(1, "a", "b"), take(2, "a", "b"), take(3, "b", "a")}
+	want := []string{"addr:a", "addr:b", "addr:a"}
+	if !slices.Equal(got, want) {
+		t.Errorf("new sessions went to %q, want %q", got, want)
+	}
+}
+
+func TestKeeper_PassesOverASessionWhoseAddressIsAtItsLimit(t *testing.T) {
+	// Two sessions came to share address a when there was nothing else. With a
+	// limit of one session at a time on an address, the second is not handed
+	// out while the first is working through a: the thread gets a new session
+	// on b instead.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	roomy := func(num int) *port {
+		p := listPort(num, "a", "a")
+		p.limit = 2
+		return p
+	}
+	p1, p2 := roomy(1), roomy(2)
+	s1, _ := k.Take(ctx, p1, desktop)
+	s2, _ := k.Take(ctx, p2, desktop)
+	_ = s1.Answered(ctx, p1)
+	c.pass(time.Second)
+	_ = s2.Answered(ctx, p2)
+	c.pass(time.Minute)
+
+	first, _ := k.Take(ctx, listPort(3, "a", "a", "b"), desktop)
+	if first.ID != s2.ID {
+		t.Fatalf("got %d, want %d, the session used last", first.ID, s2.ID)
+	}
+	other := listPort(4, "a", "a", "b")
+	next, err := k.Take(ctx, other, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if next.ID == s1.ID || other.Exit() != "addr:b" {
+		t.Errorf("the second thread got session %d on %q, want a new one on b: a is working a session already",
+			next.ID, other.Exit())
+	}
+}
+
+func TestKeeper_KeepsAGatewaySessionToItsGateway(t *testing.T) {
+	// There is no carrying a session to another exit without a challenge, and a
+	// gateway is an exit: each gateway has its own sessions.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	north := gatewayPort(1, "north")
+	s, _ := k.Take(ctx, north, desktop)
+	_ = s.Answered(ctx, north)
+	c.pass(time.Minute)
+
+	south := gatewayPort(2, "south")
+	other, _ := k.Take(ctx, south, desktop)
+	if other.ID == s.ID {
+		t.Error("a session made behind one gateway was handed to a port on another")
+	}
+	back, _ := k.Take(ctx, gatewayPort(3, "north"), desktop)
+	if back.ID != s.ID {
+		t.Error("a port on the session's own gateway was not handed the session")
+	}
+	for _, call := range south.calls {
+		if call != "fresh" && call != "tickets " {
+			t.Errorf("a port on a gateway was told %q; nothing moves a gateway", call)
+		}
+	}
+}
+
+func TestKeeper_MovesASessionWhoseAddressIsGoneByTheSameRule(t *testing.T) {
+	// A session whose address has left the list — or is resting after failing
+	// to carry anything — takes another, chosen the way a new session's is.
+	// There it pays a challenge; that is what changing exit costs.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := listPort(1, "a", "a", "b")
+	s, _ := k.Take(ctx, p, desktop)
+	_ = s.Answered(ctx, p)
+	c.pass(time.Minute)
+
+	// The list no longer holds a. The port stands on c; the rule picks b — both
+	// carry nothing and neither has rested less, and b comes first — so a move
+	// to b is the rule deciding, not the port's address being taken as found.
+	q := listPort(2, "c", "b", "c")
+	again, _ := k.Take(ctx, q, desktop)
+	if again.ID != s.ID {
+		t.Fatalf("got %d, want the rested session", again.ID)
+	}
+	if q.Exit() != "addr:b" {
+		t.Errorf("the session went to %q, want b, the address the rule picks", q.Exit())
+	}
+}
+
+func TestKeeper_TakesThePortsOwnAddressWhenTheWholeListIsResting(t *testing.T) {
+	// Every address resting leaves nothing to choose from. Standing still until
+	// the rests run out would stop the job for an hour; the port's own address
+	// is what the pool itself falls back on.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	p := listPort(1, "a", "a")
+	p.resting["a"] = true
+	if _, err := k.Take(context.Background(), p, desktop); err != nil {
+		t.Fatalf("with the whole list resting, Take answered %v, want a session on the port's own address", err)
+	}
+	if p.Exit() != "addr:a" {
+		t.Errorf("the session went to %q, want the port's own address", p.Exit())
+	}
+}
+
+func TestKeeper_WritesTicketsCookiesAndWhereTheRequestEndedUpAfterEveryAnswer(t *testing.T) {
+	// A request an address did not carry is taken to another, and the session
+	// goes with it. What is written down is where it is now, or its next use
+	// sends the new clearance out through the old exit.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := listPort(1, "a", "a", "b")
+	s, _ := k.Take(ctx, p, desktop)
+
+	s.Jar.SetCookies(google, []*http.Cookie{{Name: "NID", Value: "x"}})
+	p.exit, p.tickets = "addr:b", []byte(`[{"host":"www.google.ru"}]`)
+	if err := s.Answered(ctx, p); err != nil {
 		t.Fatalf("Answered: %v", err)
 	}
-	back, err := ReadJar(h.answered[s.ID])
-	if err != nil {
-		t.Fatalf("ReadJar: %v", err)
+	kept, _ := h.Get(s.ID)
+	if kept.Exit != "addr:b" || string(kept.Tickets) != `[{"host":"www.google.ru"}]` {
+		t.Errorf("written down at %q with %s, want addr:b with the port's tickets", kept.Exit, kept.Tickets)
 	}
-	if got := names(back, at(t, "https://www.google.ru/")); got["GOOGLE_ABUSE_EXEMPTION"] != "won" {
-		t.Errorf("the history holds %v for the session, want the clearance it answered with", got)
+	jar, err := ReadJar(kept.Cookies)
+	if err != nil || len(jar.Cookies(google)) != 1 {
+		t.Errorf("the jar written down holds %v (err %v), want the NID", jar.Cookies(google), err)
 	}
 }
 
-func TestKeeper_ResumesTheSessionsAnEarlierRunLeft(t *testing.T) {
-	// The reason for writing sessions down: the next run of the job starts on
-	// the sessions the last one made, rather than paying for every challenge
-	// again. Only the ones used in the last twelve hours; the rest are swept.
-	h, w := newHistory(), newWearer("Chrome_153_win")
-	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
-	jar := NewJar()
-	jar.SetCookies(at(t, "https://www.google.ru/"), []*http.Cookie{{Name: "GOOGLE_ABUSE_EXEMPTION", Value: "yesterday", Path: "/"}})
-	written, _ := jar.MarshalJSON()
-	recent, _ := h.NewSession(context.Background(), store.Session{
-		Profile: "Firefox_155_lin", Device: "desktop", Cookies: written, UsedAt: now.Add(-3 * time.Hour)})
-	stale, _ := h.NewSession(context.Background(), store.Session{
-		Profile: "Edge_153_win", Device: "desktop", UsedAt: now.Add(-13 * time.Hour)})
+func TestKeeper_RefusesAPortThatStandsElsewhere(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := listPort(1, "a", "a")
+	s, _ := k.Take(ctx, p, desktop)
+	_ = s.Answered(ctx, p)
+	c.pass(time.Minute)
 
-	c := &clock{at: now}
-	k := newKeeperAt(h, w, 5*time.Second, c)
-	s, err := k.Take(context.Background(), 20001)
-	if err != nil {
-		t.Fatalf("Take: %v", err)
+	wrong := listPort(2, "a", "a")
+	wrong.elsewhere = true
+	if _, err := k.Take(ctx, wrong, desktop); !errors.Is(err, ErrPortElsewhere) {
+		t.Fatalf("a port standing elsewhere answered %v, want ErrPortElsewhere", err)
 	}
-	if s.ID != recent {
-		t.Fatalf("the run started on session %d, want the one the last run left (%d)", s.ID, recent)
+	if _, held := k.Count(); held != 0 {
+		t.Error("the session refused a port was not put back")
 	}
-	if got := names(s.Jar, at(t, "https://www.google.ru/")); got["GOOGLE_ABUSE_EXEMPTION"] != "yesterday" {
-		t.Errorf("the resumed session sends %v, want the clearance it was written down with", got)
+}
+
+func TestKeeper_HandsOutOnlyWhatTheJobAskedFor(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := listPort(1, "a", "a", "b")
+	s, _ := k.Take(ctx, p, desktop)
+	_ = s.Answered(ctx, p)
+	c.pass(time.Minute)
+
+	firefox := desktop
+	firefox.Browser = "firefox"
+	q := listPort(2, "b", "a", "b")
+	q.fresh = Fingerprint{Profile: "Firefox_140_win", Browser: "firefox", OS: "windows", Release: 140}
+	got, _ := k.Take(ctx, q, firefox)
+	if got.ID == s.ID {
+		t.Error("a job asking for Firefox was handed a Chrome session")
 	}
-	if w.wearing[20001] != "Firefox_155_lin" {
-		t.Errorf("port 20001 wears %q, want the resumed session's fingerprint", w.wearing[20001])
-	}
-	if _, ok := h.sessions[stale]; ok {
-		t.Error("a session unused for thirteen hours was not swept")
+	phone := Want{Device: "mobile", Pause: time.Second}
+	r, _ := k.Take(ctx, listPort(3, "a", "a", "b"), phone)
+	if r.ID == s.ID {
+		t.Error("a phone job was handed a desktop session")
 	}
 }
 
 func TestKeeper_GivesASessionUpAtTheSecondRefusalInARow(t *testing.T) {
-	h, w := newHistory(), newWearer("Chrome_153_win")
-	c := &clock{at: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
-	k := newKeeperAt(h, w, time.Second, c)
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
 	ctx := context.Background()
-
-	s, _ := k.Take(ctx, 20001)
+	p := listPort(1, "a", "a")
+	s, _ := k.Take(ctx, p, desktop)
 	if dropped, err := s.Failed(ctx); err != nil || dropped {
-		t.Fatalf("the first refusal: dropped=%v err=%v", dropped, err)
+		t.Fatalf("first refusal: dropped=%v err=%v", dropped, err)
 	}
-	c.pass(time.Second)
-	again, _ := k.Take(ctx, 20001)
+	c.pass(time.Minute)
+	again, _ := k.Take(ctx, p, desktop)
 	if again.ID != s.ID {
-		t.Fatalf("after one refusal the session was not handed out again")
+		t.Fatalf("got %d, want the once-refused session back", again.ID)
 	}
-	dropped, err := again.Failed(ctx)
-	if err != nil {
-		t.Fatalf("Failed: %v", err)
-	}
-	if !dropped {
-		t.Fatal("the second refusal in a row left the session standing")
+	if dropped, err := again.Failed(ctx); err != nil || !dropped {
+		t.Errorf("second refusal in a row: dropped=%v err=%v, want dropped", dropped, err)
 	}
 	if all, _ := k.Count(); all != 0 {
-		t.Errorf("the keeper still knows %d sessions after giving the only one up", all)
+		t.Errorf("the keeper still knows %d sessions after giving one up", all)
 	}
 }
 
-func TestKeeper_LeavesASessionThePortWouldNotTakeForAnotherThread(t *testing.T) {
-	// A port that will not take a profile is the port's trouble and not the
-	// session's. Giving the session up over it would throw away a clearance
-	// that another port would have carried.
-	h, w := newHistory(), newWearer("Chrome_153_win")
-	c := &clock{at: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
-	k := newKeeperAt(h, w, time.Second, c)
+func TestKeeper_ResumesTheSessionsAnEarlierRunLeft(t *testing.T) {
+	c, h := startClock(), NewMemory()
 	ctx := context.Background()
+	p := listPort(1, "a", "a")
+	earlier := keeperAt(h, c)
+	s, _ := earlier.Take(ctx, p, desktop)
+	s.Jar.SetCookies(google, []*http.Cookie{{Name: "NID", Value: "kept"}})
+	_ = s.Answered(ctx, p)
+	c.pass(time.Hour)
 
-	s, _ := k.Take(ctx, 20001)
-	_ = s.Answered(ctx)
-	c.pass(time.Second)
-
-	w.refuse = errors.New("the port is gone")
-	if _, err := k.Take(ctx, 20009); err == nil {
-		t.Fatal("a port that refused the profile was handed the session anyway")
-	}
-	w.refuse = nil
-	again, err := k.Take(ctx, 20002)
+	later := keeperAt(h, c)
+	again, err := later.Take(ctx, listPort(2, "a", "a"), desktop)
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	if again.ID != s.ID {
-		t.Errorf("the session was lost over one port refusing it")
+	if again.ID != s.ID || len(again.Jar.Cookies(google)) != 1 {
+		t.Errorf("a new keeper handed out session %d with %v, want %d with its cookie",
+			again.ID, again.Jar.Cookies(google), s.ID)
+	}
+}
+
+func TestKeeper_ForgetsASessionUnusedForTwelveHours(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := listPort(1, "a", "a")
+	s, _ := k.Take(ctx, p, desktop)
+	_ = s.Answered(ctx, p)
+	c.pass(KeptFor + time.Minute)
+
+	next, _ := k.Take(ctx, listPort(2, "a", "a"), desktop)
+	if next.ID == s.ID {
+		t.Error("a session unused for more than twelve hours was handed out")
+	}
+	if _, kept := h.Get(s.ID); kept {
+		t.Error("a session unused for more than twelve hours is still in the history")
+	}
+}
+
+func TestKeeper_NeverHandsOutASessionPastItsTwelveHoursBetweenSweeps(t *testing.T) {
+	// The sweep runs once an hour; a session that ran out in between is not
+	// handed out on the strength of the sweep not having got to it yet.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := listPort(1, "a", "a")
+	s, _ := k.Take(ctx, p, desktop)
+	_ = s.Answered(ctx, p)
+
+	// Half an hour before it runs out, something takes a session elsewhere,
+	// which sweeps; the session is not yet stale and stays.
+	c.pass(KeptFor - 30*time.Minute)
+	if _, err := k.Take(ctx, gatewayPort(9, "elsewhere"), desktop); err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	// Thirty-one minutes later it has run out, and no sweep is due.
+	c.pass(31 * time.Minute)
+	next, err := k.Take(ctx, listPort(2, "a", "a"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if next.ID == s.ID {
+		t.Error("a session past its twelve hours was handed out because the sweep had not come round")
+	}
+}
+
+func TestKeeper_TakesTheColdestSessionThatHasRestedLongEnough(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	// Both are made while the other is held, so there are two; the first is
+	// then an hour colder than the second.
+	pa, pb := listPort(1, "a", "a", "b"), listPort(2, "b", "a", "b")
+	first, _ := k.Take(ctx, pa, desktop)
+	second, _ := k.Take(ctx, pb, desktop)
+	_ = first.Answered(ctx, pa)
+	c.pass(time.Hour)
+	_ = second.Answered(ctx, pb)
+
+	if _, err := k.TakeColdest(ctx, listPort(3, "a", "a", "b"), desktop, 2*time.Hour); !errors.Is(err, ErrNothingDue) {
+		t.Fatalf("nothing is two hours cold, yet TakeColdest answered %v", err)
+	}
+	got, err := k.TakeColdest(ctx, listPort(4, "a", "a", "b"), desktop, 0)
+	if err != nil {
+		t.Fatalf("TakeColdest: %v", err)
+	}
+	if got.ID != first.ID {
+		t.Errorf("took session %d, want %d, the one unused longest", got.ID, first.ID)
+	}
+}
+
+func TestKeeper_ChoosesForThePoolByTheSameRule(t *testing.T) {
+	// The address carrying fewer sessions goes first even when it has rested
+	// less: b lost its only session a minute ago and carries none, a has
+	// carried one since the start.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	pa := listPort(1, "a", "a")
+	s, _ := k.Take(ctx, pa, desktop)
+	_ = s.Answered(ctx, pa)
+
+	pb := listPort(2, "b", "b")
+	gone, _ := k.Take(ctx, pb, desktop)
+	_, _ = gone.Failed(ctx)
+	c.pass(time.Minute)
+	again, _ := k.Take(ctx, listPort(3, "b", "b"), desktop)
+	if again.ID != gone.ID {
+		t.Fatalf("got %d, want the once-refused session %d back", again.ID, gone.ID)
+	}
+	if dropped, _ := again.Failed(ctx); !dropped {
+		t.Fatal("the second refusal in a row did not give the session up")
+	}
+
+	if got, ok := k.Choose([]string{"a", "b"}, 1); !ok || got != "b" {
+		t.Errorf("Choose picked %q, want b: it carries no session, a carries one", got)
 	}
 }
 
 func TestHeld_CannotBeGivenBackTwice(t *testing.T) {
-	// Given back twice, a session would be counted rested twice and handed to
-	// two threads at once — two identities that are one.
-	h, w := newHistory(), newWearer("Chrome_153_win")
-	c := &clock{at: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
-	k := newKeeperAt(h, w, time.Second, c)
-	s, _ := k.Take(context.Background(), 20001)
-	if err := s.Answered(context.Background()); err != nil {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := listPort(1, "a", "a")
+	s, _ := k.Take(ctx, p, desktop)
+	if err := s.Answered(ctx, p); err != nil {
 		t.Fatalf("Answered: %v", err)
 	}
-	if err := s.Answered(context.Background()); !errors.Is(err, ErrNotHeld) {
-		t.Errorf("a session given back twice answered %v, want ErrNotHeld", err)
+	if err := s.Answered(ctx, p); !errors.Is(err, ErrNotHeld) {
+		t.Errorf("a second give-back answered %v, want ErrNotHeld", err)
 	}
-
-	// The case that matters: the session has rested and another thread holds
-	// it now. The first thread's old handle must not be able to let it go out
-	// from under the second — that would hand the one session to a third
-	// thread while the second is still searching with it.
-	c.pass(time.Second)
-	other, err := k.Take(context.Background(), 20002)
-	if err != nil || other.ID != s.ID {
-		t.Fatalf("the rested session was not handed to the next thread (%v, %v)", other, err)
+	c.pass(time.Minute)
+	// And a stale handle cannot write over the session once another thread
+	// holds it.
+	again, _ := k.Take(ctx, p, desktop)
+	if _, err := s.Failed(ctx); !errors.Is(err, ErrNotHeld) {
+		t.Errorf("a stale handle failed the session another thread holds: %v", err)
 	}
-	if err := s.Answered(context.Background()); !errors.Is(err, ErrNotHeld) {
-		t.Errorf("a stale handle gave back a session another thread holds: %v", err)
-	}
-	if _, held := k.Count(); held != 1 {
-		t.Errorf("%d sessions are held after the stale handle, want the other thread's one", held)
-	}
+	_ = again.Answered(ctx, p)
 }
 
 func TestHeld_SavesThePagesOfAWalkWithoutLettingTheSessionGo(t *testing.T) {
-	// A query walked page by page keeps one session for all its pages, so it
-	// cannot give the session back after each one — but a run can end between
-	// two pages, and a clearance won on page one and never written down is one
-	// the next run pays for again.
-	h, w := newHistory(), newWearer("Chrome_153_win")
-	c := &clock{at: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
-	k := newKeeperAt(h, w, time.Minute, c)
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
 	ctx := context.Background()
-
-	s, _ := k.Take(ctx, 20001)
-	s.Jar.SetCookies(at(t, "https://www.google.ru/"), []*http.Cookie{{Name: "GOOGLE_ABUSE_EXEMPTION", Value: "page-one", Path: "/"}})
-	if err := s.Save(ctx); err != nil {
+	p := listPort(1, "a", "a")
+	s, _ := k.Take(ctx, p, desktop)
+	s.Jar.SetCookies(google, []*http.Cookie{{Name: "NID", Value: "page-one"}})
+	if err := s.Save(ctx, p); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	// Written down…
-	back, _ := ReadJar(h.answered[s.ID])
-	if got := names(back, at(t, "https://www.google.ru/")); got["GOOGLE_ABUSE_EXEMPTION"] != "page-one" {
-		t.Errorf("after the first page the history holds %v", got)
+	if _, held := k.Count(); held != 1 {
+		t.Error("saving a page let the session go")
 	}
-	// …and still held: another thread asking now gets a different session.
-	other, _ := k.Take(ctx, 20002)
+	kept, _ := h.Get(s.ID)
+	if jar, _ := ReadJar(kept.Cookies); len(jar.Cookies(google)) != 1 {
+		t.Error("the page's cookies were not written down")
+	}
+}
+
+// answeredOn makes a session that has answered on address a: Google gave it a
+// cookie, and it was written down.
+func answeredOn(t *testing.T, k *Keeper, a string, list ...string) *Held {
+	t.Helper()
+	ctx := context.Background()
+	p := listPort(90, a, list...)
+	s, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	s.Jar.SetCookies(google, []*http.Cookie{{Name: "GOOGLE_ABUSE_EXEMPTION", Value: "clearance"}})
+	if err := s.Answered(ctx, p); err != nil {
+		t.Fatalf("Answered: %v", err)
+	}
+	return s
+}
+
+func TestKeeper_KeepsASessionThatHasAnsweredWaitingForItsRestingAddress(t *testing.T) {
+	// A session holds a clearance for the address it answered through. That
+	// address failing once is a reason to rest it, not to spend the clearance
+	// on a challenge somewhere else: the session waits, and a thread meanwhile
+	// takes another.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+
+	resting := listPort(1, "b", "a", "b")
+	resting.resting["a"] = true
+	other, err := k.Take(ctx, resting, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
 	if other.ID == s.ID {
-		t.Error("a session saved mid-walk was handed to another thread")
+		t.Fatal("a session that has answered was carried off its resting address")
 	}
-	// The walk goes on and ends normally.
-	if err := s.Answered(ctx); err != nil {
-		t.Errorf("the walk could not give its session back after saving it: %v", err)
+	// The other session stays held, so the only one free once a is back is
+	// the one that waited for it.
+	c.pass(time.Minute)
+
+	back, err := k.Take(ctx, listPort(2, "b", "a", "b"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
 	}
-	// And a handle that has been given back cannot save.
-	if err := s.Save(ctx); !errors.Is(err, ErrNotHeld) {
-		t.Errorf("a session given back could still be saved: %v", err)
+	if back.ID != s.ID {
+		t.Errorf("once its address was back, got session %d, want the one that waited (%d)", back.ID, s.ID)
+	}
+}
+
+func TestKeeper_MovesASessionThatHasAnsweredOnlyWhenItsAddressLeavesTheList(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+
+	p := listPort(1, "b", "b")
+	got, err := k.Take(context.Background(), p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if got.ID != s.ID || p.Exit() != "addr:b" {
+		t.Errorf("got session %d on %q, want %d moved to b: its address has left the list", got.ID, p.Exit(), s.ID)
+	}
+}
+
+func TestKeeper_LetsASessionThatNeverAnsweredGoWhereAnAddressIsFree(t *testing.T) {
+	// A session with nothing to lose does not wait for anything.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	first := listPort(1, "a", "a", "b")
+	s, _ := k.Take(ctx, first, desktop)
+	s.PutBack()
+	c.pass(time.Minute)
+
+	p := listPort(2, "a", "a", "b")
+	p.resting["a"] = true
+	got, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if got.ID != s.ID || p.Exit() != "addr:b" {
+		t.Errorf("got session %d on %q, want %d taken to b", got.ID, p.Exit(), s.ID)
+	}
+}
+
+func TestKeeper_TellsThePortToKeepItsAddressOnlyForASessionThatHasAnswered(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	answeredOn(t, k, "a", "a")
+	c.pass(time.Minute)
+
+	p := listPort(1, "a", "a")
+	if _, err := k.Take(ctx, p, desktop); err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if !p.stayed {
+		t.Error("the port carrying a session that has answered was not told to keep its address")
+	}
+	q := listPort(2, "b", "a", "b")
+	q.stayed = true
+	if _, err := k.Take(ctx, q, desktop); err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if q.stayed {
+		t.Error("the port carrying a new session was told to keep its address")
+	}
+}
+
+func TestKeeper_RestsASessionBetweenThePauseAndHalfAgainMore(t *testing.T) {
+	// Sixty to ninety seconds: the span the operator measured, and no metronome
+	// — a session asked again every sixty seconds to the millisecond is a
+	// description of a program.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	k.rand = func() float64 { return 1 }
+	ctx := context.Background()
+	minute := Want{Device: "desktop", Pause: 60 * time.Second}
+	p := listPort(1, "a", "a", "b")
+	s, _ := k.Take(ctx, p, minute)
+	_ = s.Answered(ctx, p)
+
+	c.pass(70 * time.Second)
+	early, _ := k.Take(ctx, listPort(2, "b", "a", "b"), minute)
+	if early.ID == s.ID {
+		t.Fatal("a session drawn to rest ninety seconds was handed out at seventy")
+	}
+	early.PutBack()
+	c.pass(21 * time.Second)
+	later, _ := k.Take(ctx, listPort(3, "a", "a", "b"), minute)
+	if later.ID != s.ID {
+		t.Errorf("at ninety-one seconds got session %d, want the rested one (%d)", later.ID, s.ID)
 	}
 }

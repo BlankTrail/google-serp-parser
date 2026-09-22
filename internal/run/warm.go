@@ -6,11 +6,13 @@ import (
 	"context"
 	"log/slog"
 	"math/rand/v2"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 )
 
 // IdleBeforeWarming is how long a standing port is left alone before it is
@@ -114,7 +116,27 @@ type Warmer struct {
 	// beforeSearch runs just before each warming request goes out, so a test can
 	// hold them all and see whether they are in flight together.
 	beforeSearch func()
+
+	// Keeper, when set, makes this a warmer of sessions rather than of ports: a
+	// session is what is warm now, and a port is only where it is put. Want is
+	// the kind of session warmed — the standing set's kind of result page.
+	Keeper *sessions.Keeper
+	Want   sessions.Want
+	// warmAfter, idleEvery and now override the line a session is warmed at,
+	// the gap between two warmings for want of one running out, and the clock,
+	// so a test does not have to wait eleven hours.
+	warmAfter time.Duration
+	idleEvery time.Duration
+	now       func() time.Time
+	// lastIdle is when a session was last warmed for want of one running out.
+	lastIdle time.Time
 }
+
+// idleWarmingEvery is how often, when no session is running out and nothing is
+// running, the coldest session is warmed anyway: one, and no more often than
+// this. The operator's rule — a machine left alone still looks like somebody,
+// at four requests an hour rather than a request per session per quarter.
+const idleWarmingEvery = 15 * time.Minute
 
 // Run warms every standing port that is due, until the context ends.
 //
@@ -165,6 +187,10 @@ func (w *Warmer) oneRound(ctx context.Context, idle time.Duration) {
 	// paid for a phrase somebody asked for. The set is tended while nobody is
 	// using it, and left alone while somebody is.
 	if w.Pool.InUse() > 0 {
+		return
+	}
+	if w.Keeper != nil {
+		w.sessionRound(ctx)
 		return
 	}
 
@@ -239,6 +265,100 @@ func (w *Warmer) atOnce() int {
 		return hot / 2
 	}
 	return 1
+}
+
+// sessionRound warms the sessions about to run out, several at a time; and when
+// there are none, the coldest one, alone and at most once a quarter of an hour.
+func (w *Warmer) sessionRound(ctx context.Context) {
+	if w.warmExpiring(ctx) > 0 {
+		return
+	}
+	every := w.idleEvery
+	if every <= 0 {
+		every = idleWarmingEvery
+	}
+	now := w.clock()
+	if !w.lastIdle.IsZero() && now.Sub(w.lastIdle) < every {
+		return
+	}
+	lease, ok := w.Pool.AcquireIdleHot(0)
+	if !ok {
+		return
+	}
+	held, err := w.Keeper.TakeColdest(ctx, leasePort{lease}, w.Want, 0)
+	if err != nil {
+		lease.Release()
+		return
+	}
+	w.lastIdle = now
+	// One, and waited for: nothing else is warmed alongside it.
+	w.warmSession(ctx, lease, held)
+}
+
+// warmExpiring warms every session past the line, as many at once as the set
+// allows and spaced as ever, and says how many it started.
+func (w *Warmer) warmExpiring(ctx context.Context) int {
+	line := w.warmAfter
+	if line <= 0 {
+		line = sessions.WarmAfter
+	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	started := 0
+	for started < w.atOnce() {
+		if ctx.Err() != nil {
+			return started
+		}
+		if started > 0 && !w.wait(ctx, w.spaced()) {
+			return started
+		}
+		lease, ok := w.Pool.AcquireIdleHot(0)
+		if !ok {
+			return started
+		}
+		held, err := w.Keeper.TakeColdest(ctx, leasePort{lease}, w.Want, line)
+		if err != nil {
+			lease.Release()
+			return started
+		}
+		started++
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w.warmSession(ctx, lease, held)
+		}()
+	}
+	return started
+}
+
+// warmSession makes one ordinary search through a session put on a port, and
+// writes the session down.
+func (w *Warmer) warmSession(ctx context.Context, lease *blanktrail.Lease, held *sessions.Held) {
+	defer lease.Release()
+	if w.beforeSearch != nil {
+		w.beforeSearch()
+	}
+	c := lease.Client()
+	sess := &google.Session{Client: &http.Client{Transport: c.Transport, Timeout: c.Timeout, Jar: held.Jar}}
+	if _, err := sess.Search(ctx, google.Query{Text: warmingPhrase()}); err != nil {
+		letGoAfter(ctx, held, err)
+		if ctx.Err() == nil && w.Log != nil {
+			w.Log.Info("keeping a session warm did not get through", "port", lease.Port(), "error", err)
+		}
+		return
+	}
+	_ = held.Answered(ctx, leasePort{lease})
+	if w.warmed != nil {
+		w.warmed()
+	}
+}
+
+// clock is the warmer's time, which a test may wind by hand.
+func (w *Warmer) clock() time.Time {
+	if w.now != nil {
+		return w.now()
+	}
+	return time.Now()
 }
 
 // warmOne makes one ordinary search through a port and throws the answer away.

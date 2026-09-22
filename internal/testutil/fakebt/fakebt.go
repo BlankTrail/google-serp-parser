@@ -100,7 +100,19 @@ type Server struct {
 	rotates      map[int]int
 	// resets counts how often the solver's pin and cookies were cleared off
 	// each port.
-	resets      map[int]int
+	resets map[int]int
+	// tickets are the TLS session tickets each port holds, as the real service
+	// writes them out. The fake does no TLS, so a test puts them on a port the
+	// way traffic would have; what the fake keeps honest is that they are wiped
+	// exactly where the service wipes them — a new fingerprint, a new address.
+	tickets map[int]string
+	// noResumption are the ports on which the service keeps no tickets at all.
+	noResumption map[int]bool
+	// keep is keep_sessions as each port was last told it, where it was told.
+	keep map[int]bool
+	// down makes the service answer everything with 503, the way it does while
+	// it restarts.
+	down        bool
 	rotateDrift bool
 	fails       map[string][]failure
 	seen        []Recorded
@@ -132,7 +144,11 @@ func New(t *testing.T) *Server {
 		rotates:  map[int]int{},
 		resets:   map[int]int{},
 		fails:    map[string][]failure{},
-		nextPort: freePort(),
+
+		tickets:      map[int]string{},
+		noResumption: map[int]bool{},
+		keep:         map[int]bool{},
+		nextPort:     freePort(),
 	}
 	s.ts = httptest.NewServer(http.HandlerFunc(s.route))
 	t.Cleanup(s.ts.Close)
@@ -277,6 +293,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.seen = append(s.seen, Recorded{Method: r.Method, Path: r.URL.Path, Body: string(body)})
+	if s.down {
+		// A service restarting: everything it is asked is answered "not ready".
+		s.mu.Unlock()
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "starting"})
+		return
+	}
 	if q := s.fails[r.URL.Path]; len(q) > 0 {
 		f := q[0]
 		s.fails[r.URL.Path] = q[1:]
@@ -522,6 +544,56 @@ func (s *Server) ResetsOf(port int) int {
 	return s.resets[port]
 }
 
+// Restart makes the service forget every port it held, as a restart does: the
+// numbers are free again and nothing listens on them.
+func (s *Server) Restart() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ports = map[int]string{}
+	s.profiles = map[int]Profile{}
+	s.tickets = map[int]string{}
+	s.keep = map[int]bool{}
+}
+
+// SetDown makes the service answer everything "not ready", as it does while it
+// restarts, or brings it back.
+func (s *Server) SetDown(down bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.down = down
+}
+
+// SetTickets puts TLS session tickets on a port, as traffic through it would.
+func (s *Server) SetTickets(port int, raw string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tickets[port] = raw
+}
+
+// TicketsOf is what a port holds; empty is none.
+func (s *Server) TicketsOf(port int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tickets[port]
+}
+
+// SetResumptionOff makes a port one the service keeps no tickets on, which the
+// real service answers an import on with 409.
+func (s *Server) SetResumptionOff(port int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noResumption[port] = true
+}
+
+// KeepSessionsOf is keep_sessions as the port was last told it, and whether it
+// was told at all.
+func (s *Server) KeepSessionsOf(port int) (keep, told bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keep, told = s.keep[port]
+	return keep, told
+}
+
 // StoredProfile is one fingerprint the fake says it holds.
 type StoredProfile struct{ Name, Browser, Version string }
 
@@ -556,6 +628,9 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 		Gateway  string  `json:"upstream_gateway"`
 		Browser  string  `json:"browser"`
 		OS       string  `json:"os"`
+		// KeepSessions is remembered where it is said, so a test can see what a
+		// port was opened as.
+		KeepSessions *bool `json:"keep_sessions"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil || req.Port == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -586,6 +661,9 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 		up = "direct"
 	}
 	s.ports[req.Port] = up
+	if req.KeepSessions != nil {
+		s.keep[req.Port] = *req.KeepSessions
+	}
 	s.profiles[req.Port] = Profile{
 		Browser: firstNonEmpty(req.Browser, "chrome"),
 		OS:      firstNonEmpty(req.OS, "windows"),
@@ -615,6 +693,13 @@ func (s *Server) serveClose(w http.ResponseWriter, body []byte) {
 	}
 	_ = json.Unmarshal(body, &req)
 	s.mu.Lock()
+	if _, open := s.ports[req.Port]; !open {
+		// As the real service answers it: a port it does not have — one it
+		// never opened, or one it lost to a restart — is not found.
+		s.mu.Unlock()
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("port %d not open", req.Port)})
+		return
+	}
 	delete(s.ports, req.Port)
 	delete(s.profiles, req.Port)
 	s.mu.Unlock()
@@ -662,22 +747,45 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{"port": port, "reset": true})
 	case "config":
-		// One named fingerprint put on a live port. The fake remembers it, so
-		// asking what the port is wearing afterwards answers what was asked
-		// for rather than what it was opened with — which is the whole of what
-		// resuming a session on another port turns on.
+		// Either one named fingerprint put on a live port — the fake remembers
+		// it, so asking what the port wears afterwards answers what was asked
+		// for rather than what it was opened with — or the port put back on the
+		// filter it was opened under, which wears no name until it is rotated.
+		// keep_sessions is remembered where it is said, and a new fingerprint
+		// wipes the port's tickets, as the service does.
 		var req struct {
 			Mode            string `json:"mode"`
 			SpecificProfile string `json:"specific_profile"`
+			Browser         string `json:"browser"`
+			OS              string `json:"os"`
+			KeepSessions    *bool  `json:"keep_sessions"`
 		}
-		if err := json.Unmarshal(body, &req); err != nil || req.SpecificProfile == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "specific_profile is required"})
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 			return
 		}
 		s.mu.Lock()
 		prof := s.profiles[port]
-		prof.Name = req.SpecificProfile
+		was := prof.Name
+		switch {
+		case req.SpecificProfile != "":
+			prof.Name = req.SpecificProfile
+		case req.Mode != "" && req.Mode != "specific":
+			prof.Name = ""
+			if req.Browser != "" {
+				prof.Browser = req.Browser
+			}
+			if req.OS != "" {
+				prof.OS = req.OS
+			}
+		}
+		if prof.Name != was {
+			delete(s.tickets, port)
+		}
 		s.profiles[port] = prof
+		if req.KeepSessions != nil {
+			s.keep[port] = *req.KeepSessions
+		}
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"port": port, "status": "reconfigured",
@@ -697,7 +805,11 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 		if s.rotateDrift {
 			prof.OS = otherOS(prof.OS)
 		}
+		// The fingerprint handed out is the one the port wears from now on,
+		// and a new fingerprint wipes the port's tickets.
+		prof.Name = prof.Browser + "_145_" + prof.OS + "_" + strconv.Itoa(1000+n)
 		s.profiles[port] = prof
+		delete(s.tickets, port)
 		s.mu.Unlock()
 		// The real API reports the browser family, while the open filter can
 		// include a release (chrome_153). Echoing that filter hid renewal bugs.
@@ -708,7 +820,7 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 			}
 		}
 		writeJSON(w, http.StatusOK, map[string]string{
-			"name":       prof.Browser + "_145_" + prof.OS + "_" + strconv.Itoa(1000+n),
+			"name":       prof.Name,
 			"user_agent": "Mozilla/5.0 (" + prof.OS + ") " + prof.Browser + "/145.0.0.0",
 			"browser":    browser,
 			"os":         prof.OS,
@@ -719,11 +831,76 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 		}
 		_ = json.Unmarshal(body, &req)
 		s.mu.Lock()
-		s.ports[port] = firstNonEmpty(req.Upstream, "direct")
+		next := firstNonEmpty(req.Upstream, "direct")
+		if s.ports[port] != next {
+			// A new address wipes the port's tickets, as the service does.
+			delete(s.tickets, port)
+		}
+		s.ports[port] = next
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]string{"upstream": req.Upstream})
+	case "session":
+		s.serveSession(w, r, port, body)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+	}
+}
+
+// serveSession is the session a port carries, out and back in. Out does not
+// spend it; in replaces the port's tickets whole, an empty set included, and
+// says when the port stands on another address than the one named.
+func (s *Server) serveSession(w http.ResponseWriter, r *http.Request, port int, body []byte) {
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.Lock()
+		raw := s.tickets[port]
+		up := s.ports[port]
+		name := s.profiles[port].Name
+		s.mu.Unlock()
+		doc := map[string]any{"version": 1, "identity": map[string]any{"profile": name, "upstream": up}}
+		if raw != "" {
+			doc["tls_tickets"] = json.RawMessage(raw)
+		}
+		writeJSON(w, http.StatusOK, doc)
+	case http.MethodPut:
+		var req struct {
+			Version  int `json:"version"`
+			Identity struct {
+				Upstream string `json:"upstream"`
+			} `json:"identity"`
+			Tickets json.RawMessage `json:"tls_tickets"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil || req.Version != 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid session document"})
+			return
+		}
+		s.mu.Lock()
+		if s.noResumption[port] {
+			s.mu.Unlock()
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "session resumption is disabled on this port"})
+			return
+		}
+		var hosts []struct {
+			Tickets []json.RawMessage `json:"tickets"`
+		}
+		_ = json.Unmarshal(req.Tickets, &hosts)
+		offered := 0
+		for _, h := range hosts {
+			offered += len(h.Tickets)
+		}
+		if offered == 0 {
+			delete(s.tickets, port)
+		} else {
+			s.tickets[port] = string(req.Tickets)
+		}
+		mismatch := req.Identity.Upstream != "" && req.Identity.Upstream != s.ports[port]
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "imported", "tickets_offered": offered, "tickets_applied": offered,
+			"tickets_undecoded": 0, "identity_mismatch": mismatch,
+		})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
 

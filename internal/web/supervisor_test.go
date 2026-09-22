@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 )
@@ -1452,5 +1454,32 @@ func TestSupervisor_TellsThePoolWhatIdentityTheJobAskedItsPortsToWear(t *testing
 	want := blanktrail.Worn{Browser: "safari", OS: "macos", Release: 26}
 	if got := pools.shapes()[0].Worn; got != want {
 		t.Errorf("the pool was asked for as %+v, want %+v", got, want)
+	}
+}
+
+func TestPoolEngine_RunsAJobOnTheSessionsItWasHanded(t *testing.T) {
+	// Nothing listens behind the port, so the search itself fails at once; the
+	// session is taken before it, and that is what this looks at.
+	fake := fakebt.New(t)
+	cl, err := blanktrail.NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ups, _ := blanktrail.Parse("192.0.2.1:1080", "socks5")
+	pool, err := blanktrail.NewPool(t.Context(), blanktrail.PoolConfig{
+		Client: cl, Threads: 1, PortsPerThread: 1, Spec: blanktrail.DefaultPortSpec(),
+		Channels: []blanktrail.Channel{blanktrail.NewListChannel("list", blanktrail.NewStaticRotor(ups))},
+		Insecure: true, Sessions: true, MaxRetriesPerReq: 1, RequestTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = pool.Close() })
+	k := sessions.NewKeeper(sessions.NewMemory())
+	e := &poolEngine{pool: pool, threads: 1, keeper: k, want: sessions.Want{Device: "desktop"}}
+
+	_ = e.Run(t.Context(), run.Job{Queries: []google.Query{{Text: "x"}}, Pages: 1, Tries: 1}, nil)
+	if all, _ := k.Count(); all == 0 {
+		t.Error("the job ran without taking a session from the keeper it was handed")
 	}
 }
