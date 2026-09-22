@@ -427,6 +427,10 @@ type poolPort struct {
 	quarantinedAt time.Time
 	revivals      int
 	renewedAt     time.Time
+	// stay says the port keeps its address whatever it meets, for as long as
+	// the lease on it lasts: the session on it has answered through that
+	// address. See Lease.Stay.
+	stay bool
 	// retryAt is the earliest a port whose renewal or revival just failed is
 	// handed out again. It is its own pause because in a pool of sessions a
 	// port keeps none, and a port the service cannot open would otherwise be
@@ -2046,6 +2050,11 @@ func (l *Lease) Release() {
 		return
 	}
 	l.released = true
+	// What the lease said about keeping its address was about the session it
+	// carried, and goes with it.
+	l.pt.mu.Lock()
+	l.pt.stay = false
+	l.pt.mu.Unlock()
 	l.pool.giveBack(l.pt)
 
 	l.pt.mu.Lock()
@@ -2335,7 +2344,23 @@ func (p *Pool) markDeadEgress(num int) {
 }
 
 // hunt is how many addresses one request may be carried to.
-func (p *Pool) hunt() int { return p.cfg.AddressesPerRequest }
+func (p *Pool) hunt(port int) int {
+	if p.stays(port) {
+		return 1
+	}
+	return p.cfg.AddressesPerRequest
+}
+
+// stays says the port keeps its address whatever it meets; see Lease.Stay.
+func (p *Pool) stays(port int) bool {
+	pt := p.port(port)
+	if pt == nil {
+		return false
+	}
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	return pt.stay
+}
 
 // markBadEgress reports that an egress carried its work and the answer was
 // refused, so the channel can count that against the address.

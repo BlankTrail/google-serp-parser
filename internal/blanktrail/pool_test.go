@@ -2173,7 +2173,7 @@ func TestPool_CarriesOneRequestToOneAddressAndLeavesTheLookingToTheTries(t *test
 	}
 	t.Cleanup(func() { _ = p.Close() })
 
-	if got := p.hunt(); got != 1 {
+	if got := p.hunt(0); got != 1 {
 		t.Errorf("one request may be carried to %d addresses, want one", got)
 	}
 }
@@ -2191,7 +2191,7 @@ func TestPool_TakesAHuntBudgetTheCallerNamed(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = p.Close() })
 
-	if got := p.hunt(); got != 3 {
+	if got := p.hunt(0); got != 3 {
 		t.Errorf("hunt=%d, want the three that were asked for", got)
 	}
 }

@@ -193,3 +193,49 @@ func TestLease_SaysWhenThePortStandsElsewhere(t *testing.T) {
 		t.Error("named another address and the port did not say it stands elsewhere")
 	}
 }
+
+func TestLease_ThatStaysTriesOneAddressAndForgetsItOnRelease(t *testing.T) {
+	// Staying is the session's, and the session goes when the lease does: the
+	// next session on the port may have nothing to lose. The pool carries a
+	// request to fifteen addresses, as a job's does; a staying port, to one.
+	cfg := testPoolConfig(t, fakebt.New(t), newFakeClock(), 1, 1)
+	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(sessionAddrs))}
+	cfg.Sessions = true
+	cfg.AddressesPerRequest = 15
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	num := l.Port()
+	l.Stay(true)
+	if got := p.hunt(num); got != 1 || !p.stays(num) {
+		t.Errorf("a staying port may try %d addresses (stays=%v), want one", got, p.stays(num))
+	}
+	l.Release()
+	if p.stays(num) || p.hunt(num) != 15 {
+		t.Error("the port still stays after the lease that said so was given back")
+	}
+}
+
+func TestLease_KnowsAnAddressItsListHoldsEvenWhileItRests(t *testing.T) {
+	// A session whose address rests waits for it; one whose address has left
+	// the list takes another. The two are told apart here.
+	p, rotor := sessionPool(t, fakebt.New(t), 1, nil)
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer l.Release()
+	rotor.MarkDead(sessionAddrs[0])
+	if !l.Knows(sessionAddrs[0].URL()) || l.Offers(sessionAddrs[0].URL()) {
+		t.Error("a resting address is either not known or still offered")
+	}
+	if l.Knows("socks5://198.51.100.9:1080") {
+		t.Error("an address the list does not hold is known")
+	}
+}

@@ -542,6 +542,14 @@ func (r *Rotor) Free() []Upstream {
 	return out
 }
 
+// Lists says whether the list holds the address with this key at all, resting
+// or not.
+func (r *Rotor) Lists(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.held[key]
+}
+
 // Holds says whether the list holds the address with this key and it is not
 // resting.
 func (r *Rotor) Holds(key string) bool {

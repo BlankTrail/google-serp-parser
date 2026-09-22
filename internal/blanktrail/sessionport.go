@@ -43,6 +43,29 @@ func (l *Lease) Offers(address string) bool {
 	return ok && h.Holds(address)
 }
 
+// Knows says whether the list the port's addresses come from holds the address
+// at all, resting or not. A session whose address is resting waits for it; one
+// whose address has left the list takes another.
+func (l *Lease) Knows(address string) bool {
+	h, ok := l.pt.ch.(interface{ Lists(string) bool })
+	return ok && h.Lists(address)
+}
+
+// Stay says whether the port keeps its address whatever it meets, for as long as
+// this lease lasts.
+//
+// It is what a session that has answered asks for. It holds a clearance for its
+// address; a request that address does not carry is not carried to another,
+// where the clearance would be spent on a challenge — the address is put to rest
+// and the request ends, and the session waits for its address. A session that
+// has never answered has nothing to lose and lets its requests go wherever an
+// address will carry them.
+func (l *Lease) Stay(on bool) {
+	l.pt.mu.Lock()
+	l.pt.stay = on
+	l.pt.mu.Unlock()
+}
+
 // Candidates are the addresses the port may be moved onto.
 func (l *Lease) Candidates() []string {
 	free, ok := l.pt.ch.(interface{ Free() []Egress })
