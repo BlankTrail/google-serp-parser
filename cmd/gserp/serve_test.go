@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/settings"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
@@ -1662,5 +1663,70 @@ func TestDial_GivesTheRunABrakeOnTheSolverQueue(t *testing.T) {
 	}
 	if got := want.Brake.Holding(); got <= 0 {
 		t.Errorf("the brake is holding %v against a queue of four", got)
+	}
+}
+
+func TestDial_RaisesAPoolOfSessionsForTheProgramsKeeper(t *testing.T) {
+	// A job's ports are places; the sessions are the program's, kept in its
+	// history and handed to the job with what it wants of them.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	opts.Keeper = sessions.NewKeeper(sessions.NewMemory())
+	saved, _ := opts.saved(io.Discard)
+	want := web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop,
+		Worn: blanktrail.Worn{Browser: "chrome", Release: 153}, Cooldown: 7 * time.Second}
+
+	got, err := opts.dial(t.Context(), saved, want)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = got.Search.Close() })
+	if got.Keeper != opts.Keeper {
+		t.Error("the job was not handed the program's keeper")
+	}
+	if got.Want != (sessions.Want{Device: blanktrail.DeviceDesktop, Browser: "chrome", Release: 153, Pause: 7 * time.Second}) {
+		t.Errorf("the job wants %+v of its sessions", got.Want)
+	}
+	// A pool of sessions keeps no pause on a port: the job's seven seconds are
+	// the sessions' to rest.
+	if c := got.Search.Cooldown(); c != 0 {
+		t.Errorf("the job's ports keep %v between two leases, want none in a pool of sessions", c)
+	}
+	for _, port := range fake.OpenPorts() {
+		if keep, told := fake.KeepSessionsOf(port); !told || keep {
+			t.Errorf("port %d opened with keep_sessions on, or without saying", port)
+		}
+	}
+}
+
+func TestRaise_HandsAJobOnTheStandingPortsTheProgramsSessions(t *testing.T) {
+	// A job of the standing set's kind runs on those ports grown to its size —
+	// and on the program's sessions, with its own pause, like any other job.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	opts.Keeper = sessions.NewKeeper(sessions.NewMemory())
+	saved, _ := opts.saved(io.Discard)
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 2,
+		Device: blanktrail.DeviceDesktop})
+	if err != nil {
+		t.Fatalf("opening the standing identities: %v", err)
+	}
+	t.Cleanup(func() { _ = standing.Search.Close() })
+	standing.Search.KeepWarm()
+	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop, keeper: opts.Keeper}
+
+	got, err := opts.raise(saved, false, warm)(t.Context(), web.Wanted{Profile: store.Profile{}, Threads: 1,
+		Ports: 2, Device: blanktrail.DeviceDesktop, Cooldown: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if got.Search != standing.Search {
+		t.Fatal("the job was not raised on the standing ports")
+	}
+	if got.Keeper != opts.Keeper || got.Want.Pause != 3*time.Second {
+		t.Errorf("the job on the standing ports got keeper %p and wants %+v, want the program's keeper and its pause",
+			got.Keeper, got.Want)
 	}
 }

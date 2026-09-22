@@ -14,6 +14,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -103,12 +104,17 @@ type poolEngine struct {
 	// watch, when set, is told every stage a thread of the run passes through,
 	// so a slow job can be taken apart second by second rather than guessed at.
 	watch run.Watch
+	// keeper and want are the program's sessions and what this job asks of
+	// them; a nil keeper runs the job with a port as the identity.
+	keeper *sessions.Keeper
+	want   sessions.Want
 }
 
 // Run builds a runner around the pool this job was raised. A runner is a few
 // fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
-	r := &run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch, Brake: e.brake}
+	r := &run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch, Brake: e.brake,
+		Keeper: e.keeper, Want: e.want}
 	if e.addresses != nil {
 		r.Addresses = e.addresses.Identities
 	}
@@ -204,6 +210,10 @@ type Identities struct {
 	// own queue — which carries the work of everything on this machine, not of
 	// this job alone. Nil is a run with no brake.
 	Brake *blanktrail.Brake
+	// Keeper is where the job's sessions come from, and Want what they have to
+	// be. Nil runs the job the older way, with a port as the identity.
+	Keeper *sessions.Keeper
+	Want   sessions.Want
 }
 
 // OpenPool opens the identities one job asked to run on. It is Dial as a caller
@@ -263,7 +273,7 @@ func dialing(open OpenPool, watch run.Watch) source {
 		// estimate: two answers to how wide this job runs would put a figure on the
 		// screen that no run ever matched.
 		return &poolEngine{pool: want.Search, addresses: want.Addresses, brake: want.Brake,
-			threads: asked.Threads, watch: watch}, nil
+			threads: asked.Threads, watch: watch, keeper: want.Keeper, want: want.Want}, nil
 	}}
 }
 

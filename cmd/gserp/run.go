@@ -22,6 +22,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/export"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -337,20 +338,29 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 	// wound up rather than abandoned: what was reached, what is left and the
 	// command that takes that up are the whole reason the plan is written down
 	// before the first request.
-	runErr := work(ctx, out, cfg, job, opts.Threads, storeSink{st: st, jobID: p.id})
+	// The run keeps its sessions in the history it writes to, so a run taken up
+	// later — or the server on the same history — finds them.
+	keeper := sessions.NewKeeper(st)
+	cfg.Sessions, cfg.Choose = true, keeper.Choose
+	device := p.spec.Device
+	if device == "" {
+		device = blanktrail.DeviceDesktop
+	}
+	want := sessions.Want{Device: device, Pause: settledCooldown(cfg)}
+	runErr := work(ctx, out, cfg, job, opts.Threads, storeSink{st: st, jobID: p.id}, keeper, want)
 	return finish(ctx, out, st, p, opts, runErr)
 }
 
 // work opens the ports and takes the queries.
 func work(ctx context.Context, out io.Writer, cfg blanktrail.PoolConfig, job run.Job,
-	threads int, sink run.Sink) error {
+	threads int, sink run.Sink, keeper *sessions.Keeper, want sessions.Want) error {
 	pool, err := openPool(ctx, out, cfg)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = pool.Close() }()
 
-	report := (&run.Runner{Pool: pool, Threads: threads, Sink: sink}).Run(ctx, job)
+	report := (&run.Runner{Pool: pool, Threads: threads, Sink: sink, Keeper: keeper, Want: want}).Run(ctx, job)
 	if report.Err != nil {
 		return report.Err
 	}
