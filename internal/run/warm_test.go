@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 )
 
 // warmingPool is a pool of hot ports whose requests reach a stand-in Google,
@@ -295,5 +296,111 @@ func TestWarmer_StandsAsideWhileAJobIsRunning(t *testing.T) {
 	w.oneRound(t.Context(), 0)
 	if got := warmed.Load(); got == 0 {
 		t.Error("nothing was warmed after the job let go of the identity it held")
+	}
+}
+
+// keptSessions makes n sessions through a pool of sessions, each given back at
+// once, so a warmer has something to warm.
+func keptSessions(t *testing.T, f *facing, k *sessions.Keeper, n int) {
+	t.Helper()
+	ctx := context.Background()
+	var held []*sessions.Held
+	var leases []*blanktrail.Lease
+	for i := 0; i < n; i++ {
+		l, err := f.Pool.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("Acquire: %v", err)
+		}
+		h, err := k.Take(ctx, leasePort{l}, sessions.Want{Device: "desktop"})
+		if err != nil {
+			t.Fatalf("Take: %v", err)
+		}
+		held, leases = append(held, h), append(leases, l)
+	}
+	for i := range held {
+		_ = held[i].Answered(ctx, leasePort{leases[i]})
+		leases[i].Release()
+	}
+}
+
+func TestWarmer_WarmsTheSessionsAboutToRunOut(t *testing.T) {
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	f.Pool.KeepWarm()
+	h := sessions.NewMemory()
+	k := sessions.NewKeeper(h)
+	keptSessions(t, f, k, 2)
+	before := o.searches.Load()
+	usedBefore := usedAt(t, h)
+	// Both sessions were used a moment ago, and the line below is a nanosecond.
+	// The clock on some systems moves in steps of milliseconds, so without a
+	// short wait the moment of use and the moment of warming can read the same.
+	time.Sleep(50 * time.Millisecond)
+
+	var warmed atomic.Int64
+	w := &Warmer{Pool: f.Pool, Keeper: k, Want: sessions.Want{Device: "desktop"},
+		warmAfter: time.Nanosecond, warmAtOnce: 2, spacing: time.Millisecond,
+		warmed: func() { warmed.Add(1) }}
+	w.oneRound(context.Background(), 0)
+
+	if got := warmed.Load(); got != 2 {
+		t.Errorf("%d sessions warmed, want both: both are past the line", got)
+	}
+	if got := o.searches.Load() - before; got != 2 {
+		t.Errorf("%d warming searches reached Google, want two", got)
+	}
+	// A warming that is not written down does not keep the session from
+	// running out, which is the whole of what it is for.
+	after := usedAt(t, h)
+	for id, at := range usedBefore {
+		if !after[id].After(at) {
+			t.Errorf("session %d was warmed and not written down", id)
+		}
+	}
+}
+
+// usedAt is when each desktop session in the history was last used.
+func usedAt(t *testing.T, h *sessions.Memory) map[int64]time.Time {
+	t.Helper()
+	all, err := h.Sessions(context.Background(), "desktop", time.Time{})
+	if err != nil {
+		t.Fatalf("Sessions: %v", err)
+	}
+	out := map[int64]time.Time{}
+	for _, s := range all {
+		out[s.ID] = s.UsedAt
+	}
+	return out
+}
+
+func TestWarmer_WarmsOneColdSessionAQuarterHourWhenNoneIsRunningOut(t *testing.T) {
+	// Nothing about to run out and nothing running: the coldest session is
+	// warmed, one at a time, and no more often than once a quarter of an hour.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	f.Pool.KeepWarm()
+	k := sessions.NewKeeper(sessions.NewMemory())
+	keptSessions(t, f, k, 2)
+
+	at := time.Now()
+	var warmed atomic.Int64
+	w := &Warmer{Pool: f.Pool, Keeper: k, Want: sessions.Want{Device: "desktop"},
+		idleEvery: 15 * time.Minute, now: func() time.Time { return at },
+		warmAtOnce: 2, spacing: time.Millisecond, warmed: func() { warmed.Add(1) }}
+	ctx := context.Background()
+
+	w.oneRound(ctx, 0)
+	if got := warmed.Load(); got != 1 {
+		t.Fatalf("%d sessions warmed with none running out, want exactly one", got)
+	}
+	at = at.Add(time.Minute)
+	w.oneRound(ctx, 0)
+	if got := warmed.Load(); got != 1 {
+		t.Errorf("a second session was warmed a minute after the first; the gap is a quarter of an hour")
+	}
+	at = at.Add(15 * time.Minute)
+	w.oneRound(ctx, 0)
+	if got := warmed.Load(); got != 2 {
+		t.Errorf("%d warmed after the quarter of an hour, want a second one", got)
 	}
 }
