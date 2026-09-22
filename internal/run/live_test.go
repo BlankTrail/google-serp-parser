@@ -51,6 +51,26 @@ func liveEnv(t *testing.T) (control, key, listURL string) {
 	return control, key, listURL
 }
 
+// liveFirstHop is the first hop a live run's ports take, named by
+// GSERP_FIRST_HOP the way a profile keeps one: "gw:" and a gateway's name, or a
+// SOCKS5 proxy. Unset goes to the addresses directly. A proxy's address is kept
+// out of every log, since it may carry a password.
+func liveFirstHop(t *testing.T) blanktrail.FirstHop {
+	t.Helper()
+	kept := os.Getenv("GSERP_FIRST_HOP")
+	if kept == "" {
+		return blanktrail.FirstHop{}
+	}
+	hop, err := blanktrail.ParseFirstHop(kept)
+	if err != nil {
+		t.Fatalf("GSERP_FIRST_HOP: %v", err)
+	}
+	if hop.Proxy != "" {
+		keepOut(kept, hop.Proxy)
+	}
+	return hop
+}
+
 // withheld holds the values that must not reach a log, a file or a report.
 //
 // A failure quotes the address it failed on, so an unfiltered log of an error
