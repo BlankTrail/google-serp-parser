@@ -427,7 +427,12 @@ type poolPort struct {
 	quarantinedAt time.Time
 	revivals      int
 	renewedAt     time.Time
-	session       uint64 // bumped whenever the port's identity changes
+	// retryAt is the earliest a port whose renewal or revival just failed is
+	// handed out again. It is its own pause because in a pool of sessions a
+	// port keeps none, and a port the service cannot open would otherwise be
+	// asked for again in a tight loop while the service is away.
+	retryAt time.Time
+	session uint64 // bumped whenever the port's identity changes
 }
 
 // changedIdentity records that what the port presents has changed under it, so
@@ -1661,7 +1666,7 @@ func (p *Pool) acquire(ctx context.Context, specName string, wait bool) (*Lease,
 			if err := p.reviveIfDue(ctx, pt); err != nil {
 				// The port could not be given another egress, so it stays
 				// quarantined. Give it back and take another.
-				p.giveBack(pt)
+				p.setAside(pt)
 				continue
 			}
 			if err := p.renewIfDue(ctx, pt); err != nil {
@@ -1669,7 +1674,7 @@ func (p *Pool) acquire(ctx context.Context, specName string, wait bool) (*Lease,
 				// broken — and quarantined it if it keeps failing — so give it
 				// back and take another rather than hand out a lease on a port
 				// that no longer exists on the proxy.
-				p.giveBack(pt)
+				p.setAside(pt)
 				continue
 			}
 			if p.cfg.OnLease != nil {
@@ -1786,6 +1791,7 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		pt.mu.Lock()
 		quarantined, leased, last := pt.quarantined, pt.leased, pt.lastUsed
 		revivals, since := pt.revivals, pt.quarantinedAt
+		retryAt := pt.retryAt
 		pt.mu.Unlock()
 		// A port that has waited out its quarantine is a candidate again. take
 		// holds p.mu and must not call the control API, so it only decides that
@@ -1795,6 +1801,13 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 		}
 		alive++
 		if leased {
+			continue
+		}
+		if now.Before(retryAt) {
+			// Its renewal or revival has just failed; it is not asked again yet.
+			if remaining := retryAt.Sub(now); soonest < 0 || remaining < soonest {
+				soonest = remaining
+			}
 			continue
 		}
 		// A direct egress is not counted. There is one of it — this machine —
@@ -1915,6 +1928,21 @@ func (p *Pool) revivableAt(revivals int, since, now time.Time) bool {
 	// time as "long ago" would bring such a port back on the very next acquire.
 	return !since.IsZero() && now.Sub(since) >= p.cfg.ReviveAfter
 }
+
+// setAside gives back a port whose renewal or revival has just failed, and keeps
+// it out of the hand-out for failedPortRest.
+func (p *Pool) setAside(pt *poolPort) {
+	p.giveBack(pt)
+	pt.mu.Lock()
+	pt.retryAt = p.cfg.Now().Add(failedPortRest)
+	pt.mu.Unlock()
+}
+
+// failedPortRest is how long a port whose renewal or revival failed is left
+// alone. Two seconds: long enough that a service which is away is not asked
+// again several hundred times a second, short enough that a port comes back
+// within a breath of the service coming back.
+const failedPortRest = 2 * time.Second
 
 // giveBack returns a port taken by take without counting a request against it,
 // and starts its cooldown so a failing port is not retried in a tight loop.
@@ -2395,6 +2423,10 @@ func (p *Pool) reviveIfDue(ctx context.Context, pt *poolPort) error {
 	if err := p.rotateEgress(ctx, pt.num); err != nil {
 		pt.mu.Lock()
 		pt.quarantinedAt = now
+		if Unreachable(err) {
+			// The service was away; nothing was tried, so nothing is spent.
+			pt.revivals--
+		}
 		pt.mu.Unlock()
 		return err
 	}
@@ -2450,7 +2482,7 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	}
 
 	// Past this point the port is torn down, so every failure leaves it closed.
-	if err := p.cl.ClosePort(ctx, pt.num); err != nil {
+	if err := p.cl.ClosePort(ctx, pt.num); err != nil && !notOpen(err) {
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: close: %w", pt.num, err))
 	}
 	if _, err := p.cl.OpenPort(ctx, pt.num, pt.spec, eg); err != nil {
@@ -2541,11 +2573,29 @@ func profileMatchesSpec(spec PortSpec, prof Profile) error {
 	return nil
 }
 
+// notOpen says the service does not have the port — it lost it to a restart, or
+// never opened it — which for a port about to be closed means it is closed
+// already.
+func notOpen(err error) bool {
+	var api *APIError
+	return errors.As(err, &api) && api.Status == http.StatusNotFound
+}
+
 // renewFailed marks a port broken after a failed renewal and quarantines it once
 // it has failed too often. Strikes are shared with exhausted() on purpose: both
 // mean the same thing — this port keeps failing us — and a successful renewal
 // clears the slate.
 func (p *Pool) renewFailed(pt *poolPort, err error) error {
+	if Unreachable(err) {
+		// The service is away — restarting, being updated — and the port
+		// was never asked anything. It stays broken, to be opened again the
+		// first time the service answers, and nothing is held against it: held
+		// against it, a restart of a minute quarantined every port of a pool.
+		pt.mu.Lock()
+		pt.broken = true
+		pt.mu.Unlock()
+		return err
+	}
 	pt.mu.Lock()
 	pt.broken = true
 	pt.strikes++

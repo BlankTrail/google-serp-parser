@@ -109,7 +109,10 @@ type Server struct {
 	// noResumption are the ports on which the service keeps no tickets at all.
 	noResumption map[int]bool
 	// keep is keep_sessions as each port was last told it, where it was told.
-	keep        map[int]bool
+	keep map[int]bool
+	// down makes the service answer everything with 503, the way it does while
+	// it restarts.
+	down        bool
 	rotateDrift bool
 	fails       map[string][]failure
 	seen        []Recorded
@@ -290,6 +293,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.seen = append(s.seen, Recorded{Method: r.Method, Path: r.URL.Path, Body: string(body)})
+	if s.down {
+		// A service restarting: everything it is asked is answered "not ready".
+		s.mu.Unlock()
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "starting"})
+		return
+	}
 	if q := s.fails[r.URL.Path]; len(q) > 0 {
 		f := q[0]
 		s.fails[r.URL.Path] = q[1:]
@@ -535,6 +544,25 @@ func (s *Server) ResetsOf(port int) int {
 	return s.resets[port]
 }
 
+// Restart makes the service forget every port it held, as a restart does: the
+// numbers are free again and nothing listens on them.
+func (s *Server) Restart() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ports = map[int]string{}
+	s.profiles = map[int]Profile{}
+	s.tickets = map[int]string{}
+	s.keep = map[int]bool{}
+}
+
+// SetDown makes the service answer everything "not ready", as it does while it
+// restarts, or brings it back.
+func (s *Server) SetDown(down bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.down = down
+}
+
 // SetTickets puts TLS session tickets on a port, as traffic through it would.
 func (s *Server) SetTickets(port int, raw string) {
 	s.mu.Lock()
@@ -665,6 +693,13 @@ func (s *Server) serveClose(w http.ResponseWriter, body []byte) {
 	}
 	_ = json.Unmarshal(body, &req)
 	s.mu.Lock()
+	if _, open := s.ports[req.Port]; !open {
+		// As the real service answers it: a port it does not have — one it
+		// never opened, or one it lost to a restart — is not found.
+		s.mu.Unlock()
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("port %d not open", req.Port)})
+		return
+	}
 	delete(s.ports, req.Port)
 	delete(s.profiles, req.Port)
 	s.mu.Unlock()
