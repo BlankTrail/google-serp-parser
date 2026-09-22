@@ -19,6 +19,19 @@ import (
 // is still something Google remembers.
 const KeptFor = 12 * time.Hour
 
+// WarmAfter is how long a session may go unused before the warmer takes it up:
+// an hour short of KeptFor, so a session warmed on time never runs out, and a
+// session costs one warming request in half a day rather than one every quarter
+// of an hour. The operator chose it over warming every idle session every
+// fifteen minutes, which at two hundred sessions was eight hundred requests an
+// hour spent on nothing but staying known.
+const WarmAfter = KeptFor - time.Hour
+
+// sweepEvery is how often the keeper gives up the sessions that ran out while
+// the program was up. The history is swept when it is first read; a server up
+// for days reads it once.
+const sweepEvery = time.Hour
+
 // History is what the keeper needs from the history: the sessions, and a record
 // of what became of each one.
 type History interface {
@@ -29,54 +42,56 @@ type History interface {
 	DropStaleSessions(ctx context.Context, before time.Time) (int, error)
 }
 
-// Wearer puts a session's fingerprint on a port, and reads the one a port has.
-//
-// It is the one place where a session meets a port, and the only thing about
-// the keeper that depends on the proxy service. An empty profile is a new
-// session: the port is taken as it is, and what it is wearing becomes the
-// session's.
-type Wearer interface {
-	WearSession(ctx context.Context, port int, profile string) (string, error)
-}
+var (
+	// ErrNotHeld is returned when a session is given back twice, or by a handle
+	// to a session another thread has taken since.
+	ErrNotHeld = errors.New("sessions: the session is not held")
+	// ErrNoAddress is returned when every address the list offers is already
+	// carrying as many sessions at once as it may. It is a wait, not a fault.
+	ErrNoAddress = errors.New("sessions: no address is free for a session")
+	// ErrPortElsewhere is returned when the port does not stand on the address
+	// the session was put on it for.
+	ErrPortElsewhere = errors.New("sessions: the port stands on another address than the session's")
+	// ErrNothingDue is returned by TakeColdest when no session has rested long
+	// enough.
+	ErrNothingDue = errors.New("sessions: no session is due")
+)
 
-// Keeper hands sessions to threads and writes down what became of them.
+// Keeper hands sessions to whoever asks and writes down what became of them.
 //
-// How many sessions there are is not a number anybody sets. A thread asks for
-// one; if there is a session that nobody is holding and that has rested for the
-// job's pause since it was last asked through, it gets that one, the one used
-// most recently first; if there is none, a new one is made. So a job with a
-// short pause and few threads settles on a few sessions, one with a long pause
-// settles on more, and neither has to be worked out in advance — the count is
-// wherever the pause and the number of threads put it.
+// One keeper serves the whole program: a job, the warmer and a search answered
+// inside a request all take sessions from it, and a session is held by one of
+// them at a time.
+//
+// How many sessions there are is not a number anybody sets. A caller asks for
+// one; if a session is free, fits what the caller wants, fits the port and has
+// rested the caller's pause, it gets the one used most recently; otherwise a new
+// one is made. So a short pause settles on few sessions and a long one on many.
 type Keeper struct {
 	history History
-	wearer  Wearer
-	device  string
-	// pause is the job's gap between two requests on one identity. A session
-	// is not handed out again until it has rested that long.
-	pause time.Duration
-	now   func() time.Time
+	now     func() time.Time
 
-	mu sync.Mutex
-	// known are the sessions this keeper has read or made, by id. A session
-	// given up is taken out of it.
+	mu    sync.Mutex
 	known map[int64]*kept
-	// loaded says the history has been read. It is read once, on the first
-	// Take, and after that the keeper is the one writing to it.
-	loaded bool
+	// loaded are the kinds of result page whose sessions have been read.
+	loaded map[string]bool
+	// used is when each address last carried a session. It outlives the
+	// sessions on it: "the one that has rested longest" is about the address.
+	used map[string]time.Time
+	// reserved counts, per address, new sessions chosen for it and not yet
+	// written down, so two made at once do not both take the last free place.
+	reserved  map[string]int
+	lastSweep time.Time
 }
 
-// kept is one session as the keeper holds it between two uses.
+// kept is one session as the keeper holds it between uses.
 type kept struct {
 	record store.Session
 	jar    *Jar
-	// held says a thread has it now.
-	held bool
-	// ready is the earliest it may be handed out again.
-	ready time.Time
+	held   bool
 }
 
-// Held is a session a thread holds: which one, and the jar to search with.
+// Held is a session a caller holds: which one, and the jar to search with.
 type Held struct {
 	ID      int64
 	Profile string
@@ -85,61 +100,77 @@ type Held struct {
 	done    bool
 }
 
-// ErrNotHeld is returned when a session is given back twice.
-var ErrNotHeld = errors.New("sessions: the session is not held")
-
-// NewKeeper returns a keeper for one kind of result page.
-func NewKeeper(history History, wearer Wearer, device string, pause time.Duration) *Keeper {
+// NewKeeper returns a keeper over a history.
+func NewKeeper(history History) *Keeper {
 	return &Keeper{
-		history: history, wearer: wearer, device: device, pause: pause,
-		now: time.Now, known: map[int64]*kept{},
+		history: history, now: time.Now,
+		known: map[int64]*kept{}, loaded: map[string]bool{},
+		used: map[string]time.Time{}, reserved: map[string]int{},
 	}
 }
 
-// Take hands a thread a session on the port it is holding: one that is free and
-// has rested, or a new one.
-//
-// The session's fingerprint is put on the port before it is handed over, so the
-// port and the jar the thread searches with are the same session. A session
-// that cannot be put on the port is left for another thread rather than given
-// up: a port that will not take a profile is the port's trouble, not the
-// session's.
-func (k *Keeper) Take(ctx context.Context, port int) (*Held, error) {
-	if err := k.load(ctx); err != nil {
+// Take hands the caller a session on the port it holds — one that has rested,
+// or a new one — and puts it on the port.
+func (k *Keeper) Take(ctx context.Context, p Port, w Want) (*Held, error) {
+	if err := k.load(ctx, w.Device); err != nil {
 		return nil, err
 	}
-	if s := k.pick(); s != nil {
-		profile, err := k.wearer.WearSession(ctx, port, s.record.Profile)
-		if err != nil {
-			k.putBack(s)
-			return nil, fmt.Errorf("sessions: putting session %d on port %d: %w", s.record.ID, port, err)
-		}
-		if profile != "" && profile != s.record.Profile {
-			// The service put something else on the port. The session is the
-			// fingerprint and the cookies together, and cookies won under one
-			// fingerprint sent under another are a session that disagrees with
-			// itself — so this one is not used on this port.
-			k.putBack(s)
-			return nil, fmt.Errorf("sessions: port %d wears %q after being asked for %q",
-				port, profile, s.record.Profile)
-		}
-		return &Held{ID: s.record.ID, Profile: s.record.Profile, Jar: s.jar, keeper: k}, nil
+	if err := k.sweep(ctx); err != nil {
+		return nil, err
 	}
-	return k.fresh(ctx, port)
+	if s := k.pick(p, w); s != nil {
+		return k.put(ctx, p, s)
+	}
+	return k.fresh(ctx, p, w)
 }
 
-// pick takes the free, rested session used most recently, and marks it held.
-func (k *Keeper) pick() *kept {
+// TakeColdest hands the caller the session unused longest, provided it has been
+// unused for at least idle, and puts it on the port. It is what warming takes.
+func (k *Keeper) TakeColdest(ctx context.Context, p Port, w Want, idle time.Duration) (*Held, error) {
+	if err := k.load(ctx, w.Device); err != nil {
+		return nil, err
+	}
+	if err := k.sweep(ctx); err != nil {
+		return nil, err
+	}
+	s := k.coldest(p, w.Device, idle)
+	if s == nil {
+		return nil, ErrNothingDue
+	}
+	return k.put(ctx, p, s)
+}
+
+// fitsPort says whether a session may go on this port: a gateway's session only
+// on its gateway, an address's only on an address, and not on an address already
+// working as many sessions as it may.
+func fitsPort(s *kept, portExit string, busy map[string]int, limit int, offers func(string) bool) bool {
+	if onGateway(portExit) || onGateway(s.record.Exit) {
+		return s.record.Exit == portExit
+	}
+	if a, ok := addressOf(s.record.Exit); ok && offers(a) && busy[a] >= limit {
+		return false
+	}
+	return true
+}
+
+// pick takes the free session that fits, rested for the caller's pause and used
+// most recently, and marks it held.
+func (k *Keeper) pick(p Port, w Want) *kept {
+	portExit, limit := p.Exit(), p.Limit()
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	now := k.now()
+	busy := k.busyLocked()
 	var best *kept
 	for _, s := range k.known {
-		if s.held || s.ready.After(now) {
+		r := s.record
+		if s.held || r.Device != w.Device || !w.matches(r.Browser, r.OS, r.Release) ||
+			now.Sub(r.UsedAt) < w.Pause || now.Sub(r.UsedAt) > KeptFor ||
+			!fitsPort(s, portExit, busy, limit, p.Offers) {
 			continue
 		}
-		if best == nil || s.record.UsedAt.After(best.record.UsedAt) ||
-			(s.record.UsedAt.Equal(best.record.UsedAt) && s.record.ID > best.record.ID) {
+		if best == nil || r.UsedAt.After(best.record.UsedAt) ||
+			(r.UsedAt.Equal(best.record.UsedAt) && r.ID > best.record.ID) {
 			best = s
 		}
 	}
@@ -149,25 +180,126 @@ func (k *Keeper) pick() *kept {
 	return best
 }
 
-// putBack lets go of a session without anything having been asked through it.
-func (k *Keeper) putBack(s *kept) {
+// coldest takes the free session of the kind that fits the port and has been
+// unused longest, if that is at least idle, and marks it held.
+func (k *Keeper) coldest(p Port, device string, idle time.Duration) *kept {
+	portExit, limit := p.Exit(), p.Limit()
 	k.mu.Lock()
-	s.held = false
-	k.mu.Unlock()
+	defer k.mu.Unlock()
+	now := k.now()
+	busy := k.busyLocked()
+	var best *kept
+	for _, s := range k.known {
+		r := s.record
+		if s.held || r.Device != device || now.Sub(r.UsedAt) < idle || now.Sub(r.UsedAt) > KeptFor ||
+			!fitsPort(s, portExit, busy, limit, p.Offers) {
+			continue
+		}
+		if best == nil || r.UsedAt.Before(best.record.UsedAt) {
+			best = s
+		}
+	}
+	if best != nil {
+		best.held = true
+	}
+	return best
 }
 
-// fresh makes a new session on the port: the port as it is, with an empty jar,
-// and whatever fingerprint the port is wearing written down as the session's.
-func (k *Keeper) fresh(ctx context.Context, port int) (*Held, error) {
-	profile, err := k.wearer.WearSession(ctx, port, "")
-	if err != nil {
-		return nil, fmt.Errorf("sessions: making port %d ready for a new session: %w", port, err)
+// busyLocked counts, per address, the sessions working through it now and the
+// new ones chosen for it and not yet written down.
+func (k *Keeper) busyLocked() map[string]int {
+	busy := map[string]int{}
+	for _, s := range k.known {
+		if a, ok := addressOf(s.record.Exit); ok && s.held {
+			busy[a]++
+		}
 	}
-	if profile == "" {
-		return nil, fmt.Errorf("sessions: port %d does not say which fingerprint it wears", port)
+	for a, n := range k.reserved {
+		busy[a] += n
+	}
+	return busy
+}
+
+// put puts a held session on the port: fingerprint, address, tickets. A session
+// that does not go on is put back for another caller rather than given up —
+// a port that will not take it is the port's trouble, not the session's.
+func (k *Keeper) put(ctx context.Context, p Port, s *kept) (*Held, error) {
+	if err := p.Wear(ctx, s.record.Profile); err != nil {
+		k.release(s)
+		return nil, fmt.Errorf("sessions: putting session %d's fingerprint on port %d: %w", s.record.ID, p.Number(), err)
+	}
+	address := ""
+	if !onGateway(s.record.Exit) {
+		a, ok := addressOf(s.record.Exit)
+		if !ok || !p.Offers(a) {
+			// Its address has left the list or is resting after failing to
+			// carry anything. It takes another the way a new session does, and
+			// pays a challenge there: that is what changing exit costs.
+			if a, ok = k.reserve(candidatesOf(p), p.Limit()); !ok {
+				k.release(s)
+				return nil, ErrNoAddress
+			}
+			defer k.unreserve(a)
+		}
+		if p.Exit() != addrExit+a {
+			if err := p.MoveTo(ctx, a); err != nil {
+				k.release(s)
+				return nil, fmt.Errorf("sessions: moving port %d to session %d's address: %w", p.Number(), s.record.ID, err)
+			}
+		}
+		k.mu.Lock()
+		s.record.Exit = addrExit + a
+		k.mu.Unlock()
+		address = a
+	}
+	elsewhere, err := p.PutTickets(ctx, address, s.record.Tickets)
+	if err != nil {
+		k.release(s)
+		return nil, fmt.Errorf("sessions: loading session %d's tickets onto port %d: %w", s.record.ID, p.Number(), err)
+	}
+	if elsewhere {
+		k.release(s)
+		return nil, fmt.Errorf("%w: port %d, session %d", ErrPortElsewhere, p.Number(), s.record.ID)
+	}
+	return &Held{ID: s.record.ID, Profile: s.record.Profile, Jar: s.jar, keeper: k}, nil
+}
+
+// fresh makes a new session on the port: a fresh fingerprint from the port's
+// template, an address by the rule — or the port's gateway — and no tickets.
+func (k *Keeper) fresh(ctx context.Context, p Port, w Want) (*Held, error) {
+	fp, err := p.Freshen(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: a fresh fingerprint on port %d: %w", p.Number(), err)
+	}
+	if fp.Profile == "" {
+		return nil, fmt.Errorf("sessions: port %d does not say which fingerprint it wears", p.Number())
+	}
+	exit, address := p.Exit(), ""
+	if !onGateway(exit) {
+		a, ok := k.reserve(candidatesOf(p), p.Limit())
+		if !ok {
+			return nil, ErrNoAddress
+		}
+		defer k.unreserve(a)
+		if exit != addrExit+a {
+			if err := p.MoveTo(ctx, a); err != nil {
+				return nil, fmt.Errorf("sessions: moving port %d to a new session's address: %w", p.Number(), err)
+			}
+		}
+		exit, address = addrExit+a, a
+	}
+	// A new session starts with no tickets, and the port may still hold the
+	// last session's. Loading an empty set is what wipes them.
+	elsewhere, err := p.PutTickets(ctx, address, nil)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: clearing port %d's tickets for a new session: %w", p.Number(), err)
+	}
+	if elsewhere {
+		return nil, fmt.Errorf("%w: port %d, a new session", ErrPortElsewhere, p.Number())
 	}
 	now := k.now()
-	record := store.Session{Profile: profile, Device: k.device, CreatedAt: now, UsedAt: now}
+	record := store.Session{Profile: fp.Profile, Browser: fp.Browser, OS: fp.OS, Release: fp.Release,
+		Device: w.Device, Exit: exit, CreatedAt: now, UsedAt: now}
 	id, err := k.history.NewSession(ctx, record)
 	if err != nil {
 		return nil, err
@@ -177,160 +309,245 @@ func (k *Keeper) fresh(ctx context.Context, port int) (*Held, error) {
 	jar.now = k.now
 	k.mu.Lock()
 	k.known[id] = &kept{record: record, jar: jar, held: true}
-	k.mu.Unlock()
-	return &Held{ID: id, Profile: profile, Jar: jar, keeper: k}, nil
-}
-
-// load reads the history once: the sessions of this kind of result page used in
-// the last KeptFor, after the ones older than that are swept.
-func (k *Keeper) load(ctx context.Context) error {
-	k.mu.Lock()
-	if k.loaded {
-		k.mu.Unlock()
-		return nil
+	if address != "" {
+		k.used[address] = now
 	}
 	k.mu.Unlock()
+	return &Held{ID: id, Profile: fp.Profile, Jar: jar, keeper: k}, nil
+}
 
+// Choose is the rule for giving a session an address, for the pool to use when a
+// request has to be carried elsewhere: the address carrying the fewest sessions,
+// and of those the one rested longest; one already working as many sessions at
+// once as it may is passed over.
+func (k *Keeper) Choose(candidates []string, limit int) (string, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.chooseLocked(candidates, limit)
+}
+
+func (k *Keeper) chooseLocked(candidates []string, limit int) (string, bool) {
+	if limit < 1 {
+		limit = 1
+	}
+	on := map[string]int{}
+	for _, s := range k.known {
+		if a, ok := addressOf(s.record.Exit); ok {
+			on[a]++
+		}
+	}
+	for a, n := range k.reserved {
+		on[a] += n
+	}
+	busy := k.busyLocked()
+	best, found := "", false
+	for _, a := range candidates {
+		if busy[a] >= limit {
+			continue
+		}
+		if !found || on[a] < on[best] || (on[a] == on[best] && k.used[a].Before(k.used[best])) {
+			best, found = a, true
+		}
+	}
+	return best, found
+}
+
+// reserve chooses an address and holds a place on it until unreserve, so two
+// new sessions made at once do not both take the last free place.
+func (k *Keeper) reserve(candidates []string, limit int) (string, bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	a, ok := k.chooseLocked(candidates, limit)
+	if ok {
+		k.reserved[a]++
+	}
+	return a, ok
+}
+
+func (k *Keeper) unreserve(a string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.reserved[a]--; k.reserved[a] <= 0 {
+		delete(k.reserved, a)
+	}
+}
+
+// release lets go of a session without anything recorded against it.
+func (k *Keeper) release(s *kept) {
+	k.mu.Lock()
+	s.held = false
+	k.mu.Unlock()
+}
+
+// load reads the history once per kind of result page: the sessions used in
+// the last KeptFor, after the older ones are swept.
+func (k *Keeper) load(ctx context.Context, device string) error {
+	k.mu.Lock()
+	done := k.loaded[device]
+	k.mu.Unlock()
+	if done {
+		return nil
+	}
 	now := k.now()
 	if _, err := k.history.DropStaleSessions(ctx, now.Add(-KeptFor)); err != nil {
 		return err
 	}
-	all, err := k.history.Sessions(ctx, k.device, now.Add(-KeptFor))
+	all, err := k.history.Sessions(ctx, device, now.Add(-KeptFor))
 	if err != nil {
 		return err
 	}
-
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if k.loaded {
+	if k.loaded[device] {
 		return nil
 	}
 	for _, one := range all {
+		if _, have := k.known[one.ID]; have {
+			continue
+		}
 		jar, err := ReadJar(one.Cookies)
 		if err != nil {
-			// A jar that cannot be read is a session that cannot be resumed.
-			// It is left to the sweep rather than given up here: nothing about
-			// it has been asked, and a history this program cannot read is a
-			// fault to report, not to delete.
+			// A jar that cannot be read is a session that cannot be resumed. It
+			// is left to the sweep rather than given up here: a history this
+			// program cannot read is a fault to report, not to delete.
 			continue
 		}
 		jar.now = k.now
-		k.known[one.ID] = &kept{record: one, jar: jar, ready: one.UsedAt.Add(k.pause)}
+		k.known[one.ID] = &kept{record: one, jar: jar}
+		if a, ok := addressOf(one.Exit); ok && one.UsedAt.After(k.used[a]) {
+			k.used[a] = one.UsedAt
+		}
 	}
-	k.loaded = true
+	k.loaded[device] = true
+	k.lastSweep = now
 	return nil
 }
 
-// Answered gives the session back after an answer: its cookies are written
-// down as they are now, and it rests for the job's pause before it is handed
-// out again.
-func (h *Held) Answered(ctx context.Context) error {
-	return h.keeper.answered(ctx, h)
+// sweep gives up, at most once an hour, the sessions that ran out while the
+// program was up — in the history and here.
+func (k *Keeper) sweep(ctx context.Context) error {
+	now := k.now()
+	k.mu.Lock()
+	due := now.Sub(k.lastSweep) >= sweepEvery
+	if due {
+		k.lastSweep = now
+		for id, s := range k.known {
+			if !s.held && now.Sub(s.record.UsedAt) > KeptFor {
+				delete(k.known, id)
+			}
+		}
+	}
+	k.mu.Unlock()
+	if !due {
+		return nil
+	}
+	_, err := k.history.DropStaleSessions(ctx, now.Add(-KeptFor))
+	return err
 }
 
-// Save writes the session's cookies down after an answer and keeps holding it.
+// Save writes the session down after an answer and keeps holding it: its
+// cookies, the port's tickets for it, and where the port goes out now.
 //
-// It is for a query walked page by page. The walk keeps one session for all
-// its pages — a visitor paging through results does not become someone else
-// between page one and page two — so it cannot give the session back after
-// every page; but a run can end between two pages, and a clearance won on page
-// one and never written down is a clearance the next run pays for again.
-func (h *Held) Save(ctx context.Context) error {
-	return h.keeper.save(ctx, h)
+// It is for a walk, which keeps one session for all its pages: a run can end
+// between two pages, and a clearance won on page one and never written down is
+// paid for again. Where the port goes out now is written because a request an
+// address did not carry is taken to another, and the session goes with it.
+func (h *Held) Save(ctx context.Context, p Port) error { return h.keeper.write(ctx, h, p, false) }
+
+// Answered writes the session down after an answer and gives it back.
+func (h *Held) Answered(ctx context.Context, p Port) error { return h.keeper.write(ctx, h, p, true) }
+
+// Failed gives the session back after a refusal, and says whether it was given
+// up — at the second refusal in a row.
+func (h *Held) Failed(ctx context.Context) (bool, error) { return h.keeper.failed(ctx, h) }
+
+// PutBack gives the session back with nothing recorded against it.
+func (h *Held) PutBack() {
+	k := h.keeper
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if h.done {
+		return
+	}
+	h.done = true
+	if s, ok := k.known[h.ID]; ok {
+		s.held = false
+	}
 }
 
-func (k *Keeper) save(ctx context.Context, h *Held) error {
+func (k *Keeper) write(ctx context.Context, h *Held, p Port, giveBack bool) error {
 	k.mu.Lock()
 	s, ok := k.known[h.ID]
 	if h.done || !ok || !s.held {
 		k.mu.Unlock()
 		return ErrNotHeld
 	}
+	exit, tickets := s.record.Exit, s.record.Tickets
 	k.mu.Unlock()
 
-	now := k.now()
+	if giveBack {
+		// Given back whatever the writing does: a session left held because
+		// the history would not take a line is a session nobody uses again.
+		defer func() {
+			k.mu.Lock()
+			h.done, s.held = true, false
+			k.mu.Unlock()
+		}()
+	}
+	if got, err := p.TakeTickets(ctx); err == nil {
+		tickets = got
+	}
+	if now := p.Exit(); now != "" && !onGateway(exit) {
+		exit = now
+	}
 	written, err := s.jar.MarshalJSON()
 	if err != nil {
 		return err
 	}
-	if err := k.history.SessionAnswered(ctx, s.record.ID, store.Answer{Cookies: written}, now); err != nil {
+	at := k.now()
+	if err := k.history.SessionAnswered(ctx, h.ID, store.Answer{Cookies: written, Tickets: tickets, Exit: exit}, at); err != nil {
 		return err
 	}
 	k.mu.Lock()
-	s.record.UsedAt, s.record.Failures = now, 0
-	k.mu.Unlock()
-	return nil
-}
-
-// Failed gives the session back after a refusal. It says whether the session
-// was given up — at the second refusal in a row.
-func (h *Held) Failed(ctx context.Context) (bool, error) {
-	return h.keeper.failed(ctx, h)
-}
-
-func (k *Keeper) answered(ctx context.Context, h *Held) error {
-	s, err := k.release(h)
-	if err != nil {
-		return err
+	s.record.UsedAt, s.record.Failures, s.record.Tickets, s.record.Exit = at, 0, tickets, exit
+	if a, ok := addressOf(exit); ok {
+		k.used[a] = at
 	}
-	now := k.now()
-	written, err := s.jar.MarshalJSON()
-	if err != nil {
-		return err
-	}
-	if err := k.history.SessionAnswered(ctx, s.record.ID, store.Answer{Cookies: written}, now); err != nil {
-		return err
-	}
-	k.mu.Lock()
-	s.record.UsedAt, s.record.Failures = now, 0
-	s.ready = now.Add(k.pause)
 	k.mu.Unlock()
 	return nil
 }
 
 func (k *Keeper) failed(ctx context.Context, h *Held) (bool, error) {
-	s, err := k.release(h)
-	if err != nil {
-		return false, err
+	k.mu.Lock()
+	s, ok := k.known[h.ID]
+	if h.done || !ok || !s.held {
+		k.mu.Unlock()
+		return false, ErrNotHeld
 	}
+	h.done, s.held = true, false
+	k.mu.Unlock()
+
 	now := k.now()
-	dropped, err := k.history.SessionFailed(ctx, s.record.ID, now)
+	dropped, err := k.history.SessionFailed(ctx, h.ID, now)
 	if err != nil && !errors.Is(err, store.ErrNoSession) {
 		return false, err
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if a, ok := addressOf(s.record.Exit); ok {
+		k.used[a] = now
+	}
 	if dropped || errors.Is(err, store.ErrNoSession) {
-		delete(k.known, s.record.ID)
+		delete(k.known, h.ID)
 		return true, nil
 	}
+	// A refusal is a use like any other as far as the pause is concerned.
 	s.record.UsedAt = now
 	s.record.Failures++
-	// A refusal is a request like any other as far as the pause is concerned:
-	// the session was asked through, and asking it again at once is the same
-	// push the pause is there to prevent.
-	s.ready = now.Add(k.pause)
 	return false, nil
 }
 
-// release marks a held session as given back, once.
-func (k *Keeper) release(h *Held) (*kept, error) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if h.done {
-		return nil, ErrNotHeld
-	}
-	s, ok := k.known[h.ID]
-	if !ok || !s.held {
-		return nil, ErrNotHeld
-	}
-	h.done = true
-	s.held = false
-	return s, nil
-}
-
-// Count is how many sessions the keeper knows, and how many of them a thread is
-// holding now. It is what a screen reporting the run's sessions reads.
+// Count is how many sessions the keeper knows, and how many are held now.
 func (k *Keeper) Count() (all, held int) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
