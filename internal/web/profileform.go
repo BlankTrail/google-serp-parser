@@ -55,7 +55,22 @@ type profileForm struct {
 	VDNS   string
 	Solver bool
 	HTTP3  bool
+
+	// The road the ports take to their addresses: HopKind is none, a SOCKS5
+	// proxy or one of the service's gateways, and HopProxy and HopGateway are
+	// the one it is. Both boxes are kept whichever kind is chosen, so a reader
+	// who tries the other kind and comes back finds what they had typed.
+	HopKind    string
+	HopProxy   string
+	HopGateway string
 }
+
+// The kinds of first hop the form offers. None goes to the address directly.
+const (
+	hopNone    = ""
+	hopSOCKS5  = "socks5"
+	hopGateway = "gateway"
+)
 
 // newProfile is the profile a form that is making one is laid over.
 //
@@ -84,7 +99,24 @@ func profileShowing(p store.Profile) profileForm {
 		VDNS:        vdnsModeOr(p.VDNSMode),
 		Solver:      p.Solver,
 		HTTP3:       p.HTTP3,
+	}.withHop(p.FirstHop)
+}
+
+// withHop is the form with a kept first hop in its boxes. One that no longer
+// reads — kept by some other hand, or before the rules for it were what they are
+// — is put in the proxy's box as it stands, where the reader can see it and put
+// it right, rather than dropped without a word.
+func (f profileForm) withHop(kept string) profileForm {
+	hop, err := blanktrail.ParseFirstHop(kept)
+	switch {
+	case err != nil:
+		f.HopKind, f.HopProxy = hopSOCKS5, kept
+	case hop.Gateway != "":
+		f.HopKind, f.HopGateway = hopGateway, hop.Gateway
+	case hop.Proxy != "":
+		f.HopKind, f.HopProxy = hopSOCKS5, hop.Proxy
 	}
+	return f
 }
 
 // profileFrom reads the boxes a browser sent.
@@ -106,6 +138,10 @@ func profileFrom(r former) profileForm {
 		VDNS:   strings.TrimSpace(r.FormValue(vdnsField)),
 		Solver: r.FormValue(solverField) != "",
 		HTTP3:  r.FormValue(http3Field) != "",
+
+		HopKind:    strings.TrimSpace(r.FormValue(firstHopField)),
+		HopProxy:   strings.TrimSpace(r.FormValue(hopProxyField)),
+		HopGateway: strings.TrimSpace(r.FormValue(hopGatewayField)),
 	}
 }
 
@@ -176,7 +212,49 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 	default:
 		b.complaints = append(b.complaints, "settings.source.unknown")
 	}
+
+	// A profile on gateways has its road set on the gateway, in the service,
+	// and the box is not on its screen: what it holds is kept, for the day the
+	// profile goes back to a list. Every other source shows the box, so what it
+	// says is the answer.
+	if f.Source != sourceGateways {
+		if hop, complaint := f.firstHop(); complaint != "" {
+			b.complaints = append(b.complaints, complaint)
+		} else {
+			next.FirstHop = hop
+		}
+	}
 	return next, b.complaints
+}
+
+// firstHop is the first hop the boxes describe, as a profile keeps it, or the
+// complaint that stops it being kept.
+//
+// Refused here rather than sent on: a first hop the service cannot go through
+// is a port that never carries anything, found out an hour into a job rather
+// than on the screen where it was typed.
+func (f profileForm) firstHop() (kept, complaint string) {
+	switch f.HopKind {
+	case hopNone:
+		return "", ""
+	case hopSOCKS5:
+		if f.HopProxy == "" {
+			return "", "proxies.hop.needs.proxy"
+		}
+		hop, err := blanktrail.ParseFirstHop(f.HopProxy)
+		if err != nil || hop.Proxy == "" {
+			// A gateway's name written into the proxy's box reads as a gateway,
+			// which is not what the reader chose.
+			return "", "proxies.hop.proxy.bad"
+		}
+		return hop.String(), ""
+	case hopGateway:
+		if f.HopGateway == "" {
+			return "", "proxies.hop.needs.gateway"
+		}
+		return blanktrail.FirstHop{Gateway: f.HopGateway}.String(), ""
+	}
+	return "", "proxies.hop.unknown"
 }
 
 // former is the half of a request these forms read. It is an interface so the

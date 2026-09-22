@@ -44,6 +44,11 @@ const (
 	vdnsField   = "vdns_mode"
 	solverField = "js_solver"
 	http3Field  = "http3"
+	// The road a list's ports take to their addresses: which kind of first hop,
+	// and the proxy or the gateway it is.
+	firstHopField   = "first_hop"
+	hopProxyField   = "first_hop_proxy"
+	hopGatewayField = "first_hop_gateway"
 	// The two the profiles brought: which profile a form is about, and what it
 	// is called.
 	profileField = "profile"

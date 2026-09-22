@@ -3,14 +3,17 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/settings"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -169,6 +172,13 @@ type proxiesPage struct {
 	// them they have ticked.
 	Chosen  int
 	Offered int
+
+	// HopGateways are the gateways a list's ports may go through first, by
+	// name, as the service holds them — with the one already chosen among them
+	// even when the service no longer has it, so a form drawn over it does not
+	// quietly change it. HopFault is why they could not be asked for.
+	HopGateways []string
+	HopFault    string
 }
 
 // failureRow is one kind of failure and how often it happened.
@@ -324,6 +334,7 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	view.Sources = sourcesOffered(view.Form.Source)
 	view.VDNSModes = vdnsOffered()
 	view.OnGateways = view.Form.Source == sourceGateways
+	s.offerHops(r.Context(), saved, &view)
 	if view.OnGateways {
 		if list, taken, err := s.askForGateways(r.Context(), saved, false); err != nil {
 			view.GatewayFault = gatewayFault(err)
@@ -461,8 +472,13 @@ func (s *Server) showProxies(w http.ResponseWriter, r *http.Request, lang Lang,
 	view.Editing = editing
 	view.Form = form
 	view.Sources = sourcesOffered(form.Source)
+	view.VDNSModes = vdnsOffered()
 	view.OnGateways = form.Source == sourceGateways
 	view.Complaints = complaints
+	if editing {
+		saved, _ := s.current()
+		s.offerHops(r.Context(), saved, &view)
+	}
 	if all, err := s.store.Profiles(r.Context()); err == nil {
 		view.Profiles = profileRows(all, form.ID)
 	}
@@ -607,4 +623,29 @@ func shareOf(n, total int64) string {
 		return noFigure
 	}
 	return fmt.Sprintf("%.0f%%", 100*float64(n)/float64(total))
+}
+
+// offerHops fills in the gateways a list's ports may go through first.
+//
+// Asked for only where the box is drawn — a profile on a list, being edited —
+// and from the list the gateways screen already holds, so drawing the form is
+// not a request to the service each time.
+func (s *Server) offerHops(ctx context.Context, saved settings.Settings, view *proxiesPage) {
+	if view.OnGateways {
+		return
+	}
+	list, _, err := s.askForGateways(ctx, saved, false)
+	switch {
+	case err != nil:
+		view.HopFault = gatewayFault(err)
+	case !list.Available:
+		view.HopFault = "proxies.gateways.unavailable"
+	default:
+		for _, g := range list.Gateways {
+			view.HopGateways = append(view.HopGateways, g.Name)
+		}
+	}
+	if chosen := view.Form.HopGateway; chosen != "" && !slices.Contains(view.HopGateways, chosen) {
+		view.HopGateways = append(view.HopGateways, chosen)
+	}
 }
