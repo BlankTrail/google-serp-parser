@@ -236,8 +236,14 @@ func ProtocolOr(p string) string {
 }
 
 // DefaultPortSpec is the configuration a session-oriented scraper wants: a real
-// profile from the curated database, Challenge Breaker armed, and a private
-// cookie jar.
+// profile from the curated database and Challenge Breaker armed.
+//
+// The port keeps no session of its own. The program keeps its sessions —
+// fingerprint, cookies, TLS tickets, exit — and puts one on whichever port is
+// free; a port keeping a jar as well would be a port carrying two sessions at
+// once, ours in the header and the service's underneath. With keep_sessions off
+// the service keeps neither the solver's pin nor a jar, and the cookies won by
+// passing a challenge come back with the answer, where the program keeps them.
 func DefaultPortSpec() PortSpec {
 	return PortSpec{
 		// Named rather than left to the fallback, so a spec printed or shown on
@@ -251,7 +257,7 @@ func DefaultPortSpec() PortSpec {
 		SpoofHeaders:   true,
 		SpoofUserAgent: true,
 		JSSolver:       true,
-		KeepSessions:   true,
+		KeepSessions:   false,
 		Decompress:     true,
 		// MaxConcurrent is left unset (0) so the proxy applies its own default.
 		//
@@ -659,4 +665,101 @@ func (c *Client) PortProfile(ctx context.Context, port int) (Profile, error) {
 		return Profile{}, err
 	}
 	return out, nil
+}
+
+// Exported is the session a port carries, as far as this program keeps it: the
+// address the port stands on, in the service's own writing, and the TLS
+// session tickets, exactly as the service wrote them.
+type Exported struct {
+	Upstream string
+	Tickets  json.RawMessage
+}
+
+// ExportSession reads the session a port is carrying without spending it.
+//
+// It is read after every answered page. The tickets a server hands out are the
+// session's — a returning visitor resumes TLS with them — and a session written
+// down without them is put back on its next port as a visitor who has never
+// been there, under cookies that say otherwise.
+func (c *Client) ExportSession(ctx context.Context, port int) (Exported, error) {
+	var doc struct {
+		Identity struct {
+			Upstream string `json:"upstream"`
+		} `json:"identity"`
+		Tickets json.RawMessage `json:"tls_tickets"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, fmt.Sprintf("/api/v1/port/%d/session", port), nil, &doc); err != nil {
+		return Exported{}, err
+	}
+	return Exported{Upstream: doc.Identity.Upstream, Tickets: doc.Tickets}, nil
+}
+
+// Imported is what the service says it did with a session put on a port.
+type Imported struct {
+	TicketsOffered   int  `json:"tickets_offered"`
+	TicketsApplied   int  `json:"tickets_applied"`
+	TicketsUndecoded int  `json:"tickets_undecoded"`
+	IdentityMismatch bool `json:"identity_mismatch"`
+}
+
+// ErrResumptionOff is returned for a port on which the service keeps no TLS
+// session tickets. The service answers 409 rather than "applied nought",
+// because "not applied" and "there were none" are otherwise the same answer
+// until a challenge tells them apart.
+var ErrResumptionOff = errors.New("blanktrail: TLS session resumption is off on the port")
+
+// ImportSession loads a session's TLS tickets onto a port, replacing whatever
+// the port held — none at all included, which is how a new session wipes the
+// tickets of the one before it.
+//
+// upstream is the address the port is expected to stand on. The service does
+// not refuse a session brought under another address; it says so, and the
+// caller decides. It has to be the last of the three calls that put a session on
+// a port: a new fingerprint or a new address wipes the tickets.
+func (c *Client) ImportSession(ctx context.Context, port int, upstream string, tickets json.RawMessage) (Imported, error) {
+	var body struct {
+		Version  int `json:"version"`
+		Identity struct {
+			Upstream string `json:"upstream,omitempty"`
+		} `json:"identity"`
+		Tickets json.RawMessage `json:"tls_tickets,omitempty"`
+	}
+	body.Version = 1
+	body.Identity.Upstream = upstream
+	if len(tickets) > 0 {
+		body.Tickets = tickets
+	}
+	var out Imported
+	err := c.doJSON(ctx, http.MethodPut, fmt.Sprintf("/api/v1/port/%d/session", port), body, &out)
+	var api *APIError
+	if errors.As(err, &api) && api.Status == http.StatusConflict {
+		return Imported{}, fmt.Errorf("%w: port %d", ErrResumptionOff, port)
+	}
+	if err != nil {
+		return Imported{}, err
+	}
+	return out, nil
+}
+
+// FreshProfile puts a port back on the template it was opened under and has the
+// service pick a fresh fingerprint within it.
+//
+// A new session made on a port that last carried another would otherwise wear
+// the other one's fingerprint, and the spread over releases the templates exist
+// for would fold into whatever the first sessions happened to wear.
+func (c *Client) FreshProfile(ctx context.Context, port int, spec PortSpec) (Profile, error) {
+	body := struct {
+		Mode         string `json:"mode"`
+		Browser      string `json:"browser,omitempty"`
+		OS           string `json:"os,omitempty"`
+		KeepSessions bool   `json:"keep_sessions"`
+	}{Mode: spec.Mode, Browser: spec.Browser, OS: spec.OS}
+	if body.Mode == "" || body.Mode == "specific" {
+		body.Mode = "db"
+	}
+	path := fmt.Sprintf("/api/v1/port/%d/config", port)
+	if err := c.doJSON(ctx, http.MethodPut, path, body, nil); err != nil {
+		return Profile{}, err
+	}
+	return c.RotateProfile(ctx, port)
 }
