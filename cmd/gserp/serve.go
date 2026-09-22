@@ -575,6 +575,10 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 		return web.Identities{}, o.scrubbed(err)
 	}
 	prof := want.Profile
+	hop, err := firstHopOf(prof)
+	if err != nil {
+		return web.Identities{}, err
+	}
 	threads, ports := want.Threads, want.Ports
 	if threads < 1 {
 		threads = o.Threads
@@ -588,6 +592,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	cfg.Spec.VDNSMode = prof.VDNSMode
 	cfg.Spec.JSSolver = prof.Solver
 	cfg.Spec.EnableHTTP3 = prof.HTTP3
+	cfg.Spec.FirstHop = hop
 	cfg.MaxPerUpstream = prof.ThreadsPerUpstream
 	cfg.RenewAfterInterval = prof.RenewEvery
 	// What the ports of this job are made of: every browser and system this
@@ -613,6 +618,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 		one.VDNSMode = prof.VDNSMode
 		one.JSSolver = prof.Solver
 		one.EnableHTTP3 = prof.HTTP3
+		one.FirstHop = hop
 	}
 	cfg.Trace = o.tracer()
 	cfg.OnLease = o.leaseTracer()
@@ -776,6 +782,24 @@ const listScheme = "socks5"
 // because every field of it is a box somebody filled in: a place that quietly
 // read its own interval, or its own idea of file or address, would leave a box
 // on the settings page that changes nothing and says nothing about it.
+// firstHopOf is the road a profile's ports take to their addresses, where the
+// profile is one that has one: a list's. A profile on gateways has its road set
+// on the gateway, in the service, and one on nothing has no address to reach.
+//
+// One that does not read stops the job rather than being dropped. Dropped, the
+// job would go straight to its addresses — the road the profile says it does
+// not take — and nothing on any screen would say so.
+func firstHopOf(prof store.Profile) (blanktrail.FirstHop, error) {
+	if prof.Kind == "" || prof.Kind == settings.ProxyGateways {
+		return blanktrail.FirstHop{}, nil
+	}
+	hop, err := blanktrail.ParseFirstHop(prof.FirstHop)
+	if err != nil {
+		return blanktrail.FirstHop{}, fmt.Errorf("proxy profile %q: %w", prof.Name, err)
+	}
+	return hop, nil
+}
+
 func listFrom(p store.Profile) blanktrail.Source {
 	return blanktrail.Source{
 		Kind:          p.Kind,

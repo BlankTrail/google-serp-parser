@@ -73,7 +73,9 @@ func ParseFirstHop(kept string) (FirstHop, error) {
 	}
 	ups, bad := Parse(kept, "socks5")
 	if len(bad) > 0 || len(ups) != 1 {
-		return FirstHop{}, fmt.Errorf("blanktrail: %q is not a proxy address", kept)
+		// The text itself is not repeated: a proxy's address carries its login
+		// and password, and this message travels to screens and logs.
+		return FirstHop{}, errors.New("blanktrail: the first hop is not a proxy address")
 	}
 	if s := ups[0].Scheme; s != "socks5" && s != "socks5h" {
 		return FirstHop{}, fmt.Errorf("blanktrail: a first hop is a SOCKS5 proxy, not %s", s)

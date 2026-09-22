@@ -5,6 +5,7 @@ package blanktrail
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,20 @@ func TestParseFirstHop_RefusesWhatTheServiceCannotChainThrough(t *testing.T) {
 		"gw:", "gw:   ", "not an address"} {
 		if got, err := ParseFirstHop(kept); err == nil {
 			t.Errorf("ParseFirstHop(%q) = %+v with no error", kept, got)
+		}
+	}
+}
+
+func TestParseFirstHop_DoesNotRepeatWhatItCouldNotRead(t *testing.T) {
+	// What it could not read is a proxy's address as somebody typed it, login
+	// and password included, and the refusal travels to screens and logs.
+	for _, kept := range []string{"user:secret@", "user:secret@host:notaport", "http://user:secret@198.51.100.7:8080"} {
+		_, err := ParseFirstHop(kept)
+		if err == nil {
+			t.Fatalf("ParseFirstHop(%q) read it", kept)
+		}
+		if strings.Contains(err.Error(), "secret") {
+			t.Errorf("the refusal of %q repeats the password: %v", kept, err)
 		}
 	}
 }
