@@ -6,6 +6,8 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // Want is what a caller asks a session to be.
@@ -55,6 +57,12 @@ type Port interface {
 	// Offers says whether the port may be moved onto the address: the list
 	// holds it and it is not resting.
 	Offers(address string) bool
+	// Knows says whether the list holds the address at all, resting or not.
+	Knows(address string) bool
+	// Stay says whether the port keeps its address whatever it meets while this
+	// session is on it: a request its address does not carry ends there rather
+	// than being carried to another address.
+	Stay(on bool)
 	// Candidates are the addresses the port may be moved onto.
 	Candidates() []string
 	// Limit is how many sessions may work through one address at once.
@@ -89,6 +97,13 @@ func addressOf(exit string) (string, bool) {
 // there is no carrying it to another exit without a challenge, and one gateway
 // can carry as many sessions as there are fingerprints to wear.
 func onGateway(exit string) bool { return strings.HasPrefix(exit, gateExit) }
+
+// hasAnswered says the session has been answered at least once: it holds cookies
+// Google gave it, or tickets the service handed out for it. Such a session holds
+// a clearance for its address, and moving it is spending the clearance.
+func hasAnswered(r store.Session) bool {
+	return len(r.Tickets) > 0 || (len(r.Cookies) > 0 && string(r.Cookies) != "[]")
+}
 
 // candidatesOf is what a port may be moved onto. A list with every address
 // resting leaves nothing to choose from, and then the port's own address is the

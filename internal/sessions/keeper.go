@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -70,6 +71,9 @@ var (
 type Keeper struct {
 	history History
 	now     func() time.Time
+	// rand draws each session's rest between the pause and half again more; a
+	// test pins it.
+	rand func() float64
 
 	mu    sync.Mutex
 	known map[int64]*kept
@@ -89,6 +93,22 @@ type kept struct {
 	record store.Session
 	jar    *Jar
 	held   bool
+	// spread is how much longer than the taker's pause this session rests
+	// since it was last used, as a share of the pause: from nought to a half.
+	// Drawn again at every use, so no session is asked again on a metronome.
+	spread float64
+}
+
+// restSpread is how far above the pause a session's rest may reach, as a share
+// of it: half, so a pause of sixty seconds is a rest of sixty to ninety — the
+// span the operator measured as the one a session is best asked again in.
+const restSpread = 0.5
+
+// rested says whether a session has rested for the taker's pause, drawn out by
+// its own spread.
+func (s *kept) rested(pause time.Duration, now time.Time) bool {
+	rest := pause + time.Duration(float64(pause)*s.spread)
+	return now.Sub(s.record.UsedAt) >= rest
 }
 
 // Held is a session a caller holds: which one, and the jar to search with.
@@ -103,7 +123,7 @@ type Held struct {
 // NewKeeper returns a keeper over a history.
 func NewKeeper(history History) *Keeper {
 	return &Keeper{
-		history: history, now: time.Now,
+		history: history, now: time.Now, rand: rand.Float64,
 		known: map[int64]*kept{}, loaded: map[string]bool{},
 		used: map[string]time.Time{}, reserved: map[string]int{},
 	}
@@ -143,11 +163,24 @@ func (k *Keeper) TakeColdest(ctx context.Context, p Port, w Want, idle time.Dura
 // fitsPort says whether a session may go on this port: a gateway's session only
 // on its gateway, an address's only on an address, and not on an address already
 // working as many sessions as it may.
-func fitsPort(s *kept, portExit string, busy map[string]int, limit int, offers func(string) bool) bool {
+//
+// A session that has answered and whose address is resting waits for it. It
+// holds a clearance for that address, and taken elsewhere it would spend it on a
+// challenge; the rest runs out, and the address carries it again or leaves the
+// list. A session that has never answered has nothing to wait for.
+func fitsPort(s *kept, portExit string, busy map[string]int, limit int, p Port) bool {
 	if onGateway(portExit) || onGateway(s.record.Exit) {
 		return s.record.Exit == portExit
 	}
-	if a, ok := addressOf(s.record.Exit); ok && offers(a) && busy[a] >= limit {
+	a, ok := addressOf(s.record.Exit)
+	if !ok {
+		return true
+	}
+	offered := p.Offers(a)
+	if !offered && hasAnswered(s.record) && p.Knows(a) {
+		return false
+	}
+	if offered && busy[a] >= limit {
 		return false
 	}
 	return true
@@ -165,8 +198,8 @@ func (k *Keeper) pick(p Port, w Want) *kept {
 	for _, s := range k.known {
 		r := s.record
 		if s.held || r.Device != w.Device || !w.matches(r.Browser, r.OS, r.Release) ||
-			now.Sub(r.UsedAt) < w.Pause || now.Sub(r.UsedAt) > KeptFor ||
-			!fitsPort(s, portExit, busy, limit, p.Offers) {
+			!s.rested(w.Pause, now) || now.Sub(r.UsedAt) > KeptFor ||
+			!fitsPort(s, portExit, busy, limit, p) {
 			continue
 		}
 		if best == nil || r.UsedAt.After(best.record.UsedAt) ||
@@ -192,7 +225,7 @@ func (k *Keeper) coldest(p Port, device string, idle time.Duration) *kept {
 	for _, s := range k.known {
 		r := s.record
 		if s.held || r.Device != device || now.Sub(r.UsedAt) < idle || now.Sub(r.UsedAt) > KeptFor ||
-			!fitsPort(s, portExit, busy, limit, p.Offers) {
+			!fitsPort(s, portExit, busy, limit, p) {
 			continue
 		}
 		if best == nil || r.UsedAt.Before(best.record.UsedAt) {
@@ -229,12 +262,14 @@ func (k *Keeper) put(ctx context.Context, p Port, s *kept) (*Held, error) {
 		return nil, fmt.Errorf("sessions: putting session %d's fingerprint on port %d: %w", s.record.ID, p.Number(), err)
 	}
 	address := ""
+	pinned := hasAnswered(s.record)
 	if !onGateway(s.record.Exit) {
 		a, ok := addressOf(s.record.Exit)
-		if !ok || !p.Offers(a) {
-			// Its address has left the list or is resting after failing to
-			// carry anything. It takes another the way a new session does, and
-			// pays a challenge there: that is what changing exit costs.
+		// A session that has never answered goes wherever an address is free.
+		// One that has answered moves only when its address has left the list
+		// — a resting one it waited for — and pays a challenge where it lands:
+		// that is what changing exit costs.
+		if move := !ok || (pinned && !p.Knows(a)) || (!pinned && !p.Offers(a)); move {
 			if a, ok = k.reserve(candidatesOf(p), p.Limit()); !ok {
 				k.release(s)
 				return nil, ErrNoAddress
@@ -252,6 +287,9 @@ func (k *Keeper) put(ctx context.Context, p Port, s *kept) (*Held, error) {
 		k.mu.Unlock()
 		address = a
 	}
+	// A session that has answered keeps its port on its address for the length
+	// of the lease; one that never has lets its requests go where they can.
+	p.Stay(pinned)
 	elsewhere, err := p.PutTickets(ctx, address, s.record.Tickets)
 	if err != nil {
 		k.release(s)
@@ -288,6 +326,9 @@ func (k *Keeper) fresh(ctx context.Context, p Port, w Want) (*Held, error) {
 		}
 		exit, address = addrExit+a, a
 	}
+	// A new session has nothing to lose: its first request goes wherever an
+	// address will carry it.
+	p.Stay(false)
 	// A new session starts with no tickets, and the port may still hold the
 	// last session's. Loading an empty set is what wipes them.
 	elsewhere, err := p.PutTickets(ctx, address, nil)
@@ -413,7 +454,7 @@ func (k *Keeper) load(ctx context.Context, device string) error {
 			continue
 		}
 		jar.now = k.now
-		k.known[one.ID] = &kept{record: one, jar: jar}
+		k.known[one.ID] = &kept{record: one, jar: jar, spread: k.rand() * restSpread}
 		if a, ok := addressOf(one.Exit); ok && one.UsedAt.After(k.used[a]) {
 			k.used[a] = one.UsedAt
 		}
@@ -510,6 +551,8 @@ func (k *Keeper) write(ctx context.Context, h *Held, p Port, giveBack bool) erro
 	}
 	k.mu.Lock()
 	s.record.UsedAt, s.record.Failures, s.record.Tickets, s.record.Exit = at, 0, tickets, exit
+	s.record.Cookies = written
+	s.spread = k.rand() * restSpread
 	if a, ok := addressOf(exit); ok {
 		k.used[a] = at
 	}
@@ -544,6 +587,7 @@ func (k *Keeper) failed(ctx context.Context, h *Held) (bool, error) {
 	// A refusal is a use like any other as far as the pause is concerned.
 	s.record.UsedAt = now
 	s.record.Failures++
+	s.spread = k.rand() * restSpread
 	return false, nil
 }
 

@@ -31,6 +31,8 @@ type port struct {
 	calls     []string
 	elsewhere bool
 	refuse    error
+	// stayed is what the port was last told about keeping its address.
+	stayed bool
 }
 
 func listPort(num int, on string, list ...string) *port {
@@ -57,6 +59,18 @@ func (p *port) Offers(a string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return slices.Contains(p.list, a) && !p.resting[a]
+}
+
+func (p *port) Knows(a string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Contains(p.list, a)
+}
+
+func (p *port) Stay(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stayed = on
 }
 
 func (p *port) Candidates() []string {
@@ -134,6 +148,9 @@ func (c *clock) pass(d time.Duration) { c.at = c.at.Add(d) }
 func keeperAt(h History, c *clock) *Keeper {
 	k := NewKeeper(h)
 	k.now = c.now
+	// Every rest is the pause and no more, unless a test says otherwise: the
+	// spread is a test of its own.
+	k.rand = func() float64 { return 0 }
 	return k
 }
 
@@ -636,5 +653,142 @@ func TestHeld_SavesThePagesOfAWalkWithoutLettingTheSessionGo(t *testing.T) {
 	kept, _ := h.Get(s.ID)
 	if jar, _ := ReadJar(kept.Cookies); len(jar.Cookies(google)) != 1 {
 		t.Error("the page's cookies were not written down")
+	}
+}
+
+// answeredOn makes a session that has answered on address a: Google gave it a
+// cookie, and it was written down.
+func answeredOn(t *testing.T, k *Keeper, a string, list ...string) *Held {
+	t.Helper()
+	ctx := context.Background()
+	p := listPort(90, a, list...)
+	s, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	s.Jar.SetCookies(google, []*http.Cookie{{Name: "GOOGLE_ABUSE_EXEMPTION", Value: "clearance"}})
+	if err := s.Answered(ctx, p); err != nil {
+		t.Fatalf("Answered: %v", err)
+	}
+	return s
+}
+
+func TestKeeper_KeepsASessionThatHasAnsweredWaitingForItsRestingAddress(t *testing.T) {
+	// A session holds a clearance for the address it answered through. That
+	// address failing once is a reason to rest it, not to spend the clearance
+	// on a challenge somewhere else: the session waits, and a thread meanwhile
+	// takes another.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+
+	resting := listPort(1, "b", "a", "b")
+	resting.resting["a"] = true
+	other, err := k.Take(ctx, resting, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if other.ID == s.ID {
+		t.Fatal("a session that has answered was carried off its resting address")
+	}
+	// The other session stays held, so the only one free once a is back is
+	// the one that waited for it.
+	c.pass(time.Minute)
+
+	back, err := k.Take(ctx, listPort(2, "b", "a", "b"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if back.ID != s.ID {
+		t.Errorf("once its address was back, got session %d, want the one that waited (%d)", back.ID, s.ID)
+	}
+}
+
+func TestKeeper_MovesASessionThatHasAnsweredOnlyWhenItsAddressLeavesTheList(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+
+	p := listPort(1, "b", "b")
+	got, err := k.Take(context.Background(), p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if got.ID != s.ID || p.Exit() != "addr:b" {
+		t.Errorf("got session %d on %q, want %d moved to b: its address has left the list", got.ID, p.Exit(), s.ID)
+	}
+}
+
+func TestKeeper_LetsASessionThatNeverAnsweredGoWhereAnAddressIsFree(t *testing.T) {
+	// A session with nothing to lose does not wait for anything.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	first := listPort(1, "a", "a", "b")
+	s, _ := k.Take(ctx, first, desktop)
+	s.PutBack()
+	c.pass(time.Minute)
+
+	p := listPort(2, "a", "a", "b")
+	p.resting["a"] = true
+	got, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if got.ID != s.ID || p.Exit() != "addr:b" {
+		t.Errorf("got session %d on %q, want %d taken to b", got.ID, p.Exit(), s.ID)
+	}
+}
+
+func TestKeeper_TellsThePortToKeepItsAddressOnlyForASessionThatHasAnswered(t *testing.T) {
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	answeredOn(t, k, "a", "a")
+	c.pass(time.Minute)
+
+	p := listPort(1, "a", "a")
+	if _, err := k.Take(ctx, p, desktop); err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if !p.stayed {
+		t.Error("the port carrying a session that has answered was not told to keep its address")
+	}
+	q := listPort(2, "b", "a", "b")
+	q.stayed = true
+	if _, err := k.Take(ctx, q, desktop); err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if q.stayed {
+		t.Error("the port carrying a new session was told to keep its address")
+	}
+}
+
+func TestKeeper_RestsASessionBetweenThePauseAndHalfAgainMore(t *testing.T) {
+	// Sixty to ninety seconds: the span the operator measured, and no metronome
+	// — a session asked again every sixty seconds to the millisecond is a
+	// description of a program.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	k.rand = func() float64 { return 1 }
+	ctx := context.Background()
+	minute := Want{Device: "desktop", Pause: 60 * time.Second}
+	p := listPort(1, "a", "a", "b")
+	s, _ := k.Take(ctx, p, minute)
+	_ = s.Answered(ctx, p)
+
+	c.pass(70 * time.Second)
+	early, _ := k.Take(ctx, listPort(2, "b", "a", "b"), minute)
+	if early.ID == s.ID {
+		t.Fatal("a session drawn to rest ninety seconds was handed out at seventy")
+	}
+	early.PutBack()
+	c.pass(21 * time.Second)
+	later, _ := k.Take(ctx, listPort(3, "a", "a", "b"), minute)
+	if later.ID != s.ID {
+		t.Errorf("at ninety-one seconds got session %d, want the rested one (%d)", later.ID, s.ID)
 	}
 }
