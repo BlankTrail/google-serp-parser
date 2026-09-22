@@ -224,10 +224,10 @@ func (c *crew) step(ctx context.Context, f *flight) bool {
 			return true
 		}
 		if f.held != nil {
-			// The refusal is the session's — whether Google read the request
-			// and judged it, or no address carried it. The address belongs to
-			// sessions and stays where it is.
-			_, _ = f.held.Failed(ctx)
+			// Only a refusal Google judged is the session's; a request that
+			// never reached Google puts it back as it was. The address belongs
+			// to sessions and stays where it is.
+			letGoAfter(ctx, f.held, err)
 			f.held = nil
 		} else if _, judged := google.ClassOf(err); judged {
 			// Only an answer that was read and judged counts as a refusal. A
@@ -305,10 +305,18 @@ func (c *crew) hold(ctx context.Context, wait bool) (*blanktrail.Lease, *session
 		return lease, nil, err
 	}
 	// Every address working as many sessions as it may is answered like a pool
-	// with nothing free: the thread works what it holds and looks again.
+	// with nothing free: the thread works what it holds and looks again. A
+	// port the service lost to a restart is opened again before it is handed
+	// out next; a service that is away is waited for, not asked in a loop.
 	held, err := c.a.Keeper.Take(ctx, leasePort{lease}, c.a.Want)
 	if err != nil {
+		if blanktrail.PortLost(err) {
+			lease.Reopen()
+		}
 		lease.Release()
+		if blanktrail.Unreachable(err) {
+			_ = c.r.Pool.Sleep(ctx, serviceAwayWait)
+		}
 		return nil, nil, err
 	}
 	return lease, held, nil

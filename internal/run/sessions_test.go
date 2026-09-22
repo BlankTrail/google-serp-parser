@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/sessions"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // cookieOrigin answers the way Google does for a session: every search is
@@ -169,5 +171,96 @@ func TestAttempt_WalksOnOneKeptSession(t *testing.T) {
 	sent := o.cookiesSent()
 	if len(sent) != 2 || !strings.Contains(sent[1], "NID=search-1") {
 		t.Errorf("page two went out with cookies %q, want what page one was given", sent)
+	}
+}
+
+func TestAttempt_KeepsASessionWhoseRequestNeverReachedGoogle(t *testing.T) {
+	// A request no address carried says nothing about the session: counted
+	// against it, a list of dead addresses — or a service restarting — gave up
+	// every session it touched.
+	o := newCookieOrigin(t, func(int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	h := sessions.NewMemory()
+	a := &Attempt{Pool: f.Pool, Keeper: sessions.NewKeeper(h), Want: searchDesktop, Tries: 2}
+	ctx := context.Background()
+	if _, err := a.Search(ctx, usQuery("x")); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	o.Close() // nothing answers behind the address any more
+	if _, err := a.Search(ctx, usQuery("y")); err == nil {
+		t.Fatal("a search with nothing behind the address succeeded")
+	}
+	all, _ := h.Sessions(ctx, "desktop", time.Time{})
+	if len(all) != 1 || all[0].Failures != 0 {
+		t.Fatalf("after two requests that never reached Google the history holds %+v, want the session kept "+
+			"with nothing against it", all)
+	}
+}
+
+func TestAttempt_WaitsOutAServiceThatIsAwayWithoutSpendingATry(t *testing.T) {
+	// An update of the service is a restart: for a while it answers "not
+	// ready". The query waits for it rather than spending its tries on it.
+	o := newCookieOrigin(t, func(int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	a := &Attempt{Pool: f.Pool, Keeper: sessions.NewKeeper(sessions.NewMemory()), Want: searchDesktop, Tries: 1}
+
+	f.Fake.SetDown(true)
+	back := make(chan struct{})
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		f.Fake.SetDown(false)
+		close(back)
+	}()
+	_, err := a.Search(context.Background(), usQuery("x"))
+	<-back
+	if err != nil {
+		t.Errorf("a service away for a moment cost the query its only try: %v", err)
+	}
+}
+
+func TestAttempt_OpensAPortTheServiceLostAgainAndCarriesOn(t *testing.T) {
+	// A restart of the service loses every port. A port found lost is opened
+	// again, on its address, and the query goes on without spending a try.
+	o := newCookieOrigin(t, func(int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	a := &Attempt{Pool: f.Pool, Keeper: sessions.NewKeeper(sessions.NewMemory()), Want: searchDesktop, Tries: 1}
+	ctx := context.Background()
+	if _, err := a.Search(ctx, usQuery("x")); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	f.Fake.Restart()
+	if _, err := a.Search(ctx, usQuery("y")); err != nil {
+		t.Fatalf("after the service lost its ports the query failed: %v", err)
+	}
+	if len(f.Fake.OpenPorts()) == 0 {
+		t.Error("the lost port was not opened again")
+	}
+}
+
+func TestRunner_CarriesAJobThroughARestartOfTheService(t *testing.T) {
+	o := newCookieOrigin(t, func(int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	h := sessions.NewMemory()
+	r := &Runner{Pool: f.Pool, Threads: 2, Keeper: sessions.NewKeeper(h), Want: searchDesktop}
+	ctx := context.Background()
+	if rep := r.Run(ctx, Job{Queries: []google.Query{usQuery("a"), usQuery("b")}, Pages: 1}); rep.Results[0].Err != nil {
+		t.Fatalf("the first job: %v", rep.Results[0].Err)
+	}
+	before, _ := h.Sessions(ctx, "desktop", time.Time{})
+
+	f.Fake.Restart()
+	rep := r.Run(ctx, Job{Queries: []google.Query{usQuery("c"), usQuery("d"), usQuery("e")}, Pages: 1})
+	for i, q := range rep.Results {
+		if q.Err != nil {
+			t.Errorf("query %d after the restart: %v", i, q.Err)
+		}
+	}
+	after, _ := h.Sessions(ctx, "desktop", time.Time{})
+	for _, s := range before {
+		if !slices.ContainsFunc(after, func(a store.Session) bool { return a.ID == s.ID }) {
+			t.Errorf("session %d did not survive the restart", s.ID)
+		}
 	}
 }

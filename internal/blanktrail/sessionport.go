@@ -66,6 +66,11 @@ func (l *Lease) Stay(on bool) {
 	l.pt.mu.Unlock()
 }
 
+// Reopen tells the pool the service no longer has this port — it came back from
+// a restart without it — so it is opened again, on the address it had, before
+// it is handed out next.
+func (l *Lease) Reopen() { l.pool.reopenPort(l.pt.num) }
+
 // Candidates are the addresses the port may be moved onto.
 func (l *Lease) Candidates() []string {
 	free, ok := l.pt.ch.(interface{ Free() []Egress })

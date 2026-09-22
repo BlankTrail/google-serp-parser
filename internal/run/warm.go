@@ -341,12 +341,8 @@ func (w *Warmer) warmSession(ctx context.Context, lease *blanktrail.Lease, held 
 	c := lease.Client()
 	sess := &google.Session{Client: &http.Client{Transport: c.Transport, Timeout: c.Timeout, Jar: held.Jar}}
 	if _, err := sess.Search(ctx, google.Query{Text: warmingPhrase()}); err != nil {
-		if ctx.Err() != nil {
-			held.PutBack()
-			return
-		}
-		_, _ = held.Failed(ctx)
-		if w.Log != nil {
+		letGoAfter(ctx, held, err)
+		if ctx.Err() == nil && w.Log != nil {
 			w.Log.Info("keeping a session warm did not get through", "port", lease.Port(), "error", err)
 		}
 		return

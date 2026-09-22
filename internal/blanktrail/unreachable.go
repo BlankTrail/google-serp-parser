@@ -38,3 +38,8 @@ func Unreachable(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
+
+// PortLost says the service answered that it does not have the port a call was
+// about: it lost it to a restart, or never opened it. The port has to be opened
+// again before anything can be put on it.
+func PortLost(err error) bool { return notOpen(err) }

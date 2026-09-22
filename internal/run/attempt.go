@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
@@ -247,7 +248,7 @@ func (a *Attempt) walkOnce(ctx context.Context, q google.Query, from, to int) ([
 		if err == nil {
 			_ = held.Answered(ctx, port)
 		} else {
-			a.letGoAfter(ctx, held)
+			a.letGoAfter(ctx, held, err)
 		}
 		return out, err
 	}
@@ -343,9 +344,23 @@ func (a *Attempt) once(ctx context.Context, q google.Query) (google.SERP, error)
 }
 
 // onceWithSession asks one query through a kept session put on the leased port.
+//
+// A port the service turns out not to have — it came back from a restart
+// without it — is given back to be opened again, and the query goes to another
+// without spending a try: the port was lost, the query was never asked.
 func (a *Attempt) onceWithSession(ctx context.Context, lease *blanktrail.Lease, q google.Query) (google.SERP, error) {
 	port := leasePort{lease}
 	held, err := a.takeSession(ctx, port)
+	for lost := 0; blanktrail.PortLost(err) && lost < lostPortsPerQuery; lost++ {
+		lease.Reopen()
+		lease.Release()
+		if lease, err = a.lease(ctx); err != nil {
+			return google.SERP{}, err
+		}
+		defer lease.Release()
+		port = leasePort{lease}
+		held, err = a.takeSession(ctx, port)
+	}
 	if err != nil {
 		return google.SERP{}, err
 	}
@@ -356,7 +371,7 @@ func (a *Attempt) onceWithSession(ctx context.Context, lease *blanktrail.Lease, 
 	serp, err := a.searchFor(held, lease).Search(ctx, q)
 	a.caught(serp, err)
 	if err != nil {
-		a.letGoAfter(ctx, held)
+		a.letGoAfter(ctx, held, err)
 		return google.SERP{}, err
 	}
 	// Written down before the port is let go of: the tickets are read off the
@@ -368,31 +383,56 @@ func (a *Attempt) onceWithSession(ctx context.Context, lease *blanktrail.Lease, 
 }
 
 // takeSession puts a session on the port, waiting while every address is
-// working as many sessions as it may. That is a queue and not a failure: a try
-// spent on it is a try the query never had.
+// working as many sessions as it may, and while the service is away. Neither is
+// a failure: a try spent on them is a try the query never had.
 func (a *Attempt) takeSession(ctx context.Context, port leasePort) (*sessions.Held, error) {
 	for {
 		held, err := a.Keeper.Take(ctx, port, a.Want)
-		if !errors.Is(err, sessions.ErrNoAddress) {
+		var wait time.Duration
+		switch {
+		case errors.Is(err, sessions.ErrNoAddress):
+			wait = waitingForAnIdentity
+		case blanktrail.Unreachable(err):
+			// Restarting, being updated: it will be back, and the session
+			// with it — they are kept here, not there.
+			wait = serviceAwayWait
+		default:
 			return held, err
 		}
-		if err := a.Pool.Sleep(ctx, waitingForAnIdentity); err != nil {
+		if err := a.Pool.Sleep(ctx, wait); err != nil {
 			return nil, err
 		}
 	}
 }
 
-// letGoAfter gives a session back after a request that brought no page. A
-// request the caller's own context ended is not the session failing; anything
-// else — a refusal Google read and judged, or a request no address carried — is
-// one more failure in a row.
-func (a *Attempt) letGoAfter(ctx context.Context, held *sessions.Held) {
-	if ctx.Err() != nil {
-		held.PutBack()
+// letGoAfter gives a session back after a request that brought no page.
+//
+// Only a refusal Google read and judged is held against the session. A request
+// no address carried, a port that did not answer, the service being away: the
+// session never reached Google, and counting those against it gave the whole
+// of a history up within the minute the service was restarting.
+func letGoAfter(ctx context.Context, held *sessions.Held, err error) {
+	if _, judged := google.ClassOf(err); judged && ctx.Err() == nil {
+		_, _ = held.Failed(ctx)
 		return
 	}
-	_, _ = held.Failed(ctx)
+	held.PutBack()
 }
+
+// letGoAfter is the attempt's way of saying it; see the function of that name.
+func (a *Attempt) letGoAfter(ctx context.Context, held *sessions.Held, err error) {
+	letGoAfter(ctx, held, err)
+}
+
+// serviceAwayWait is how long a run waits before asking a service that was away
+// again. Two seconds: an update takes tens of them, and a thread asking more
+// often than this would only fill the log of a service that is not listening.
+const serviceAwayWait = 2 * time.Second
+
+// lostPortsPerQuery is how many ports a query may find lost before it spends a
+// try: after a restart of the service every port is lost at once, and each is
+// opened again the moment it is found.
+const lostPortsPerQuery = 8
 
 // searchFor is a kept session's search state, bound for this request to the port
 // it is on and to the session's own jar.
