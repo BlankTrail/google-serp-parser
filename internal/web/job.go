@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/export"
+	"github.com/blanktrail/google-serp-parser/internal/run"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -133,12 +134,21 @@ type jobPool struct {
 	Ports       int
 	Warm        int
 	Quarantined int
-	// Sessions is how many sessions the program holds of this job's kind, and
-	// Asleep how many of those are resting between two of their own requests.
-	// They are the program's rather than the job's: two jobs of one kind share
-	// them.
+	// Sessions is how many sessions the program holds of this job's kind, Working
+	// how many are in a thread's hands this instant, and Asleep how many of the
+	// others are resting between two of their own requests. They are the
+	// program's rather than the job's: two jobs of one kind share them.
 	Sessions int
+	Working  int
 	Asleep   int
+	// Made is how many sessions this run has had made for it, which is not the
+	// same as how many there are: the others were made by an earlier run or by
+	// another job of this kind, and are as much this job's to use.
+	Made int
+	// Ramp is the key of the word for how far the run has got into its own
+	// speed: still taking on sessions, running on as many as it can use, or
+	// wanting more than the list will give it.
+	Ramp string
 	// Met is how many of Google's checks this run's sessions have been made to
 	// pass, counted off the clearance each one leaves behind.
 	Met int
@@ -370,14 +380,40 @@ func (s *Server) poolOf(job int64) *jobPool {
 	out := &jobPool{
 		Addresses: facts.Addresses, Resting: facts.Banned,
 		Ports: facts.Stats.Ports, Warm: facts.Stats.Warm, Quarantined: facts.Stats.Quarantined,
-		Sessions: facts.Sessions, Asleep: facts.SessionsResting,
+		Sessions: facts.Sessions, Working: facts.SessionsHeld, Asleep: facts.SessionsResting,
+		Made: facts.Ramp.Made, Ramp: rampWord(facts.Ramp),
 		Met: facts.Checks.Met, Solving: facts.Queue.Running, Queued: facts.Queue.Queued,
-		Between: noFigure, Crowded: facts.Checks.Crowded,
+		Between: noFigure,
+		// The advice about the rest is for a run whose rest is what limits it. A
+		// run still taking on sessions is limited by how many it has, and one
+		// short of addresses by the list; in both, the checks are being paid by
+		// sessions arriving somewhere new rather than by any of them being asked
+		// again too soon — and a longer rest, which makes more sessions, would
+		// make more of those.
+		Crowded: facts.Checks.Crowded && facts.Ramp.AtSpeed,
 	}
 	if facts.Checks.Known {
 		out.Between = strconv.FormatFloat(facts.Checks.Between, 'f', 1, 64)
 	}
 	return out
+}
+
+// rampWord is the key of what to call where a run stands against its own speed.
+//
+// Three states and not two: a run that has stopped taking on sessions because it
+// has enough and one that has stopped because the list will give it no more
+// look identical in every other figure on the screen, and they want opposite
+// answers — one is a job running at its speed, the other a job to give a wider
+// list or fewer threads.
+func rampWord(at run.Ramping) string {
+	switch {
+	case at.Short:
+		return "job.ramp.short"
+	case at.AtSpeed:
+		return "job.ramp.atspeed"
+	default:
+		return "job.ramp.widening"
+	}
 }
 
 // pageSpeed is how fast pages are coming back, measured over the ones this run

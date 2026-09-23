@@ -94,6 +94,13 @@ type kept struct {
 	record store.Session
 	jar    *Jar
 	held   bool
+	// moved says this session was put on an address other than the one it last
+	// answered from. It is worked out afresh every time the session is put on a
+	// port, so an answer from the new address leaves it false the next time
+	// round. What reads it is the count of Google's checks: a session arriving
+	// from somewhere new is a stranger there whatever pace it is asked at, so
+	// the check it pays says nothing about the pace.
+	moved bool
 	// spread is where between the two ends of the taker's span this session's
 	// own rest falls: nought is the least it may rest and one the most. Drawn
 	// again at every use, so no session is asked again on a metronome.
@@ -117,10 +124,7 @@ func (s *kept) rested(w Want, now time.Time) bool {
 // resting the same span do not come due together, and neither comes due on a
 // metronome.
 func (s *kept) restFor(w Want) time.Duration {
-	from, to := w.Pause, w.UpTo
-	if to <= from {
-		to = from + time.Duration(float64(from)*restSpread)
-	}
+	from, to := w.Pause, w.Longest()
 	return from + time.Duration(float64(to-from)*s.spread)
 }
 
@@ -129,8 +133,16 @@ type Held struct {
 	ID      int64
 	Profile string
 	Jar     *Jar
-	keeper  *Keeper
-	done    bool
+	// Fresh says this session was made for this taking rather than handed on
+	// from an earlier one.
+	//
+	// A caller watching how a run gets up to speed reads it: a thread makes a
+	// session only when none it could use has rested, so a run still making them
+	// is a run still widening, and one that has stopped has as many as its
+	// threads can keep busy.
+	Fresh  bool
+	keeper *Keeper
+	done   bool
 }
 
 // NewKeeper returns a keeper over a history.
@@ -326,6 +338,9 @@ func (k *Keeper) put(ctx context.Context, p Port, s *kept) (*Held, error) {
 			}
 		}
 		k.mu.Lock()
+		// Somewhere other than where it last answered from: a stranger at this
+		// address until it answers from it.
+		s.moved = addrExit+a != s.record.Exit
 		s.record.Exit = addrExit + a
 		k.mu.Unlock()
 		address = a
@@ -397,7 +412,7 @@ func (k *Keeper) fresh(ctx context.Context, p Port, w Want) (*Held, error) {
 		k.used[address] = now
 	}
 	k.mu.Unlock()
-	return &Held{ID: id, Profile: fp.Profile, Jar: jar, keeper: k}, nil
+	return &Held{ID: id, Profile: fp.Profile, Jar: jar, Fresh: true, keeper: k}, nil
 }
 
 // Choose is the rule for giving a session an address, for the pool to use when a
@@ -574,6 +589,25 @@ func (h *Held) Admitted() bool {
 	defer k.mu.Unlock()
 	s, ok := k.known[h.ID]
 	return ok && hasAnswered(s.record)
+}
+
+// Moved says this session is going out from an address other than the one it
+// last answered from.
+//
+// A session is moved when the address it answered on has left the list or would
+// not carry a request, and it arrives at the new one as a stranger: the same
+// cookies from another part of the world are what a check is for. So a check
+// met just after a move is the price of the address rather than a reading of
+// how fast the session is being asked.
+func (h *Held) Moved() bool {
+	if h == nil || h.keeper == nil {
+		return false
+	}
+	k := h.keeper
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	s, ok := k.known[h.ID]
+	return ok && s.moved
 }
 
 // Save writes the session down after an answer and keeps holding it: its
@@ -812,14 +846,14 @@ func (k *Keeper) failed(ctx context.Context, h *Held) (bool, error) {
 }
 
 // Standing is how the sessions one caller can use stand at this moment: how
-// many there are, and how many of them are resting.
+// many there are, how many are in somebody's hands, and how many of the rest
+// are still resting.
 //
-// Resting is the number a screen is really asking for. A run whose sessions are
-// nearly all resting is a run that will wait for them, and whether that is the
-// rest being long or the run being wide is a question the two numbers together
-// answer. A session in somebody's hands is neither resting nor free, and is
-// counted only in the total: it is working.
-func (k *Keeper) Standing(w Want) (all, resting int) {
+// The three are what a screen needs to answer "is this run waiting on its own
+// sessions". What is left over — neither working nor resting — is a session
+// nobody took, and a run with none of those to spare is a run that will wait
+// the moment a thread comes back for one.
+func (k *Keeper) Standing(w Want) (all, held, resting int) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	now := k.now()
@@ -829,11 +863,14 @@ func (k *Keeper) Standing(w Want) (all, resting int) {
 			continue
 		}
 		all++
-		if !s.held && !s.rested(w, now) {
+		switch {
+		case s.held:
+			held++
+		case !s.rested(w, now):
 			resting++
 		}
 	}
-	return all, resting
+	return all, held, resting
 }
 
 // Count is how many sessions the keeper knows, and how many are held now.

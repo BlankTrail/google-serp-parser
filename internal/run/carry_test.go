@@ -36,6 +36,11 @@ type deepOrigin struct {
 	// page, the way Google hands one out when its check has just been passed.
 	// An empty answer hands none.
 	clears func(n int) string
+	// shells, when set, says which searches are answered with the page that
+	// carries no results at all — Google's check on the address, handed back
+	// unsolved. It is the address's failure rather than the session's, and what
+	// it costs the session is the address.
+	shells func(n int) bool
 	mu     sync.Mutex
 
 	asked []string
@@ -63,6 +68,10 @@ func newDeepOrigin(t *testing.T, depth int) *deepOrigin {
 		o.mu.Unlock()
 		if o.refuse.Load() {
 			_, _ = io.WriteString(w, wallBody)
+			return
+		}
+		if o.shells != nil && o.shells(n) {
+			_, _ = io.WriteString(w, shellBody)
 			return
 		}
 		defer func() {
@@ -396,5 +405,159 @@ func TestRunner_CountsACheckWhereGoogleHandsTheSessionAFreshClearance(t *testing
 	}
 	if !got.Known || got.Between != 1 {
 		t.Errorf("the run reads %v requests a check, want one", got.Between)
+	}
+}
+
+func TestRunner_CountsNoCheckAgainstThePaceWhenTheSessionCameFromSomewhereNew(t *testing.T) {
+	// A session arriving at an address Google has not seen it at is a stranger
+	// there, and the check it pays is the price of the address. Counted against
+	// the pace, a list whose addresses keep dying — every death moving a session
+	// somewhere new — would read as a run asking too fast, and the advice would
+	// be to rest sessions that are already resting.
+	o := newDeepOrigin(t, 1)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	port := 0
+	o.clears = func(n int) string {
+		if n == 1 {
+			return "let-in"
+		}
+		return "somewhere-new"
+	}
+	o.then = func(n int) {
+		if n == 1 {
+			// The address the session answered on dies under it, so the next
+			// request is carried to another one.
+			f.kill(f.Fake.UpstreamOf(port))
+		}
+	}
+	counting := counting()
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, Challenges: counting}
+	port = f.onePort(t)
+
+	rep := r.Run(context.Background(), Job{
+		Queries: []google.Query{usQuery("one"), usQuery("two")}, Pages: 1, Tries: 3})
+	for i, got := range rep.Results {
+		if got.Err != nil {
+			t.Fatalf("query %d: %v", i, got.Err)
+		}
+	}
+	if stood := f.stoodOn(port); len(stood) < 2 {
+		t.Fatalf("the port stood on %q, so nothing moved and this test proves nothing", stood)
+	}
+
+	// Both checks are reported — somebody waited for each — and neither is part
+	// of the rhythm: one let the session in, the other let it in somewhere else.
+	got := counting.Rhythm()
+	if got.Met != 2 {
+		t.Errorf("%d checks were reported, want the two that were paid for: %+v", got.Met, got)
+	}
+	if got.Asked != 0 || got.Known {
+		t.Errorf("the rhythm reads %+v, want nothing counted towards the pace", got)
+	}
+}
+
+func TestRunner_CountsNoCheckAgainstThePaceWhereTheSessionWasMovedBetweenRequests(t *testing.T) {
+	// The other way a session arrives somewhere new: the address it answered on
+	// would not carry its next request — here it failed Google's check on the
+	// address — so the session is taken off it and put on another one before the
+	// request is made at all. The check it pays there is the price of the new
+	// address, and it is the run's list rather than the run's pace that is being
+	// read when one is met.
+	o := newDeepOrigin(t, 1)
+	o.shells = func(n int) bool { return n == 2 }
+	o.clears = func(n int) string {
+		switch n {
+		case 1:
+			return "let-in"
+		case 3:
+			return "somewhere-new"
+		}
+		return ""
+	}
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	counting := counting()
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, Challenges: counting}
+
+	rep := r.Run(context.Background(), Job{
+		Queries: []google.Query{usQuery("one"), usQuery("two"), usQuery("three"), usQuery("four")},
+		Pages:   1, Tries: 1})
+	if rep.Results[1].Err == nil {
+		t.Fatal("the search answered with a shell came back as a page, so nothing was moved")
+	}
+
+	got := counting.Rhythm()
+	// Two checks paid for: one to be let in, one to be let in somewhere else.
+	if got.Met != 2 {
+		t.Errorf("%d checks were reported, want the two that were paid for: %+v", got.Met, got)
+	}
+	// And one request counted towards the pace: the fourth, asked by a session
+	// Google had already answered from the address it was asking from.
+	if got.Asked != 1 || got.AskedMet != 0 {
+		t.Errorf("the rhythm reads %+v, want the one request that says anything about the pace", got)
+	}
+}
+
+func TestRunner_CountsTheSessionsItHadMadeForIt(t *testing.T) {
+	// A thread makes a session only when none of the ones there are is ready for
+	// it, so what a run has had made for it is the reading of whether it is
+	// still widening: a run that has stopped making them has as many as its
+	// threads can keep busy, and the speed it is going at is its own.
+	o := newDeepOrigin(t, 1)
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	h := sessions.NewMemory()
+	watching := NewRamp(time.Minute)
+	r := &Runner{Pool: f.Pool, Threads: 2, Keeper: sessions.NewKeeper(h),
+		// A minute of rest and a run of milliseconds: nothing comes due, so
+		// every query opened is a session made.
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop, Pause: time.Minute},
+		Ramp: watching}
+
+	rep := r.Run(context.Background(), Job{
+		Queries: []google.Query{usQuery("one"), usQuery("two"), usQuery("three")}, Pages: 1})
+	for i, got := range rep.Results {
+		if got.Err != nil {
+			t.Fatalf("query %d: %v", i, got.Err)
+		}
+	}
+
+	all, _ := h.Sessions(context.Background(), "desktop", time.Time{})
+	if got := watching.Ramping(); got.Made != 3 || got.Made != len(all) {
+		t.Errorf("the run reads %d sessions made and the history holds %d, want the three it opened",
+			got.Made, len(all))
+	}
+	// And it is still widening: it has made one this instant.
+	if got := watching.Ramping(); got.AtSpeed {
+		t.Errorf("a run that has just made a session reads %+v, want it widening", got)
+	}
+}
+
+func TestRunner_SaysSoWhenThereIsNoAddressLeftToOpenASessionOn(t *testing.T) {
+	// The other end of a run widening: it stops not because it has enough
+	// sessions but because the list will not carry another. Read as the first,
+	// a job whose list is too narrow for its threads would show on the screen
+	// as one running at its own speed — and what it wants is a wider list or
+	// fewer threads, which is the opposite of leaving it alone.
+	o := newDeepOrigin(t, 1)
+	only, bad := blanktrail.Parse("192.0.2.1:1080", "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	f := poolFacing(t, o.addr(), 2, inSessions, func(c *blanktrail.PoolConfig) {
+		// One address, and one session at a time on it: the second thread has
+		// nowhere to put a session of its own.
+		c.Channels = []blanktrail.Channel{blanktrail.NewListChannel("list", blanktrail.NewStaticRotor(only))}
+		c.MaxPerUpstream = 1
+	})
+	watching := NewRamp(time.Minute)
+	r := &Runner{Pool: f.Pool, Threads: 2, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop, Pause: time.Minute}, Ramp: watching}
+
+	r.Run(context.Background(), Job{
+		Queries: []google.Query{usQuery("one"), usQuery("two"), usQuery("three")}, Pages: 1, Tries: 1})
+
+	if got := watching.Ramping(); !got.Short {
+		t.Errorf("the run reads %+v, want it short of addresses to open a session on", got)
 	}
 }

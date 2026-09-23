@@ -1123,28 +1123,73 @@ func TestKeeper_StandingCountsTheSessionsACallerCanUseAndThoseStillResting(t *te
 	_ = second.Answered(ctx, pb)
 
 	// Both have just answered, so both are resting the five seconds this want
-	// asks of them.
-	if all, resting := k.Standing(desktop); all != 2 || resting != 2 {
-		t.Errorf("%d sessions, %d resting; want both of two resting", all, resting)
+	// asks of them, and neither is in anybody's hands.
+	if all, held, resting := k.Standing(desktop); all != 2 || held != 0 || resting != 2 {
+		t.Errorf("%d sessions, %d in hand, %d resting; want two, none and two", all, held, resting)
 	}
 	c.pass(time.Minute)
-	if all, resting := k.Standing(desktop); all != 2 || resting != 0 {
+	if all, _, resting := k.Standing(desktop); all != 2 || resting != 0 {
 		t.Errorf("a minute on, %d of %d sessions are resting; want none", resting, all)
 	}
 
 	// One in somebody's hands is working rather than resting, and is still one
-	// of the sessions there are.
-	held, err := k.Take(ctx, listPort(3, "a", "a", "b"), desktop)
+	// of the sessions there are. The three are told apart because what is
+	// neither is what a thread coming back for one would find.
+	taken, err := k.Take(ctx, listPort(3, "a", "a", "b"), desktop)
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	if all, resting := k.Standing(desktop); all != 2 || resting != 0 {
-		t.Errorf("with one in hand: %d sessions, %d resting; want two and none", all, resting)
+	if all, held, resting := k.Standing(desktop); all != 2 || held != 1 || resting != 0 {
+		t.Errorf("with one in hand: %d sessions, %d in hand, %d resting; want two, one and none",
+			all, held, resting)
 	}
-	held.PutBack()
+	taken.PutBack()
 
 	// And the sessions of another kind of result page are another caller's.
-	if all, _ := k.Standing(Want{Device: "mobile"}); all != 0 {
+	if all, _, _ := k.Standing(Want{Device: "mobile"}); all != 0 {
 		t.Errorf("a phone job is told it has %d sessions, want the desktop ones left out", all)
+	}
+}
+
+func TestKeeper_RestsASessionFromItsAnswerAndNotFromItsAsking(t *testing.T) {
+	// Google's check is solved inside the request that met it: the answer comes
+	// back tens of seconds, sometimes minutes, after the request went out.
+	// Rested from the asking, a session would finish its rest while it was still
+	// waiting for that answer, and the next request would go out the instant the
+	// last one landed — which is the one thing the rest is for.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := listPort(1, "a", "a", "b")
+	s, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	// The request waits three minutes for a check to be solved. The rest this
+	// want asks for is five seconds, so it has passed many times over.
+	c.pass(3 * time.Minute)
+	if err := s.Answered(ctx, p); err != nil {
+		t.Fatalf("Answered: %v", err)
+	}
+
+	c.pass(4 * time.Second)
+	fresh, err := k.Take(ctx, listPort(2, "b", "a", "b"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if fresh.ID == s.ID {
+		t.Error("the session was handed out four seconds after its answer, so it rested from when it was asked")
+	}
+	fresh.PutBack()
+
+	// And it comes back once it has rested from the answer.
+	c.pass(2 * time.Second)
+	again, err := k.Take(ctx, listPort(3, "a", "a", "b"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if again.ID != s.ID {
+		t.Errorf("six seconds after the answer got session %d, want the one that had rested (%d)",
+			again.ID, s.ID)
 	}
 }

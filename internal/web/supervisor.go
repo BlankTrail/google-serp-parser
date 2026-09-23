@@ -91,14 +91,20 @@ type poolFacts struct {
 	// Checks is how often this job's sessions have been made to pass Google's
 	// check, and what that says about the rest they are given.
 	Checks run.Rhythm
+	// Ramp is how far this run has got into its own speed: whether it is still
+	// taking on sessions, has as many as it can use, or wants more than the
+	// list will give it.
+	Ramp run.Ramping
 	// Sessions is how many sessions the program holds of the kind this job asks
-	// for, and SessionsResting how many of those are not due to be asked again
-	// yet.
+	// for, SessionsHeld how many are in a thread's hands this instant, and
+	// SessionsResting how many of the others are not due to be asked again yet.
 	//
 	// They are the program's rather than the job's: sessions outlive a job and
-	// two jobs of one kind share them. What they answer is whether a run is
-	// waiting on its own sessions.
+	// two jobs of one kind share them. What the three answer together is whether
+	// a run is waiting on its own sessions: what is neither working nor resting
+	// is what a thread coming back for one would find.
 	Sessions        int
+	SessionsHeld    int
 	SessionsResting int
 }
 
@@ -130,16 +136,18 @@ type poolEngine struct {
 	keeper *sessions.Keeper
 	want   sessions.Want
 	// checks counts how often this job's sessions are made to pass Google's
-	// check. It is the job's own — a reading of how this run is going, not of
-	// the machine — so it is made with the engine and dies with it.
+	// check, and ramp watches the run widen into its speed. Both are the job's
+	// own — readings of how this run is going, not of the machine — so they are
+	// made with the engine and die with it.
 	checks *run.Challenges
+	ramp   *run.Ramp
 }
 
 // Run builds a runner around the pool this job was raised. A runner is a few
 // fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
 	r := &run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch, Brake: e.brake,
-		Keeper: e.keeper, Want: e.want, Challenges: e.checks}
+		Keeper: e.keeper, Want: e.want, Challenges: e.checks, Ramp: e.ramp}
 	if e.addresses != nil {
 		r.Addresses = e.addresses.Identities
 	}
@@ -171,10 +179,10 @@ func (e *poolEngine) Close() error {
 // Pool is this job's pool, as it stands right now.
 func (e *poolEngine) Pool() poolFacts {
 	facts := poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown(),
-		Pool: e.pool, Queue: e.brake.Queue(), Checks: e.checks.Rhythm()}
+		Pool: e.pool, Queue: e.brake.Queue(), Checks: e.checks.Rhythm(), Ramp: e.ramp.Ramping()}
 	facts.Addresses, facts.Banned = e.pool.Addresses()
 	if e.keeper != nil {
-		facts.Sessions, facts.SessionsResting = e.keeper.Standing(e.want)
+		facts.Sessions, facts.SessionsHeld, facts.SessionsResting = e.keeper.Standing(e.want)
 	}
 	return facts
 }
@@ -308,7 +316,7 @@ func dialing(open OpenPool, watch run.Watch) source {
 		// screen that no run ever matched.
 		return &poolEngine{pool: want.Search, addresses: want.Addresses, brake: want.Brake,
 			threads: asked.Threads, watch: watch, keeper: want.Keeper, want: want.Want,
-			checks: run.NewChallenges()}, nil
+			checks: run.NewChallenges(), ramp: run.NewRamp(want.Want.Longest())}, nil
 	}}
 }
 

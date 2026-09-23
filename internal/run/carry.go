@@ -73,6 +73,12 @@ func (c *crew) carry(ctx context.Context) {
 			if one != nil {
 				c.walks.waitFor(one)
 			}
+			if errors.Is(err, sessions.ErrNoAddress) {
+				// A thread that wanted a session and could not have one: every
+				// address is already carrying as many as it may. The run has
+				// stopped widening because the list will not let it.
+				c.r.Ramp.Short()
+			}
 			c.letGoUntaken(ctx, lease, err)
 			if ctx.Err() != nil {
 				return
@@ -80,6 +86,11 @@ func (c *crew) carry(ctx context.Context) {
 			continue
 		}
 
+		if held.Fresh {
+			// None of the sessions there were was ready for this thread, so one
+			// was made: the run is still widening into its speed.
+			c.r.Ramp.Made()
+		}
 		if one == nil {
 			one, _ = c.walks.of(held.ID)
 		} else if carrying, took := c.walks.give(held.ID, one); !took {
@@ -176,10 +187,15 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	search := boundSearcher{attempt: c.a, lease: lease, held: held}
 
 	// What Google's check left on this session before the request, so an answer
-	// that comes back with a new one can be read as a check just paid for — and
-	// whether Google had answered this session at all before, because the check
-	// a fresh one pays to be let in says nothing about the pace.
-	held0, admitted := held.Clearance(), held.Admitted()
+	// that comes back with a new one can be read as a check just paid for.
+	//
+	// And whether this session is one Google already knows at the address it is
+	// asking from. A session it has never answered is paying to be let in, and
+	// one that has been moved since its last answer is a stranger where it has
+	// landed: both pay a check whatever pace they are asked at, so neither says
+	// anything about the pace.
+	held0 := held.Clearance()
+	known := held.Admitted() && !held.Moved()
 
 	var serp google.SERP
 	var err error
@@ -222,7 +238,10 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	case err == nil:
 		// Written down and given back: its rest starts here, and the keeper
 		// will not hand it out again before the rest is over.
-		c.r.Challenges.Answer(admitted, held0, held.Clearance())
+		// The move may also have happened inside this request: the address it
+		// set out through carried nothing and it was sent to another. What
+		// answered is a session Google has not seen at that address either.
+		c.r.Challenges.Answer(known && !moved, held0, held.Clearance())
 		_ = held.Answered(ctx, port)
 		c.took(ctx, one, held.ID, serp)
 	case judged && moved:

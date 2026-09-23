@@ -1236,18 +1236,15 @@ func TestJobPage_ShowsGooglesChecksAndWhatTheSolverHasInHand(t *testing.T) {
 	}
 }
 
-func TestJobPage_AdvisesALongerRestOnlyWhenTheChecksAreCrowded(t *testing.T) {
-	// The advice is the point of the count: checks coming every few requests are
-	// sessions asked again before they have rested, and nothing the run does
-	// about it will help — only a longer rest will. Drawn on a run that is not
-	// meeting them often, the same sentence would send an operator to slow down
-	// a job that is going well.
-	s, _, id := runningWith(t, poolFacts{
-		Checks: run.Rhythm{Met: 9, Asked: 27, AskedMet: 9, Between: 2, Known: true, Crowded: true},
-	})
+func TestJobPage_AdvisesALongerRestOnlyWhereTheRestIsWhatLimitsTheRun(t *testing.T) {
+	// The advice is the point of the count: on a run whose sessions are all the
+	// sessions it can use, checks coming every few requests are those sessions
+	// asked again before they have rested, and only a longer rest will mend it.
+	crowded := run.Rhythm{Met: 9, Asked: 27, AskedMet: 9, Between: 2, Known: true, Crowded: true}
+	s, _, id := runningWith(t, poolFacts{Checks: crowded, Ramp: run.Ramping{AtSpeed: true}})
 	body := get(t, s, jobPath(id)).Body.String()
 	if !strings.Contains(body, `id="checks-crowded"`) {
-		t.Error("the checks come every other request and the page says nothing about the rest")
+		t.Error("the checks come every other request on a run at its speed and the page says nothing")
 	}
 	// Unescaped, because the advice carries an apostrophe and the template
 	// writes it as an entity.
@@ -1255,11 +1252,54 @@ func TestJobPage_AdvisesALongerRestOnlyWhenTheChecksAreCrowded(t *testing.T) {
 		t.Errorf("the page does not carry the advice itself:\n%s", body)
 	}
 
-	easy, _, other := runningWith(t, poolFacts{
+	// A run still taking sessions on is limited by how many it has rather than
+	// by how long they rest, and the checks it is paying are what a session
+	// arriving somewhere new pays. A longer rest makes more such sessions: the
+	// advice would make the thing it was given about worse.
+	widening, _, other := runningWith(t, poolFacts{Checks: crowded})
+	if body := get(t, widening, jobPath(other)).Body.String(); strings.Contains(body, `id="checks-crowded"`) {
+		t.Error("a run still taking sessions on is told to rest them longer")
+	}
+
+	// Nor is a run that cannot take on more because the list will not let it.
+	short, _, third := runningWith(t, poolFacts{Checks: crowded, Ramp: run.Ramping{Short: true}})
+	if body := get(t, short, jobPath(third)).Body.String(); strings.Contains(body, `id="checks-crowded"`) {
+		t.Error("a run with no address left for another session is told to rest its sessions longer")
+	}
+
+	// And a run meeting them seldom is left alone whatever else is true of it.
+	easy, _, fourth := runningWith(t, poolFacts{
 		Checks: run.Rhythm{Met: 9, Asked: 909, AskedMet: 9, Between: 100, Known: true},
+		Ramp:   run.Ramping{AtSpeed: true},
 	})
-	if body := get(t, easy, jobPath(other)).Body.String(); strings.Contains(body, `id="checks-crowded"`) {
+	if body := get(t, easy, jobPath(fourth)).Body.String(); strings.Contains(body, `id="checks-crowded"`) {
 		t.Error("a run meeting a check every hundred requests is told to rest its sessions longer")
+	}
+}
+
+func TestJobPage_SaysWhereTheRunStandsAgainstItsOwnSpeed(t *testing.T) {
+	// Three states, and the middle one is the question being asked: a run that
+	// has stopped taking sessions on because it has enough is a run whose speed
+	// is its own. One that has stopped because every address is full looks the
+	// same in every other figure on the screen and wants the opposite answer.
+	for _, state := range []struct {
+		at   run.Ramping
+		want string
+	}{
+		{run.Ramping{Made: 12}, "job.ramp.widening"},
+		{run.Ramping{Made: 12, AtSpeed: true}, "job.ramp.atspeed"},
+		{run.Ramping{Made: 12, Short: true}, "job.ramp.short"},
+	} {
+		s, _, id := runningWith(t, poolFacts{Ramp: state.at})
+		body := get(t, s, jobPath(id)).Body.String()
+		if got := shown(t, body, "ramp"); got != LangEN.T(state.want) {
+			t.Errorf("a run reading %+v is drawn as %q, want %q", state.at, got, LangEN.T(state.want))
+		}
+		// And how many sessions it had made for it, which is what the word is
+		// about: the others were made by an earlier run or by another job.
+		if got := shown(t, body, "sessions-made"); got != "12" {
+			t.Errorf("the page says %q sessions were made for this job, want 12", got)
+		}
 	}
 }
 

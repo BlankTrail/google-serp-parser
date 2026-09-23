@@ -463,14 +463,21 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   opened again; failures broken down by kind, with counters you can zero at any
   moment.
 - A running job's own page reads the identities under it: addresses in the list
-  and banned right now, ports open, warm and in quarantine, sessions and how
-  many of them are resting — and Google's checks: how many this job has been
-  made to pass, how many the solver is working on, how many are waiting for it,
-  and how many requests the run gets between one check and the next. That last
-  one is counted on sessions Google has already admitted — a fresh session pays
-  a check to be let in whatever pace it is asked at — and after ten minutes of
-  the run, checks oftener than one in seven of those requests say the sessions
-  are being asked again before they have rested, which the page says.
+  and banned right now, ports open, warm and in quarantine, sessions — how many
+  there are, how many are in work, how many are resting and how many this job
+  had made for it — and whether it is still taking sessions on, running at its
+  own speed, or out of addresses to open one on. A thread makes a session only
+  when none of the ones there are is ready for it, so a run that has stopped
+  making them has as many as its threads can keep busy: the speed on the screen
+  is then the speed the job runs at rather than one it is still climbing to.
+- The same page reads Google's checks: how many this job has been made to pass,
+  how many the solver is working on, how many are waiting for it, and how many
+  requests the run gets between one check and the next. That last one is counted
+  on sessions Google has already answered from the address they are asking from
+  — a session being let in, or one arriving somewhere new, pays a check whatever
+  pace it is asked at. On a run that has stopped taking sessions on, checks
+  oftener than one in seven of those requests say the sessions are being asked
+  again before they have rested, which the page says.
 - The gateway list is read once and held for a couple of minutes, with a
   **Refresh** that asks the service again — for when a configuration has just
   been added or the tunnels have just been measured.

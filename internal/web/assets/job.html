@@ -67,12 +67,20 @@
 <div class="metric"><dt class="label">{{$.T "proxies.warm"}}</dt><dd class="figure" id="warm">{{.Warm}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "proxies.quarantined"}}</dt><dd class="figure" id="quarantined">{{.Quarantined}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "job.sessions"}}</dt><dd class="figure" id="sessions">{{.Sessions}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "job.sessions.working"}}</dt><dd class="figure" id="sessions-working">{{.Working}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "job.sessions.asleep"}}</dt><dd class="figure" id="sessions-asleep">{{.Asleep}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "job.sessions.made"}}</dt><dd class="figure" id="sessions-made">{{.Made}}</dd></div>
+{{/* Where the run stands against its own speed. A thread makes a session only
+     when none of the ones there are is ready for it, so a run that has stopped
+     making them is a run whose sessions cover its threads — and the speed above
+     is the speed this job runs at rather than one it is still climbing to. */}}
+<div class="metric"><dt class="label">{{$.T "job.ramp"}}</dt><dd class="state" id="ramp">{{$.T .Ramp}}</dd></div>
 </dl>
 <details class="help">
 <summary>{{$.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{$.T "job.sessions.why"}}</li>
+<li>{{$.T "job.ramp.why"}}</li>
 </ul>
 </details>
 </section>

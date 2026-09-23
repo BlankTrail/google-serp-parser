@@ -48,6 +48,20 @@ type Want struct {
 	UpTo  time.Duration
 }
 
+// Longest is the most a session may rest between two requests under this want:
+// the far end where the caller named one, and the near end and half again where
+// they named only that.
+//
+// It is here rather than in the keeper because it is the same reading of the
+// same pair of numbers, and two places working out what a span means is two
+// places to change when it changes.
+func (w Want) Longest() time.Duration {
+	if w.UpTo > w.Pause {
+		return w.UpTo
+	}
+	return w.Pause + time.Duration(float64(w.Pause)*restSpread)
+}
+
 // matches says whether a session's fingerprint is what the want narrows to.
 func (w Want) matches(browser, os string, release int) bool {
 	return (w.Browser == "" || w.Browser == browser) &&

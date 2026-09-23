@@ -219,6 +219,9 @@ type Runner struct {
 	// ports are the identities counts nothing either way: the clearance a check
 	// leaves belongs to a session, and there are none.
 	Challenges *Challenges
+	// Ramp, when set, watches this run widen into its speed: how many sessions
+	// it has had made for it, and whether it has stopped needing more.
+	Ramp *Ramp
 }
 
 // Run works through a job and reports what came of every query.
