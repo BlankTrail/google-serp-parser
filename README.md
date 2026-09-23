@@ -330,6 +330,19 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   page one and page two. How many a thread holds is nobody's setting: it takes
   another whenever it is about to wait and the pool has one spare, so the count
   settles wherever the pause and the speed of the answers put it.
+- **A page Google would not show is asked for again where the session stands.**
+  Such a page is Google's check on the address handed back unsolved: the service
+  passes a check of that kind in a browser of its own through that same address,
+  so the page is that browser failing to open a connection through the exit —
+  which it may manage a minute later. It used to condemn the address at once:
+  the session was taken off it, landed somewhere else, and paid a check to be
+  let in there, which is a page, an address and a check for one refusal. Now the
+  page is asked for once more through the same session and the same address, and
+  only a second one condemns. Measured live on a list of fifteen thousand,
+  sixteen phrases an arm: condemning at once answered 14 of 16 and condemned
+  five addresses, asking again answered 16 of 16 and condemned one. The second
+  asking counts against the tries the phrase is allowed, so an address that
+  answers nothing else is not asked for ever.
 - **The hidden addresses are read through ports of their own.** Some regions
   put no address in the markup: the link is a redirector and the address is read
   out of the `Location` header it answers with. Those lookups were going out

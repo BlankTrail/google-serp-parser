@@ -39,6 +39,26 @@ var ErrNoIdentityLeft = errors.New("run: every identity refused this query")
 // asked for is checked against this machine before the port is opened.
 const defaultTries = 30
 
+// defaultShellTries is how many times the page is asked for again at the
+// address that would not show it, when the job named no number.
+//
+// One. A shell is Google's check on the address handed back unsolved, and the
+// service passes such a check in a browser of its own through that same
+// address — so a shell is that browser failing to open a connection through
+// the exit, which it may manage the next minute and may not. Condemning the
+// address on the first one costs the request, the address, and then the check
+// the session pays to be let in wherever it lands; asking again costs one
+// request.
+//
+// Measured live on a list of fifteen thousand, sixteen phrases an arm in the
+// order A B B A: condemned at once answered 14 of 16 and condemned five
+// addresses, asked again answered 16 of 16 and condemned one. The two arms met
+// seven shells between them, of which one got past on the second asking — too
+// few to read a rate off, which is why the number is one rather than three: a
+// second asking that fails costs a request, and the arithmetic is only
+// favourable while the shells that pass are a fair share of them.
+const defaultShellTries = 1
+
 // Attempt is one search that survives a refused identity.
 //
 // It implements google.Searcher, which is the whole point of its shape. The

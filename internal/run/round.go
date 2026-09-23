@@ -284,6 +284,18 @@ func (c *crew) triesAllowed() int {
 	return defaultTries
 }
 
+// shellTriesAllowed is how many times a page Google would not show is asked for
+// again at the address it was refused from, before the address is blamed.
+func (c *crew) shellTriesAllowed() int {
+	switch {
+	case c.r.ShellTries > 0:
+		return c.r.ShellTries
+	case c.r.ShellTries < 0:
+		return 0
+	}
+	return defaultShellTries
+}
+
 // hold takes an identity — a port — queueing for one only when the caller says
 // it has nothing else to do.
 func (c *crew) hold(ctx context.Context, wait bool) (*blanktrail.Lease, error) {

@@ -219,7 +219,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 			// back unsolved. Asked again through the same session and the same
 			// address, it costs one more request; condemned at once, it costs
 			// the session its address and a check to be let in at the next one.
-			if class == google.ClassShell && shells < c.r.ShellTries &&
+			if class == google.ClassShell && shells < c.shellTriesAllowed() &&
 				c.walks.spend(held.ID) < c.triesAllowed() {
 				shells++
 				continue

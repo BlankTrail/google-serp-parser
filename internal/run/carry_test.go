@@ -625,15 +625,15 @@ func TestRunner_CondemnsTheAddressWhereTheSecondAskingIsRefusedTheSameWay(t *tes
 	}
 }
 
-func TestRunner_CondemnsTheAddressAtOnceWhereTheJobAllowsNoSecondAsking(t *testing.T) {
-	// And with no second chance allowed, which is what a job that says nothing
-	// gets, the first shell is what it always was: the address's failure, and
-	// the session leaves it.
+func TestRunner_CondemnsTheAddressAtOnceWhereTheRunAllowsNoSecondAsking(t *testing.T) {
+	// And where the second chance is refused — a negative number, since nought
+	// is the number nobody set — the first shell is what it always was: the
+	// address's failure, and the session leaves it.
 	o := newDeepOrigin(t, 1)
 	o.shells = func(n int) bool { return n == 1 }
 	f := poolFacing(t, o.addr(), 1, inSessions)
 	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
-		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, ShellTries: -1}
 
 	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 5})
 	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
@@ -642,6 +642,26 @@ func TestRunner_CondemnsTheAddressAtOnceWhereTheJobAllowsNoSecondAsking(t *testi
 	}
 	if got := f.Pool.Stats().Rejections; got != 1 {
 		t.Errorf("Stats().Rejections=%d, want the one the shell earned", got)
+	}
+}
+
+func TestRunner_AsksTheAddressAgainWithoutBeingToldTo(t *testing.T) {
+	// The second chance is what a run gets when nobody said anything about it:
+	// the number a caller leaves at nought is the number nobody set, and what
+	// it means is one.
+	o := newDeepOrigin(t, 1)
+	o.shells = func(n int) bool { return n == 1 }
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 5})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the query took %d pages and ended with %v, want the one the second asking brought",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if got := f.Pool.Stats().Rejections; got != 0 {
+		t.Errorf("Stats().Rejections=%d, want none - the address was condemned for a check it then passed", got)
 	}
 }
 
@@ -664,6 +684,32 @@ func TestRunner_AsksNoRefusalOtherThanAShellAgainAtTheSameAddress(t *testing.T) 
 	if asked := o.seen(); len(asked) != 2 {
 		t.Errorf("the origin was asked %d times: %q, want the page and the wall that ended the walk",
 			len(asked), asked)
+	}
+}
+
+func TestRunner_AsksTheAddressAsManyTimesAsTheRunWasTold(t *testing.T) {
+	// A run that names its own number gets it, and not the one it would have
+	// had. What the number is for is a road where the check is handed back for
+	// reasons of its own — a solver with nothing free answers every request
+	// with a shell until it has — and there the address deserves more than one
+	// asking before it is blamed.
+	o := newDeepOrigin(t, 1)
+	o.shells = func(n int) bool { return n <= 3 }
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, ShellTries: 3}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 9})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the query took %d pages and ended with %v, want the one the fourth asking brought",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if asked := o.seen(); len(asked) != 4 {
+		t.Fatalf("the origin was asked %d times: %q, want three shells and the asking after them",
+			len(asked), asked)
+	}
+	if got := f.Pool.Stats().Rejections; got != 0 {
+		t.Errorf("Stats().Rejections=%d, want none - the address was blamed although the run allowed it three askings", got)
 	}
 }
 

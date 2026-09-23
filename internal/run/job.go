@@ -226,11 +226,12 @@ type Runner struct {
 	// the address, handed back unsolved — is asked for again through the same
 	// session and the same address before the address is blamed for it.
 	//
-	// Nought condemns the address on the first one, which is what this did
-	// before the number existed. What it buys is the thing a shell costs beyond
-	// the request itself: the session is taken off its address, lands on another
-	// one, and pays Google's check to be let in there — so a shell that would
-	// have passed on a second asking costs a check as well as a page.
+	// Nought means defaultShellTries, and a negative number means none: the
+	// address is condemned by the first one, which is what this did before the
+	// number existed. It reaches only a run that keeps its own sessions, where
+	// a session belongs to an address and leaving costs something; a run whose
+	// ports are the identities has nothing to keep and carries the refusal to
+	// the next port as it always did.
 	ShellTries int
 }
 

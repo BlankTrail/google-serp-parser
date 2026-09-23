@@ -58,7 +58,7 @@ var shellAgainPhrases = []string{
 type shellArm struct {
 	name string
 	// tries is how many second chances a page gets at the address it was
-	// refused from. Nought is the rule as it was.
+	// refused from. A negative number is none, the rule as it was.
 	tries int
 
 	rounds   int
@@ -98,7 +98,7 @@ func TestLiveShellAgain_MeasuresWhatASecondAskingAtTheSameAddressBuys(t *testing
 	}
 
 	arms := []*shellArm{
-		{name: "condemned at once", tries: 0},
+		{name: "condemned at once", tries: -1},
 		{name: "asked again where it stands", tries: 1},
 	}
 	// A B B A: whatever the list is doing as the hour passes, each arm gets one
