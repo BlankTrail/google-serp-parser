@@ -471,3 +471,22 @@ func TestParseSERP_APageThatOffersNoNextOneSaysSo(t *testing.T) {
 		t.Errorf("a page with no bar offers %q as its next one", bare.NextPage)
 	}
 }
+
+func TestParseSERP_FindsTheNextPageWhateverLanguageThePageIsIn(t *testing.T) {
+	// Which language a page comes back in is the exit's to decide: Google reads
+	// the address it is asked from. So the control is found by the mark Google
+	// puts on it and never by the word on it — a parser reading "Следующая"
+	// would walk Russian pages and stop on the first English, Turkish or Arabic
+	// one, and the operator would see a list of queries that mysteriously end
+	// on page one.
+	for _, word := range []string{"Следующая", "Next", "Weiter", "التالية", ""} {
+		s, err := ParseSERP("x", withNavigation(
+			`<a href="/search?q=x&amp;start=10&amp;sa=N" id="pnnext">`+word+`</a>`))
+		if err != nil {
+			t.Fatalf("ParseSERP: %v", err)
+		}
+		if want := "/search?q=x&start=10&sa=N"; s.NextPage != want {
+			t.Errorf("a page whose next control reads %q offers %q, want %q", word, s.NextPage, want)
+		}
+	}
+}
