@@ -595,6 +595,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	cfg.Spec.VDNSMode = prof.VDNSMode
 	cfg.Spec.JSSolver = prof.Solver
 	cfg.Spec.EnableHTTP3 = prof.HTTP3
+	cfg.Spec.AllowMITMUpstream = prof.AllowMITM
 	cfg.Spec.FirstHop = hop
 	cfg.MaxPerUpstream = prof.ThreadsPerUpstream
 	// What the ports of this job are made of: every browser and system this
@@ -620,6 +621,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 		one.VDNSMode = prof.VDNSMode
 		one.JSSolver = prof.Solver
 		one.EnableHTTP3 = prof.HTTP3
+		one.AllowMITMUpstream = prof.AllowMITM
 		one.FirstHop = hop
 	}
 	cfg.Trace = o.tracer()

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -272,4 +273,64 @@ func TestProxies_DrawsTheGatewaysOnAFormThatIsNotOnThem(t *testing.T) {
 	if !strings.Contains(page, `data-source="gateways" hidden`) {
 		t.Error("the gateways are drawn on a profile read from an address without being put away")
 	}
+}
+
+func TestProfile_OffersToWorkThroughExitsThatTerminateTLSFromTheStart(t *testing.T) {
+	// The setting that made a working list look dead. Ten of fifteen addresses
+	// the service itself could reach answered a port with a refusal, because
+	// the exit presents its own certificate and the port would not have it —
+	// and the service's own check never saw it, because that check does not
+	// look at the certificate at all. So the box a reader is shown for a fresh
+	// profile is already ticked: one who has to find a switch to make their
+	// list work is one who concludes the list is bad.
+	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+
+	body := getBody(t, s, proxiesAt+"?"+profileField+"=new")
+	if !strings.Contains(body, `name="allow_mitm" type="checkbox" value="1" checked`) {
+		t.Error("a fresh profile is offered with exits that terminate TLS refused")
+	}
+	// The other switch the same blank form was getting wrong. A profile made on
+	// this screen came out with the challenge solver off, which is the one
+	// setting a search cannot do without, and the screen said nothing.
+	if !strings.Contains(body, `name="js_solver" type="checkbox" value="1" checked`) {
+		t.Error("a fresh profile is offered with the challenge solver switched off")
+	}
+}
+
+func TestSaveProxies_KeepsTheAnswerAboutExitsThatTerminateTLS(t *testing.T) {
+	// And it is a switch rather than a rule: a reader who turns it off gets it
+	// off, and a form that quietly put it back would be a setting nobody can
+	// change.
+	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	postForm(t, s, proxiesAt, url.Values{
+		"profile": {"0"}, "profile_name": {"datacentre"},
+		"source": {"url"}, "source_at": {"https://example.test/list"},
+		"allow_mitm": {"1"},
+	})
+	made := profileNamed(t, s, "datacentre")
+
+	postForm(t, s, proxiesAt, url.Values{
+		"profile": {strconv.FormatInt(made.ID, 10)}, "profile_name": {"datacentre"},
+		"source": {"url"}, "source_at": {"https://example.test/list"},
+	})
+
+	if again := profileNamed(t, s, "datacentre"); again.AllowMITM {
+		t.Error("the switch was left on although the form that saved it had it off")
+	}
+}
+
+// profileNamed is the stored profile with this name.
+func profileNamed(t *testing.T, s *Server, name string) store.Profile {
+	t.Helper()
+	all, err := s.store.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	for _, one := range all {
+		if one.Name == name {
+			return one
+		}
+	}
+	t.Fatalf("no profile named %q among %d", name, len(all))
+	return store.Profile{}
 }

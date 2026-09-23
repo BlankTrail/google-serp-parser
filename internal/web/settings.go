@@ -42,7 +42,10 @@ const (
 	vdnsOnField = "vdns"
 	vdnsField   = "vdns_mode"
 	solverField = "js_solver"
-	http3Field  = "http3"
+	// mitmField is the switch that lets a profile's ports work through an exit
+	// which terminates TLS itself.
+	mitmField  = "allow_mitm"
+	http3Field = "http3"
 	// The road a list's ports take to their addresses: which kind of first hop,
 	// and the proxy or the gateway it is.
 	firstHopField   = "first_hop"

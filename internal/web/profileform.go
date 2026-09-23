@@ -53,7 +53,10 @@ type profileForm struct {
 	VDNSOn bool
 	VDNS   string
 	Solver bool
-	HTTP3  bool
+	// AllowMITM lets this profile's ports work through an exit that terminates
+	// TLS itself. On by default; see store.Profile.
+	AllowMITM bool
+	HTTP3     bool
 
 	// The road the ports take to their addresses: HopKind is none, a SOCKS5
 	// proxy or one of the service's gateways, and HopProxy and HopGateway are
@@ -96,6 +99,7 @@ func profileShowing(p store.Profile) profileForm {
 		VDNSOn:      p.VDNSMode != blanktrail.VDNSOff,
 		VDNS:        vdnsModeOr(p.VDNSMode),
 		Solver:      p.Solver,
+		AllowMITM:   p.AllowMITM,
 		HTTP3:       p.HTTP3,
 	}.withHop(p.FirstHop)
 }
@@ -131,10 +135,11 @@ func profileFrom(r former) profileForm {
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
 		// These three are on the form whenever it is shown, so a box that sent
 		// nothing is a box somebody unticked rather than one that was not there.
-		VDNSOn: r.FormValue(vdnsOnField) != "",
-		VDNS:   strings.TrimSpace(r.FormValue(vdnsField)),
-		Solver: r.FormValue(solverField) != "",
-		HTTP3:  r.FormValue(http3Field) != "",
+		VDNSOn:    r.FormValue(vdnsOnField) != "",
+		VDNS:      strings.TrimSpace(r.FormValue(vdnsField)),
+		Solver:    r.FormValue(solverField) != "",
+		AllowMITM: r.FormValue(mitmField) != "",
+		HTTP3:     r.FormValue(http3Field) != "",
 
 		HopKind:    strings.TrimSpace(r.FormValue(firstHopField)),
 		HopProxy:   strings.TrimSpace(r.FormValue(hopProxyField)),
@@ -157,7 +162,7 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 		b.complaints = append(b.complaints, "proxies.profile.needs.name")
 	}
 	next.Protocol = blanktrail.ProtocolOr(f.Wire)
-	next.Solver, next.HTTP3 = f.Solver, f.HTTP3
+	next.Solver, next.HTTP3, next.AllowMITM = f.Solver, f.HTTP3, f.AllowMITM
 	// The switch wins over the list. A reader who turned vDNS off did not also
 	// say which way it should be on, and the list under the switch still holds
 	// whatever it was showing when they turned it off.

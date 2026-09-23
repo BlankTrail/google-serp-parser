@@ -524,8 +524,14 @@ func (s *Server) profileShown(r *http.Request) ([]store.Profile, store.Profile, 
 	// "new" rather than a number is the empty form: a profile being made has no
 	// id to name it by, and nought would be indistinguishable from the address
 	// having said nothing at all.
+	//
+	// What it is filled from is a profile as it ships rather than a blank one,
+	// and the difference is two switches whose useful answer is yes. A blank
+	// struct drew them off while the save started from the shipped defaults, so
+	// the two disagreed and the form won: every profile made on this screen came
+	// out with the challenge solver switched off, and nothing said so.
 	if strings.TrimSpace(r.URL.Query().Get(profileField)) == "new" {
-		return all, store.Profile{}, nil
+		return all, newProfile(), nil
 	}
 	want, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get(profileField)), 10, 64)
 	for _, p := range all {

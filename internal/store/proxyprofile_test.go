@@ -391,3 +391,29 @@ func TestProfile_IsEmptyWhenItNamesNoWayOut(t *testing.T) {
 		}
 	}
 }
+
+func TestProfiles_WorkThroughExitsThatTerminateTLSAfterAnUpgrade(t *testing.T) {
+	// Every profile written before this column existed gets it on, and that is
+	// the whole point of the column's default: the setting is what made a
+	// working list look dead, so a machine upgrading into this build should not
+	// have to be told to go and tick something.
+	s := testStore(t)
+	if _, err := s.db.ExecContext(t.Context(),
+		`INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
+		        threads_per_upstream, protocol, gateways, is_default, vdns_mode,
+		        js_solver, http3, first_hop)
+		 VALUES('from before', 'url', 'https://example.test/list', 0, 0, 1, 'socks5', '', 0, '', 1, 0, '')`,
+	); err != nil {
+		t.Fatalf("writing a profile the way an older build did: %v", err)
+	}
+
+	all, err := s.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	for _, one := range all {
+		if one.Name == "from before" && !one.AllowMITM {
+			t.Error("a profile written before the column reads as refusing exits that terminate TLS")
+		}
+	}
+}

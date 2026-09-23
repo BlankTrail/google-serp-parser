@@ -1,0 +1,16 @@
+-- Whether a profile's ports may work through an exit that terminates TLS
+-- itself and presents a certificate of its own.
+--
+-- On by default, existing profiles included, because off is what made the list
+-- look broken. Measured on the live wingate list: with a Chrome profile the
+-- port answered 526 — the upstream substitutes the origin's TLS — on ten of
+-- fifteen addresses the service's own check reached, and with this on the same
+-- address answered 204 in under three seconds. The check never saw it because
+-- it does not verify the certificate at all, which is why the two disagreed
+-- for a night.
+--
+-- It is a deliberate trade and the same one whoever chose the list already
+-- made: an exit that terminates TLS can read what it carries. What travels
+-- through is a search on a public engine, carried by an identity that exists
+-- to be spent — no login, no cookie of anybody's but the program's own.
+ALTER TABLE proxy_profiles ADD COLUMN allow_mitm INTEGER NOT NULL DEFAULT 1;
