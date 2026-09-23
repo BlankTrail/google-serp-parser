@@ -115,6 +115,19 @@ type SERP struct {
 	MaxOffset     int
 	HasPagination bool
 
+	// NextPage is where the page itself says the next one is: the address under
+	// the bar's "next" control, exactly as the page carries it, and empty where
+	// the page offers none — the last page of a query, or a layout with no bar.
+	//
+	// It is what a walk asks for rather than an address built from an offset.
+	// Measured on a live page: that link carries ei, sca_esv, sa, sstk and ved
+	// besides the offset, and those are issued to the session that was shown
+	// this page. Rebuilding the address drops them and asks as a stranger.
+	//
+	// ParseSERP leaves it as the page wrote it, which is origin-relative;
+	// Session.Search joins it to where the answer landed, as it does Origin.
+	NextPage string
+
 	// TotalResults is Google's own estimate and HasTotal says whether it was
 	// read. Neither is populated yet: nothing here reads #result-stats. So
 	// HasTotal false currently means "this library did not look", not "Google

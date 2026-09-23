@@ -47,6 +47,7 @@ func ParseSERP(query string, body []byte) (SERP, error) {
 	s.Ads = parseAds(doc)
 	s.Related = parseRelated(doc)
 	s.MaxOffset, s.HasPagination = parsePagination(doc)
+	s.NextPage = parseNextPage(doc)
 	return s, nil
 }
 
@@ -84,6 +85,27 @@ func parsePagination(doc *goquery.Document) (maxOffset int, found bool) {
 		}
 	})
 	return maxOffset, found
+}
+
+// parseNextPage reads the address of the page after this one, as the page
+// carries it.
+//
+// It is the bar's own "next" control, which Google marks with id="pnnext" —
+// measured on a live page, where it stands at the end of the bar carrying the
+// offset and the session's tags. A page without it is a page offering nothing
+// further: the last of a query links back and not on, and that absence is what
+// ends a walk.
+//
+// The other links in the bar are not read for this. They are the pages around
+// this one in both directions, and picking one of them would need this parser
+// to know which page it is looking at — which it does not, being handed a body
+// and no address.
+func parseNextPage(doc *goquery.Document) string {
+	href, ok := doc.Find("[role=navigation] a#pnnext").First().Attr("href")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(href)
 }
 
 // parseOrganic reads the organic results in page order.

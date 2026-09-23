@@ -427,3 +427,47 @@ func TestParseSERP_RelatedExcludesPaginationAndReadsThePhraseFromQ(t *testing.T)
 		}
 	}
 }
+
+func TestParseSERP_KeepsTheAddressOfTheNextPageAsThePageCarriesIt(t *testing.T) {
+	// Measured on a live page of a real query: the bar's own page links carry
+	// ei, sca_esv, gl, hl and start, and the one to the page after this one
+	// carries sa, sstk and ved besides, under id="pnnext". Those tags are
+	// issued to the session that was shown this page. A walk that rebuilt the
+	// address out of the offset alone would drop every one of them and ask for
+	// the next page as a stranger, which is what this field exists to stop.
+	const next = `/search?q=x&amp;newwindow=1&amp;sca_esv=2f89caf2&amp;gl=ru&amp;hl=ru&amp;ei=E1&amp;` +
+		`start=10&amp;sa=N&amp;sstk=AS6-VmL&amp;ved=2ahUKEwj`
+	s, err := ParseSERP("x", withNavigation(
+		`<a href="/search?q=x&amp;ei=E1&amp;start=10">2</a>`+
+			`<a href="`+next+`" id="pnnext">Следующая</a>`))
+	if err != nil {
+		t.Fatalf("ParseSERP: %v", err)
+	}
+	want := "/search?q=x&newwindow=1&sca_esv=2f89caf2&gl=ru&hl=ru&ei=E1&start=10&sa=N&sstk=AS6-VmL&ved=2ahUKEwj"
+	if s.NextPage != want {
+		t.Errorf("the next page is at %q, want the address the page carries: %q", s.NextPage, want)
+	}
+}
+
+func TestParseSERP_APageThatOffersNoNextOneSaysSo(t *testing.T) {
+	// The last page links back and not on, and a page with no bar at all says
+	// nothing either way. Both are the end of a walk: there is no address to
+	// ask for, and this parser invents none.
+	last, err := ParseSERP("x", withNavigation(
+		`<a href="/search?q=x&amp;start=0">1</a><a href="/search?q=x&amp;start=10">2</a>`))
+	if err != nil {
+		t.Fatalf("ParseSERP: %v", err)
+	}
+	if last.NextPage != "" {
+		t.Errorf("the last page offers %q as its next one", last.NextPage)
+	}
+	bare, err := ParseSERP("x", []byte(`<!doctype html><html><body><div id="rso">`+
+		`<div data-snc="r0"><a href="https://example.com/a" data-ved="x"><h3>A result</h3></a></div>`+
+		`</div></body></html>`))
+	if err != nil {
+		t.Fatalf("ParseSERP: %v", err)
+	}
+	if bare.NextPage != "" {
+		t.Errorf("a page with no bar offers %q as its next one", bare.NextPage)
+	}
+}
