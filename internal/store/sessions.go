@@ -191,6 +191,20 @@ func (s *Store) SessionFailed(ctx context.Context, id int64, at time.Time) (bool
 	return dropped, nil
 }
 
+// DropSession gives one session up by id, whatever its count of refusals.
+//
+// It is for a session the caller knows is dead rather than one that has failed
+// often enough to be: a walk whose deeper pages are addressed to an exit the
+// session no longer has cannot go on, and the session would only spend ports on
+// requests that can only fail. A session that is already gone is not an error —
+// two threads may reach the same verdict.
+func (s *Store) DropSession(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("store: giving up session %d: %w", id, err)
+	}
+	return nil
+}
+
 // DropStaleSessions gives up every session last used before the given moment,
 // and says how many.
 func (s *Store) DropStaleSessions(ctx context.Context, before time.Time) (int, error) {

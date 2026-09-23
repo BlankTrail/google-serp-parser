@@ -64,6 +64,14 @@ func (m *Memory) SessionAnswered(_ context.Context, id int64, a store.Answer, at
 	return nil
 }
 
+// DropSession gives one session up by id, as the history does.
+func (m *Memory) DropSession(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, id)
+	return nil
+}
+
 // SessionFailed counts a refusal and gives the session up at the second in a
 // row, and says whether it did.
 func (m *Memory) SessionFailed(_ context.Context, id int64, at time.Time) (bool, error) {

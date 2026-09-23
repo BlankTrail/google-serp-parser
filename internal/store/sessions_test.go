@@ -195,3 +195,34 @@ func onlySession(t *testing.T, s *Store) Session {
 	}
 	return got[0]
 }
+
+func TestDropSession_GivesOneUpWhateverItsCountOfRefusals(t *testing.T) {
+	// A session whose walk cannot go on is dead now rather than after two more
+	// refusals: its deeper pages are addressed to an exit it no longer has, and
+	// every port it were handed would be spent on a request that can only fail.
+	s := testStore(t)
+	ctx := context.Background()
+	id, err := s.NewSession(ctx, Session{Profile: "Chrome_153_win", Device: "desktop"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	other, err := s.NewSession(ctx, Session{Profile: "Chrome_153_win", Device: "desktop"})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := s.DropSession(ctx, id); err != nil {
+		t.Fatalf("DropSession: %v", err)
+	}
+	all, err := s.Sessions(ctx, "desktop", time.Time{})
+	if err != nil {
+		t.Fatalf("Sessions: %v", err)
+	}
+	if len(all) != 1 || all[0].ID != other {
+		t.Errorf("the history holds %d sessions, want the one that was not given up", len(all))
+	}
+	// Two threads may reach the same verdict about one session, and the second
+	// of them is not an error.
+	if err := s.DropSession(ctx, id); err != nil {
+		t.Errorf("giving up a session that is already gone: %v", err)
+	}
+}
