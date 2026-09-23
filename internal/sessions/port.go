@@ -10,6 +10,20 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
+// DefaultRest and DefaultRestUpTo are the span a session rests when nobody has
+// said otherwise: a minute to two, as the operator set it.
+//
+// They live here rather than at each of the doors a job comes in by, because a
+// job set up in the browser and the same job from the command line have to cost
+// the same. What the number is about is a session, which is what this package
+// holds: a session is a person reading results, and a minute to two between two
+// of their pages is what one looks like. Nothing is bought by hurrying it —
+// the thread does not wait through the rest, it works another session.
+const (
+	DefaultRest     = time.Minute
+	DefaultRestUpTo = 2 * time.Minute
+)
+
 // Want is what a caller asks a session to be.
 type Want struct {
 	// Device is the kind of result page: "desktop" or "mobile". A phone's

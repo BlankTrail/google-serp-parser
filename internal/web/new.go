@@ -11,6 +11,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -95,16 +96,17 @@ type jobForm struct {
 // defaultCooldown and defaultRestUpTo are the two ends of the rest the form
 // offers between two requests on one session, in seconds.
 //
-// Sixty to a hundred and twenty, as the operator set it. The earlier number was
-// five, measured on the arrangement that came before: an identity asked every
-// two seconds answered twelve requests before Google challenged it, and one
-// asked every five answered around forty. What that measured was a port asked
-// again and again with nothing else to do; a session is a person reading
-// results, and a minute to two between two pages is what one looks like. The
-// waiting costs nothing now — the thread works another session through it.
-const (
-	defaultCooldown = 60
-	defaultRestUpTo = 120
+// Sixty to a hundred and twenty, as the operator set it, and spelled from the
+// sessions' own numbers so the box a reader sees and the span a session rests
+// cannot drift apart. The earlier number was five, measured on the arrangement
+// that came before: an identity asked every two seconds answered twelve
+// requests before Google challenged it, and one asked every five answered
+// around forty. What that measured was a port asked again and again with
+// nothing else to do; a session is a person reading results, and the waiting
+// costs nothing now — the thread works another session through it.
+var (
+	defaultCooldown = int(sessions.DefaultRest / time.Second)
+	defaultRestUpTo = int(sessions.DefaultRestUpTo / time.Second)
 )
 
 // portsPerThread is how many ports a job is run on for each of its threads.

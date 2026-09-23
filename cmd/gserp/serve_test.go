@@ -1675,7 +1675,7 @@ func TestDial_RaisesAPoolOfSessionsForTheProgramsKeeper(t *testing.T) {
 	opts.Keeper = sessions.NewKeeper(sessions.NewMemory())
 	saved, _ := opts.saved(io.Discard)
 	want := web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop,
-		Worn: blanktrail.Worn{Browser: "chrome", Release: 153},
+		Worn:     blanktrail.Worn{Browser: "chrome", Release: 153},
 		Cooldown: 7 * time.Second, RestUpTo: 11 * time.Second}
 
 	got, err := opts.dial(t.Context(), saved, want)

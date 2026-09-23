@@ -61,6 +61,11 @@ type runOptions struct {
 	Name     string
 	Resume   bool
 	DryRun   bool
+	// Rest and RestUpTo are the two ends of the span a session rests between two
+	// of its requests. Each session draws its own rest between them afresh at
+	// every use, so a pool of them is not asked again on a metronome.
+	Rest     time.Duration
+	RestUpTo time.Duration
 }
 
 // runFlags declares the flags. It is separate from the parsing so the help text
@@ -79,6 +84,10 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	fs.StringVar(&opts.Language, "language", "", "language code, e.g. de")
 	fs.StringVar(&opts.Name, "name", "", "name to file the job under (default: the query list's file name)")
 	fs.BoolVar(&opts.Resume, "resume", false, "take up the last unfinished job of this name instead of starting one")
+	fs.DurationVar(&opts.Rest, "rest", sessions.DefaultRest,
+		"the least a session rests between two of its requests")
+	fs.DurationVar(&opts.RestUpTo, "rest-up-to", sessions.DefaultRestUpTo,
+		"the most a session rests between two of its requests")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "print the estimate and send nothing")
 	return fs
 }
@@ -221,24 +230,34 @@ func poolConfig(threads, ports int, wholePool bool) blanktrail.PoolConfig {
 	}
 }
 
-// settledCooldown is the gap the pool will keep between two requests on one
-// port.
+// restingWant is what a run asks of the sessions it works through: the kind of
+// result page the job is for, and both ends of the span they rest between two
+// requests, as the command was told them.
 //
-// The estimate is printed before the ports are opened, and on a dry run they
-// are never opened at all, so the number cannot be read off a pool and has to
-// be arrived at the same way the pool arrives at it: a named gap stands, a
-// described pause is what the gap is derived from, and a caller who said
-// neither gets the documented default. Arrived at any other way, the estimate
-// paces a job nobody is going to run.
-func settledCooldown(cfg blanktrail.PoolConfig) time.Duration {
-	switch {
-	case cfg.Cooldown > 0:
-		return cfg.Cooldown
-	case cfg.DelayMin > 0 || cfg.DelayMax > 0:
-		return blanktrail.DeriveCooldown(cfg.PortsPerThread, cfg.DelayMin, cfg.DelayMax)
-	default:
-		return blanktrail.DefaultCooldown
+// A job that named no kind of page is a desktop one, which is what every job
+// this program ran before there was a choice ran on.
+func restingWant(device string, opts runOptions) sessions.Want {
+	if device == "" {
+		device = blanktrail.DeviceDesktop
 	}
+	return sessions.Want{Device: device, Pause: opts.Rest, UpTo: opts.RestUpTo}
+}
+
+// restedAt is the gap between two requests on one identity that the estimate is
+// paced by: the middle of the span the sessions rest, because that is what a
+// run of sessions is actually paced by. Half the requests wait less than it and
+// half wait more, so the middle is the number a whole job averages out to.
+//
+// A far end at or below the near one is read as a near end named alone — that
+// end and half again — which is the keeper's own reading of the same pair. The
+// two must not drift: an estimate arrived at differently from the rest the
+// sessions will actually take quotes a job nobody is going to run.
+func restedAt(opts runOptions) time.Duration {
+	from, to := opts.Rest, opts.RestUpTo
+	if to <= from {
+		to = from + from/2
+	}
+	return (from + to) / 2
 }
 
 // plan is the work a run is about to do, whether it was just read from a list
@@ -317,7 +336,7 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 	// leaving them to be assumed equal to the ports quotes half the time for the
 	// four threads over eight ports the live runs were measured at.
 	printEstimate(out, p.spec.Name, run.EstimateWith(job, cfg.Size(), opts.Threads,
-		settledCooldown(cfg), run.MeasuredPace))
+		restedAt(opts), run.MeasuredPace))
 	if opts.DryRun {
 		return nil
 	}
@@ -342,11 +361,7 @@ func runJob(ctx context.Context, out io.Writer, opts runOptions) error {
 	// later — or the server on the same history — finds them.
 	keeper := sessions.NewKeeper(st)
 	cfg.Sessions, cfg.Choose = true, keeper.Choose
-	device := p.spec.Device
-	if device == "" {
-		device = blanktrail.DeviceDesktop
-	}
-	want := sessions.Want{Device: device, Pause: settledCooldown(cfg)}
+	want := restingWant(p.spec.Device, opts)
 	runErr := work(ctx, out, cfg, job, opts.Threads, storeSink{st: st, jobID: p.id}, keeper, want)
 	return finish(ctx, out, st, p, opts, runErr)
 }

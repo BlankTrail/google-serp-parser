@@ -109,6 +109,11 @@ Run flags:
   --resume                    take up the last unfinished job of this name
                               instead of starting one; it runs at the depth and
                               in the country it was created with
+  --rest duration             the least a session rests between two of its
+                              requests (default 1m0s)
+  --rest-up-to duration       the most it rests; each rest is drawn between the
+                              two, so no session is asked again on a metronome
+                              (default 2m0s)
   --dry-run                   print the estimate and send nothing
 
 Serve flags:
