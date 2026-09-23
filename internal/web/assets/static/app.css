@@ -459,6 +459,16 @@ h2 {
 	gap: 0.5rem;
 }
 
+/* The presses that end a form stand off from the last thing above them by the
+   gap the form's own rows are set out with. Flush against a fieldset, the save
+   button reads as part of the box above it rather than as the end of the form
+   — and the eye finds it late, because nothing separates it from the settings
+   it applies. A group of buttons that is not a form's own ending keeps its
+   place: those follow a sentence or a table, which bring their own room. */
+form > .actions {
+	margin-top: 0.85rem;
+}
+
 button {
 	background: var(--surface);
 	border: var(--hairline-width) solid var(--hairline);
