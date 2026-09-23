@@ -10,7 +10,6 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
-	"github.com/blanktrail/google-serp-parser/internal/sessions"
 )
 
 // A thread's round: several queries in the air at once, each on an identity of
@@ -61,9 +60,6 @@ type flight struct {
 	ready time.Time
 	began time.Time
 	err   error
-	// held is the session the walk is carried by, in a run that keeps
-	// sessions. It is taken with the port and let go of with it.
-	held *sessions.Held
 }
 
 // crew is what a thread needs to work a round. It is a value rather than a
@@ -96,6 +92,11 @@ type crew struct {
 }
 
 // work takes queries off the queue and walks them until there are none left.
+//
+// This is the arrangement in which a port is the identity: the walk stays on the
+// thread, and the thread holds an identity per query in the air. A run that
+// keeps its own sessions walks the other way — see carry, where the walk belongs
+// to the session and the thread holds nothing between two pages.
 func (c *crew) work(ctx context.Context) {
 	var flying []*flight
 	pending := -1 // a query taken off the queue with no identity yet
@@ -115,18 +116,18 @@ func (c *crew) work(ctx context.Context) {
 			if f.lease != nil {
 				continue
 			}
-			lease, held, err := c.hold(ctx, false)
+			lease, err := c.hold(ctx, false)
 			if err != nil {
 				break
 			}
-			f.lease, f.held = lease, held
+			f.lease = lease
 		}
 		if pending >= 0 {
-			lease, held, err := c.hold(ctx, len(flying) == 0)
+			lease, err := c.hold(ctx, len(flying) == 0)
 			switch {
 			case err == nil:
 				flying = append(flying, &flight{at: pending, q: c.j.Queries[pending],
-					lease: lease, held: held, next: 1, began: time.Now()})
+					lease: lease, next: 1, began: time.Now()})
 				c.results[pending].Attempted = true
 				pending = -1
 				continue
@@ -222,7 +223,7 @@ func (c *crew) step(ctx context.Context, f *flight) bool {
 	q.Page = f.next
 
 	asked := time.Now()
-	serp, err := boundSearcher{attempt: c.a, lease: f.lease, held: f.held}.Search(ctx, q)
+	serp, err := boundSearcher{attempt: c.a, lease: f.lease}.Search(ctx, q)
 	c.r.step(c.thread, StageAsk, asked, text, err)
 
 	if err != nil {
@@ -230,13 +231,7 @@ func (c *crew) step(ctx context.Context, f *flight) bool {
 			f.err = err
 			return true
 		}
-		if f.held != nil {
-			// Only a refusal Google judged is the session's, and the check on
-			// an address is the address's; a request that never reached Google
-			// puts the session back as it was.
-			letGoAfter(ctx, f.held, f.lease, err)
-			f.held = nil
-		} else if _, judged := google.ClassOf(err); judged {
+		if _, judged := google.ClassOf(err); judged {
 			// Only an answer that was read and judged counts as a refusal. A
 			// request that never completed was already accounted for by the
 			// pool.
@@ -257,12 +252,7 @@ func (c *crew) step(ctx context.Context, f *flight) bool {
 
 	// This identity has brought back a page, which is what makes it warm: the
 	// next request through it costs seconds where the first cost minutes.
-	if f.held != nil {
-		// Written down page by page: a run can end between two pages.
-		_ = f.held.Save(ctx, leasePort{f.lease})
-	} else {
-		f.lease.Answered()
-	}
+	f.lease.Answered()
 	// And it owes the pause before it is asked again. That is where the pause
 	// belongs: between two requests on one identity, which on a walk of a
 	// hundred pages is ninety-nine places it never used to be.
@@ -294,39 +284,17 @@ func (c *crew) triesAllowed() int {
 	return defaultTries
 }
 
-// hold takes an identity — a port, and in a run that keeps sessions a session
-// put on it — queueing for the port only when the caller says it has nothing
-// else to do.
-func (c *crew) hold(ctx context.Context, wait bool) (*blanktrail.Lease, *sessions.Held, error) {
-	var lease *blanktrail.Lease
-	var err error
+// hold takes an identity — a port — queueing for one only when the caller says
+// it has nothing else to do.
+func (c *crew) hold(ctx context.Context, wait bool) (*blanktrail.Lease, error) {
 	switch {
 	case wait:
-		lease, err = c.a.lease(ctx)
+		return c.a.lease(ctx)
 	case c.a.SpecName == "":
-		lease, err = c.r.Pool.TryAcquire(ctx)
+		return c.r.Pool.TryAcquire(ctx)
 	default:
-		lease, err = c.r.Pool.TryAcquireSpec(ctx, c.a.SpecName)
+		return c.r.Pool.TryAcquireSpec(ctx, c.a.SpecName)
 	}
-	if err != nil || c.a.Keeper == nil {
-		return lease, nil, err
-	}
-	// Every address working as many sessions as it may is answered like a pool
-	// with nothing free: the thread works what it holds and looks again. A
-	// port the service lost to a restart is opened again before it is handed
-	// out next; a service that is away is waited for, not asked in a loop.
-	held, err := c.a.Keeper.Take(ctx, leasePort{lease}, c.a.Want)
-	if err != nil {
-		if blanktrail.PortLost(err) {
-			lease.Reopen()
-		}
-		lease.Release()
-		if blanktrail.Unreachable(err) {
-			_ = c.r.Pool.Sleep(ctx, serviceAwayWait)
-		}
-		return nil, nil, err
-	}
-	return lease, held, nil
 }
 
 // rest waits until the earliest identity comes due, or a short moment when
@@ -354,17 +322,8 @@ func (c *crew) rest(ctx context.Context, due *flight) {
 // not asking the pool a thousand times a second between them.
 const waitingForAnIdentity = 25 * time.Millisecond
 
-// letGoOf gives one flight's port back, and its session with it.
-//
-// The session is only given back. Every page the walk took was written down as
-// it came — the empty one that ended it included — and a refusal was recorded
-// where it happened, so by the time a walk lets go there is nothing left to
-// write.
+// letGoOf gives one flight's port back.
 func (c *crew) letGoOf(f *flight) {
-	if f.held != nil {
-		f.held.PutBack()
-		f.held = nil
-	}
 	if f.lease == nil {
 		return
 	}
