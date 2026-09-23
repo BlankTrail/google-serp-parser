@@ -597,7 +597,6 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	cfg.Spec.EnableHTTP3 = prof.HTTP3
 	cfg.Spec.FirstHop = hop
 	cfg.MaxPerUpstream = prof.ThreadsPerUpstream
-	cfg.RenewAfterInterval = prof.RenewEvery
 	// What the ports of this job are made of: every browser and system this
 	// program knows, at the newest ten releases of each the service holds,
 	// narrowed by whatever of the three the job named.
@@ -852,9 +851,9 @@ const firstProfileName = "Default"
 // A machine that has been running since before profiles existed keeps its list,
 // its ban and its gateways in that file, so those are what the first profile is
 // made of. A machine with no settings file at all — a fresh install — gets one
-// made of the program's own defaults instead of one made of zeroes: nought ban
-// and nought renewal are real answers that mean never, and a fresh install
-// that quietly chose them would be a fresh install nobody set up that way.
+// made of the program's own defaults instead of one made of zeroes: a nought
+// ban is a real answer that means never, and a fresh install that quietly chose
+// it would be a fresh install nobody set up that way.
 func theFirstProfile(saved settings.Settings, hadSettings bool) store.Profile {
 	if !hadSettings {
 		saved = settings.Defaults()
@@ -868,7 +867,6 @@ func theFirstProfile(saved settings.Settings, hadSettings bool) store.Profile {
 		Refresh:            saved.Proxy.Refresh,
 		Ban:                saved.Proxy.Ban,
 		ThreadsPerUpstream: saved.ThreadsPerUpstream,
-		RenewEvery:         saved.RenewEvery,
 		Protocol:           saved.PortProtocol,
 		Gateways:           saved.Proxy.Gateways,
 		Default:            true,

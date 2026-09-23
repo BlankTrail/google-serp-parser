@@ -1321,31 +1321,6 @@ func TestLockFor_AsksForNothingWhileTheInterfaceIsOnThisMachine(t *testing.T) {
 	}
 }
 
-func TestDial_CarriesHowOftenAPortChangesIdentityIntoThePool(t *testing.T) {
-	// The setting is worth nothing until it reaches the pool, and this is the
-	// one place the two are joined. A pool built without it holds every identity
-	// for as long as the job runs — which on a dozen gateways is a dozen
-	// identities an origin comes to know.
-	//
-	// It is the profile's setting now, not the settings file's: the connection
-	// says where BlankTrail is and the profile says how its ports are used.
-	fake := fakebt.New(t)
-	fake.SetCA(testCAPEM)
-	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
-	saved, _ := opts.saved(io.Discard)
-
-	prof := store.Profile{RenewEvery: 10 * time.Minute}
-	pool, err := opts.dial(t.Context(), saved, web.Wanted{Profile: prof, Threads: 1, Ports: 2, Device: blanktrail.DeviceDesktop})
-	if err != nil {
-		t.Fatalf("opening the identities: %v", err)
-	}
-	t.Cleanup(func() { _ = pool.Search.Close() })
-
-	if got := pool.Search.RenewEvery(); got != 10*time.Minute {
-		t.Errorf("the pool changes identity every %v, want the ten minutes that were saved", got)
-	}
-}
-
 func TestTheFirstProfile_CarriesTheSettingsFileAndFallsBackToTheDefaults(t *testing.T) {
 	// The first profile is what every job runs through until somebody makes
 	// another, so where it comes from decides what a machine does the day it is
@@ -1354,7 +1329,6 @@ func TestTheFirstProfile_CarriesTheSettingsFileAndFallsBackToTheDefaults(t *test
 	// this program changing their exits without saying so.
 	set := settings.Settings{
 		ThreadsPerUpstream: 3,
-		RenewEvery:         10 * time.Minute,
 		PortProtocol:       "http",
 		Proxy: settings.ProxySource{
 			Kind: settings.ProxyGateways, Location: "ignored for gateways",
@@ -1368,21 +1342,19 @@ func TestTheFirstProfile_CarriesTheSettingsFileAndFallsBackToTheDefaults(t *test
 			got.Name, got.Default, firstProfileName)
 	}
 	if got.Kind != settings.ProxyGateways || got.Refresh != 30*time.Minute ||
-		got.Ban != 20*time.Minute || got.ThreadsPerUpstream != 3 ||
-		got.RenewEvery != 10*time.Minute || got.Protocol != "http" {
+		got.Ban != 20*time.Minute || got.ThreadsPerUpstream != 3 || got.Protocol != "http" {
 		t.Errorf("carried %+v, want the settings it was handed", got)
 	}
 	if len(got.Gateways) != 2 || got.Gateways[0] != "nl-one" {
 		t.Errorf("the ticked gateways came over as %q, want both in order", got.Gateways)
 	}
 
-	// And from the program's own defaults when there is no file. Nought ban and
-	// nought renewal are real answers meaning "never", so a fresh install made
-	// of zeroes would be one nobody set up that way.
+	// And from the program's own defaults when there is no file. A nought ban is
+	// a real answer meaning "never", so a fresh install made of zeroes would be
+	// one nobody set up that way.
 	fresh := theFirstProfile(settings.Settings{}, false)
-	if fresh.Ban != settings.DefaultBan || fresh.RenewEvery != settings.DefaultRenew {
-		t.Errorf("a fresh install starts on ban=%v renew=%v, want %v and %v",
-			fresh.Ban, fresh.RenewEvery, settings.DefaultBan, settings.DefaultRenew)
+	if fresh.Ban != settings.DefaultBan {
+		t.Errorf("a fresh install starts on ban=%v, want %v", fresh.Ban, settings.DefaultBan)
 	}
 	if !fresh.Default {
 		t.Error("the profile a fresh install starts with is not the default one")

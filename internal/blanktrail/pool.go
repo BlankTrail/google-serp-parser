@@ -261,9 +261,6 @@ type PoolConfig struct {
 	// RenewAfterRequests renews a port's whole identity — fingerprint, egress IP
 	// and cookie jar — once it has served this many requests. Zero disables it.
 	RenewAfterRequests int
-	// RenewAfterInterval renews a port's identity once this much time has passed
-	// since the last renewal. Zero disables it.
-	RenewAfterInterval time.Duration
 	// MaxPortStrikes is how many times a port may spend its whole retry budget
 	// without getting a usable response before it is quarantined (default 3).
 	MaxPortStrikes int
@@ -426,7 +423,6 @@ type poolPort struct {
 	// another egress to come back on.
 	quarantinedAt time.Time
 	revivals      int
-	renewedAt     time.Time
 	// stay says the port keeps its address whatever it meets, for as long as
 	// the lease on it lasts: the session on it has answered through that
 	// address. See Lease.Stay.
@@ -839,14 +835,13 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 		}
 
 		pt := &poolPort{
-			num:       num,
-			ch:        ch,
-			eg:        eg,
-			specName:  specNames[i],
-			spec:      spec,
-			hot:       hot,
-			base:      newBaseTransport(host, num, spec.Protocol, p.cfg.CA, p.cfg.Insecure, p.cfg.NoKeepAlives),
-			renewedAt: p.cfg.Now(),
+			num:      num,
+			ch:       ch,
+			eg:       eg,
+			specName: specNames[i],
+			spec:     spec,
+			hot:      hot,
+			base:     newBaseTransport(host, num, spec.Protocol, p.cfg.CA, p.cfg.Insecure, p.cfg.NoKeepAlives),
 		}
 		// lastUsed stays zero so a fresh port is immediately available.
 		pt.client = &http.Client{
@@ -1499,14 +1494,6 @@ func (p *Pool) Cooldown() time.Duration {
 	defer p.mu.Unlock()
 	return p.cool
 }
-
-// RenewEvery is how often a port is opened again to change the identity it
-// wears, and nought when it never is.
-//
-// It is readable because it travels from a saved setting through the program to
-// here, and a caller that could not read it back could only trust that the trip
-// worked.
-func (p *Pool) RenewEvery() time.Duration { return p.cfg.RenewAfterInterval }
 
 // PaceAt sets the gap this pool keeps between two requests on one identity.
 //
@@ -2478,18 +2465,15 @@ func (p *Pool) reviveIfDue(ctx context.Context, pt *poolPort) error {
 // control API, and a jar carried across an IP change is exactly the
 // inconsistency an origin looks for.
 func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
-	now := p.cfg.Now()
-
 	pt.mu.Lock()
 	broken := pt.broken
 	repair := pt.repair
 	byCount := p.cfg.RenewAfterRequests > 0 && pt.requests >= p.cfg.RenewAfterRequests
-	byTime := p.cfg.RenewAfterInterval > 0 && now.Sub(pt.renewedAt) >= p.cfg.RenewAfterInterval
 	pt.mu.Unlock()
 
 	// A broken port was closed by an earlier renewal that could not finish. It
-	// has to be repaired before it can serve anything, whatever the triggers say.
-	if !broken && !byCount && !byTime {
+	// has to be repaired before it can serve anything, whatever the count says.
+	if !broken && !byCount {
 		return nil
 	}
 
@@ -2552,7 +2536,6 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	pt.failures = 0
 	pt.strikes = 0
 	pt.broken = false
-	pt.renewedAt = now
 	pt.session++
 	pt.answered = false
 	pt.repair = false

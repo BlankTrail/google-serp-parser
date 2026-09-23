@@ -1,0 +1,12 @@
+-- How often a port changed the identity it wore, on a timer.
+--
+-- It is gone, and with it the whole of that machinery. A port is a place now: a
+-- session carries the fingerprint, the cookies and the exit, and it is the
+-- session that is kept or given up. A timer that reopened the port underneath
+-- one threw away a warm identity somebody's run was in the middle of using, and
+-- nothing about a session's life is measured in minutes of wall clock.
+--
+-- The column is dropped rather than left to sit: read by nothing, it would go
+-- on being written by every save and read by the next person trying to work out
+-- what sets it.
+ALTER TABLE proxy_profiles DROP COLUMN renew_ms;

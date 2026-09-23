@@ -52,9 +52,6 @@ type Profile struct {
 	// ThreadsPerUpstream is how many identities may work through one exit at a
 	// time. Nought is one.
 	ThreadsPerUpstream int
-	// RenewEvery is how often a port is opened again to change the identity it
-	// wears. Nought never does.
-	RenewEvery time.Duration
 	// Protocol is how the ports themselves are reached: "socks5" or "http".
 	// Empty is socks5.
 	Protocol string
@@ -146,22 +143,21 @@ func (p Profile) Empty() bool {
 // column added to the table cannot be added to one query and forgotten in
 // another.
 const profileColumns = `id, name, kind, location, refresh_ms, ban_ms,
-	threads_per_upstream, renew_ms, protocol, gateways, is_default,
+	threads_per_upstream, protocol, gateways, is_default,
 	vdns_mode, js_solver, http3, first_hop`
 
 // scanProfile reads one row in the order profileColumns names.
 func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
 	var p Profile
-	var refreshMS, banMS, renewMS int64
+	var refreshMS, banMS int64
 	var gateways string
 	if err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.Location, &refreshMS, &banMS,
-		&p.ThreadsPerUpstream, &renewMS, &p.Protocol, &gateways, &p.Default,
+		&p.ThreadsPerUpstream, &p.Protocol, &gateways, &p.Default,
 		&p.VDNSMode, &p.Solver, &p.HTTP3, &p.FirstHop); err != nil {
 		return Profile{}, err
 	}
 	p.Refresh = time.Duration(refreshMS) * time.Millisecond
 	p.Ban = time.Duration(banMS) * time.Millisecond
-	p.RenewEvery = time.Duration(renewMS) * time.Millisecond
 	p.Gateways = gatewaysOf(gateways)
 	return p, nil
 }
@@ -294,12 +290,12 @@ func (s *Store) CreateProfile(ctx context.Context, p Profile) (int64, error) {
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
-			threads_per_upstream, renew_ms, protocol, gateways, is_default,
+			threads_per_upstream, protocol, gateways, is_default,
 			vdns_mode, js_solver, http3, first_hop)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
-		p.RenewEvery.Milliseconds(), p.Protocol, gatewayLines(p.Gateways), p.Default,
+		p.Protocol, gatewayLines(p.Gateways), p.Default,
 		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop))
 	if err != nil {
 		return 0, nameOr(err, "store: writing a proxy profile")
@@ -369,12 +365,12 @@ func (s *Store) SaveProfile(ctx context.Context, p Profile) error {
 	res, err := tx.ExecContext(ctx, `
 		UPDATE proxy_profiles
 		   SET name = ?, kind = ?, location = ?, refresh_ms = ?, ban_ms = ?,
-		       threads_per_upstream = ?, renew_ms = ?, protocol = ?, gateways = ?,
+		       threads_per_upstream = ?, protocol = ?, gateways = ?,
 		       is_default = ?, vdns_mode = ?, js_solver = ?, http3 = ?, first_hop = ?
 		 WHERE id = ?`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
-		p.RenewEvery.Milliseconds(), p.Protocol, gatewayLines(p.Gateways), p.Default,
+		p.Protocol, gatewayLines(p.Gateways), p.Default,
 		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.ID)
 	if err != nil {
 		return nameOr(err, fmt.Sprintf("store: saving proxy profile %d", p.ID))

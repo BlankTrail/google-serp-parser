@@ -34,7 +34,6 @@ const (
 	lanField     = "lan_access"
 	lanKeyField  = "lan_password"
 	perUpField   = "threads_per_upstream"
-	renewField   = "renew_minutes"
 	gatewayField = "gateway"
 	sourceField  = "source"
 	whereField   = "source_at"
@@ -73,10 +72,6 @@ const refreshUnit = time.Minute
 
 // banUnit is the unit the box for how long an address is banned is labelled in.
 const banUnit = time.Minute
-
-// renewUnit is the unit the box for how often a port changes identity is
-// labelled in, for the reason the other two are: nobody sets this in seconds.
-const renewUnit = time.Minute
 
 // reachedDomains are the hosts a job cannot work without, and what the check
 // asks about. They are named one by one rather than by wildcard because a
@@ -125,9 +120,6 @@ type settingsForm struct {
 	Ban string
 	// PerUpstream is how many identities may work through one egress at once.
 	PerUpstream string
-	// Renew is how often a port is opened again to change its identity, in
-	// minutes. Empty box and nought both mean never.
-	Renew string
 	// Gateways are the stored VPN configurations ticked on the proxy screen.
 	Gateways []string
 	// LAN says the interface answers the network rather than this machine
@@ -156,7 +148,6 @@ func settingsFormOf(r *http.Request) settingsForm {
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
 		Ban:         strings.TrimSpace(r.FormValue(banField)),
 		PerUpstream: strings.TrimSpace(r.FormValue(perUpField)),
-		Renew:       strings.TrimSpace(r.FormValue(renewField)),
 		Gateways:    ticked(r, gatewayField),
 		LAN:         r.FormValue(lanField) != "",
 		LANPassword: strings.TrimSpace(r.FormValue(lanKeyField)),
@@ -180,7 +171,6 @@ func formShowing(saved settings.Settings) settingsForm {
 		Wire:        blanktrail.ProtocolOr(saved.PortProtocol),
 		Ban:         spellUnits(saved.Proxy.Ban, banUnit),
 		PerUpstream: strconv.Itoa(atLeastOne(saved.ThreadsPerUpstream)),
-		Renew:       spellUnits(saved.RenewEvery, renewUnit),
 		Gateways:    saved.Proxy.Gateways,
 		LAN:         saved.LANAccess,
 		LANLocked:   saved.LANPassword != "",
@@ -272,10 +262,6 @@ func (f settingsForm) onto(saved settings.Settings) (settings.Settings, []string
 	// One is the floor rather than the default alone: nought identities through
 	// an egress is a pool that hands out nothing at all.
 	next.ThreadsPerUpstream = atLeastOne(b.none(f.PerUpstream, saved.ThreadsPerUpstream, "settings.perupstream.count"))
-	// Nought is an answer here too, and the one that ships: it is how "hold this
-	// identity for as long as it works" is said.
-	next.RenewEvery = b.span(f.Renew, saved.RenewEvery, renewUnit, "settings.renew.length")
-
 	// The password, and the one rule around it: nothing is opened to the network
 	// without one. An empty box keeps the password already saved, the same way
 	// the key box does — somebody who came here to change the port count and

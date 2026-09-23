@@ -571,35 +571,6 @@ func TestPool_RenewsIdentityAfterNRequests(t *testing.T) {
 	}
 }
 
-func TestPool_RenewsIdentityAfterInterval(t *testing.T) {
-	fake := fakebt.New(t)
-	clock := newFakeClock()
-	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
-	cfg := testPoolConfig(t, fake, clock, 1, 1)
-	cfg.Channels = []Channel{NewListChannel("list", NewStaticRotor(ups))}
-	cfg.RenewAfterInterval = 10 * time.Minute
-
-	p, err := NewPool(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewPool: %v", err)
-	}
-	defer p.Close()
-
-	port := fake.OpenPorts()[0]
-	before := fake.UpstreamOf(port)
-
-	clock.Advance(11 * time.Minute)
-	l, err := p.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	defer l.Release()
-
-	if after := fake.UpstreamOf(port); after == before {
-		t.Errorf("upstream still %q after the renewal interval elapsed", after)
-	}
-}
-
 func TestPool_QuarantinesAPortAfterRepeatedExhaustion(t *testing.T) {
 	fake := fakebt.New(t)
 	clock := newFakeClock()
@@ -2655,15 +2626,15 @@ func TestPool_DoesNotQueueOnAPoolThatIsClosed(t *testing.T) {
 	}
 }
 
-func TestPool_ChangesAPortsIdentityOnceItsTimeIsUp(t *testing.T) {
-	// A short list of gateways is a dozen identities held for hours, which is a
-	// dozen an origin comes to know — and what it does about that is a challenge
-	// on every request. This is the stage that stops it: the port is opened
-	// again, which is the only way there is to an empty cookie jar.
+func TestPool_ChangesTheIdentityOnAPortWithoutChangingThePort(t *testing.T) {
+	// A renewal opens the port again — the only way there is to an empty cookie
+	// jar — and what comes back has to be a different identity on the same
+	// number: the number is what everything holding a lease is talking to, and
+	// the fingerprint is half of what an origin recognises.
 	fake := fakebt.New(t)
 	clock := newFakeClock()
 	cfg := testPoolConfig(t, fake, clock, 1, 1)
-	cfg.RenewAfterInterval = 10 * time.Minute
+	cfg.RenewAfterRequests = 1
 	p, err := NewPool(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewPool: %v", err)
@@ -2673,22 +2644,19 @@ func TestPool_ChangesAPortsIdentityOnceItsTimeIsUp(t *testing.T) {
 	num := p.ports[0].num
 	before := p.Stats().Renewals
 
-	// Not yet: a renewal that came early would spend a warm identity for
-	// nothing, which is the whole reason this is a setting and not a rule.
-	clock.Advance(9 * time.Minute)
 	l, err := p.Acquire(context.Background())
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
 	l.Release()
 	if got := p.Stats().Renewals; got != before {
-		t.Errorf("the identity changed after nine minutes of a ten-minute setting (%d renewals)", got-before)
+		t.Errorf("the identity changed before the port had served anything (%d renewals)", got-before)
 	}
 
-	clock.Advance(2 * time.Minute)
+	clock.Advance(p.Cooldown())
 	l, err = p.Acquire(context.Background())
 	if err != nil {
-		t.Fatalf("Acquire after the time was up: %v", err)
+		t.Fatalf("Acquire once the port had served its count: %v", err)
 	}
 	defer l.Release()
 	if got := p.Stats().Renewals; got != before+1 {

@@ -123,24 +123,6 @@ type Settings struct {
 	// the job's screen says how many are waiting.
 	ThreadsPerUpstream int `json:"threads_per_upstream"`
 
-	// RenewEvery is how often a port is opened again to change the identity it
-	// wears: a fresh fingerprint and an empty cookie jar, which is the only way
-	// there is — the jar cannot be cleared through the control API, and one
-	// carried across a change of address is the very inconsistency an origin
-	// looks for.
-	//
-	// Nought is never, and never is right for a long list of addresses: a port
-	// there meets a different address every few requests anyway, and a renewal
-	// throws away a warm identity that cost minutes to make.
-	//
-	// A short list of gateways is the other case. A dozen identities held for
-	// hours are a dozen identities an origin comes to know, and what it does
-	// about that is a challenge on every request. Ten minutes is what the proxy
-	// screen offers when the gateways are chosen — long enough that a warmed
-	// identity is spent rather than wasted, short enough that none of them
-	// becomes a regular.
-	RenewEvery time.Duration `json:"renew_every"`
-
 	LANAccess   bool   `json:"lan_access"`
 	LANPassword string `json:"lan_password"`
 
@@ -179,23 +161,10 @@ const DefaultControlURL = "http://127.0.0.1:8891/"
 // switched off look as though it could.
 const DefaultBan = time.Hour
 
-// DefaultRenew is how often a port is opened again to change the identity it
-// wears, on a machine where nobody has said otherwise.
-//
-// An hour. An identity held for as long as it works is right on a long list of
-// addresses, where a port meets a different address every few requests anyway —
-// but "for as long as it works" turned out to mean "until somebody notices",
-// and nobody watches a run at four in the morning. An hour is far longer than
-// the forty-odd requests an identity answers before it is challenged, so it
-// costs almost nothing on a busy pool and catches the identity that has been
-// sitting in a corner of a large one.
-const DefaultRenew = time.Hour
-
 // Defaults are what a program that has never been configured runs on.
 func Defaults() Settings {
 	return Settings{
 		ControlURL: DefaultControlURL,
-		RenewEvery: DefaultRenew,
 		Proxy:      ProxySource{Ban: DefaultBan},
 	}
 }

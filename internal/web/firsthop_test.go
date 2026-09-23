@@ -142,6 +142,42 @@ func TestProxies_OffersTheServicesGatewaysAsAFirstHop(t *testing.T) {
 	}
 }
 
+func TestProxies_DrawsOnlyTheBoxThatBelongsToTheChosenRoad(t *testing.T) {
+	// One choice with two shapes: a proxy to type, or a gateway to pick. The box
+	// of the shape nobody chose is not filled in, and left on the screen it
+	// reads as a setting somebody forgot — so the page is drawn with it away.
+	// Drawn away here rather than only by the script, so a browser running none
+	// is shown the same thing, and so the value still travels with the form.
+	onGateway, _, _ := hopScreen(t, []fakebt.Gateway{{Name: "vless-185", Kind: "vless"}},
+		store.Profile{Name: "Default", Kind: sourceFile, Location: "C:/lists/wingate.txt",
+			FirstHop: "gw:vless-185", Solver: true})
+	if !strings.Contains(onGateway, `data-hop="socks5" hidden`) {
+		t.Error("a profile going out through a gateway is shown the box for a proxy address")
+	}
+	if strings.Contains(onGateway, `data-hop="gateway" hidden`) {
+		t.Error("a profile going out through a gateway is not shown which gateway")
+	}
+
+	onProxy, _, _ := hopScreen(t, []fakebt.Gateway{{Name: "vless-185", Kind: "vless"}},
+		store.Profile{Name: "Default", Kind: sourceFile, Location: "C:/lists/wingate.txt",
+			FirstHop: "socks5://198.51.100.7:1080", Solver: true})
+	if !strings.Contains(onProxy, `data-hop="gateway" hidden`) {
+		t.Error("a profile going out through a proxy is shown the gateway picker")
+	}
+	if strings.Contains(onProxy, `data-hop="socks5" hidden`) {
+		t.Error("a profile going out through a proxy is not shown the proxy it goes through")
+	}
+
+	// And a profile that connects to its addresses directly is shown neither.
+	straight, _, _ := hopScreen(t, []fakebt.Gateway{{Name: "vless-185", Kind: "vless"}},
+		store.Profile{Name: "Default", Kind: sourceFile, Location: "C:/lists/wingate.txt", Solver: true})
+	for _, want := range []string{`data-hop="socks5" hidden`, `data-hop="gateway" hidden`} {
+		if !strings.Contains(straight, want) {
+			t.Errorf("a profile that connects straight to its addresses is still shown %s", want)
+		}
+	}
+}
+
 func TestProxies_DrawsNoFirstHopOnAProfileOnGateways(t *testing.T) {
 	page, _, _ := hopScreen(t, []fakebt.Gateway{{Name: "vless-185", Kind: "vless"}},
 		store.Profile{Name: "Default", Kind: sourceGateways, Gateways: []string{"vless-185"}, Solver: true})

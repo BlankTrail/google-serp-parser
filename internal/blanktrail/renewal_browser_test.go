@@ -11,7 +11,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 )
 
-func TestPool_RenewsVersionedBrowserAfterInterval(t *testing.T) {
+func TestPool_RenewsAVersionedBrowserOntoTheSameFamily(t *testing.T) {
 	for _, browser := range []string{"chrome_153", "firefox_155", "edge_153", "safari_26"} {
 		for _, pause := range []time.Duration{0, time.Minute} {
 			t.Run(fmt.Sprintf("%s/pause=%s", browser, pause), func(t *testing.T) {
@@ -24,7 +24,7 @@ func TestPool_RenewsVersionedBrowserAfterInterval(t *testing.T) {
 					spec.OS = "macos"
 				}
 				cfg.Specs = []NamedSpec{{Name: browser, Spec: spec}}
-				cfg.RenewAfterInterval = time.Hour
+				cfg.RenewAfterRequests = 1
 				pool, err := NewPool(context.Background(), cfg)
 				if err != nil {
 					t.Fatal(err)
@@ -40,12 +40,13 @@ func TestPool_RenewsVersionedBrowserAfterInterval(t *testing.T) {
 				lease.Answered()
 				lease.Release()
 
-				// Advance the identity TTL, without waiting an hour or contacting
-				// Google. The proxy returns a valid family such as "chrome".
-				clock.Advance(time.Hour)
+				// The port has served its one request, so the next acquire renews
+				// it, without contacting Google. The proxy returns a valid family
+				// such as "chrome".
+				clock.Advance(pool.Cooldown())
 				lease, err = pool.Acquire(context.Background())
 				if err != nil {
-					t.Fatalf("acquire after identity TTL: %v; proxy ports=%v; pool=%+v",
+					t.Fatalf("acquire after the port had served its count: %v; proxy ports=%v; pool=%+v",
 						err, fake.OpenPorts(), pool.Stats())
 				}
 				if lease.Port() != port || lease.Session() == before {
@@ -62,8 +63,11 @@ func TestPool_RenewsVersionedBrowserAfterInterval(t *testing.T) {
 					t.Fatalf("next acquire after renewal: %v", err)
 				}
 				lease.Release()
-				if got := fake.RotateCount(port); got != 1 {
-					t.Errorf("rotated %d times, want one successful renewal", got)
+				// One rotation for each renewal, and with a renewal owed before
+				// each of the two acquires after the first, that is two: the port
+				// went on serving through both of them.
+				if got := fake.RotateCount(port); got != 2 {
+					t.Errorf("rotated %d times, want one for each renewal", got)
 				}
 			})
 		}

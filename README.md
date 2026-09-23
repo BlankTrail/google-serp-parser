@@ -210,17 +210,18 @@ and there are three:
   once. This is where gateways are chosen; nothing is chosen on the BlankTrail
   side. *Refresh* asks the service for the list again and re-measures.
 
-A list — a file or an address — also has a **First hop**: the road its ports
-take to the addresses. *None* goes straight to each address. *SOCKS5 proxy*
+A list — a file or an address — also has **Connect through**: the road its ports
+take to the addresses. *Nothing* goes straight to each address. *SOCKS5 proxy*
 sends every port through that proxy first, written the way an address on a list
-is, login and password included. *BlankTrail gateway* sends them through one of
-the gateways the service holds, chosen from its list. It is for a list this
-machine reaches badly: measured on a wingate list, straight from here the
-challenge solver could not open a connection through any address and every
-search came back as Google's JavaScript check; through a first hop 46 searches in
-48 were answered. The address stays the exit Google sees, so a session made on it
-stays the same session. A profile on gateways has no first hop — a gateway's own
-road is set on it in BlankTrail.
+is, login and password included. *VPN gateway* sends them through one of the
+gateways the service holds, chosen from its list; only the box belonging to the
+choice is shown. It is for a list this machine reaches badly: measured on a
+wingate list, straight from here the challenge solver could not open a connection
+through any address and every search came back as Google's JavaScript check;
+through a SOCKS5 proxy in front of them 46 searches in 48 were answered. The
+address stays the exit Google sees, so a session made on it stays the same
+session. A profile on gateways connects through nothing of its own — a gateway's
+own road is set on it in BlankTrail.
 
 The rest of the form is how that profile's pool behaves — each of these belongs
 to the profile, so two lists can be banned for different lengths and reached over
@@ -231,7 +232,6 @@ different protocols:
 | Re-read every, minutes | How often a list at a URL is read again | 30 |
 | Ban for, minutes | How long an address that failed is left out. Nought leaves nobody out | 60 |
 | Threads per proxy | How many threads may share one address or one gateway at a time | 1 for a long list, more for a short one |
-| Change identity every, minutes | How often a port is opened again with a fresh fingerprint and an empty cookie jar | 60; nought never, and gateways offer 10 |
 | Connection to a port | SOCKS5 carries UDP, so QUIC and far-side DNS work. HTTP is the fallback | SOCKS5 |
 
 While a job runs, the top of the screen reads the pool: addresses in the list,
@@ -404,10 +404,6 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   one. Measured at ten threads for twenty minutes an arm, at the same minute:
   three ports a thread answered 259 against 164 for one port, and 154 against 54
   in the second half, once the identities were warm.
-- A port can be told to **change identity every N minutes**: a fresh
-  fingerprint and an empty cookie jar. Nought never does, which suits a long
-  address list; choosing the gateways offers ten minutes, because a dozen
-  identities held for hours become a dozen an origin knows.
 - A job **waits for an identity** rather than spending a query on not having
   one. A pool with everything set aside almost always has something to give
   shortly, and the screen counts who is queueing.
@@ -568,7 +564,6 @@ measured to it:
 | Ban for, minutes | How long a failed address is left out. Nought leaves nobody out; sixty is where a fresh install starts |
 | Threads per proxy | How many threads share one address or one gateway. One by default |
 | Profile | Which named set of exits this is. A job names one; the default one is what a job naming none runs on |
-| Change identity every, minutes | How often a port is opened again with a fresh fingerprint and an empty jar. Sixty by default, nought never does, and choosing the gateways offers ten |
 | Connection to a port | SOCKS5 (default) or HTTP |
 | Gateways | Which stored configurations to use, when the source is the gateways |
 

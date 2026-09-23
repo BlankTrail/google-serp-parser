@@ -20,7 +20,6 @@ func aProfile(name string) Profile {
 		Refresh:            30 * time.Minute,
 		Ban:                time.Hour,
 		ThreadsPerUpstream: 3,
-		RenewEvery:         10 * time.Minute,
 		Protocol:           "http",
 		Gateways:           []string{"nl-one", "de-two"},
 	}
@@ -45,7 +44,7 @@ func TestCreateProfile_ReadsBackEverythingItWasGiven(t *testing.T) {
 	want.ID, want.Default = id, true // the first one written is the default one
 	if got.Name != want.Name || got.Kind != want.Kind || got.Location != want.Location ||
 		got.Refresh != want.Refresh || got.Ban != want.Ban ||
-		got.ThreadsPerUpstream != want.ThreadsPerUpstream || got.RenewEvery != want.RenewEvery ||
+		got.ThreadsPerUpstream != want.ThreadsPerUpstream ||
 		got.Protocol != want.Protocol || got.Default != want.Default {
 		t.Errorf("read back %+v, want %+v", got, want)
 	}

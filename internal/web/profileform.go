@@ -28,11 +28,10 @@ type profileForm struct {
 	// gateways stored in the service. Where is the path or the address.
 	Source string
 	Where  string
-	// The three spans, each as the operator typed it, in the units its box is
+	// The two spans, each as the operator typed it, in the units its box is
 	// labelled with: minutes.
 	Refresh string
 	Ban     string
-	Renew   string
 	// PerUpstream is how many threads share one exit, and Wire is socks5 or
 	// http.
 	PerUpstream string
@@ -91,7 +90,6 @@ func profileShowing(p store.Profile) profileForm {
 		Where:       p.Location,
 		Refresh:     spellUnits(p.Refresh, refreshUnit),
 		Ban:         spellUnits(p.Ban, banUnit),
-		Renew:       spellUnits(p.RenewEvery, renewUnit),
 		PerUpstream: strconv.Itoa(atLeastOne(p.ThreadsPerUpstream)),
 		Wire:        blanktrail.ProtocolOr(p.Protocol),
 		Gateways:    p.Gateways,
@@ -129,7 +127,6 @@ func profileFrom(r former) profileForm {
 		Where:       strings.TrimSpace(r.FormValue(whereField)),
 		Refresh:     strings.TrimSpace(r.FormValue(refreshField)),
 		Ban:         strings.TrimSpace(r.FormValue(banField)),
-		Renew:       strings.TrimSpace(r.FormValue(renewField)),
 		PerUpstream: strings.TrimSpace(r.FormValue(perUpField)),
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
 		// These three are on the form whenever it is shown, so a box that sent
@@ -181,9 +178,6 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 	// One is the floor rather than the default alone: nought identities through
 	// an egress is a pool that hands out nothing at all.
 	next.ThreadsPerUpstream = atLeastOne(b.none(f.PerUpstream, p.ThreadsPerUpstream, "settings.perupstream.count"))
-	// Nought is an answer, and the one that ships: it is how "hold this identity
-	// for as long as it works" is said.
-	next.RenewEvery = b.span(f.Renew, p.RenewEvery, renewUnit, "settings.renew.length")
 
 	// The list is switched off by choosing no source, which is why the source is
 	// a choice and not a box: a blank box would have to mean both "leave it" and

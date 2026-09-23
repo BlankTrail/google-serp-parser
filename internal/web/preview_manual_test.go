@@ -67,14 +67,14 @@ func TestWritePreviews(t *testing.T) {
 	list, err := st.CreateProfile(t.Context(), store.Profile{
 		Name: "Datacentre list", Kind: "url", Location: "https://example.com/proxies.txt",
 		Refresh: 30 * time.Minute, Ban: time.Hour, ThreadsPerUpstream: 3,
-		RenewEvery: time.Hour, Protocol: "socks5",
+		Protocol: "socks5",
 	})
 	if err != nil {
 		t.Fatalf("CreateProfile: %v", err)
 	}
 	gateways, err := st.CreateProfile(t.Context(), store.Profile{
-		Name: "BlankTrail gateways", Kind: settings.ProxyGateways,
-		Ban: 10 * time.Minute, ThreadsPerUpstream: 10, RenewEvery: 10 * time.Minute,
+		Name: "VPN gateways", Kind: settings.ProxyGateways,
+		Ban: 10 * time.Minute, ThreadsPerUpstream: 10,
 		Protocol: "socks5",
 		Gateways: []string{"WiseKeys.DE-Germaniya", "WiseKeys.FR-Franciya",
 			"WiseKeys.NL-Niderlandy-Torrent", "astro-via-185"},

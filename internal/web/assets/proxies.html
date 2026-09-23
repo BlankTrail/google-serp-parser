@@ -201,13 +201,18 @@
      than it looks. It is folded away because it is a reference, read once by
      whoever is writing a list and never again. */}}
 {{/* The road the ports take to their addresses. A list this machine reaches
-     badly answers through a first hop: a SOCKS5 proxy, or one of the gateways
-     the service holds, chosen from its list rather than typed. It is not drawn
-     for a profile on gateways, whose road is set on the gateway itself; what it
-     holds there is kept for the day the profile goes back to a list.
+     badly answers through something in front of it: a SOCKS5 proxy, or one of
+     the VPN gateways the service holds, chosen from its list rather than typed.
+     It is not drawn for a profile on gateways, whose road is set on the gateway
+     itself; what it holds there is kept for the day the profile goes back to a
+     list.
 
-     Both boxes stay whichever kind is chosen, so a reader who tries the other
-     kind and comes back finds what they had typed. */}}
+     One choice, and only the box that belongs to it: the other is for a road
+     nobody picked, and left on the screen it reads as a setting somebody forgot
+     to fill in. It is drawn away rather than left out, so the value goes on
+     travelling with the form — a reader who tries the other kind and comes back
+     finds what they had typed — and so a browser running no script is shown the
+     same thing this one is. */}}
 {{if not .OnGateways}}
 <div class="row">
 <div class="field">
@@ -218,19 +223,22 @@
 <option value="gateway"{{if eq .Form.HopKind "gateway"}} selected{{end}}>{{.T "proxies.hop.gateway"}}</option>
 </select>
 </div>
-<div class="field wide">
+<div class="field wide" data-hop="socks5"{{if ne .Form.HopKind "socks5"}} hidden{{end}}>
 <label for="first_hop_proxy">{{.T "proxies.hop.proxy"}}</label>
 <input id="first_hop_proxy" name="first_hop_proxy" value="{{.Form.HopProxy}}" placeholder="socks5://login:password@host:port">
 </div>
-<div class="field">
+<div class="field" data-hop="gateway"{{if ne .Form.HopKind "gateway"}} hidden{{end}}>
 <label for="first_hop_gateway">{{.T "proxies.hop.gateway.pick"}}</label>
 <select id="first_hop_gateway" name="first_hop_gateway">
 <option value=""{{if eq .Form.HopGateway ""}} selected{{end}}>—</option>
 {{range .HopGateways}}<option value="{{.}}"{{if eq $.Form.HopGateway .}} selected{{end}}>{{.}}</option>
 {{end}}</select>
-</div>
-</div>
+{{/* Why there are none to choose from stands inside the box it is about, so it
+     is away with it: a profile going out through a proxy is not missing
+     anything by the service holding no gateways. */}}
 {{if .HopFault}}<p class="empty">{{.T .HopFault}}</p>{{end}}
+</div>
+</div>
 <details class="help">
 <summary>{{.T "help.what"}}</summary>
 <ul class="notes">
@@ -263,10 +271,6 @@
 <input id="threads_per_upstream" name="threads_per_upstream" type="number" min="1" value="{{.Form.PerUpstream}}">
 </div>
 <div class="field">
-<label for="renew_minutes">{{.T "settings.renew"}}</label>
-<input id="renew_minutes" name="renew_minutes" type="number" min="0" value="{{.Form.Renew}}">
-</div>
-<div class="field">
 <label for="port_protocol">{{.T "form.wire"}}</label>
 <select id="port_protocol" name="port_protocol">
 <option value="socks5"{{if eq .Form.Wire "socks5"}} selected{{end}}>SOCKS5</option>
@@ -279,7 +283,6 @@
 <ul class="notes">
 <li>{{.T "settings.ban.why"}}</li>
 <li>{{.T "settings.perupstream.why"}}</li>
-<li>{{.T "settings.renew.why"}}</li>
 <li>{{.T "settings.wire.why"}}</li>
 </ul>
 </details>

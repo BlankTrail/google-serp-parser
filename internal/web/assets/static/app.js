@@ -327,6 +327,29 @@
 		apply();
 	}
 
+	// How a profile's ports reach their addresses is one choice with two shapes:
+	// a proxy to type, or a gateway to pick from what the service holds. The box
+	// belonging to the other shape is not filled in, and left on the screen it
+	// reads as a setting somebody forgot.
+	//
+	// The page is already drawn with only the one that belongs to what is saved,
+	// so a browser running no script shows the same thing; this is that kept true
+	// from the moment the choice changes rather than from the next page load.
+	function hopFields(root) {
+		var kind = root.querySelector("[name=first_hop]");
+		if (!kind) {
+			return;
+		}
+		var shapes = root.querySelectorAll("[data-hop]");
+		var apply = function () {
+			for (var i = 0; i < shapes.length; i++) {
+				shapes[i].hidden = shapes[i].getAttribute("data-hop") !== kind.value;
+			}
+		};
+		kind.addEventListener("change", apply);
+		apply();
+	}
+
 	// mark hides or shows the field a box stands in, along with whatever the page
 	// wrote under it: a box put away without its own sentence leaves the sentence
 	// explaining something nobody can see.
@@ -374,36 +397,6 @@
 		};
 		source.addEventListener("change", apply);
 		apply();
-
-		// Choosing the gateways offers ten minutes between changes of identity.
-		//
-		// A long list of addresses wants none: a port there meets a different
-		// address every few requests anyway, and changing identity throws away a
-		// warm one that cost minutes to make. A dozen gateways held for hours are
-		// a dozen identities an origin comes to know, and what it does about that
-		// is a challenge on every request.
-		//
-		// It is offered rather than applied: the box is filled in, in front of
-		// the reader, and only when it says never — a number somebody chose is
-		// theirs, and nothing here is saved until they press save.
-		var renew = root.querySelector("[name=renew_minutes]");
-		if (!renew) {
-			return;
-		}
-		// Only while the box still holds what the server drew. A number the
-		// reader typed is theirs, and the offer is for somebody who has not
-		// thought about this box at all — which, now that the machine's own
-		// default is an hour, is most people who reach for the gateways.
-		var drawn = renew.value;
-		source.addEventListener("change", function () {
-			if (source.value === "gateways" && renew.value === drawn) {
-				renew.value = "10";
-			}
-		});
-		renew.addEventListener("input", function () {
-			// Typed in, so it is no longer what was drawn and the offer is off.
-			drawn = null;
-		});
 	}
 
 	// Ticking two-and-thirty boxes one at a time to use a whole subscription is
@@ -791,12 +784,14 @@
 
 	shape(document);
 	shapeSettings(document);
+	hopFields(document);
 
 	// A form that arrived with a swapped screen has to be shaped as well, or it
 	// is the one screen where this works only on a reload.
 	window.addEventListener("gserp:screen", function () {
 		shape(document);
 		shapeSettings(document);
+		hopFields(document);
 	});
 
 	watch();

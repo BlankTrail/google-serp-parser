@@ -403,53 +403,17 @@ func TestProxies_ShowsHowManyPortsWereOpenedAgain(t *testing.T) {
 	}
 }
 
-func TestProxies_SavesHowOftenAPortChangesItsIdentity(t *testing.T) {
-	// The box is in minutes and what is kept is a duration: saved as minutes it
-	// would be read back as nanoseconds and a run would change identity ten
-	// million times a second, or never.
-	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := settings.Save(path, settings.Settings{ControlURL: "http://127.0.0.1:8891", APIKey: "k"}); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	s, err := New(Config{Store: testStore(t), Logger: quiet(), SettingsPath: path})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	prof, err := s.store.CreateProfile(t.Context(), store.Profile{Name: "Default"})
-	if err != nil {
-		t.Fatalf("CreateProfile: %v", err)
-	}
-
-	rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
-		"source":               {"gateways"},
-		"ban_minutes":          {"10"},
-		"threads_per_upstream": {"10"},
-		"renew_minutes":        {"10"},
-		"port_protocol":        {"socks5"},
-	}))
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("saving answered %d: %s", rec.Code, rec.Body.String())
-	}
-	after, err := s.store.Profile(t.Context(), prof)
-	if err != nil {
-		t.Fatalf("reading the profile back: %v", err)
-	}
-	if after.RenewEvery != 10*time.Minute {
-		t.Errorf("kept %v between changes of identity, want ten minutes", after.RenewEvery)
-	}
-	// And nought is an answer: it is how "hold this identity for as long as it
-	// works" is said, and it is what a long address list wants.
-	if rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
-		"source": {"url"}, "source_at": {"http://example.test/list"}, "renew_minutes": {"0"},
-		"ban_minutes": {"10"}, "threads_per_upstream": {"1"}, "port_protocol": {"socks5"},
-	})); rec.Code != http.StatusSeeOther {
-		t.Fatalf("saving nought answered %d", rec.Code)
-	}
-	if after, err = s.store.Profile(t.Context(), prof); err != nil {
-		t.Fatalf("reading the profile back: %v", err)
-	}
-	if after.RenewEvery != 0 {
-		t.Errorf("nought in the box was kept as %v", after.RenewEvery)
+func TestProxies_NoLongerOffersToChangeAPortsIdentityOnATimer(t *testing.T) {
+	// A port is a place now. The fingerprint, the cookies and the exit belong to
+	// the session standing on it, and it is the session that is kept or given
+	// up — by what Google answers, not by a clock. A timer that reopened the
+	// port underneath one threw away a warm identity in the middle of a walk,
+	// and the box that set it could only make a run worse.
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+	page := get(t, s, boxesOf(prof)).Body.String()
+	if strings.Contains(page, `name="renew_minutes"`) {
+		t.Error("the proxy profile form still offers to change a port's identity on a timer")
 	}
 }
 
