@@ -402,5 +402,75 @@
 </div>
 </form>
 </section>
+
+{{/* The list, put to the service along the road this profile's ports take.
+
+     It is here rather than on the counters page because it is about this
+     profile's boxes above and not about a run: what it answers is whether the
+     addresses in that box are reachable the way those boxes say to reach them.
+     Both roads are drawn where there is a first hop, because on a list that is
+     only reachable through one the two answers are opposite, and the one that
+     matters is the road the ports take. */}}
+<section class="card" id="listcheck">
+<h2>{{.T "proxies.check"}}</h2>
+<form method="post" action="/proxies/check" class="fields">
+<input type="hidden" name="profile" value="{{.Form.ID}}">
+<div class="row">
+<div class="field">
+<label for="sample">{{.T "proxies.check.sample"}}</label>
+<input id="sample" name="sample" type="number" min="1" max="2000" value="{{.CheckSample}}">
+</div>
+<div class="field">
+<label for="checkthreads">{{.T "proxies.check.threads"}}</label>
+<input id="checkthreads" name="checkthreads" type="number" min="1" max="200" value="{{.CheckThreads}}">
+</div>
+</div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<ul class="notes">
+<li>{{.T "proxies.check.why"}}</li>
+<li>{{.T "proxies.check.roads"}}</li>
+</ul>
+</details>
+<div class="actions">
+{{/* Not the filled press: the one that acts on this screen is the save above,
+     and a second filled button is a second thing an eye is drawn to. */}}
+<button type="submit"{{if .Check.Running}} disabled{{end}}>{{.T "proxies.check.run"}}</button>
+</div>
+</form>
+{{if .Check.Running}}<form method="post" action="/proxies/check/stop" class="actions">
+<input type="hidden" name="profile" value="{{.Form.ID}}">
+<button type="submit">{{.T "proxies.check.stop"}}</button>
+</form>{{end}}
+
+{{with .Check}}
+{{if .Fault}}<p class="empty">{{$.T .Fault}}</p>{{end}}
+{{if .Asked}}
+{{if .Running}}<p class="empty">{{$.T "proxies.check.going"}} {{.Done}} / {{.Sample}}{{if .Hop}} × 2{{end}}</p>{{end}}
+<dl class="figures">
+{{if .Holds}}<div><dt>{{$.T "proxies.check.holds"}}</dt><dd>{{.Holds}}</dd></div>{{end}}
+<div><dt>{{$.T "proxies.check.asked"}}</dt><dd>{{.Sample}}</dd></div>
+<div><dt>{{$.T "proxies.check.threads"}}</dt><dd>{{.Threads}}</dd></div>
+{{if .Took}}<div><dt>{{$.T "proxies.check.took"}}</dt><dd>{{.Took}}</dd></div>{{end}}
+</dl>
+{{if .Hop}}
+<h3>{{$.T "proxies.check.through"}}{{if .Gateway}} — {{.Gateway}}{{end}}</h3>
+<dl class="figures" id="check-through">
+<div><dt>{{$.T "proxies.check.ok"}}</dt><dd>{{.Through.OK}} / {{.Through.Asked}}{{if .Through.Asked}} — {{.Through.Share}}%{{end}}</dd></div>
+<div><dt>{{$.T "proxies.check.refused"}}</dt><dd>{{.Through.Refused}}</dd></div>
+{{if .Through.Broke}}<div><dt>{{$.T "proxies.check.broke"}}</dt><dd>{{.Through.Broke}}</dd></div>{{end}}
+<div><dt>{{$.T "proxies.check.each"}}</dt><dd>{{.Through.Each}}</dd></div>
+</dl>
+{{end}}
+<h3>{{$.T "proxies.check.direct"}}</h3>
+<dl class="figures" id="check-direct">
+<div><dt>{{$.T "proxies.check.ok"}}</dt><dd>{{.Direct.OK}} / {{.Direct.Asked}}{{if .Direct.Asked}} — {{.Direct.Share}}%{{end}}</dd></div>
+<div><dt>{{$.T "proxies.check.refused"}}</dt><dd>{{.Direct.Refused}}</dd></div>
+{{if .Direct.Broke}}<div><dt>{{$.T "proxies.check.broke"}}</dt><dd>{{.Direct.Broke}}</dd></div>{{end}}
+<div><dt>{{$.T "proxies.check.each"}}</dt><dd>{{.Direct.Each}}</dd></div>
+</dl>
+{{end}}
+{{end}}
+</section>
 {{end}}
 {{end}}

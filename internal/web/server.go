@@ -126,6 +126,11 @@ type Server struct {
 	// current by a watcher of its own rather than asked after by the pages: every
 	// screen carries it and the busiest of them redraws every three seconds.
 	link link
+	// checking is the list check one profile is under, or the last one made.
+	// One at a time: the check is a load on the same service the jobs run
+	// through, and two of them at once would be two loads reported as one
+	// reading.
+	checking listCheck
 	// now is where this server reads the clock. It is a field so that a test can
 	// hold the clock still: how long a job has been running is a number on the
 	// screen, and a test that could not name the instant could only check that
@@ -224,6 +229,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+proxiesAt+"/default", s.makeProfileDefault)
 	s.mux.HandleFunc("POST "+proxiesAt+"/delete", s.dropProfile)
 	s.mux.HandleFunc("POST "+gatewaysAt, s.refreshGateways)
+	s.mux.HandleFunc("POST "+checkListAt, s.checkList)
+	s.mux.HandleFunc("POST "+checkListAt+"/stop", s.stopCheckList)
 	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)
 	// What the job page polls, and what its two buttons send. Both buttons are

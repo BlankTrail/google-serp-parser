@@ -176,6 +176,15 @@ type proxiesPage struct {
 	Chosen  int
 	Offered int
 
+	// Check is the list put to the service along the road this profile's ports
+	// take, as it stands this instant. It is drawn only under the profile it
+	// belongs to: a reading shown under another profile's boxes would be this
+	// screen reporting one list's addresses as another's.
+	Check checkReading
+	// CheckSample and CheckThreads are what the boxes of the check start at.
+	CheckSample  int
+	CheckThreads int
+
 	// HopGateways are the gateways a list's ports may go through first, by
 	// name, as the service holds them — with the one already chosen among them
 	// even when the service no longer has it, so a form drawn over it does not
@@ -326,6 +335,16 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.Form = profileShowing(editing)
+	view.CheckSample, view.CheckThreads = listCheckSample, listCheckThreads
+	// The reading belongs to one profile. A check made on another one is not
+	// shown here at all rather than shown under this heading.
+	if check := s.checking.Reading(); check.Of == editing.ID && editing.ID != 0 {
+		view.Check = check
+		view.CheckSample, view.CheckThreads = check.Sample, check.Threads
+		if check.Running {
+			view.Refresh = proxiesRefresh.Milliseconds()
+		}
+	}
 	// A path chosen in the browser arrives here and fills the box, and nothing
 	// more: choosing is not saving. The reader sees what they picked standing
 	// where they would have typed it, and it is written down when they press

@@ -10,9 +10,12 @@ const (
 	stateAt    = "/"
 	jobsAt     = "/jobs"
 	gatewaysAt = "/proxies/gateways"
-	newAt      = "/new"
-	proxiesAt  = "/proxies"
-	historyAt  = "/history"
+	// checkListAt is where a profile's addresses are put to the service, along
+	// the road that profile's ports take.
+	checkListAt = "/proxies/check"
+	newAt       = "/new"
+	proxiesAt   = "/proxies"
+	historyAt   = "/history"
 )
 
 // What the script works on, named here because the markup and the script have
