@@ -2,7 +2,10 @@
 
 package run
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // challengeCrowded is how few requests between two checks reads as too few.
 //
@@ -13,10 +16,17 @@ import "sync"
 const challengeCrowded = 7
 
 // challengeEnough is how many checks must have been met before the rhythm is
-// worth judging. Without it the first check of a run — which may be the first
-// request of a fresh session, where a check is ordinary — would raise the
-// warning on a run that has done nothing yet.
+// worth judging. Without it a single check early on — one session's bad luck —
+// would raise the warning on a run that has done nothing yet.
 const challengeEnough = 5
+
+// challengeSettling is how long a run goes before its rhythm is judged at all.
+//
+// Ten minutes, as the operator set it. The opening of a run is its sessions
+// being let in: every one of them is fresh, and a fresh session pays a check to
+// be admitted whatever pace it is asked at. Judged in the first minutes, a run
+// starting up reads exactly like a run asking too fast.
+const challengeSettling = 10 * time.Minute
 
 // Challenges is the rhythm of Google's checks through one run: how many
 // requests were answered between one check and the next.
@@ -32,46 +42,76 @@ const challengeEnough = 5
 // before has just paid for one. Timing the answers would be a guess either way:
 // the solver on the live list answered after 15, 25, 44, 63, 89, 210 and 254
 // seconds, and an ordinary search through a slow list averaged about twenty, so
-// no line drawn through that separates the two.
+// no line drawn through that separates the two. Measured on the live list, of
+// eight answers five brought a clearance and the same five took over thirty
+// seconds — the clearance is the one that says which.
 //
 // It is fed from whichever thread took the answer, so it is safe for several at
 // once.
 type Challenges struct {
+	// now and began are the clock and when this run started counting, for the
+	// waiting period before the rhythm is judged. A counter that was never told
+	// when its run began has none.
+	now   func() time.Time
+	began time.Time
+
 	mu sync.Mutex
-	// met is how many answers came back with a clearance the session did not
-	// have before, and answered is how many came back without one.
-	met      int
-	answered int
+	// met is every check this run has paid for, the one a fresh session pays to
+	// be let in included: it is a check somebody waited for, and the screen
+	// reports it as one.
+	met int
+	// asked is how many answers came back on sessions Google had already
+	// admitted, and askedMet how many of those met a check anyway. The rhythm is
+	// worked out from these two alone — see Held.Admitted.
+	asked    int
+	askedMet int
 }
 
-// Answer takes one answer from Google: the clearance the session held before
-// the request, and the one it holds now.
+// NewChallenges starts counting for a run beginning now.
+func NewChallenges() *Challenges {
+	return &Challenges{now: time.Now, began: time.Now()}
+}
+
+// Answer takes one answer from Google: whether Google had answered this session
+// before, and the clearance it held before the request and holds now.
 //
 // A clearance that is new, or one that has changed, is a check just passed.
 // Nothing else counts: a session that carried the same clearance through the
 // request answered without meeting one, and one that has never had a clearance
 // has never met one at all.
-func (c *Challenges) Answer(before, after string) {
+func (c *Challenges) Answer(admitted bool, before, after string) {
 	if c == nil {
 		return
 	}
+	passed := after != "" && after != before
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if after != "" && after != before {
+	if passed {
 		c.met++
+	}
+	if !admitted {
+		// The session's first answer. Whatever it cost, it is the price of being
+		// let in rather than a reading of the pace.
 		return
 	}
-	c.answered++
+	c.asked++
+	if passed {
+		c.askedMet++
+	}
 }
 
 // Rhythm is how a run's checks fell, as a screen reports them.
 type Rhythm struct {
-	// Met is how many checks this run has paid for, and Answered how many
-	// searches came back without one.
-	Met      int
-	Answered int
-	// Between is how many requests the run gets for each check it meets, and
-	// Known says whether anything has been met yet to work it out from.
+	// Met is how many checks this run has paid for, the one a fresh session pays
+	// to be let in included.
+	Met int
+	// Asked is how many requests went out on sessions Google had already
+	// admitted, and AskedMet how many of those met a check.
+	Asked    int
+	AskedMet int
+	// Between is how many requests the run gets for each check it meets on a
+	// session already admitted, and Known says whether enough has happened to
+	// work it out from.
 	//
 	// It is the whole run's requests over the whole run's checks rather than the
 	// average of each session's own figure: a session that answered twice
@@ -91,12 +131,19 @@ func (c *Challenges) Rhythm() Rhythm {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := Rhythm{Met: c.met, Answered: c.answered}
-	if c.met == 0 {
+	out := Rhythm{Met: c.met, Asked: c.asked, AskedMet: c.askedMet}
+	if c.askedMet == 0 {
 		return out
 	}
-	out.Between = float64(c.answered) / float64(c.met)
+	out.Between = float64(c.asked-c.askedMet) / float64(c.askedMet)
 	out.Known = true
-	out.Crowded = c.met >= challengeEnough && out.Between < challengeCrowded
+	out.Crowded = c.settled() && c.askedMet >= challengeEnough && out.Between < challengeCrowded
 	return out
+}
+
+// settled says the run has been going long enough for its rhythm to be worth
+// judging. A counter nobody told when the run began has no waiting period, and
+// says so at once.
+func (c *Challenges) settled() bool {
+	return c.began.IsZero() || c.now().Sub(c.began) >= challengeSettling
 }

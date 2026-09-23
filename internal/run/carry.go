@@ -176,8 +176,10 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	search := boundSearcher{attempt: c.a, lease: lease, held: held}
 
 	// What Google's check left on this session before the request, so an answer
-	// that comes back with a new one can be read as a check just paid for.
-	held0 := held.Clearance()
+	// that comes back with a new one can be read as a check just paid for — and
+	// whether Google had answered this session at all before, because the check
+	// a fresh one pays to be let in says nothing about the pace.
+	held0, admitted := held.Clearance(), held.Admitted()
 
 	var serp google.SERP
 	var err error
@@ -220,7 +222,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	case err == nil:
 		// Written down and given back: its rest starts here, and the keeper
 		// will not hand it out again before the rest is over.
-		c.r.Challenges.Answer(held0, held.Clearance())
+		c.r.Challenges.Answer(admitted, held0, held.Clearance())
 		_ = held.Answered(ctx, port)
 		c.took(ctx, one, held.ID, serp)
 	case judged && moved:

@@ -456,8 +456,9 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 - Browser interface — no command line needed for anything.
 - **Status** screen: the job in flight, elapsed against estimated, share
-  answered, what came back instead, ports held and ports set aside, threads
-  waiting for a free proxy, queue.
+  answered, what came back instead, identities free to hand out, threads waiting
+  for a free proxy, queue. What the pool is doing this minute is on the running
+  job's own page.
 - **Proxies** screen: requests, attempts, failure share, address changes, ports
   opened again; failures broken down by kind, with counters you can zero at any
   moment.
@@ -465,9 +466,11 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   and banned right now, ports open, warm and in quarantine, sessions and how
   many of them are resting — and Google's checks: how many this job has been
   made to pass, how many the solver is working on, how many are waiting for it,
-  and how many requests the run gets between one check and the next. Checks
-  oftener than one in seven requests say the sessions are being asked again
-  before they have rested, and the page says so.
+  and how many requests the run gets between one check and the next. That last
+  one is counted on sessions Google has already admitted — a fresh session pays
+  a check to be let in whatever pace it is asked at — and after ten minutes of
+  the run, checks oftener than one in seven of those requests say the sessions
+  are being asked again before they have rested, which the page says.
 - The gateway list is read once and held for a couple of minutes, with a
   **Refresh** that asks the service again — for when a configuration has just
   been added or the tunnels have just been measured.

@@ -82,11 +82,12 @@
 <p class="figure" id="pool-alive">{{.Pool.Alive}}</p>
 {{if .Pool.Ports}}
 <dl class="detail">
-<dt>{{.T "state.pool.ports"}}</dt><dd id="pool-ports">{{.Pool.Ports}}</dd>
-<dt>{{.T "state.pool.warm"}}</dt><dd id="pool-warm">{{.Pool.Warm}}</dd>
+{{/* How many ports are open, how many of them are warm and how many were set
+     aside are on the page of the job the pool was raised for: they change with
+     the run rather than with the machine, and the same numbers under two
+     headings are two readings a reader has to reconcile. */}}
 <dt>{{.T "state.pool.queueing"}}</dt><dd id="pool-queueing">{{.Pool.Queueing}}</dd>
 <dt>{{.T "state.pool.rotate"}}</dt><dd id="pool-rotations">{{.Pool.Rotations}}</dd>
-<dt>{{.T "state.pool.aside"}}</dt><dd id="pool-quarantined">{{.Pool.Quarantined}}</dd>
 <dt>{{.T "state.pool.back"}}</dt><dd id="pool-revived">{{.Pool.Revived}}</dd>
 </dl>
 {{else}}

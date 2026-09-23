@@ -308,7 +308,7 @@ func dialing(open OpenPool, watch run.Watch) source {
 		// screen that no run ever matched.
 		return &poolEngine{pool: want.Search, addresses: want.Addresses, brake: want.Brake,
 			threads: asked.Threads, watch: watch, keeper: want.Keeper, want: want.Want,
-			checks: &run.Challenges{}}, nil
+			checks: run.NewChallenges()}, nil
 	}}
 }
 

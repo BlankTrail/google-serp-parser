@@ -147,13 +147,13 @@ type reasonView struct {
 // to start one.
 type poolView struct {
 	Alive int
+	// Ports is how many are open, and it is not drawn: what it does here is say
+	// whether there is a pool to detail at all. How many are open, how many of
+	// them are warm and how many were set aside belong to the run rather than to
+	// the machine, and they are on the page of the job the pool was raised for —
+	// the same numbers under two headings are two readings a reader has to
+	// reconcile.
 	Ports int
-	// Warm is how many of those ports have brought back an answer under their
-	// current identity. It is drawn beside the count of ports because the two
-	// differ for the first quarter of an hour of every machine's day, and that
-	// difference is the whole of what a job started in that window feels: a cold
-	// identity's first request costs minutes and a warm one's costs seconds.
-	Warm int
 	// Queueing is how many threads are standing in the queue for an egress right
 	// now, because every one they could use is already carrying as many
 	// identities as it may.
@@ -161,10 +161,9 @@ type poolView struct {
 	// It is not a fault. A job of a hundred threads on thirty-two gateways is
 	// arithmetic, and a screen that did not show this would leave the reader to
 	// work out on their own why a pool of three hundred looks idle.
-	Queueing    int
-	Rotations   int64
-	Quarantined int
-	Revived     int64
+	Queueing  int
+	Rotations int64
+	Revived   int64
 }
 
 // queueView is what will be taken next, in the order it will be taken.
@@ -221,13 +220,11 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 	}
 	facts := s.sup.pool()
 	view.Pool = poolView{
-		Alive:       facts.Stats.Available,
-		Ports:       facts.Stats.Ports,
-		Warm:        facts.Stats.Warm,
-		Queueing:    facts.Stats.Waiting,
-		Rotations:   facts.Stats.EgressRotations,
-		Quarantined: facts.Stats.Quarantined,
-		Revived:     facts.Stats.Revivals,
+		Alive:     facts.Stats.Available,
+		Ports:     facts.Stats.Ports,
+		Queueing:  facts.Stats.Waiting,
+		Rotations: facts.Stats.EgressRotations,
+		Revived:   facts.Stats.Revivals,
 	}
 
 	// The queue comes from the supervisor and never from the history. A job is

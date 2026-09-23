@@ -1176,9 +1176,7 @@ func readState(t *testing.T, cl *http.Client, base string) stateReading {
 		Failures:  maybeShown(html, "fail-count"),
 		Settled:   maybeShown(html, "fail-settled"),
 		Alive:     maybeShown(html, "pool-alive"),
-		Ports:     maybeShown(html, "pool-ports"),
 		Rotations: maybeShown(html, "pool-rotations"),
-		Aside:     maybeShown(html, "pool-quarantined"),
 		Back:      maybeShown(html, "pool-revived"),
 		Waiting:   maybeShown(html, "queue-waiting"),
 	}

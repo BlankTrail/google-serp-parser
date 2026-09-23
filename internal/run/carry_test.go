@@ -364,31 +364,35 @@ func TestRunner_CountsACheckWhereGoogleHandsTheSessionAFreshClearance(t *testing
 	// The answer that paid for a check looks like any other — it is the page
 	// that was asked for — and the only sign is the clearance that came with it.
 	o := newDeepOrigin(t, 1)
-	// The first search pays for a check; the second is answered on the
-	// clearance the first won, which is what an untroubled request looks like.
+	// The first search pays for a check to let the session in; the second is
+	// answered on the clearance it won, and the third is made to pass another.
 	o.clears = func(n int) string {
-		if n == 1 {
-			return "won-it"
+		switch n {
+		case 1:
+			return "let-in"
+		case 3:
+			return "again"
 		}
 		return ""
 	}
 	f := poolFacing(t, o.addr(), 1, inSessions)
-	counting := &Challenges{}
+	counting := counting()
 	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
 		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, Challenges: counting}
 
 	rep := r.Run(context.Background(), Job{
-		Queries: []google.Query{usQuery("one"), usQuery("two")}, Pages: 1})
+		Queries: []google.Query{usQuery("one"), usQuery("two"), usQuery("three")}, Pages: 1})
 	for i, got := range rep.Results {
 		if got.Err != nil {
 			t.Fatalf("query %d: %v", i, got.Err)
 		}
 	}
 
+	// Two checks paid for, and only the second of them counts towards the
+	// rhythm: the first was the price of being let in.
 	got := counting.Rhythm()
-	if got.Met != 1 || got.Answered != 1 {
-		t.Errorf("the run counted %d checks and %d plain answers, want one of each: %+v",
-			got.Met, got.Answered, got)
+	if got.Met != 2 || got.Asked != 2 || got.AskedMet != 1 {
+		t.Errorf("the run reads %+v, want two checks of which one was on an admitted session", got)
 	}
 	if !got.Known || got.Between != 1 {
 		t.Errorf("the run reads %v requests a check, want one", got.Between)

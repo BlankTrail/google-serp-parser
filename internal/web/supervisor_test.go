@@ -1525,10 +1525,13 @@ func TestPoolEngine_ReadsWhatTheRunIsUpAgainst(t *testing.T) {
 	if err := brake.Hold(t.Context()); err != nil {
 		t.Fatalf("Hold: %v", err)
 	}
-	checks := &run.Challenges{}
-	checks.Answer("", "won-one") // a check paid for
-	checks.Answer("won-one", "won-one")
-	checks.Answer("won-one", "won-one") // and two answers on the clearance it won
+	checks := run.NewChallenges()
+	// A session let in, then made to pass another check, then two answers on the
+	// clearance that won: the first is not part of the rhythm, the rest are.
+	checks.Answer(false, "", "let-in")
+	checks.Answer(true, "let-in", "won-one")
+	checks.Answer(true, "won-one", "won-one")
+	checks.Answer(true, "won-one", "won-one")
 
 	e := &poolEngine{pool: pool, threads: 1, brake: brake, checks: checks,
 		keeper: sessions.NewKeeper(sessions.NewMemory()), want: sessions.Want{Device: "desktop"}}
@@ -1541,8 +1544,8 @@ func TestPoolEngine_ReadsWhatTheRunIsUpAgainst(t *testing.T) {
 	if facts.Queue.Running != 2 || facts.Queue.Queued != 5 {
 		t.Errorf("the solver reads %+v, want two being solved and five waiting", facts.Queue)
 	}
-	if facts.Checks.Met != 1 || facts.Checks.Answered != 2 || facts.Checks.Between != 2 {
-		t.Errorf("the checks read %+v, want one met, two answers and two requests between them",
+	if facts.Checks.Met != 2 || facts.Checks.Asked != 3 || facts.Checks.Between != 2 {
+		t.Errorf("the checks read %+v, want two met, three requests counted and two between them",
 			facts.Checks)
 	}
 	if facts.Stats.Ports != 1 {

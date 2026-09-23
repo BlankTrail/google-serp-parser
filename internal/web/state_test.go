@@ -402,11 +402,9 @@ func TestState_ShowsThePoolWithoutAJobRunning(t *testing.T) {
 	body := get(t, s, stateAt).Body.String()
 
 	for cell, want := range map[string]string{
-		"pool-alive":       strconv.Itoa(fakePool.Stats.Available),
-		"pool-ports":       strconv.Itoa(fakePool.Stats.Ports),
-		"pool-rotations":   strconv.FormatInt(fakePool.Stats.EgressRotations, 10),
-		"pool-quarantined": strconv.Itoa(fakePool.Stats.Quarantined),
-		"pool-revived":     strconv.FormatInt(fakePool.Stats.Revivals, 10),
+		"pool-alive":     strconv.Itoa(fakePool.Stats.Available),
+		"pool-rotations": strconv.FormatInt(fakePool.Stats.EgressRotations, 10),
+		"pool-revived":   strconv.FormatInt(fakePool.Stats.Revivals, 10),
 	} {
 		if got := shown(t, body, cell); got != want {
 			t.Errorf("the screen shows %s = %q, and the pool says %s", cell, got, want)

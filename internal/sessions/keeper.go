@@ -557,6 +557,25 @@ func (h *Held) Clearance() string {
 	return ""
 }
 
+// Admitted says Google has already answered this session at least once: it
+// holds cookies it was given, or tickets the port kept for it.
+//
+// What it is for is telling a session's first answer from the rest. A fresh
+// session pays for a check to be let in at all, whatever pace it is asked at,
+// so counting that one against the pace would read every run that opens
+// sessions as one asking too fast — and the remedy for asking too fast, a
+// longer rest, makes more fresh sessions rather than fewer.
+func (h *Held) Admitted() bool {
+	if h == nil || h.keeper == nil {
+		return false
+	}
+	k := h.keeper
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	s, ok := k.known[h.ID]
+	return ok && hasAnswered(s.record)
+}
+
 // Save writes the session down after an answer and keeps holding it: its
 // cookies, the port's tickets for it, and where the port goes out now.
 //
