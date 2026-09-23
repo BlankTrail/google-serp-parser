@@ -222,6 +222,16 @@ type Runner struct {
 	// Ramp, when set, watches this run widen into its speed: how many sessions
 	// it has had made for it, and whether it has stopped needing more.
 	Ramp *Ramp
+	// Where, when set, is the census of what this run's threads are doing: how
+	// many are standing in each place of the loop this instant, and how much of
+	// the run's time each place has taken between them. Nil is a run nobody is
+	// counting, which costs a nil check per stage.
+	//
+	// It reaches a run that keeps its own sessions and no other. The other
+	// arrangement has a thread on one query at a time with nothing between the
+	// requests but a pause it sets itself, and the stages already say where
+	// that time goes.
+	Where *Where
 	// ShellTries is how many times a page Google would not show — its check on
 	// the address, handed back unsolved — is asked for again through the same
 	// session and the same address before the address is blamed for it.

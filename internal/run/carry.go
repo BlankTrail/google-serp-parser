@@ -34,10 +34,14 @@ import (
 // for a thread standing still was more ports.
 func (c *crew) carry(ctx context.Context) {
 	drained := false
+	// A thread that has gone home is taken out of the census: left in it, it
+	// would read as one still standing wherever it stopped.
+	defer c.r.Where.Gone(c.thread)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+		c.r.Where.At(c.thread, DoingPort)
 		lease, err := c.a.lease(ctx)
 		if err != nil {
 			if errors.Is(err, blanktrail.ErrPoolExhausted) {
@@ -52,6 +56,7 @@ func (c *crew) carry(ctx context.Context) {
 		// A session carrying a query comes first; a query nobody is carrying is
 		// opened only where none of them is due.
 		var one *walk
+		c.r.Where.At(c.thread, DoingTake)
 		held, err := c.a.Keeper.TakeOneOf(ctx, leasePort{lease}, c.a.Want, c.walks.carriers())
 		if errors.Is(err, sessions.ErrNothingDue) {
 			one = c.opening(ctx, &drained)
@@ -62,6 +67,7 @@ func (c *crew) carry(ctx context.Context) {
 				}
 				// Queries are still being carried by sessions that are resting.
 				// Their pages are what is left of this job.
+				c.r.Where.At(c.thread, DoingIdle)
 				if err := c.r.Pool.Sleep(ctx, waitingForAnIdentity); err != nil {
 					return
 				}
@@ -162,6 +168,7 @@ func (c *crew) over(drained bool) bool {
 // letGoUntaken gives back a port no session went onto, and waits where waiting
 // is what the refusal calls for.
 func (c *crew) letGoUntaken(ctx context.Context, lease *blanktrail.Lease, err error) {
+	c.r.Where.At(c.thread, DoingIdle)
 	// A port the service lost to a restart is opened again before it is handed
 	// out next; a service that is away is waited for, not asked in a loop.
 	if blanktrail.PortLost(err) {
@@ -184,7 +191,8 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	port := leasePort{lease}
 	q := one.q
 	q.Page = one.page + 1
-	search := boundSearcher{attempt: c.a, lease: lease, held: held}
+	search := boundSearcher{attempt: c.a, lease: lease, held: held,
+		where: c.r.Where, thread: c.thread}
 
 	// What Google's check left on this session before the request, so an answer
 	// that comes back with a new one can be read as a check just paid for.
@@ -201,6 +209,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	var err error
 	moved := false
 	shells := 0
+	c.r.Where.At(c.thread, DoingAsk)
 	for {
 		asked := time.Now()
 		if one.next == "" {
@@ -239,6 +248,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 		moved = true
 	}
 
+	c.r.Where.At(c.thread, DoingGiveBack)
 	_, judged := google.ClassOf(err)
 	switch {
 	case ctx.Err() != nil:
@@ -330,6 +340,7 @@ func (c *crew) done(ctx context.Context, one *walk, session int64, err error) {
 		c.results[one.at].Err = err
 		c.mu.Unlock()
 	}
+	c.r.Where.At(c.thread, DoingRecord)
 	c.settle(ctx, one.at, one.began)
 }
 

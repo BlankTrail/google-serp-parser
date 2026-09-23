@@ -349,8 +349,23 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/settings/integration-key":
 		s.serveIntegrationKey(w, r, body)
 	case "/api/v1/upstream/test":
+		// The road the check took is said back, because that is the whole of
+		// what a caller asking about a first hop wants to know: a service that
+		// answered about the direct road is not answering the question.
+		road := "direct"
+		var asked struct {
+			ChainProxy   string `json:"chain_proxy"`
+			ChainGateway string `json:"chain_gateway"`
+		}
+		_ = json.Unmarshal(body, &asked)
+		if asked.ChainProxy != "" {
+			road = "via chain " + asked.ChainProxy
+		}
+		if asked.ChainGateway != "" {
+			road = "via gateway " + asked.ChainGateway
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"http": map[string]any{"ok": true, "detail": "direct"},
+			"http": map[string]any{"ok": true, "detail": road},
 		})
 	default:
 		s.servePortScoped(w, r, body)

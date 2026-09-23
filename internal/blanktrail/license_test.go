@@ -5,6 +5,7 @@ package blanktrail
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
@@ -118,7 +119,7 @@ func TestGateways_ListsConfigsWithTunnelState(t *testing.T) {
 func TestTestEgress_ReturnsPerCheckVerdicts(t *testing.T) {
 	c, _ := newTestClient(t)
 
-	res, err := c.TestEgress(context.Background(), Egress{}, "http")
+	res, err := c.TestEgress(context.Background(), Egress{}, FirstHop{}, "http")
 	if err != nil {
 		t.Fatalf("TestEgress: %v", err)
 	}
@@ -128,6 +129,39 @@ func TestTestEgress_ReturnsPerCheckVerdicts(t *testing.T) {
 	}
 	if !got.OK {
 		t.Errorf("http check OK=false, detail=%q", got.Detail)
+	}
+}
+
+func TestTestEgress_AsksAboutTheRoadThePortsWillTake(t *testing.T) {
+	// An address is reached along a road, and a check that takes another road
+	// answers about a road nobody uses. Measured on a live list: the list
+	// refuses this machine's address outright and carries everything through
+	// its first hop, so a check that leaves the hop out condemns fifteen
+	// thousand working addresses — which is what a reader would then act on.
+	c, _ := newTestClient(t)
+
+	res, err := c.TestEgress(context.Background(), Egress{Upstream: "socks5://198.51.100.7:1080"},
+		FirstHop{Proxy: "socks5://203.0.113.9:2334"}, "http")
+	if err != nil {
+		t.Fatalf("TestEgress: %v", err)
+	}
+	if got := res["http"].Detail; !strings.Contains(got, "203.0.113.9:2334") {
+		t.Errorf("the check was answered %q, want one that went through the first hop it named", got)
+	}
+}
+
+func TestTestEgress_AsksAboutTheGatewayWhereThatIsTheFirstHop(t *testing.T) {
+	// The other kind of first hop. A profile on gateways names one by name, and
+	// a check that dropped it would be asking about the direct road again.
+	c, _ := newTestClient(t)
+
+	res, err := c.TestEgress(context.Background(), Egress{Upstream: "socks5://198.51.100.7:1080"},
+		FirstHop{Gateway: "nl-vless"}, "http")
+	if err != nil {
+		t.Fatalf("TestEgress: %v", err)
+	}
+	if got := res["http"].Detail; !strings.Contains(got, "nl-vless") {
+		t.Errorf("the check was answered %q, want one that went through the gateway it named", got)
 	}
 }
 

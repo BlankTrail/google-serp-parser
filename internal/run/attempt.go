@@ -294,6 +294,19 @@ type boundSearcher struct {
 	// held is the kept session the walk is carried by, in a run that keeps
 	// sessions; nil asks through the port's own identity.
 	held *sessions.Held
+	// where and thread are the census this thread reports to, so the wait in
+	// front of a request is not counted as part of the request.
+	where  *Where
+	thread int
+}
+
+// braked waits out whatever the brake asks for, under its own name in the
+// census. Everything after it is the request.
+func (b boundSearcher) braked(ctx context.Context) error {
+	b.where.At(b.thread, DoingBrake)
+	err := b.attempt.Brake.Hold(ctx)
+	b.where.At(b.thread, DoingAsk)
+	return err
 }
 
 func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP, error) {
@@ -301,7 +314,7 @@ func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP,
 	// walk it already holds the identity for. Both are braked, or a job of the
 	// kind that walks would be the one kind that could still start an
 	// avalanche.
-	if err := b.attempt.Brake.Hold(ctx); err != nil {
+	if err := b.braked(ctx); err != nil {
 		return google.SERP{}, err
 	}
 	var search *google.Session
@@ -318,7 +331,7 @@ func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP,
 // SearchAt is Search for a page whose address the page before it carried; see
 // google.Session.SearchAt. It is braked and reported exactly as Search is.
 func (b boundSearcher) SearchAt(ctx context.Context, q google.Query, target string) (google.SERP, error) {
-	if err := b.attempt.Brake.Hold(ctx); err != nil {
+	if err := b.braked(ctx); err != nil {
 		return google.SERP{}, err
 	}
 	var search *google.Session

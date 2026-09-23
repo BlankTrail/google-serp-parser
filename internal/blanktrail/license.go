@@ -176,11 +176,18 @@ type CheckResult struct {
 	Detail  string `json:"detail"`
 }
 
-// TestEgress probes an egress chain before any port is opened. Valid checks are
-// "http", "udp" and "leak"; passing none defaults to "http". This is what backs
-// the "test my proxy list" button — failing here costs a second, failing an
-// hour into a job costs the job.
-func (c *Client) TestEgress(ctx context.Context, eg Egress, checks ...string) (map[string]CheckResult, error) {
+// TestEgress probes an egress before any port is opened. Valid checks are
+// "http", "udp" and "leak"; passing none defaults to "http". Failing here costs
+// a second, failing an hour into a job costs the job.
+//
+// hop is the first hop the ports of this profile take, and it has to be here:
+// an address is reached along a road, and a check that takes another road
+// answers about a road nobody uses. Measured on a live list this is the whole
+// difference between "every address is dead" and "most of them answer" — the
+// list in question refuses this machine's own address outright and carries
+// everything through its hop, so a check without the hop condemns fifteen
+// thousand working addresses.
+func (c *Client) TestEgress(ctx context.Context, eg Egress, hop FirstHop, checks ...string) (map[string]CheckResult, error) {
 	if len(checks) == 0 {
 		checks = []string{"http"}
 	}
@@ -189,6 +196,8 @@ func (c *Client) TestEgress(ctx context.Context, eg Egress, checks ...string) (m
 		"protocol":         "http",
 		"upstream":         eg.Upstream,
 		"upstream_gateway": eg.Gateway,
+		"chain_proxy":      hop.Proxy,
+		"chain_gateway":    hop.Gateway,
 	}
 	out := map[string]CheckResult{}
 	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/upstream/test", body, &out); err != nil {
