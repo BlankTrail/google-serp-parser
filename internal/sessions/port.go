@@ -20,11 +20,18 @@ type Want struct {
 	Browser string
 	OS      string
 	Release int
-	// Pause is how long a session rests after it was last used before it may be
-	// handed out again. It is the taker's rather than the keeper's: a job, the
-	// warmer and a search answered inside a request share the sessions, and not
-	// the pause.
+	// Pause and UpTo are the rest a session takes after it was last used,
+	// before it may be handed out again: the least and the most of it. Each
+	// session draws its own rest between the two afresh at every use, so a
+	// session asked again every sixty seconds to the millisecond — which is a
+	// description of a program and not of a reader — does not happen.
+	//
+	// The rest is the taker's rather than the keeper's: a job, the warmer and a
+	// search answered inside a request share the sessions, and not the rest.
+	// UpTo below Pause is a caller naming one end only, and the other is that
+	// end and half again — what the single number meant before there were two.
 	Pause time.Duration
+	UpTo  time.Duration
 }
 
 // matches says whether a session's fingerprint is what the want narrows to.

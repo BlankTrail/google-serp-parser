@@ -1059,3 +1059,51 @@ func TestHeld_GiveUpTakesTheSessionOutOfTheHistory(t *testing.T) {
 		t.Errorf("the keeper knows %d sessions, want the one made after the other was given up", all)
 	}
 }
+
+func TestKeeper_DrawsASessionsRestBetweenTheTwoEndsTheTakerNames(t *testing.T) {
+	// The operator sets a span rather than a number — sixty to a hundred and
+	// twenty by default — and each session's own rest is drawn inside it. The
+	// draw is what keeps a pool of sessions off a metronome: the number is the
+	// reader's pace, and a request every sixty seconds to the millisecond
+	// describes the program making it.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	k.rand = func() float64 { return 1 } // this session rests the most it may
+	ctx := context.Background()
+	span := Want{Device: "desktop", Pause: time.Minute, UpTo: 2 * time.Minute}
+	p := listPort(1, "a", "a", "b")
+	s, _ := k.Take(ctx, p, span)
+	_ = s.Answered(ctx, p)
+
+	c.pass(119 * time.Second)
+	early, _ := k.Take(ctx, listPort(2, "b", "a", "b"), span)
+	if early.ID == s.ID {
+		t.Fatal("a session drawn to rest two minutes was handed out at a hundred and nineteen seconds")
+	}
+	early.PutBack()
+	c.pass(2 * time.Second)
+	later, _ := k.Take(ctx, listPort(3, "a", "a", "b"), span)
+	if later.ID != s.ID {
+		t.Errorf("at two minutes and one second got session %d, want the one that had rested its span (%d)",
+			later.ID, s.ID)
+	}
+
+	// And the least end is a floor: a session drawn to rest the least of the
+	// span still rests that much.
+	k.rand = func() float64 { return 0 }
+	_ = later.Answered(ctx, listPort(3, "a", "a", "b"))
+	c.pass(59 * time.Second)
+	fresh, _ := k.Take(ctx, listPort(4, "b", "a", "b"), span)
+	if fresh.ID == s.ID {
+		t.Error("a session was handed out at fifty-nine seconds of a span starting at sixty")
+	}
+	fresh.PutBack()
+	// The draw is taken again at every use rather than once in a session's
+	// life: this one fell on the least of the span, so the session that rested
+	// two minutes last time is due at one this time.
+	c.pass(2 * time.Second)
+	if got, _ := k.Take(ctx, listPort(5, "a", "a", "b"), span); got.ID != s.ID {
+		t.Errorf("at sixty-one seconds got session %d, want the one whose new draw was the least of the span (%d)",
+			got.ID, s.ID)
+	}
+}

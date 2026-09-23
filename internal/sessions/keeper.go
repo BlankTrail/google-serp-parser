@@ -94,22 +94,34 @@ type kept struct {
 	record store.Session
 	jar    *Jar
 	held   bool
-	// spread is how much longer than the taker's pause this session rests
-	// since it was last used, as a share of the pause: from nought to a half.
-	// Drawn again at every use, so no session is asked again on a metronome.
+	// spread is where between the two ends of the taker's span this session's
+	// own rest falls: nought is the least it may rest and one the most. Drawn
+	// again at every use, so no session is asked again on a metronome.
 	spread float64
 }
 
-// restSpread is how far above the pause a session's rest may reach, as a share
-// of it: half, so a pause of sixty seconds is a rest of sixty to ninety — the
-// span the operator measured as the one a session is best asked again in.
+// restSpread is how far above the floor a session's rest reaches when the taker
+// names no ceiling, as a share of the floor: half, so a pause of sixty seconds
+// is a rest of sixty to ninety. It is what the one number meant before a taker
+// could name both ends.
 const restSpread = 0.5
 
-// rested says whether a session has rested for the taker's pause, drawn out by
-// its own spread.
-func (s *kept) rested(pause time.Duration, now time.Time) bool {
-	rest := pause + time.Duration(float64(pause)*s.spread)
-	return now.Sub(s.record.UsedAt) >= rest
+// rested says whether a session has rested the span the taker asks for.
+func (s *kept) rested(w Want, now time.Time) bool {
+	return now.Sub(s.record.UsedAt) >= s.restFor(w)
+}
+
+// restFor is the rest this session owes a taker asking for this span: the least
+// of it, and its own draw of the distance to the most. The draw is the
+// session's and is taken again at every use — see kept.spread — so two sessions
+// resting the same span do not come due together, and neither comes due on a
+// metronome.
+func (s *kept) restFor(w Want) time.Duration {
+	from, to := w.Pause, w.UpTo
+	if to <= from {
+		to = from + time.Duration(float64(from)*restSpread)
+	}
+	return from + time.Duration(float64(to-from)*s.spread)
 }
 
 // Held is a session a caller holds: which one, and the jar to search with.
@@ -229,7 +241,7 @@ func (k *Keeper) pick(p Port, w Want, only map[int64]bool) *kept {
 			continue
 		}
 		if s.held || r.Device != w.Device || !w.matches(r.Browser, r.OS, r.Release) ||
-			!s.rested(w.Pause, now) || now.Sub(r.UsedAt) > KeptFor ||
+			!s.rested(w, now) || now.Sub(r.UsedAt) > KeptFor ||
 			!fitsPort(s, portExit, busy, limit, p) {
 			continue
 		}
@@ -485,7 +497,7 @@ func (k *Keeper) load(ctx context.Context, device string) error {
 			continue
 		}
 		jar.now = k.now
-		k.known[one.ID] = &kept{record: one, jar: jar, spread: k.rand() * restSpread}
+		k.known[one.ID] = &kept{record: one, jar: jar, spread: k.rand()}
 		if a, ok := addressOf(one.Exit); ok && one.UsedAt.After(k.used[a]) {
 			k.used[a] = one.UsedAt
 		}
@@ -583,7 +595,7 @@ func (k *Keeper) write(ctx context.Context, h *Held, p Port, giveBack bool) erro
 	k.mu.Lock()
 	s.record.UsedAt, s.record.Failures, s.record.Tickets, s.record.Exit = at, 0, tickets, exit
 	s.record.Cookies = written
-	s.spread = k.rand() * restSpread
+	s.spread = k.rand()
 	if a, ok := addressOf(exit); ok {
 		k.used[a] = at
 	}
@@ -711,7 +723,7 @@ func (k *Keeper) elsewhere(ctx context.Context, h *Held) error {
 	k.mu.Lock()
 	s.record.UsedAt, s.record.Failures, s.record.Tickets, s.record.Exit = at, 0, nil, ""
 	s.record.Cookies = written
-	s.spread = k.rand() * restSpread
+	s.spread = k.rand()
 	if a, ok := addressOf(exit); ok {
 		// The address carried a request and is spent for the pause all the
 		// same: what it could not do was pass the check at the end of it.
@@ -748,7 +760,7 @@ func (k *Keeper) failed(ctx context.Context, h *Held) (bool, error) {
 	// A refusal is a use like any other as far as the pause is concerned.
 	s.record.UsedAt = now
 	s.record.Failures++
-	s.spread = k.rand() * restSpread
+	s.spread = k.rand()
 	return false, nil
 }
 
