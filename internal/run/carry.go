@@ -252,8 +252,13 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	_, judged := google.ClassOf(err)
 	switch {
 	case ctx.Err() != nil:
-		// The run is ending. The query stays as it was found, and the session
-		// goes back untouched.
+		// The run is ending. A page that came back is kept all the same — it
+		// was fetched and paid for, and the run writes down what its walks hold
+		// when it stops — but nothing further is asked of the service or the
+		// history under a context that has ended.
+		if err == nil {
+			c.keep(one.at, serp)
+		}
 		held.PutBack()
 	case err == nil:
 		// Written down and given back: its rest starts here, and the keeper
@@ -315,6 +320,15 @@ func (c *crew) took(ctx context.Context, one *walk, session int64, serp google.S
 // page addressed to a search it never showed that one. With nothing in hand
 // the query has not started, so it waits for another session — unless the tries
 // its phrase is allowed are spent, and then the refusal stands as its answer.
+//
+// Unless nothing ever reached Google. A phrase that spent every try on
+// addresses the service could not reach was never asked, and writing it down as
+// failed says the opposite of what happened: measured on a live job the hour
+// its list went down, 141 phrases were recorded as failures in twenty minutes
+// without one of them being put to Google. So it is left as the run found it,
+// the way a query is left when the pool has nothing to give — the next run
+// takes it up again, and the history is not filled with failures nobody can
+// act on.
 func (c *crew) stopped(ctx context.Context, one *walk, session int64, err error, spend bool) {
 	if one.page > 0 {
 		c.done(ctx, one, session, nil)
@@ -328,7 +342,26 @@ func (c *crew) stopped(ctx context.Context, one *walk, session int64, err error,
 		c.walks.park(session)
 		return
 	}
+	if _, judged := google.ClassOf(err); !judged && err != nil {
+		c.never(one, session)
+		return
+	}
 	c.done(ctx, one, session, err)
+}
+
+// never takes a walk out of the register and leaves its query as the run found
+// it: nothing collected, nothing written down, and not marked as one this run
+// asked for.
+//
+// Not marking it is the whole of it. A query this run attempted and settled
+// with neither pages nor a reason is reported as done and written to the
+// history as done, and a job resumed afterwards never asks it again.
+func (c *crew) never(one *walk, session int64) {
+	c.walks.end(session)
+	c.mu.Lock()
+	c.results[one.at].Attempted = false
+	c.results[one.at].Err = nil
+	c.mu.Unlock()
 }
 
 // done takes the walk out of the register and settles its query with what it

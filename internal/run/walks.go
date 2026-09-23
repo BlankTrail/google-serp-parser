@@ -3,6 +3,7 @@
 package run
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -194,6 +195,31 @@ func (w *walks) end(session int64) (*walk, bool) {
 	delete(w.carrying, session)
 	w.live--
 	return one, true
+}
+
+// left takes every walk still in the register — carried and waiting alike —
+// and hands them back, leaving it empty.
+//
+// It is for the end of a run. A walk is settled by the thread that finishes it,
+// and a run that stops has walks in neither state: some in a thread's hands,
+// the rest sitting under sessions nobody will come back for. What they
+// collected is in the results already; without this, nothing ever writes it
+// down.
+func (w *walks) left() []*walk {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]*walk, 0, len(w.carrying)+len(w.waiting))
+	for id, one := range w.carrying {
+		out = append(out, one)
+		delete(w.carrying, id)
+	}
+	out = append(out, w.waiting...)
+	w.waiting = nil
+	w.live = 0
+	// In the order the queries were opened, so a run settles what it has the
+	// way it took it rather than in whatever order a map hands them over.
+	sort.Slice(out, func(i, j int) bool { return out[i].at < out[j].at })
+	return out
 }
 
 // open is how many queries are in flight: begun and not settled. A thread stops

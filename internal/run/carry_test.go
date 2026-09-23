@@ -733,3 +733,91 @@ func TestRunner_BoundsTheSecondAskingsByTheTriesThePhraseIsAllowed(t *testing.T)
 			len(asked), asked)
 	}
 }
+
+func TestRunner_KeepsWhatAWalkHadCollectedWhenTheRunIsStopped(t *testing.T) {
+	// The pages of a walk reach the history when its query is settled, and a
+	// run that stops has walks part way through: some in a thread's hands, the
+	// rest under sessions nobody will come back for. Left as they were, every
+	// page they had taken goes with them — measured on a live job, three
+	// hundred and seventy pages to one press of stop.
+	o := newDeepOrigin(t, 5)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	sink := &recordingSink{}
+	ctx, stop := context.WithCancel(context.Background())
+	// The run is stopped the instant its second page comes back, which is the
+	// shape a press of stop has: the walk is holding two pages, owes three
+	// more, and the page in hand arrived under a context that has just ended.
+	answered := 0
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop},
+		Watch: func(s Step) {
+			if s.Stage != StageAsk || s.Err != nil {
+				return
+			}
+			answered++
+			if answered == 2 {
+				stop()
+			}
+		}}
+
+	rep := r.Run(ctx, Job{Queries: []google.Query{usQuery("x")}, Pages: 5, Tries: 3})
+
+	got := sink.records()
+	if len(got) != 1 {
+		t.Fatalf("the sink was told about %d queries, want the one the run was holding", len(got))
+	}
+	if len(got[0].Pages) != 2 {
+		t.Errorf("the query was written down with %d pages, want the two it had taken", len(got[0].Pages))
+	}
+	if len(rep.Results[0].Pages) != 2 {
+		t.Errorf("the report carries %d pages, want the two the walk had", len(rep.Results[0].Pages))
+	}
+}
+
+func TestRunner_LeavesAPhraseThatNeverReachedGoogleAsItWasFound(t *testing.T) {
+	// Every try spent on addresses that carried nothing is a phrase that was
+	// never asked. Written down as failed it says the opposite of what
+	// happened, and a job resumed afterwards never asks it again — so on a list
+	// that is down for an hour, a run turns its whole list into failures nobody
+	// can act on.
+	o := newDeepOrigin(t, 1)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	f.blackout()
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 2})
+
+	if got := sink.records(); len(got) != 0 {
+		t.Errorf("the sink was told about %d queries, want none: nothing was ever asked", len(got))
+	}
+	if rep.Untried != 1 || rep.Failed != 0 {
+		t.Errorf("the report says %d untried and %d failed, want the phrase left untried: %+v",
+			rep.Untried, rep.Failed, rep.Results[0])
+	}
+	if rep.Results[0].Err != nil {
+		t.Errorf("the phrase carries %v, want nothing held against it", rep.Results[0].Err)
+	}
+}
+
+func TestRunner_StillRecordsAPhraseGoogleItselfRefused(t *testing.T) {
+	// The other half of the rule. A refusal Google read and judged is an answer
+	// about the phrase, and leaving it unwritten would have the next run ask it
+	// again for as long as Google keeps saying the same thing.
+	o := newDeepOrigin(t, 1)
+	o.refuse.Store(true)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 2})
+
+	if got := sink.records(); len(got) != 1 {
+		t.Fatalf("the sink was told about %d queries, want the one Google refused", len(got))
+	}
+	if rep.Failed != 1 {
+		t.Errorf("the report says %d failed, want the one Google itself refused: %+v", rep.Failed, rep.Results[0])
+	}
+}

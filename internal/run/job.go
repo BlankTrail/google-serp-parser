@@ -27,6 +27,15 @@ type Sink interface {
 	Record(ctx context.Context, res QueryResult) error
 }
 
+// settlingTheRest is how long a run that has stopped may spend writing down
+// what its walks had collected.
+//
+// It is bounded because a stop is somebody waiting: a run with three hundred
+// walks in hand, each of them looking up the addresses its page would not
+// state, would take minutes to put itself away. What does not fit stays in the
+// history as it was, which is what would have happened to all of it before.
+const settlingTheRest = 20 * time.Second
+
 // ErrOrdinalsMismatch is returned when a job carries a numbering that does not
 // line up with its queries.
 var ErrOrdinalsMismatch = errors.New("run: Ordinals must be empty or as long as Queries")
@@ -461,6 +470,32 @@ sending:
 	}
 	close(queue)
 	wg.Wait()
+
+	// What the walks still in hand had collected. A run that stops — a job
+	// somebody pressed stop on, a service that went away — has queries part way
+	// through their pages, and those pages are in the results and nowhere else:
+	// they reach the history when the query is settled, and a query nobody
+	// settles takes them with it. Measured on a live job: a hundred threads at
+	// ten pages a query lost three hundred and seventy pages to one press.
+	//
+	// The context is the one that just ended, so the writing is done under one
+	// that is not cancelled — with a bound of its own, because a run being
+	// stopped is a run somebody is waiting for.
+	if attempt.Keeper != nil {
+		if left := carrying.left(); len(left) > 0 {
+			keeping, stop := context.WithTimeout(context.WithoutCancel(ctx), settlingTheRest)
+			for _, one := range left {
+				if len(results[one.at].Pages) == 0 {
+					// Nothing was collected, so there is nothing to keep and
+					// nothing to say: the query stays as the history has it and
+					// the next run takes it up again.
+					continue
+				}
+				settle(keeping, 0, one.at, one.began)
+			}
+			stop()
+		}
+	}
 
 	rep := Report{Results: results, Requests: r.Pool.Stats().Requests - before}
 	select {
