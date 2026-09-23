@@ -805,12 +805,12 @@ func TestLadder_ReadsAnUnreachableAddressAsTheRoadAndNotAsAnAnswer(t *testing.T)
 }
 
 func TestLadder_DoesNotSpendTheAddressOnAServiceRefusalOfItsOwn(t *testing.T) {
-	// Any other thing the service says about itself — a solver that ran out of
-	// time, a licence that is full — is about the service. Answered by leaving
-	// the address, a run would spend a list of fifteen thousand on a queue that
-	// was busy for a minute.
+	// A browser that tried and did not clear the challenge is about this
+	// request and this identity, not about whether the address can be reached.
+	// Answered by benching the address, a run would spend a list of fifteen
+	// thousand on challenges it met.
 	rt := &fakeRT{steps: []func() (*http.Response, error){
-		serviceSays(523, "solver_timeout"),
+		serviceSays(403, "solver_failed"),
 	}}
 	rem := &fakeRemedy{retries: 3, addresses: 5}
 	l := &ladder{rt: rt, port: 20102, rem: rem}
@@ -881,3 +881,110 @@ func TestLadder_LeavesAPlain523FromTheFarEndAlone(t *testing.T) {
 
 // kindsOf is how many failures of one kind the ladder named.
 func (r *fakeRemedy) kindsOf(k Failure) int { return r.kinds[k] }
+
+func TestLadder_AsksTheSamePortAgainWhileAChallengeIsStillBeingSolved(t *testing.T) {
+	// A solve that outran the request it met is still going, and it pins itself
+	// to the port that met it. Leaving for another address throws away the wait
+	// already paid for and starts the challenge again somewhere else; asking the
+	// same port again usually walks straight through.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(403, "solver_timeout"),
+		respond(200, nil, "the page the solve cleared"),
+	}}
+	rem := &fakeRemedy{retries: 3, addresses: 5}
+	l := &ladder{rt: rt, port: 20201, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Errorf("the request came back %d, want the page the second asking got", resp.StatusCode)
+	}
+	if rem.markedDead != 0 || rem.rotations != 0 {
+		t.Errorf("the address was marked dead %d times and the port moved %d, want neither: the "+
+			"challenge is not the address's doing", rem.markedDead, rem.rotations)
+	}
+	if len(rem.waits) != 1 || rem.waits[0] != solverAgain {
+		t.Errorf("the ladder waited %v before asking again, want the one short wait for a solve to land",
+			rem.waits)
+	}
+}
+
+func TestLadder_WaitsLongerWhereTheSolverHadNothingFree(t *testing.T) {
+	// No attempt was made at all: the queue is full or there is no window. The
+	// address is not at fault and asking again at once asks the same thing of
+	// the same queue.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(403, "solver_capacity"),
+		respond(200, nil, "the page"),
+	}}
+	rem := &fakeRemedy{retries: 3, addresses: 5}
+	l := &ladder{rt: rt, port: 20202, rem: rem}
+
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if rem.markedDead != 0 || rem.rotations != 0 {
+		t.Errorf("the address was spent on a solver with nothing free: dead %d, moved %d",
+			rem.markedDead, rem.rotations)
+	}
+	if len(rem.waits) != 1 || rem.waits[0] != solverQueueAgain {
+		t.Errorf("the ladder waited %v, want the longer wait for somebody else's solve to finish", rem.waits)
+	}
+}
+
+func TestLadder_LeavesTheAddressAloneWhereTheRoadItselfIsDown(t *testing.T) {
+	// The first hop being unreachable is every address at once. Walking the
+	// list for it spends the whole list on one road.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(523, "chain_unreachable"),
+	}}
+	rem := &fakeRemedy{retries: 3, addresses: 5}
+	l := &ladder{rt: rt, port: 20203, rem: rem}
+
+	_, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if !errors.Is(err, ErrChainUnreachable) {
+		t.Fatalf("RoundTrip returned %v, want the road being unreachable", err)
+	}
+	if rem.markedDead != 0 || rem.rotations != 0 {
+		t.Errorf("the address was marked dead %d times and the port moved %d for a road that is down",
+			rem.markedDead, rem.rotations)
+	}
+	if rt.calls != 1 {
+		t.Errorf("the request went out %d times, want the one: the road is the same for every address",
+			rt.calls)
+	}
+}
+
+func TestLadder_TellsTheTraceWhatTheServiceCalledIt(t *testing.T) {
+	// A tally of these is what says what a run is up against, and an answer
+	// carrying no reason at all is something neither side has a name for.
+	var told []RequestTrace
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(403, "solver_timeout"),
+		respond(429, nil, "google is cross"),
+		respond(200, nil, "the page"),
+	}}
+	l := &ladder{rt: rt, port: 20204, rem: &fakeRemedy{retries: 3, addresses: 5},
+		trace: func(tr RequestTrace) { told = append(told, tr) }}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if len(told) != 3 {
+		t.Fatalf("the trace was told about %d attempts, want the three that went out", len(told))
+	}
+	if told[0].Reason != "solver_timeout" {
+		t.Errorf("the first attempt is traced as %q, want what the service called it", told[0].Reason)
+	}
+	for i, one := range told[1:] {
+		if one.Reason != "" {
+			t.Errorf("attempt %d came from the far end and is traced as %q, want no reason at all",
+				i+2, one.Reason)
+		}
+	}
+}

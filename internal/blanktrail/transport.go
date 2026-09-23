@@ -44,6 +44,16 @@ type RequestTrace struct {
 	// Status is what came back, or zero when nothing did; Err is why.
 	Status int
 	Err    error
+	// Reason is the word the service put on an answer it composed itself —
+	// why it could not carry this request — and is empty on every answer that
+	// came from the far end.
+	//
+	// It is in the trace rather than only in the error because the two answer
+	// different questions: the error says what happened to one request, and a
+	// tally of these says what a run is up against. A run whose answers carry
+	// no reason at all is meeting something neither side has a name for yet,
+	// which is the most interesting thing this can say.
+	Reason string
 }
 
 // newBaseTransport builds the HTTP-CONNECT transport that talks to one proxy
@@ -170,7 +180,11 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		t.rem.attempted()
 		resp, err := t.rt.RoundTrip(sent)
 		if t.trace != nil {
-			t.trace(mark.done(t.port, attempt, resp, err))
+			told := mark.done(t.port, attempt, resp, err)
+			if refusal, ours := serviceRefusal(resp); ours {
+				told.Reason = refusal.Reason
+			}
+			t.trace(told)
 		}
 		if err != nil {
 			kind := failureOf(err, 0)
@@ -215,12 +229,13 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		// are the same number about different things.
 		if refusal, ours := serviceRefusal(resp); ours {
 			drainAndClose(resp)
-			t.rem.failed(FailureTransport)
-			if errors.Is(refusal, ErrUpstreamUnreachable) {
+			switch {
+			case errors.Is(refusal, ErrUpstreamUnreachable):
 				// The address could not be reached. That is the address's, and
 				// it is answered the way a request that never arrived is: leave
 				// it and try another, with no pause in between — there is
 				// nothing at the far end to wait out.
+				t.rem.failed(FailureTransport)
 				if t.rem.leaveAddress(t.port) {
 					t.rem.markDeadEgress(t.port)
 					if !t.rem.stays(t.port) {
@@ -233,11 +248,33 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				}
 				delay = 0
 				continue
+
+			case errors.Is(refusal, ErrSolverWorking), errors.Is(refusal, ErrSolverBusy):
+				// The challenge, not the road. A solve that outran this request
+				// is still going and pins itself to this port, so the warm place
+				// to ask from is the one we are standing on: leaving it throws
+				// away the wait already paid for and starts the challenge again
+				// somewhere else. A solver with nothing free is the same port
+				// and the same address, a moment later.
+				t.rem.failed(FailureTimeout)
+				if attempt >= retryBudget {
+					t.rem.exhausted(t.port)
+					return nil, refusal
+				}
+				delay = solverAgain
+				if errors.Is(refusal, ErrSolverBusy) {
+					delay = solverQueueAgain
+				}
+				continue
+
+			default:
+				// Anything else the service says about itself — a road that is
+				// down, a browser that tried and failed — is not this address's
+				// to answer for, and leaving the address for it would spend a
+				// list on something that was never in it.
+				t.rem.failed(FailureTransport)
+				return nil, refusal
 			}
-			// Anything else the service says about itself is not the address's,
-			// and leaving the address for it would spend a list on something
-			// that was never in it.
-			return nil, refusal
 		}
 
 		if answered(resp.StatusCode) {
@@ -303,6 +340,20 @@ func drainAndClose(resp *http.Response) {
 
 // backoff returns an exponential delay with jitter for retry attempt n (n >= 1),
 // capped at 8 seconds.
+// solverAgain is how long to wait before asking the same port again while a
+// challenge it met is still being solved, and solverQueueAgain how long when
+// the solver had nothing free to start one with.
+//
+// The first is short because the thing being waited for is nearly done — the
+// solve is running and will pin this port — and the second is longer because
+// what is being waited for is somebody else's solve finishing. Neither is a
+// backoff against a far end that is angry with us: this is our own service
+// asking for a moment.
+const (
+	solverAgain      = 3 * time.Second
+	solverQueueAgain = 10 * time.Second
+)
+
 func backoff(n int) time.Duration {
 	const base = 400 * time.Millisecond
 	if n < 1 {

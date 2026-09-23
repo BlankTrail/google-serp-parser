@@ -342,7 +342,11 @@ type attemptTally struct {
 	// nothing actually did. A count of "never arrived" says how many, and this
 	// says what happened to them, which is the difference between a road that
 	// refuses and a road that goes quiet.
-	why      map[string]int
+	why map[string]int
+	// reasons counts the word the service put on each answer it composed
+	// itself, and the ones it put no word on. The last is what says whether
+	// there is a kind of refusal neither side has a name for.
+	reasons  map[string]int
 	n        int
 	retries  int
 	reused   int
@@ -374,6 +378,17 @@ func (a *attemptTally) note(tr blanktrail.RequestTrace) {
 		a.why[whyFailed(tr.Err)]++
 	}
 	a.statuses[tr.Status]++
+	if a.reasons == nil {
+		a.reasons = map[string]int{}
+	}
+	switch {
+	case tr.Reason != "":
+		a.reasons[tr.Reason]++
+	case tr.Err != nil:
+		a.reasons["(no tag: nothing came back)"]++
+	case tr.Status/100 != 2 && tr.Status/100 != 3:
+		a.reasons[fmt.Sprintf("(no tag: HTTP %d from the far end)", tr.Status)]++
+	}
 	a.total = append(a.total, tr.Total)
 	if tr.Connect > 0 {
 		a.connect = append(a.connect, tr.Connect)
@@ -407,9 +422,19 @@ func (a *attemptTally) reading() string {
 		}
 		why = append(why, fmt.Sprintf("%d×%s", a.why[w], w))
 	}
+	tags := make([]string, 0, len(a.reasons))
+	for r := range a.reasons {
+		tags = append(tags, r)
+	}
+	sort.Slice(tags, func(i, j int) bool { return a.reasons[tags[i]] > a.reasons[tags[j]] })
+	var named []string
+	for _, r := range tags {
+		named = append(named, fmt.Sprintf("%d×%s", a.reasons[r], r))
+	}
 	return fmt.Sprintf("%d attempts, %d of them retries, %d on a kept connection, %d never arrived; "+
-		"statuses %v; what the failures were: %v; whole attempt %s; tunnel %s; first byte %s",
-		a.n, a.retries, a.reused, a.failed, says, why,
+		"statuses %v; what the service called them: %v; what the failures were: %v; "+
+		"whole attempt %s; tunnel %s; first byte %s",
+		a.n, a.retries, a.reused, a.failed, says, named, why,
 		spread(a.total), spread(a.connect), spread(a.first))
 }
 

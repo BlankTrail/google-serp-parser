@@ -31,8 +31,41 @@ var ErrUpstreamUnreachable = errors.New("blanktrail: the service could not reach
 // list on something that was never in it.
 var ErrServiceRefused = errors.New("blanktrail: the service did not carry the request")
 
-// unreachableReason is what the service calls an address it could not reach.
-const unreachableReason = "upstream_unreachable"
+// ErrSolverWorking is a challenge still being solved when the request ran out
+// of patience. The port is the warm one — the solve pins itself to it — so the
+// thing to do is ask again through the same port rather than anywhere else.
+var ErrSolverWorking = errors.New("blanktrail: the challenge is still being solved")
+
+// ErrSolverBusy is the solver with nothing free to give this request. Asking
+// again at once asks the same thing of the same queue.
+var ErrSolverBusy = errors.New("blanktrail: the challenge solver has nothing free")
+
+// ErrChainUnreachable is the first hop being unreachable. Every address is
+// behind it, so this is not one address's failure and walking the list for it
+// would spend the whole of it on one road being down.
+var ErrChainUnreachable = errors.New("blanktrail: the service could not reach the first hop")
+
+// The words the service uses, each with a different thing to do about it.
+const (
+	// unreachableReason is an address that did not answer. The next address is
+	// the answer.
+	unreachableReason = "upstream_unreachable"
+	// chainUnreachableReason is the road itself being down. Every address is
+	// behind it, so taking the next one buys nothing and spends the list.
+	chainUnreachableReason = "chain_unreachable"
+	// solverWorkingReason is a challenge the solver did not finish inside this
+	// request. It goes on working and pins the port, so the same port asked
+	// again usually walks straight through — and a caller that leaves throws
+	// away the wait it has already paid for.
+	solverWorkingReason = "solver_timeout"
+	// solverBusyReason is no attempt at all: the queue is full, no window is
+	// free, or the solver is off. Nothing is wrong with the address and nothing
+	// is gained by asking faster.
+	solverBusyReason = "solver_capacity"
+	// solverFailedReason is a browser that tried and did not clear the
+	// challenge. That one is about where the request is going out from.
+	solverFailedReason = "solver_failed"
+)
 
 // ServiceError is one of those answers, with the word the service used.
 type ServiceError struct {
@@ -52,6 +85,12 @@ func (e *ServiceError) Is(target error) bool {
 	switch target {
 	case ErrUpstreamUnreachable:
 		return e.Reason == unreachableReason
+	case ErrChainUnreachable:
+		return e.Reason == chainUnreachableReason
+	case ErrSolverWorking:
+		return e.Reason == solverWorkingReason
+	case ErrSolverBusy:
+		return e.Reason == solverBusyReason
 	case ErrServiceRefused:
 		return true
 	}
