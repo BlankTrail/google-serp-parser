@@ -108,6 +108,41 @@
 </ul>
 </details>
 </section>
+
+{{/* Where the threads of this run are standing, and where the run's time has
+     gone. One row per place, in the order a thread meets them, and every thread
+     is in exactly one of them at every instant — so the shares add up to the
+     whole of the run's time and can be read against each other.
+
+     It is the reading that tells one slow run from another: waiting on Google
+     is the work, and every other place with a share worth seeing is a place to
+     go and look at. The longest column is what tells a place threads pass
+     through quickly from one they are stuck in. */}}
+{{if .Standing}}<section class="card" id="standing">
+<h2>{{$.T "job.standing"}}</h2>
+<table class="rows">
+<thead><tr>
+<th>{{$.T "job.standing.where"}}</th>
+<th class="num">{{$.T "job.standing.threads"}}</th>
+<th class="num">{{$.T "job.standing.share"}}</th>
+<th class="num">{{$.T "job.standing.longest"}}</th>
+</tr></thead>
+<tbody>
+{{range .Standing}}<tr>
+<td>{{$.T .Where}}</td>
+<td class="num">{{.Threads}}</td>
+<td class="num">{{.Share}}%</td>
+<td class="num">{{.Longest}}</td>
+</tr>
+{{end}}</tbody>
+</table>
+<details class="help">
+<summary>{{$.T "help.what"}}</summary>
+<ul class="notes">
+<li>{{$.T "job.standing.why"}}</li>
+</ul>
+</details>
+</section>{{end}}
 {{end}}
 
 {{/* Each button is a form that sends itself, by post. Nothing here needs a

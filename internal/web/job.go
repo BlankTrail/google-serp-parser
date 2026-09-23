@@ -164,6 +164,24 @@ type jobPool struct {
 	// is the sessions being asked oftener than their rest allows. The page says
 	// what to do about it.
 	Crowded bool
+	// Standing is where the threads of this run are this instant and where its
+	// time has gone, one row per place. Without it a run at a tenth of the speed
+	// it should be reads the same on every other figure here whether its threads
+	// are queueing for the service, resting on a pause, or waiting on Google.
+	Standing []jobStanding
+}
+
+// jobStanding is one place a thread can be, drawn.
+type jobStanding struct {
+	// Where is the key of what the place is called.
+	Where string
+	// Threads is how many are standing there this instant, Share what part of
+	// the run's time went there, and Longest how long the one that has been
+	// there longest has been. The last is what tells a place threads pass
+	// through from one they are stuck in.
+	Threads int
+	Share   int
+	Longest string
 }
 
 // jobPage is one job: how it was set up, how far it has got, what it has
@@ -395,7 +413,39 @@ func (s *Server) poolOf(job int64) *jobPool {
 	if facts.Checks.Known {
 		out.Between = strconv.FormatFloat(facts.Checks.Between, 'f', 1, 64)
 	}
+	for _, one := range facts.Standing.Standing {
+		out.Standing = append(out.Standing, jobStanding{
+			Where:   standingWord(one.Doing),
+			Threads: one.Threads,
+			Share:   int(100*facts.Standing.Share(one.Doing) + 0.5),
+			Longest: one.Longest.Round(time.Second).String(),
+		})
+	}
 	return out
+}
+
+// standingWord is the key of what to call one of the places a thread stands in.
+//
+// The keys are spelled out rather than built from the name, because a name
+// built out of data is a name no search of this repository finds: a reader
+// looking for the phrase on the screen has to be able to get from it to here.
+func standingWord(d run.Doing) string {
+	switch d {
+	case run.DoingPort:
+		return "job.standing.port"
+	case run.DoingTake:
+		return "job.standing.take"
+	case run.DoingBrake:
+		return "job.standing.brake"
+	case run.DoingAsk:
+		return "job.standing.ask"
+	case run.DoingGiveBack:
+		return "job.standing.giveback"
+	case run.DoingRecord:
+		return "job.standing.record"
+	default:
+		return "job.standing.idle"
+	}
 }
 
 // rampWord is the key of what to call where a run stands against its own speed.

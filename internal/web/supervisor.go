@@ -95,6 +95,11 @@ type poolFacts struct {
 	// taking on sessions, has as many as it can use, or wants more than the
 	// list will give it.
 	Ramp run.Ramping
+	// Standing is where the threads of this run are and where its time has
+	// gone. A run at a tenth of the speed it should be reads the same on every
+	// other number here whether its threads are queueing for the service,
+	// resting on a pause, or waiting on Google.
+	Standing run.Census
 	// Sessions is how many sessions the program holds of the kind this job asks
 	// for, SessionsHeld how many are in a thread's hands this instant, and
 	// SessionsResting how many of the others are not due to be asked again yet.
@@ -141,13 +146,17 @@ type poolEngine struct {
 	// made with the engine and die with it.
 	checks *run.Challenges
 	ramp   *run.Ramp
+	// where is the census of what this run's threads are doing. It is the one
+	// reading that says whether a slow run is slow because Google is slow or
+	// because its threads are standing somewhere they should not be.
+	where *run.Where
 }
 
 // Run builds a runner around the pool this job was raised. A runner is a few
 // fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
 	r := &run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch, Brake: e.brake,
-		Keeper: e.keeper, Want: e.want, Challenges: e.checks, Ramp: e.ramp}
+		Keeper: e.keeper, Want: e.want, Challenges: e.checks, Ramp: e.ramp, Where: e.where}
 	if e.addresses != nil {
 		r.Addresses = e.addresses.Identities
 	}
@@ -179,7 +188,8 @@ func (e *poolEngine) Close() error {
 // Pool is this job's pool, as it stands right now.
 func (e *poolEngine) Pool() poolFacts {
 	facts := poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown(),
-		Pool: e.pool, Queue: e.brake.Queue(), Checks: e.checks.Rhythm(), Ramp: e.ramp.Ramping()}
+		Pool: e.pool, Queue: e.brake.Queue(), Checks: e.checks.Rhythm(), Ramp: e.ramp.Ramping(),
+		Standing: e.where.Reading()}
 	facts.Addresses, facts.Banned = e.pool.Addresses()
 	if e.keeper != nil {
 		facts.Sessions, facts.SessionsHeld, facts.SessionsResting = e.keeper.Standing(e.want)
@@ -316,7 +326,8 @@ func dialing(open OpenPool, watch run.Watch) source {
 		// screen that no run ever matched.
 		return &poolEngine{pool: want.Search, addresses: want.Addresses, brake: want.Brake,
 			threads: asked.Threads, watch: watch, keeper: want.Keeper, want: want.Want,
-			checks: run.NewChallenges(), ramp: run.NewRamp(want.Want.Longest())}, nil
+			checks: run.NewChallenges(), ramp: run.NewRamp(want.Want.Longest()),
+			where: run.NewWhere()}, nil
 	}}
 }
 
