@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,7 +26,14 @@ import (
 type deepOrigin struct {
 	*httptest.Server
 	depth int // how many pages a query has; past it a page offers no next one
-	mu    sync.Mutex
+	// refuse makes every page from here on Google refusing the session itself.
+	refuse atomic.Bool
+	// then, when set, runs after each page is written, with the number of pages
+	// served so far. It is for a test that changes the world under a walk — an
+	// address that dies between two of its pages.
+	then func(n int)
+	mu   sync.Mutex
+
 	asked []string
 	count int
 }
@@ -35,6 +43,11 @@ func newDeepOrigin(t *testing.T, depth int) *deepOrigin {
 	o := &deepOrigin{depth: depth}
 	o.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		// Every request on a connection of its own. A kept-alive connection is
+		// already joined to the origin and goes on carrying requests whatever
+		// the port is told afterwards, so a test that kills an address under a
+		// walk would find the walk reaching Google through it regardless.
+		w.Header().Set("Connection", "close")
 		if !strings.HasPrefix(r.URL.Path, "/search") {
 			_, _ = io.WriteString(w, "<html><body>home</body></html>")
 			return
@@ -44,6 +57,15 @@ func newDeepOrigin(t *testing.T, depth int) *deepOrigin {
 		o.count++
 		n := o.count
 		o.mu.Unlock()
+		if o.refuse.Load() {
+			_, _ = io.WriteString(w, wallBody)
+			return
+		}
+		defer func() {
+			if o.then != nil {
+				o.then(n)
+			}
+		}()
 		page := 1
 		if p := r.URL.Query().Get("page"); p != "" {
 			_, _ = fmt.Sscanf(p, "%d", &page)
@@ -184,5 +206,116 @@ func TestRunner_StopsAWalkAtTheDepthTheJobAskedFor(t *testing.T) {
 	}
 	if asked := o.seen(); len(asked) != 2 {
 		t.Errorf("the origin was asked %d times: %q", len(asked), asked)
+	}
+}
+
+func TestRunner_MovesASessionOffADeadAddressAndCarriesItsWalkOn(t *testing.T) {
+	// A page that never reached Google says nothing about the session: the road
+	// failed, not the search. So the session keeps its cookies and its place in
+	// the walk, the port is moved to another address, and the page is asked for
+	// again at once — there is nothing to rest from, because nothing was asked.
+	o := newDeepOrigin(t, 5)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	h := sessions.NewMemory()
+	port := 0
+	o.then = func(n int) {
+		if n == 1 {
+			// The address that carried page one dies under the walk.
+			f.kill(f.Fake.UpstreamOf(port))
+		}
+	}
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(h),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+	port = f.onePort(t)
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 3, Tries: 2})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 3 {
+		t.Fatalf("the walk took %d pages and ended with %v, want three and no error — the address died, not the session",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	stood := f.stoodOn(port)
+	if len(stood) != 2 {
+		t.Errorf("the port stood on %d addresses: %q, want the one that died and the one it moved to", len(stood), stood)
+	}
+	all, _ := h.Sessions(context.Background(), "desktop", time.Time{})
+	if len(all) != 1 {
+		t.Fatalf("the walk was carried by %d sessions, want the one that opened it", len(all))
+	}
+	if all[0].Failures != 0 {
+		t.Errorf("the session carries %d refusals, want none: the road failed, not the session", all[0].Failures)
+	}
+}
+
+func TestRunner_StopsMovingASessionAtTheTriesThePhraseIsAllowed(t *testing.T) {
+	// The road to Google is the job's to bound, and the bound is the tries its
+	// phrase is allowed — the same budget a query gets anywhere else. Unbounded,
+	// a walk whose whole list had gone would move from address to address for as
+	// long as there were addresses.
+	//
+	// What it has collected stands: the query is settled as a finished
+	// collection rather than a failure, because the pages it took are pages.
+	o := newDeepOrigin(t, 9)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	h := sessions.NewMemory()
+	o.then = func(n int) {
+		if n == 1 {
+			f.blackout() // the road to the whole list is gone
+		}
+	}
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(h),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+	port := f.onePort(t)
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 9, Tries: 2})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the walk took %d pages and ended with %v, want the one page it got and no failure",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if stood := f.stoodOn(port); len(stood) != 2 {
+		t.Errorf("the port stood on %d addresses: %q, want two — the one it was on and the one try it was allowed",
+			len(stood), stood)
+	}
+	// And the session is put back as it was found. Nothing reached Google, so
+	// there is nothing Google refused: a road counted against the session would
+	// give up the whole pool on a list that had gone.
+	all, _ := h.Sessions(context.Background(), "desktop", time.Time{})
+	if len(all) != 1 || all[0].Failures != 0 {
+		t.Errorf("after a walk stopped by the road the history holds %+v, want the session kept with nothing against it", all)
+	}
+	// Four requests went through the port and no more: the front page a session
+	// opens with, page one, and the two tries the phrase allows for the page
+	// that never arrived.
+	if asks := f.carriedBy(port); asks != 4 {
+		t.Errorf("the port carried %d requests, want four — the front page, page one, and two tries", asks)
+	}
+}
+
+func TestRunner_GivesUpASessionGoogleRefusesAfterTheMoveAndKeepsWhatItTook(t *testing.T) {
+	// Only Google's answer decides whether a moved session is alive. Refused
+	// from the new address, it does not revive: the deeper pages it was keeping
+	// are addressed to an exit it no longer has, and every port it were handed
+	// would be spent on a request that can only fail. So it is given up there
+	// and then — and what it collected is a finished collection, not a failure.
+	o := newDeepOrigin(t, 9)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	h := sessions.NewMemory()
+	port := 0
+	o.then = func(n int) {
+		if n == 1 {
+			f.kill(f.Fake.UpstreamOf(port))
+			o.refuse.Store(true)
+		}
+	}
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(h),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+	port = f.onePort(t)
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 9, Tries: 3})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the walk took %d pages and ended with %v, want the one page it took and no failure",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if all, _ := h.Sessions(context.Background(), "desktop", time.Time{}); len(all) != 0 {
+		t.Errorf("the history holds %+v, want nothing: a session refused after the move is given up", all)
 	}
 }
