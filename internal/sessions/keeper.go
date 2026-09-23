@@ -40,6 +40,7 @@ type History interface {
 	NewSession(ctx context.Context, s store.Session) (int64, error)
 	SessionAnswered(ctx context.Context, id int64, a store.Answer, at time.Time) error
 	SessionFailed(ctx context.Context, id int64, at time.Time) (bool, error)
+	DropSession(ctx context.Context, id int64) error
 	DropStaleSessions(ctx context.Context, before time.Time) (int, error)
 }
 
@@ -138,10 +139,36 @@ func (k *Keeper) Take(ctx context.Context, p Port, w Want) (*Held, error) {
 	if err := k.sweep(ctx); err != nil {
 		return nil, err
 	}
-	if s := k.pick(p, w); s != nil {
+	if s := k.pick(p, w, nil); s != nil {
 		return k.put(ctx, p, s)
 	}
 	return k.fresh(ctx, p, w)
+}
+
+// TakeOneOf hands the caller whichever of the named sessions is due, and makes
+// none: where Take would answer with a new session, this answers ErrNothingDue.
+//
+// It is what a caller asks when it has no work a new session could do. A thread
+// walking queries names the sessions carrying one part way: the page it would
+// take next is addressed to one of those and to no other, so a new session
+// could not take it, and a thread that asked Take every time it looked for one
+// would make a session for every glance.
+func (k *Keeper) TakeOneOf(ctx context.Context, p Port, w Want, only []int64) (*Held, error) {
+	if err := k.load(ctx, w.Device); err != nil {
+		return nil, err
+	}
+	if err := k.sweep(ctx); err != nil {
+		return nil, err
+	}
+	among := make(map[int64]bool, len(only))
+	for _, id := range only {
+		among[id] = true
+	}
+	s := k.pick(p, w, among)
+	if s == nil {
+		return nil, ErrNothingDue
+	}
+	return k.put(ctx, p, s)
 }
 
 // TakeColdest hands the caller the session unused longest, provided it has been
@@ -187,8 +214,9 @@ func fitsPort(s *kept, portExit string, busy map[string]int, limit int, p Port) 
 }
 
 // pick takes the free session that fits, rested for the caller's pause and used
-// most recently, and marks it held.
-func (k *Keeper) pick(p Port, w Want) *kept {
+// most recently, and marks it held. Where only is given, no session outside it
+// is considered.
+func (k *Keeper) pick(p Port, w Want, only map[int64]bool) *kept {
 	portExit, limit := p.Exit(), p.Limit()
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -197,6 +225,9 @@ func (k *Keeper) pick(p Port, w Want) *kept {
 	var best *kept
 	for _, s := range k.known {
 		r := s.record
+		if only != nil && !only[r.ID] {
+			continue
+		}
 		if s.held || r.Device != w.Device || !w.matches(r.Browser, r.OS, r.Release) ||
 			!s.rested(w.Pause, now) || now.Sub(r.UsedAt) > KeptFor ||
 			!fitsPort(s, portExit, busy, limit, p) {
@@ -557,6 +588,83 @@ func (k *Keeper) write(ctx context.Context, h *Held, p Port, giveBack bool) erro
 		k.used[a] = at
 	}
 	k.mu.Unlock()
+	return nil
+}
+
+// MoveOn puts the session on another address and keeps it in hand.
+//
+// It is for a page that never reached Google: the road failed, not the session,
+// and there is nothing to rest from — nothing was answered. So the session
+// stays held, the port is moved to another address the list offers, and the
+// caller asks again at once. Nothing is held against the session, and the
+// tickets go with the address they were handed out by.
+//
+// A session on a gateway has nowhere to go: the gateway is the whole of what it
+// is. Saying so lets the caller spend its tries on the gateway rather than on a
+// move that cannot happen.
+func (h *Held) MoveOn(ctx context.Context, p Port) error { return h.keeper.moveOn(ctx, h, p) }
+
+func (k *Keeper) moveOn(ctx context.Context, h *Held, p Port) error {
+	k.mu.Lock()
+	s, ok := k.known[h.ID]
+	if h.done || !ok || !s.held {
+		k.mu.Unlock()
+		return ErrNotHeld
+	}
+	was := s.record.Exit
+	k.mu.Unlock()
+	if onGateway(was) {
+		return fmt.Errorf("%w: session %d is on a gateway", ErrNoAddress, h.ID)
+	}
+	// The address it is leaving is not among the choices: it has just shown it
+	// cannot carry this session's request.
+	var elsewhere []string
+	leaving, _ := addressOf(was)
+	for _, a := range candidatesOf(p) {
+		if a != leaving {
+			elsewhere = append(elsewhere, a)
+		}
+	}
+	to, ok := k.reserve(elsewhere, p.Limit())
+	if !ok {
+		return ErrNoAddress
+	}
+	defer k.unreserve(to)
+	if err := p.MoveTo(ctx, to); err != nil {
+		return fmt.Errorf("sessions: moving session %d to another address: %w", h.ID, err)
+	}
+	// The tickets belonged to the exit it has left and mean nothing at this
+	// one; the port is given none.
+	if _, err := p.PutTickets(ctx, to, nil); err != nil {
+		return fmt.Errorf("sessions: clearing session %d's tickets on port %d: %w", h.ID, p.Number(), err)
+	}
+	k.mu.Lock()
+	s.record.Exit, s.record.Tickets = addrExit+to, nil
+	k.mu.Unlock()
+	return nil
+}
+
+// GiveUp takes the session out of the history: it is dead.
+//
+// It is for a session whose walk cannot go on — the deep pages it was keeping
+// are addressed to an exit it no longer has, and Google has answered it with a
+// refusal from the new one. Handing it out again would spend a port on a
+// session that can only fail.
+func (h *Held) GiveUp(ctx context.Context) error { return h.keeper.giveUp(ctx, h) }
+
+func (k *Keeper) giveUp(ctx context.Context, h *Held) error {
+	k.mu.Lock()
+	s, ok := k.known[h.ID]
+	if h.done || !ok || !s.held {
+		k.mu.Unlock()
+		return ErrNotHeld
+	}
+	h.done, s.held = true, false
+	delete(k.known, h.ID)
+	k.mu.Unlock()
+	if err := k.history.DropSession(ctx, h.ID); err != nil && !errors.Is(err, store.ErrNoSession) {
+		return err
+	}
 	return nil
 }
 

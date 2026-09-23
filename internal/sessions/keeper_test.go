@@ -563,6 +563,43 @@ func TestKeeper_NeverHandsOutASessionPastItsTwelveHoursBetweenSweeps(t *testing.
 	}
 }
 
+func TestKeeper_TakesOneOfTheNamedSessionsAndMakesNone(t *testing.T) {
+	// A thread walking queries asks for the sessions carrying one, and for no
+	// others: the page it would take next is addressed to one of those and
+	// nothing else can take it. So where none of them has rested, the answer is
+	// that none is due — Take would answer the same asking with a new session,
+	// and a thread looking every few milliseconds would collect one per glance.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	pa, pb := listPort(1, "a", "a", "b"), listPort(2, "b", "a", "b")
+	carrying, _ := k.Take(ctx, pa, desktop)
+	other, _ := k.Take(ctx, pb, desktop)
+	_ = carrying.Answered(ctx, pa)
+	_ = other.Answered(ctx, pb)
+
+	// A thread carrying nothing names nothing, and is given nothing.
+	if _, err := k.TakeOneOf(ctx, listPort(3, "a", "a", "b"), desktop, nil); !errors.Is(err, ErrNothingDue) {
+		t.Fatalf("naming no session answered %v, want nothing due", err)
+	}
+	// Both have just answered, so neither has rested the pause.
+	if _, err := k.TakeOneOf(ctx, listPort(4, "a", "a", "b"), desktop, []int64{carrying.ID}); !errors.Is(err, ErrNothingDue) {
+		t.Fatalf("a session that has not rested was handed out: %v", err)
+	}
+
+	c.pass(time.Minute)
+	got, err := k.TakeOneOf(ctx, listPort(5, "b", "a", "b"), desktop, []int64{carrying.ID})
+	if err != nil {
+		t.Fatalf("TakeOneOf: %v", err)
+	}
+	if got.ID != carrying.ID {
+		t.Errorf("took session %d, want %d, the one named", got.ID, carrying.ID)
+	}
+	if all, _ := h.Sessions(ctx, "desktop", time.Time{}); len(all) != 2 {
+		t.Errorf("the history holds %d sessions, want the two that were made — this asking makes none", len(all))
+	}
+}
+
 func TestKeeper_TakesTheColdestSessionThatHasRestedLongEnough(t *testing.T) {
 	c, h := startClock(), NewMemory()
 	k := keeperAt(h, c)
@@ -871,5 +908,154 @@ func TestHeld_ElsewhereLeavesASessionOnItsGateway(t *testing.T) {
 	}
 	if kept.Exit != gateExit+"nl-one" {
 		t.Errorf("the session on a gateway is written down at %q, want it left on its gateway", kept.Exit)
+	}
+}
+
+func TestHeld_MoveOnPutsTheSessionOnAnotherAddressAndKeepsItInHand(t *testing.T) {
+	// A page that never reached Google is the road's doing, not the session's.
+	// The session is moved to another address and asked again at once — it
+	// keeps its place in hand, because nothing has been answered and there is
+	// nothing to rest from.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+	p := listPort(1, "a", "a", "b")
+	held, err := k.Take(ctx, p, desktop)
+	if err != nil || held.ID != s.ID {
+		t.Fatalf("taking the session: %v (got %d, want %d)", err, held.ID, s.ID)
+	}
+	if err := held.MoveOn(ctx, p); err != nil {
+		t.Fatalf("MoveOn: %v", err)
+	}
+	if p.Exit() != addrExit+"b" {
+		t.Errorf("the port stands on %q, want the other address", p.Exit())
+	}
+	// Still in hand: the answer that follows is written down against the
+	// address it was answered through.
+	if err := held.Answered(ctx, p); err != nil {
+		t.Fatalf("Answered after MoveOn: %v", err)
+	}
+	kept, ok := h.Get(s.ID)
+	if !ok {
+		t.Fatal("the session is not in the history")
+	}
+	if kept.Exit != addrExit+"b" {
+		t.Errorf("the session is written down at %q, want the address it moved to", kept.Exit)
+	}
+	if kept.Failures != 0 {
+		t.Errorf("the session carries %d refusals, want none: the road failed, not the session", kept.Failures)
+	}
+}
+
+func TestHeld_MoveOnIsRememberedEvenIfNothingIsAnsweredAfterIt(t *testing.T) {
+	// The session itself knows where it went, not only the port it was on. Put
+	// back without an answer — the page after the move failed too, and the
+	// tries ran out — it must not be handed to the next port still pointing at
+	// the address it left.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+	held, err := k.Take(ctx, listPort(1, "a", "a", "b"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if err := held.MoveOn(ctx, listPort(1, "a", "a", "b")); err != nil {
+		t.Fatalf("MoveOn: %v", err)
+	}
+	held.PutBack()
+
+	c.pass(time.Minute)
+	next := listPort(2, "a", "a", "b")
+	if _, err := k.Take(ctx, next, desktop); err != nil {
+		t.Fatalf("taking the session again: %v", err)
+	}
+	if next.Exit() != addrExit+"b" {
+		t.Errorf("the next port was put on %q, want the address the session moved to", next.Exit())
+	}
+}
+
+func TestHeld_MoveOnWillNotPutASessionBackOnTheAddressItIsLeaving(t *testing.T) {
+	// The address it is leaving has just shown it cannot carry this session's
+	// request. Handed back, the caller would ask again through the same road
+	// and call the second failure an answer about the session.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	answeredOn(t, k, "a", "a")
+	c.pass(time.Minute)
+	p := listPort(1, "a", "a")
+	// The address has room for more sessions than this one, so nothing but the
+	// rule itself keeps the move off it.
+	p.limit = 4
+	held, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if err := held.MoveOn(ctx, p); !errors.Is(err, ErrNoAddress) {
+		t.Errorf("MoveOn with nowhere else to go answered %v, want %v", err, ErrNoAddress)
+	}
+	if p.Exit() != addrExit+"a" {
+		t.Errorf("the port stands on %q, want the address it was on", p.Exit())
+	}
+}
+
+func TestHeld_MoveOnHasNowhereToTakeASessionOnAGateway(t *testing.T) {
+	// A gateway is the whole of what such a session is. There is no other
+	// address to try, and saying so lets the caller spend its tries on the
+	// gateway rather than on a move that cannot happen.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	p := gatewayPort(4, "nl-one")
+	// Even offered somewhere to go, a session on a gateway does not go: what
+	// a gateway channel hands out are gateways, and a session moved to another
+	// one is another session.
+	p.list = []string{"de-two", "fr-three"}
+	held, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if err := held.MoveOn(ctx, p); err == nil {
+		t.Error("a session on a gateway was moved somewhere")
+	}
+	if p.Exit() != gateExit+"nl-one" {
+		t.Errorf("the port stands on %q, want its gateway", p.Exit())
+	}
+}
+
+func TestHeld_GiveUpTakesTheSessionOutOfTheHistory(t *testing.T) {
+	// A session whose walk cannot go on is dead: its deep links belong to an
+	// exit it no longer has, and handing it out again would spend a port on a
+	// session that can only fail.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+	p := listPort(1, "a", "a", "b")
+	held, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if err := held.GiveUp(ctx); err != nil {
+		t.Fatalf("GiveUp: %v", err)
+	}
+	if _, ok := h.Get(s.ID); ok {
+		t.Error("a session given up is still in the history")
+	}
+	c.pass(time.Minute)
+	again, err := k.Take(ctx, listPort(2, "a", "a", "b"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if again.ID == s.ID {
+		t.Error("a session given up was handed out again")
+	}
+	if all, _ := k.Count(); all != 1 {
+		t.Errorf("the keeper knows %d sessions, want the one made after the other was given up", all)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // maxBody caps how much of a response is read. A result page runs to a couple
@@ -66,6 +67,31 @@ func (s *Session) Search(ctx context.Context, q Query) (SERP, error) {
 	if err != nil {
 		return SERP{}, err
 	}
+	return s.at(ctx, q, target)
+}
+
+// SearchAt performs one capture at the address it is given rather than at the
+// one the query renders, and returns the parsed page.
+//
+// It is how a walk asks for the page after the one in hand: the address is the
+// one that page carried — see SERP.NextPage — with the tags Google issued to
+// this session on it. The query travels along all the same, because the answer
+// is parsed as that query's page and a refusal is reported with its text.
+//
+// An empty address is refused rather than followed. Asked for nothing, this
+// would fetch whatever a bare request lands on and file it as a page of the
+// query.
+func (s *Session) SearchAt(ctx context.Context, q Query, target string) (SERP, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return SERP{}, fmt.Errorf("google: no address to ask for page of %q", q.Text)
+	}
+	return s.at(ctx, q, target)
+}
+
+// at is one capture at one address: the warm-up on a session's first request,
+// the request itself, the reading of what came back.
+func (s *Session) at(ctx context.Context, q Query, target string) (SERP, error) {
 	if s.Asking != nil {
 		s.Asking(target)
 	}
@@ -103,7 +129,25 @@ func (s *Session) Search(ctx context.Context, q Query) (SERP, error) {
 	if serp.Origin == "" {
 		serp.Origin = originOf(target)
 	}
+	// The page writes the address of the next one origin-relative. Joined here,
+	// where the origin is already known, a caller can ask for it without
+	// working out which of Google's domains answered this one.
+	serp.NextPage = absolute(serp.Origin, serp.NextPage)
 	return serp, nil
+}
+
+// absolute joins an origin-relative address to the origin it came from. An
+// address that already names a scheme is left as it is, and nothing stays
+// nothing.
+func absolute(origin, href string) string {
+	switch {
+	case href == "":
+		return ""
+	case strings.HasPrefix(href, "http://"), strings.HasPrefix(href, "https://"):
+		return href
+	default:
+		return origin + href
+	}
 }
 
 // originOf reduces an address to the scheme and host that an origin-relative

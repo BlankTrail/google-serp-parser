@@ -31,10 +31,12 @@ func serpBody(host string) string {
 }
 
 // serpBodyWithBar is a result page whose pagination bar links further than the
-// page in hand. Without a bar reaching onwards a walk stops on the first page,
-// and a test of what a multi-page walk costs would measure a single page.
+// page in hand: the numbered links, and the onward one Google marks as next.
+// Without a bar reaching onwards a walk stops on the first page, and a test of
+// what a multi-page walk costs would measure a single page.
 func serpBodyWithBar(host string) string {
-	return serpBody(host) + `<div role="navigation"><a href="/search?q=x&amp;start=90">10</a></div>`
+	return serpBody(host) + `<div role="navigation"><a href="/search?q=x&amp;start=90">10</a>` +
+		`<a href="/search?q=x&amp;start=10&amp;sa=N" id="pnnext">Next</a></div>`
 }
 
 // shellBody is the page that carries no results at all.
@@ -88,12 +90,73 @@ type facing struct {
 
 	mu     sync.Mutex
 	byPort map[int]int
+	// dead are the addresses nothing answers behind. A port standing on one
+	// carries nothing at all, which is what a dead exit looks like from here:
+	// the request never reaches Google and nothing about it is the session's.
+	dead map[string]bool
+	// allDead is every address at once, for a test whose whole list has gone.
+	allDead bool
+	// stood is every address each port stood on as it carried a request, in
+	// order, so a test can see a session moved and how often.
+	stood map[int][]string
 }
 
 func (f *facing) carried(port int) {
+	up := f.Fake.UpstreamOf(port)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.byPort[port]++
+	if on := f.stood[port]; len(on) == 0 || on[len(on)-1] != up {
+		f.stood[port] = append(f.stood[port], up)
+	}
+}
+
+// kill puts out the address: from here on a port standing on it answers nothing.
+func (f *facing) kill(address string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dead[address] = true
+}
+
+// reaches says whether a request through this port gets anywhere.
+func (f *facing) reaches(port int) bool {
+	up := f.Fake.UpstreamOf(port)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.allDead && !f.dead[up]
+}
+
+// blackout puts out every address at once, as when the road to the whole list
+// is gone.
+func (f *facing) blackout() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.allDead = true
+}
+
+// carriedBy is how many requests a port carried, dead address or not.
+func (f *facing) carriedBy(port int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.byPort[port]
+}
+
+// stoodOn is the addresses a port carried requests on, one entry per move.
+func (f *facing) stoodOn(port int) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.stood[port]...)
+}
+
+// onePort is the number of the pool's only port, for a test that has to speak
+// about the address it is standing on.
+func (f *facing) onePort(t *testing.T) int {
+	t.Helper()
+	open := f.Fake.OpenPorts()
+	if len(open) != 1 {
+		t.Fatalf("the pool holds %d ports, want the one this test opened", len(open))
+	}
+	return open[0]
 }
 
 // portsUsed is how many distinct ports carried at least one request.
@@ -122,7 +185,7 @@ func poolFacing(t *testing.T, originAddr string, ports int, tune ...func(*blankt
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	f := &facing{byPort: map[int]int{}}
+	f := &facing{byPort: map[int]int{}, dead: map[string]bool{}, stood: map[int][]string{}, Fake: fake}
 	// Reserving the numbers is what makes them a free consecutive run; holding
 	// them while the pool opens would defeat it. NewPool asks this machine
 	// whether a number is free before it asks the proxy to stand on it, because
@@ -171,11 +234,10 @@ func poolFacing(t *testing.T, originAddr string, ports int, tune ...func(*blankt
 			t.Fatalf("the stand-in for port %d could not take the number back: %v", port, err)
 		}
 		t.Cleanup(func() { _ = ln.Close() })
-		go serveStandIn(ln, originAddr, func() { f.carried(port) })
+		go serveStandIn(ln, originAddr, port, f)
 	}
 
 	f.Pool = p
-	f.Fake = fake
 	return f
 }
 
@@ -223,13 +285,21 @@ func reserveConsecutive(t *testing.T, n int) []net.Listener {
 // tunnel and then speaks TLS through it end to end, so joining the caller
 // straight to the test origin delivers the whole request there and nowhere
 // else.
-func serveStandIn(ln net.Listener, originAddr string, carried func()) {
+//
+// A port standing on an address a test has killed is not joined to anything:
+// the tunnel is never spoken and the connection closes, so the request ends
+// where a request through a dead exit ends — short of Google.
+func serveStandIn(ln net.Listener, originAddr string, port int, f *facing) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		carried()
+		f.carried(port)
+		if !f.reaches(port) {
+			_ = c.Close()
+			continue
+		}
 		go joinToOrigin(c, originAddr)
 	}
 }

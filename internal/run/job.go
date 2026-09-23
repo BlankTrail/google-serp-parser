@@ -304,6 +304,13 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 		r.step(thread, StageQuery, began, text, results[at].Err)
 	}
 
+	// What every thread of a job that walks shares: the queries the sessions
+	// are carrying, and the slice their pages are filed in. A query is carried
+	// by whichever thread holds its session, so neither belongs to a thread
+	// any more.
+	carrying := newWalks()
+	var filing sync.Mutex
+
 	queue := make(chan int)
 	// Closed once, by whichever thread first finds the pool empty. Every thread
 	// watches it, and so does the hand-out below: with fifty threads reading one
@@ -327,13 +334,24 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 			switch j.Kind {
 			case Index, Position:
 			default:
-				(&crew{
+				hands := &crew{
 					r: r, a: attempt, j: j, thread: thread, pages: pages,
 					queue: queue, starved: starved,
 					starve:  func() { starveOnce.Do(func() { close(starved) }) },
 					results: results,
+					mu:      &filing,
+					walks:   carrying,
 					settle:  func(ctx context.Context, at int, began time.Time) { settle(ctx, thread, at, began) },
-				}).work(ctx)
+				}
+				// A run that keeps its own sessions walks a query through the
+				// session that opened it, page by page, letting the port go
+				// between them; one that does not keeps the walk on the thread,
+				// as it always did. See carry and work.
+				if attempt.Keeper != nil {
+					hands.carry(ctx)
+				} else {
+					hands.work(ctx)
+				}
 				return
 			}
 
