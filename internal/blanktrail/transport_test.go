@@ -759,3 +759,125 @@ func TestLadder_DoesNotMoveAStayingPortForARefusedAnswerEither(t *testing.T) {
 		t.Errorf("rotations=%d, want none: the port keeps its address", rem.rotations)
 	}
 }
+
+// serviceSays is an answer the proxy composed about itself rather than one it
+// carried: the header names the reason.
+func serviceSays(status int, reason string) func() (*http.Response, error) {
+	h := http.Header{}
+	h.Set(serviceErrorHeader, reason)
+	return respond(status, h, "the service could not carry this")
+}
+
+func TestLadder_ReadsAnUnreachableAddressAsTheRoadAndNotAsAnAnswer(t *testing.T) {
+	// The service saying it could not reach the address is not a page, and it
+	// is not a refusal of the identity either: nothing went out. Answered as a
+	// status it would be retried four times against an address that cannot be
+	// reached at all, and the query that met it would be recorded as refused by
+	// Google — which is the opposite of what happened.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(523, "upstream_unreachable"),
+		respond(200, nil, "the page"),
+	}}
+	rem := &fakeRemedy{retries: 3, addresses: 5}
+	l := &ladder{rt: rt, port: 20101, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Errorf("the request came back %d, want the page from the address it was carried to", resp.StatusCode)
+	}
+	for _, waited := range rem.waits {
+		if waited > 0 {
+			t.Errorf("the ladder waited %v before trying another address, want no pause: there is "+
+				"nothing at the far end to wait out", waited)
+		}
+	}
+	if rem.markedDead != 1 || rem.rotations != 1 {
+		t.Errorf("the address was marked dead %d times and the port moved %d, want once each",
+			rem.markedDead, rem.rotations)
+	}
+	if got := rem.kindsOf(FailureTransport); got != 1 {
+		t.Errorf("%d failures were counted as a request that never arrived, want one", got)
+	}
+}
+
+func TestLadder_DoesNotSpendTheAddressOnAServiceRefusalOfItsOwn(t *testing.T) {
+	// Any other thing the service says about itself — a solver that ran out of
+	// time, a licence that is full — is about the service. Answered by leaving
+	// the address, a run would spend a list of fifteen thousand on a queue that
+	// was busy for a minute.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(523, "solver_timeout"),
+	}}
+	rem := &fakeRemedy{retries: 3, addresses: 5}
+	l := &ladder{rt: rt, port: 20102, rem: rem}
+
+	_, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if !errors.Is(err, ErrServiceRefused) {
+		t.Fatalf("RoundTrip returned %v, want the service's own refusal", err)
+	}
+	if errors.Is(err, ErrUpstreamUnreachable) {
+		t.Error("a refusal of the service's own was read as the address being unreachable")
+	}
+	if rem.markedDead != 0 || rem.rotations != 0 {
+		t.Errorf("the address was marked dead %d times and the port moved %d, want neither",
+			rem.markedDead, rem.rotations)
+	}
+	if rt.calls != 1 {
+		t.Errorf("the request was put on the wire %d times, want the one: retrying is what the service "+
+			"just said it could not do", rt.calls)
+	}
+}
+
+func TestLadder_StopsHuntingWhereThePortKeepsItsAddress(t *testing.T) {
+	// A port carrying a session that has answered stays where it is, so there
+	// is nowhere to hunt to: one unreachable answer ends the request, and what
+	// to do about the session is the run's to decide.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(523, "upstream_unreachable"),
+		respond(200, nil, "never reached"),
+	}}
+	rem := &fakeRemedy{retries: 3, staying: true}
+	l := &ladder{rt: rt, port: 20103, rem: rem}
+
+	_, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if !errors.Is(err, ErrUpstreamUnreachable) {
+		t.Fatalf("RoundTrip returned %v, want the address being unreachable", err)
+	}
+	if rem.rotations != 0 {
+		t.Errorf("the port was moved %d times although it keeps its address", rem.rotations)
+	}
+	if rt.calls != 1 {
+		t.Errorf("the request went out %d times, want the one it was allowed", rt.calls)
+	}
+}
+
+func TestLadder_LeavesAPlain523FromTheFarEndAlone(t *testing.T) {
+	// The number alone means nothing: a 523 without the header is something at
+	// the far end answering, and reading it as the service's own would take an
+	// address out of the list for a page somebody's server sent.
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		respond(523, nil, "somebody else's error page"),
+		respond(200, nil, "the page"),
+	}}
+	rem := &fakeRemedy{retries: 3, addresses: 5}
+	l := &ladder{rt: rt, port: 20104, rem: rem}
+
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if rem.markedDead != 0 {
+		t.Errorf("the address was marked dead %d times for a page from the far end", rem.markedDead)
+	}
+	if len(rem.waits) == 0 {
+		t.Error("the ladder retried without waiting, so it did not treat this as something to wait out")
+	}
+}
+
+// kindsOf is how many failures of one kind the ladder named.
+func (r *fakeRemedy) kindsOf(k Failure) int { return r.kinds[k] }

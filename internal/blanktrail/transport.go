@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"math/rand"
 	"net"
@@ -205,6 +206,38 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			// one that works and has just hiccuped.
 			delay = 0
 			continue
+		}
+
+		// An answer the service composed about itself is not an answer at all:
+		// the request never went out. It is read before the status is looked at,
+		// because what it says the status cannot — a 523 the service wrote about
+		// an address it could not reach and a 523 from something at the far end
+		// are the same number about different things.
+		if refusal, ours := serviceRefusal(resp); ours {
+			drainAndClose(resp)
+			t.rem.failed(FailureTransport)
+			if errors.Is(refusal, ErrUpstreamUnreachable) {
+				// The address could not be reached. That is the address's, and
+				// it is answered the way a request that never arrived is: leave
+				// it and try another, with no pause in between — there is
+				// nothing at the far end to wait out.
+				if t.rem.leaveAddress(t.port) {
+					t.rem.markDeadEgress(t.port)
+					if !t.rem.stays(t.port) {
+						_ = t.rem.rotateEgress(req.Context(), t.port)
+					}
+				}
+				hunted++
+				if hunted >= t.rem.hunt(t.port) {
+					return nil, refusal
+				}
+				delay = 0
+				continue
+			}
+			// Anything else the service says about itself is not the address's,
+			// and leaving the address for it would spend a list on something
+			// that was never in it.
+			return nil, refusal
 		}
 
 		if answered(resp.StatusCode) {
