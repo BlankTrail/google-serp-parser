@@ -319,3 +319,32 @@ func TestRunner_GivesUpASessionGoogleRefusesAfterTheMoveAndKeepsWhatItTook(t *te
 		t.Errorf("the history holds %+v, want nothing: a session refused after the move is given up", all)
 	}
 }
+
+func TestRunner_DoesNotCallAQueryCollectedWhenNothingWasCollected(t *testing.T) {
+	// A session can die before its first page: the address it was given carries
+	// nothing, it moves, and Google refuses it from the new one. The session is
+	// given up either way — but the query has not started, and a query settled
+	// as a finished collection with no page in it is written down as done and
+	// never asked again.
+	o := newDeepOrigin(t, 9)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	h := sessions.NewMemory()
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(h),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+	// The address the port stands on is dead before the run starts, and what
+	// answers beyond the move is Google refusing the session.
+	f.kill(f.Fake.UpstreamOf(f.onePort(t)))
+	o.refuse.Store(true)
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 3, Tries: 2})
+	if len(rep.Results[0].Pages) != 0 || rep.Results[0].Err == nil {
+		t.Errorf("the query came back with %d pages and %v, want nothing and the refusal that stopped it",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if rep.Done != 0 || rep.Failed != 1 {
+		t.Errorf("the run reports %d done and %d failed, want the one query counted as failed", rep.Done, rep.Failed)
+	}
+	if all, _ := h.Sessions(context.Background(), "desktop", time.Time{}); len(all) != 0 {
+		t.Errorf("the history holds %+v, want nothing: a session refused after the move is given up", all)
+	}
+}

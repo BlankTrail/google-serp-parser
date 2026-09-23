@@ -222,8 +222,14 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 		// It did not revive. Google answered from the new address with a
 		// refusal, and the pages this session was keeping are addressed to an
 		// exit it no longer has: there is nothing left for it to carry.
+		//
+		// What becomes of the query is the same question as after any refusal:
+		// with pages in hand it is a finished collection, and with none it has
+		// not started and waits for another session. A query settled as
+		// collected with nothing collected would be written down as done and
+		// never asked again.
 		_ = held.GiveUp(ctx)
-		c.done(ctx, one, held.ID, nil)
+		c.stopped(ctx, one, held.ID, err, true)
 	case judged:
 		letGoAfter(ctx, held, lease, err)
 		c.stopped(ctx, one, held.ID, err, true)
