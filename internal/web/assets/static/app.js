@@ -369,30 +369,29 @@
 		}
 	}
 
-	// The settings offer to look through the folders beside this program for a
-	// list of addresses, which is an offer only worth making when the addresses
-	// are read from a file at all. Left up, it is a link that leads somewhere the
-	// reader has no use for and then back again.
-	function shapeSettings(root) {
+	// Where a profile's addresses come from is one choice with three shapes: a
+	// file to pick on this machine, an address to fetch, or the gateways the
+	// service holds. Each wants different boxes, and the boxes of the other two
+	// are not filled in — left on the screen they read as settings somebody
+	// forgot.
+	//
+	// The page is already drawn with only the ones that belong to what is saved,
+	// so a browser running no script shows the same thing; this is that kept
+	// true from the moment the choice changes rather than from the next save.
+	//
+	// Hidden rather than emptied: what is typed goes on travelling with the
+	// form, so trying another kind and coming back finds the address where it
+	// was left.
+	function sourceFields(root) {
 		var source = root.querySelector("[name=source]");
-		var chooser = root.querySelector('a[href="/proxies/browse"]');
-		if (!source || !chooser) {
+		if (!source) {
 			return;
 		}
-		// The box for where a list is read from, and the link that browses for
-		// one. Neither means anything while the gateways are chosen: what is
-		// behind a gateway lives in the service, and a box asking for a path
-		// beside it reads as a thing left unfilled.
-		//
-		// Hidden rather than emptied — the value goes on travelling with the
-		// form, so switching to the gateways and back finds the address where it
-		// was left.
-		var where = root.querySelector("[name=source_at]");
-		var whereField = where && where.closest(".field");
+		var shapes = root.querySelectorAll("[data-source]");
 		var apply = function () {
-			chooser.hidden = source.value !== "file";
-			if (whereField) {
-				whereField.hidden = source.value === "gateways" || source.value === "";
+			for (var i = 0; i < shapes.length; i++) {
+				var kinds = shapes[i].getAttribute("data-source").split(" ");
+				shapes[i].hidden = kinds.indexOf(source.value) < 0;
 			}
 		};
 		source.addEventListener("change", apply);
@@ -783,14 +782,14 @@
 	}
 
 	shape(document);
-	shapeSettings(document);
+	sourceFields(document);
 	hopFields(document);
 
 	// A form that arrived with a swapped screen has to be shaped as well, or it
 	// is the one screen where this works only on a reload.
 	window.addEventListener("gserp:screen", function () {
 		shape(document);
-		shapeSettings(document);
+		sourceFields(document);
 		hopFields(document);
 	});
 

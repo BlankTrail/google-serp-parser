@@ -271,10 +271,10 @@ func TestSettings_PutsTheChooserAwayWhenTheListIsNotReadFromAFile(t *testing.T) 
 	//
 	// No line of the script runs here — there is no runtime to run it with — so
 	// what is pinned is the seam: the script decides by the box named here and
-	// puts away the link written here, and renaming either on its own leaves a
-	// page where the offer never goes away.
+	// puts away whatever is marked with the kind it belongs to, and renaming
+	// either on its own leaves a page where the offer never goes away.
 	script := mustAsset(t, "static/app.js")
-	for _, part := range []string{"[name=source]", "/proxies/browse", `"file"`} {
+	for _, part := range []string{"[name=source]", "[data-source]"} {
 		if !strings.Contains(script, part) {
 			t.Errorf("the script never names %q, so the chooser stays up whatever is chosen", part)
 		}
@@ -288,6 +288,27 @@ func TestSettings_PutsTheChooserAwayWhenTheListIsNotReadFromAFile(t *testing.T) 
 	if !strings.Contains(body, `value="file"`) {
 		t.Error("the page offers no file as a source, so the script's one condition can never hold")
 	}
+	// And the chooser is marked as the file's, which is what the script reads.
+	if tag := tagAround(t, body, "/proxies/browse"); !strings.Contains(tag, `data-source="file"`) {
+		t.Errorf("the chooser is drawn as <%s>, with nothing saying which kind it belongs to", tag)
+	}
+}
+
+// tagAround is the opening tag of the element that carries a piece of text, so
+// a test can ask what the element says about itself rather than whether the
+// page mentions the text anywhere.
+func tagAround(t *testing.T, body, inside string) string {
+	t.Helper()
+	at := strings.Index(body, inside)
+	if at < 0 {
+		t.Fatalf("the page does not carry %q", inside)
+	}
+	start := strings.LastIndex(body[:at], "<")
+	if start < 0 {
+		t.Fatalf("%q stands outside any tag", inside)
+	}
+	tag, _, _ := strings.Cut(body[start+1:], ">")
+	return tag
 }
 
 func TestBrowse_ShowsItsListingAsSomethingThatScrollsWithinItself(t *testing.T) {

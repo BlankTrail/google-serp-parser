@@ -143,6 +143,18 @@ type proxiesPage struct {
 	// a list of addresses, which is what decides whether the rest of this is
 	// drawn at all.
 	OnGateways bool
+	// OnFile, OnURL and OnList say which shape the address source is in: a file
+	// on this machine, an address to fetch, or either of the two — which is what
+	// the boxes they share are drawn for.
+	//
+	// They are the saved kind rather than whatever is chosen this second, and
+	// that is on purpose: the page is drawn with only the boxes that belong to
+	// it, so a browser running no script is shown the same thing the script
+	// would show, and the script's work is to keep it true as the choice
+	// changes.
+	OnFile bool
+	OnURL  bool
+	OnList bool
 	// Groups are the configurations the service holds, by subscription, with
 	// whatever is already chosen ticked. Missing counts the ones chosen that the
 	// service no longer has, and GatewayFault is why the list could not be asked
@@ -325,21 +337,27 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	view.Sources = sourcesOffered(view.Form.Source)
 	view.VDNSModes = vdnsOffered()
 	view.OnGateways = view.Form.Source == sourceGateways
+	view.OnFile = view.Form.Source == sourceFile
+	view.OnURL = view.Form.Source == sourceURL
+	view.OnList = view.OnFile || view.OnURL
 	s.offerHops(r.Context(), saved, &view)
-	if view.OnGateways {
-		if list, taken, err := s.askForGateways(r.Context(), saved, false); err != nil {
-			view.GatewayFault = gatewayFault(err)
-			view.GatewayFaultAt = saved.ControlURL
-		} else if !list.Available {
-			view.GatewayFault = "proxies.gateways.unavailable"
-		} else {
-			view.Groups, view.Missing = gatewaysOffered(list, view.Form.Gateways)
-			for _, g := range view.Groups {
-				view.Chosen += g.Chosen
-				view.Offered += g.Offered
-			}
-			view.Taken = taken.Format("15:04")
+	// The gateways are fetched for every form and not only for one already on
+	// them: a reader who picks them in the box wants the list under it there and
+	// then, rather than after a save of a profile with nothing chosen. It is the
+	// same list the first-hop box above was filled from, held for a couple of
+	// minutes, so asking for it costs nothing here.
+	if list, taken, err := s.askForGateways(r.Context(), saved, false); err != nil {
+		view.GatewayFault = gatewayFault(err)
+		view.GatewayFaultAt = saved.ControlURL
+	} else if !list.Available {
+		view.GatewayFault = "proxies.gateways.unavailable"
+	} else {
+		view.Groups, view.Missing = gatewaysOffered(list, view.Form.Gateways)
+		for _, g := range view.Groups {
+			view.Chosen += g.Chosen
+			view.Offered += g.Offered
 		}
+		view.Taken = taken.Format("15:04")
 	}
 	view.page = s.frame(r, lang, "proxies.title", proxiesAt)
 	s.render(w, r, "proxies.html", view)

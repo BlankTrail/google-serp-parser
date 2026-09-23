@@ -765,3 +765,85 @@ func TestNewProfile_TurnsTheSolverOnRatherThanLeavingItToAZeroValue(t *testing.T
 		t.Errorf("a profile nobody has filled in resolves names as %q, want the service's own answer", got.VDNSMode)
 	}
 }
+
+func TestProxies_DrawsTheSourceInTheShapeOfTheKindItIs(t *testing.T) {
+	// Where a profile's addresses come from is one choice with three shapes: a
+	// file to pick on this machine, an address to fetch, or the gateways the
+	// service holds. Each wants different boxes, and the boxes of the other two
+	// are not filled in — left on the screen they read as settings somebody
+	// forgot. The page is drawn that way by the server, so a browser running no
+	// script is shown what the script would show.
+	s := testServerWithSupervisor(t)
+	prof, err := s.store.CreateProfile(t.Context(), store.Profile{
+		Name: "by address", Kind: sourceURL, Location: "https://example.test/list.txt"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	byAddress := get(t, s, boxesOf(prof)).Body.String()
+	if tag := fieldAround(t, byAddress, `id="source_at"`); strings.Contains(tag, "hidden") {
+		t.Errorf("a profile read from an address is not shown where to read it: <%s>", tag)
+	}
+	if tag := tagAround(t, byAddress, "/proxies/browse"); !strings.Contains(tag, "hidden") {
+		t.Errorf("a profile read from an address is offered a look through this machine's folders: <%s>", tag)
+	}
+	if tag := tagAround(t, byAddress, LangEN.T("settings.source.at.file")); !strings.Contains(tag, "hidden") {
+		t.Errorf("the box is named for a file on a profile read from an address: <%s>", tag)
+	}
+
+	// On the gateways the boxes a list is named in go away, and the gateways
+	// themselves are what is left to choose from.
+	onGateways, err := s.store.CreateProfile(t.Context(), store.Profile{
+		Name: "on gateways", Kind: sourceGateways})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	gateways := get(t, s, boxesOf(onGateways)).Body.String()
+	if tag := fieldAround(t, gateways, `id="source_at"`); !strings.Contains(tag, "hidden") {
+		t.Errorf("a profile on gateways is asked where to read a list: <%s>", tag)
+	}
+	if tag := fieldAround(t, gateways, `id="source_refresh"`); !strings.Contains(tag, "hidden") {
+		t.Errorf("a profile on gateways is asked how often to read a list again: <%s>", tag)
+	}
+}
+
+// fieldAround is the opening tag of the field a box stands in, which is where a
+// box is drawn away from the screen: the box itself goes on carrying its value
+// either way.
+func fieldAround(t *testing.T, body, box string) string {
+	t.Helper()
+	at := strings.Index(body, box)
+	if at < 0 {
+		t.Fatalf("the page has no %s", box)
+	}
+	start := strings.LastIndex(body[:at], `<div class="field`)
+	if start < 0 {
+		t.Fatalf("%s stands in no field", box)
+	}
+	tag, _, _ := strings.Cut(body[start+1:], ">")
+	return tag
+}
+
+func TestProxies_PutsTheListOfProfilesAwayWhileAFormIsOpen(t *testing.T) {
+	// A machine with twenty profiles would push the boxes somebody has just
+	// pressed «new» for below the fold. The form says for itself which profile
+	// it is, and the way back to the list is the «cancel» beside the save.
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+
+	if body := get(t, s, proxiesAt).Body.String(); !strings.Contains(body, `id="profiles"`) {
+		t.Error("the screen without a form open does not list the profiles")
+	}
+	for _, at := range []string{boxesOf(prof), proxiesAt + "?" + profileField + "=new"} {
+		body := get(t, s, at).Body.String()
+		if strings.Contains(body, `id="profiles"`) {
+			t.Errorf("%s draws the list of profiles above the form", at)
+		}
+		if !strings.Contains(body, `name="source"`) {
+			t.Errorf("%s draws no form at all", at)
+		}
+	}
+	// And the reading of a profile's counters is not a form, so the list stays.
+	if body := get(t, s, readingOf(prof)).Body.String(); !strings.Contains(body, `id="profiles"`) {
+		t.Error("the reading of one profile's counters hides the list of the others")
+	}
+}

@@ -13,7 +13,13 @@
      goes out through the exits one of them names, and everything below is a
      reading of the one in use. A page that opened on the counters answered a
      question the reader had not asked yet, and left them looking elsewhere for
-     where the addresses are set. */}}
+     where the addresses are set.
+
+     While a form is open the list steps aside. A machine with twenty profiles
+     would otherwise push the boxes somebody just pressed «new» for below the
+     fold, and the form says for itself which profile it is. The way back to the
+     list is the «cancel» beside the save. */}}
+{{if not .Editing}}
 <section class="card" id="profiles">
 <h2>{{.T "proxies.profiles"}}</h2>
 <p class="empty">{{.T "proxies.profiles.why"}}</p>
@@ -54,6 +60,7 @@
 </table>
 <p class="export"><a href="/proxies?profile=new">{{.T "proxies.profile.new"}}</a></p>
 </section>
+{{end}}
 
 {{/* Every figure here was worked out in one reading of one pool, so no two of
      them describe different moments. The screen says nothing about whether the
@@ -172,8 +179,15 @@
 {{range .Sources}}<option value="{{.Value}}"{{if .Current}} selected{{end}}>{{$.T .Key}}</option>
 {{end}}</select>
 </div>
-<div class="field wide">
-<label for="source_at">{{.T "settings.source.at"}}</label>
+{{/* One box for the two kinds that have one — a path on this machine and an
+     address to fetch — named for whichever is chosen. Two boxes carrying the
+     same setting would both be sent, and the one nobody filled in would have to
+     be told apart from the one they did. */}}
+<div class="field wide" data-source="file url"{{if not .OnList}} hidden{{end}}>
+<label for="source_at">
+<span data-source="file"{{if not .OnFile}} hidden{{end}}>{{.T "settings.source.at.file"}}</span>
+<span data-source="url"{{if not .OnURL}} hidden{{end}}>{{.T "settings.source.at.url"}}</span>
+</label>
 {{/* The chooser stands beside the box and not under it. Boxes on one line are
      lined up by their feet, so a box with something under it stands a line
      higher than the ones next to it and the line reads as broken. */}}
@@ -181,11 +195,12 @@
 <input id="source_at" name="source_at" value="{{.Form.Where}}">
 {{/* The chooser is a link rather than a button: it leaves the form to look at
      this machine, and a form that submitted to get there would save settings
-     nobody had finished filling in. */}}
-<a href="/proxies/browse?profile={{if .Form.ID}}{{.Form.ID}}{{else}}new{{end}}">{{.T "settings.source.choose"}}</a>
+     nobody had finished filling in. It is for a file and for nothing else —
+     there is nothing on this machine to point an address at. */}}
+<a data-source="file"{{if not .OnFile}} hidden{{end}} href="/proxies/browse?profile={{if .Form.ID}}{{.Form.ID}}{{else}}new{{end}}">{{.T "settings.source.choose"}}</a>
 </span>
 </div>
-<div class="field">
+<div class="field" data-source="file url"{{if not .OnList}} hidden{{end}}>
 <label for="source_refresh">{{.T "settings.source.refresh"}}</label>
 <input id="source_refresh" name="source_refresh" type="number" min="0" value="{{.Form.Refresh}}">
 </div>
@@ -208,8 +223,7 @@
      travelling with the form — a reader who tries the other kind and comes back
      finds what they had typed — and so a browser running no script is shown the
      same thing this one is. */}}
-{{if not .OnGateways}}
-<div class="row">
+<div class="row" data-source="file url"{{if not .OnList}} hidden{{end}}>
 <div class="field">
 <label for="first_hop">{{.T "proxies.hop"}}</label>
 <select id="first_hop" name="first_hop">
@@ -234,14 +248,15 @@
 {{if .HopFault}}<p class="empty">{{.T .HopFault}}</p>{{end}}
 </div>
 </div>
-<details class="help">
+<details class="help" data-source="file url"{{if not .OnList}} hidden{{end}}>
 <summary>{{.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{.T "proxies.hop.why"}}</li>
 </ul>
 </details>
-{{end}}
-<details class="help">
+{{/* What a list may look like is about a list, so it goes with the boxes a list
+     is named in. */}}
+<details class="help" data-source="file url"{{if not .OnList}} hidden{{end}}>
 <summary>{{.T "settings.source.forms"}}</summary>
 <ul class="notes forms">
 <li>{{.T "settings.source.form.plain"}}</li>
@@ -252,6 +267,48 @@
 <p class="empty">{{.T "settings.source.scheme"}}</p>
 <p class="empty">{{.T "settings.source.skipped"}}</p>
 </details>
+{{/* The gateways themselves, which are what a profile on them is made of. They
+     are drawn for every form and shown for the kind they belong to: a reader
+     who picks them in the box above wants the list under it there and then,
+     rather than after saving a profile with nothing chosen yet. */}}
+{{if .GatewayFault}}<p class="empty" data-source="gateways"{{if not .OnGateways}} hidden{{end}}>{{.T .GatewayFault}}{{if .GatewayFaultAt}} {{.T "proxies.gateways.asked"}} <code>{{.GatewayFaultAt}}</code>{{end}}</p>{{end}}
+{{if .Groups}}
+{{/* The list stands as its own band with a header: without one, the pair of
+     words that ticks it sat directly under the last input of the form above and
+     read as that input's own. The header says what the box holds, what has been
+     chosen out of it, and carries the three things that act on it. */}}
+<div class="band" data-source="gateways"{{if not .OnGateways}} hidden{{end}}>
+<div class="band-head">
+<span class="band-name">{{.T "proxies.gateways.title"}} <span class="empty" data-chosen>{{.Chosen}}/{{.Offered}}</span></span>
+<span class="band-acts">
+{{if .Taken}}<span class="empty">{{.T "proxies.gateways.taken"}} {{.Taken}}</span>{{end}}
+<button type="submit" form="gateways-afresh">{{.T "proxies.gateways.refresh"}}</button>
+<button type="button" data-tick="all">{{.T "proxies.gateways.all"}}</button>
+<button type="button" data-tick="none">{{.T "proxies.gateways.none"}}</button>
+</span>
+</div>
+<div class="scrolls">
+{{range .Groups}}
+<fieldset data-gateways>
+<legend>{{if .Name}}{{.Name}}{{else}}{{$.T "proxies.gateways.loose"}}{{end}} — <span data-tally>{{.Chosen}}/{{.Offered}}</span>
+<button type="button" data-tick="all">{{$.T "proxies.gateways.all"}}</button>
+<button type="button" data-tick="none">{{$.T "proxies.gateways.none"}}</button></legend>
+{{range .Items}}
+<div class="field">
+<label for="gw-{{.Name}}">
+<input id="gw-{{.Name}}" name="gateway" type="checkbox" value="{{.Name}}"{{if .Chosen}} checked{{end}}>
+{{.Name}} <span class="empty">{{.Kind}}</span>
+{{if .Timed}}<span class="ping">{{.Ping}} {{$.T "proxies.gateways.ping.ms"}}</span>
+{{else if .Tried}}<span class="ping">{{$.T "proxies.gateways.ping.gone"}}</span>
+{{else}}<span class="ping empty">{{$.T "proxies.gateways.ping.never"}}</span>{{end}}</label>
+</div>
+{{end}}
+</fieldset>
+{{end}}
+</div>
+</div>
+{{end}}
+{{if .Missing}}<p class="empty" data-source="gateways"{{if not .OnGateways}} hidden{{end}}>{{.T "proxies.gateways.missing"}} {{.Missing}}</p>{{end}}
 </fieldset>
 
 <fieldset>
@@ -332,46 +389,6 @@
      runs, and asking the service on every redraw would put a request behind
      each of them. Choosing the gateways in the box above and saving is what
      brings the list. */}}
-{{if .OnGateways}}
-{{if .GatewayFault}}<p class="empty">{{.T .GatewayFault}}{{if .GatewayFaultAt}} {{.T "proxies.gateways.asked"}} <code>{{.GatewayFaultAt}}</code>{{end}}</p>{{end}}
-{{if .Groups}}
-{{/* The list stands as its own band with a header: without one, the pair of
-     words that ticks it sat directly under the last input of the form above and
-     read as that input's own. The header says what the box holds, what has been
-     chosen out of it, and carries the three things that act on it. */}}
-<div class="band">
-<div class="band-head">
-<span class="band-name">{{.T "proxies.gateways.title"}} <span class="empty" data-chosen>{{.Chosen}}/{{.Offered}}</span></span>
-<span class="band-acts">
-{{if .Taken}}<span class="empty">{{.T "proxies.gateways.taken"}} {{.Taken}}</span>{{end}}
-<button type="submit" form="gateways-afresh">{{.T "proxies.gateways.refresh"}}</button>
-<button type="button" data-tick="all">{{.T "proxies.gateways.all"}}</button>
-<button type="button" data-tick="none">{{.T "proxies.gateways.none"}}</button>
-</span>
-</div>
-<div class="scrolls">
-{{range .Groups}}
-<fieldset data-gateways>
-<legend>{{if .Name}}{{.Name}}{{else}}{{$.T "proxies.gateways.loose"}}{{end}} — <span data-tally>{{.Chosen}}/{{.Offered}}</span>
-<button type="button" data-tick="all">{{$.T "proxies.gateways.all"}}</button>
-<button type="button" data-tick="none">{{$.T "proxies.gateways.none"}}</button></legend>
-{{range .Items}}
-<div class="field">
-<label for="gw-{{.Name}}">
-<input id="gw-{{.Name}}" name="gateway" type="checkbox" value="{{.Name}}"{{if .Chosen}} checked{{end}}>
-{{.Name}} <span class="empty">{{.Kind}}</span>
-{{if .Timed}}<span class="ping">{{.Ping}} {{$.T "proxies.gateways.ping.ms"}}</span>
-{{else if .Tried}}<span class="ping">{{$.T "proxies.gateways.ping.gone"}}</span>
-{{else}}<span class="ping empty">{{$.T "proxies.gateways.ping.never"}}</span>{{end}}</label>
-</div>
-{{end}}
-</fieldset>
-{{end}}
-</div>
-</div>
-{{end}}
-{{if .Missing}}<p class="empty">{{.T "proxies.gateways.missing"}} {{.Missing}}</p>{{end}}
-{{end}}
 {{/* Save, and the way out without saving.
 
      It stays an anchor, because what it does is leave this page rather than

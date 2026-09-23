@@ -179,11 +179,31 @@ func TestProxies_DrawsOnlyTheBoxThatBelongsToTheChosenRoad(t *testing.T) {
 }
 
 func TestProxies_DrawsNoFirstHopOnAProfileOnGateways(t *testing.T) {
+	// A gateway's road is set on the gateway, in the service, so the question
+	// does not arise for a profile on them. The boxes are drawn away rather than
+	// left out — the reader may pick a list in the box above and want them back
+	// — and what they hold is kept either way: the handler leaves a profile on
+	// gateways with the hop it was saved with.
 	page, _, _ := hopScreen(t, []fakebt.Gateway{{Name: "vless-185", Kind: "vless"}},
 		store.Profile{Name: "Default", Kind: sourceGateways, Gateways: []string{"vless-185"}, Solver: true})
-	if strings.Contains(page, `name="first_hop"`) {
-		t.Error("a profile on gateways is offered a first hop, which its gateways set for themselves")
+	if row := rowAround(t, page, `name="first_hop"`); !strings.Contains(row, "hidden") {
+		t.Errorf("a profile on gateways is shown the road to its addresses: <%s>", row)
 	}
+}
+
+// rowAround is the opening tag of the row a box stands in.
+func rowAround(t *testing.T, body, box string) string {
+	t.Helper()
+	at := strings.Index(body, box)
+	if at < 0 {
+		t.Fatalf("the page has no %s", box)
+	}
+	start := strings.LastIndex(body[:at], `<div class="row"`)
+	if start < 0 {
+		t.Fatalf("%s stands in no row", box)
+	}
+	tag, _, _ := strings.Cut(body[start+1:], ">")
+	return tag
 }
 
 func TestSaveProxies_WritesTheFirstHopDown(t *testing.T) {
@@ -237,5 +257,19 @@ func TestSaveProxies_OffersTheGatewaysAgainWhenItRefusesTheFirstHop(t *testing.T
 	}
 	if !strings.Contains(page, `value="http://198.51.100.7:8080"`) {
 		t.Error("the refusal empties the proxy that was typed")
+	}
+}
+
+func TestProxies_DrawsTheGatewaysOnAFormThatIsNotOnThem(t *testing.T) {
+	// So that picking them in the box above shows the list under it there and
+	// then. Fetched only for a profile already on them, the reader would have to
+	// save a profile with nothing chosen, come back, and choose then.
+	page, _, _ := hopScreen(t, []fakebt.Gateway{{Name: "vless-185", Kind: "vless"}},
+		store.Profile{Name: "Default", Kind: sourceURL, Location: "https://example.test/list.txt", Solver: true})
+	if !strings.Contains(page, `name="gateway"`) {
+		t.Error("a profile read from an address is drawn without the gateways it could be moved onto")
+	}
+	if !strings.Contains(page, `data-source="gateways" hidden`) {
+		t.Error("the gateways are drawn on a profile read from an address without being put away")
 	}
 }
