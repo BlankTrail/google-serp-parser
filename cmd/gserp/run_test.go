@@ -21,8 +21,8 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/export"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/store"
-	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 )
 
 // syncBuffer is written by the goroutine that watches for the interruption
@@ -176,30 +176,69 @@ func TestRunCommand_SaysWhichOfTheTimesItQuotesIsABoundAndWhereTheOtherCameFrom(
 	}
 }
 
-func TestRunCommand_PacesTheEstimateAsThePoolItWillOpenWouldPaceItself(t *testing.T) {
+func TestRunCommand_PacesTheEstimateByTheRestItsSessionsWillTake(t *testing.T) {
 	// The estimate is printed before the ports are opened — and on a dry run
-	// they never are — so the gap between two requests on one port has to be
-	// arrived at here. Arrived at differently from the pool, it quotes a job
-	// nobody is going to run.
-	fake := fakebt.New(t)
-	client, err := blanktrail.NewClient(fake.URL(), fake.Key())
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+	// they never are — so the pace has to be arrived at here. What paces a run
+	// of sessions is the rest between two requests on one of them: the ports
+	// keep no pause of their own, and a thread works another session through
+	// the rest rather than waiting out a gap of its own.
+	//
+	// Each rest is drawn inside the span, so half of them are shorter than the
+	// middle and half longer, and the middle is what a whole job averages to.
+	if got := restedAt(runOptions{Rest: time.Minute, RestUpTo: 2 * time.Minute}); got != 90*time.Second {
+		t.Errorf("the estimate paces the job at %v, want the middle of a span of a minute to two", got)
+	}
+	// A far end nobody named is the near end and half again, which is how the
+	// keeper reads it; the middle of that is the near end and a quarter.
+	if got := restedAt(runOptions{Rest: time.Minute}); got != 75*time.Second {
+		t.Errorf("with one end named the estimate paces the job at %v, want 1m15s", got)
+	}
+	// And the span the flags default to — which is the span the form offers —
+	// paces the estimate of a command that named neither.
+	var untouched runOptions
+	if err := runFlags(&untouched).Parse(nil); err != nil {
+		t.Fatalf("parsing no flags at all: %v", err)
+	}
+	if got, want := restedAt(untouched),
+		(sessions.DefaultRest+sessions.DefaultRestUpTo)/2; got != want {
+		t.Errorf("a run that named no rest is paced at %v, want %v", got, want)
+	}
+}
+
+func TestRunCommand_AsksItsSessionsForTheSpanItWasTold(t *testing.T) {
+	// Both ends reach the sessions. With the far one dropped on the way, a run
+	// told to rest a minute to two would rest a minute to a minute and a half —
+	// the keeper's reading of a near end named alone — and nothing would say so.
+	got := restingWant("", runOptions{Rest: 30 * time.Second, RestUpTo: 45 * time.Second})
+	if got.Pause != 30*time.Second || got.UpTo != 45*time.Second {
+		t.Errorf("the run asks its sessions to rest %v to %v, want the 30s to 45s it was told",
+			got.Pause, got.UpTo)
+	}
+	if got.Device != blanktrail.DeviceDesktop {
+		t.Errorf("a job that named no kind of page asks for %q, want the desktop", got.Device)
+	}
+}
+
+func TestRunFlags_RestASessionTheSameSpanTheFormOffers(t *testing.T) {
+	// One job set up two ways has to cost the same. The numbers are the
+	// sessions' own — see sessions.DefaultRest — so neither door can drift from
+	// the other by somebody changing a default where they happened to be
+	// reading.
+	var opts runOptions
+	if err := runFlags(&opts).Parse(nil); err != nil {
+		t.Fatalf("parsing no flags at all: %v", err)
+	}
+	if opts.Rest != sessions.DefaultRest || opts.RestUpTo != sessions.DefaultRestUpTo {
+		t.Errorf("the command rests its sessions %v to %v, want the %v to %v the form offers",
+			opts.Rest, opts.RestUpTo, sessions.DefaultRest, sessions.DefaultRestUpTo)
 	}
 
-	cfg := poolConfig(2, 3, false)
-	cfg.Client = client
-	cfg.Insecure = true // the fake serves plain HTTP
-	cfg.Channels = []blanktrail.Channel{blanktrail.NewDirectChannel("direct")}
-
-	pool, err := blanktrail.NewPool(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("NewPool: %v", err)
+	// And both ends are the operator's to name.
+	if err := runFlags(&opts).Parse([]string{"-rest", "30s", "-rest-up-to", "45s"}); err != nil {
+		t.Fatalf("naming a span: %v", err)
 	}
-	defer func() { _ = pool.Close() }()
-
-	if got := settledCooldown(cfg); got != pool.Cooldown() {
-		t.Errorf("the estimate paces the job at %v and the pool paces it at %v", got, pool.Cooldown())
+	if opts.Rest != 30*time.Second || opts.RestUpTo != 45*time.Second {
+		t.Errorf("the command was told to rest 30s to 45s and rests %v to %v", opts.Rest, opts.RestUpTo)
 	}
 }
 

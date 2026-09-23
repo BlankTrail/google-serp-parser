@@ -173,8 +173,11 @@ type Wanted struct {
 	// them asked for.
 	Device string
 	Worn   blanktrail.Worn
-	// Cooldown is the gap the job leaves between two requests on one identity.
+	// Cooldown and RestUpTo are the two ends of the rest the job leaves between
+	// two requests on one session. Each session draws its own rest between them
+	// at every use; a RestUpTo at or below Cooldown is a job that named one end.
 	Cooldown time.Duration
+	RestUpTo time.Duration
 	// WholePool says the job spends the whole proxy list rather than a fixed
 	// number of ports, and Addresses that it keeps the address of each result —
 	// which is what decides whether the second set of ports is worth opening at
@@ -839,6 +842,7 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 		Device:    sum.Device,
 		Worn:      blanktrail.Worn{Browser: sum.Browser, OS: sum.OS, Release: sum.Release},
 		Cooldown:  sum.Cooldown,
+		RestUpTo:  sum.RestUpTo,
 		WholePool: sum.WholePool,
 		Addresses: sum.Fields.Keeps(store.FieldURL),
 	})

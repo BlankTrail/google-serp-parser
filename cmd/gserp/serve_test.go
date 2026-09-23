@@ -1675,7 +1675,8 @@ func TestDial_RaisesAPoolOfSessionsForTheProgramsKeeper(t *testing.T) {
 	opts.Keeper = sessions.NewKeeper(sessions.NewMemory())
 	saved, _ := opts.saved(io.Discard)
 	want := web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop,
-		Worn: blanktrail.Worn{Browser: "chrome", Release: 153}, Cooldown: 7 * time.Second}
+		Worn:     blanktrail.Worn{Browser: "chrome", Release: 153},
+		Cooldown: 7 * time.Second, RestUpTo: 11 * time.Second}
 
 	got, err := opts.dial(t.Context(), saved, want)
 	if err != nil {
@@ -1685,7 +1686,11 @@ func TestDial_RaisesAPoolOfSessionsForTheProgramsKeeper(t *testing.T) {
 	if got.Keeper != opts.Keeper {
 		t.Error("the job was not handed the program's keeper")
 	}
-	if got.Want != (sessions.Want{Device: blanktrail.DeviceDesktop, Browser: "chrome", Release: 153, Pause: 7 * time.Second}) {
+	// Both ends of the rest: a job whose far end were dropped on the way would
+	// rest its sessions seven to ten and a half seconds — the fallback for a
+	// caller naming one end — rather than the seven to eleven it asked for.
+	if got.Want != (sessions.Want{Device: blanktrail.DeviceDesktop, Browser: "chrome", Release: 153,
+		Pause: 7 * time.Second, UpTo: 11 * time.Second}) {
 		t.Errorf("the job wants %+v of its sessions", got.Want)
 	}
 	// A pool of sessions keeps no pause on a port: the job's seven seconds are

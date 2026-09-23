@@ -842,18 +842,20 @@ func TestReshape_ChangesThePoolTheJobWillComeUpOnAndNothingElse(t *testing.T) {
 	before := theJob(t, s, id)
 
 	rec := postForm(t, s, "/api/reshape", url.Values{
-		"job": {strconv.FormatInt(id, 10)}, "ports": {"11"}, "threads": {"3"}, "tries": {"17"},
+		"job": {strconv.FormatInt(id, 10)}, "threads": {"3"}, "tries": {"17"},
+		"cooldown": {"45"}, "restupto": {"90"},
 	})
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("reshaping came back %d, want a redirect: %s", rec.Code, rec.Body.String())
 	}
 
 	after := theJob(t, s, id)
-	// The three are all different from each other and from what was there, so a
+	// The four are all different from each other and from what was there, so a
 	// handler that read one box into another cannot pass this.
-	if after.Ports != 11 || after.Threads != 3 || after.Tries != 17 {
-		t.Errorf("the job now runs on ports=%d threads=%d tries=%d, want 11, 3 and 17",
-			after.Ports, after.Threads, after.Tries)
+	if after.Threads != 3 || after.Tries != 17 ||
+		after.Cooldown != 45*time.Second || after.RestUpTo != 90*time.Second {
+		t.Errorf("the job now runs threads=%d tries=%d resting %v to %v, want 3, 17, 45s and 90s",
+			after.Threads, after.Tries, after.Cooldown, after.RestUpTo)
 	}
 	if after.Pages != before.Pages || after.Country != before.Country ||
 		after.UniqueBy != before.UniqueBy || after.Kind != before.Kind {
@@ -875,7 +877,7 @@ func TestReshape_SaysSoWhenTheJobHasAlreadyRunRatherThanAcceptingItQuietly(t *te
 	}
 
 	rec := postForm(t, s, "/api/reshape", url.Values{
-		"job": {strconv.FormatInt(id, 10)}, "ports": {"11"}, "threads": {"3"}, "tries": {"17"},
+		"job": {strconv.FormatInt(id, 10)}, "threads": {"3"}, "tries": {"17"},
 	})
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("reshaping a finished job came back %d", rec.Code)

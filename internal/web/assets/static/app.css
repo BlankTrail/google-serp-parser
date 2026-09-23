@@ -691,21 +691,26 @@ input.narrow {
 	min-width: 0;
 }
 
-/* A tick that belongs to the box above it rather than beside it: it takes the
-   meaning out of that box, so standing it in a column of its own would leave
-   the reader to work out which box it was about. It reads as a note under the
-   value, in the size the notes are in. */
-.field .under {
+/* Two boxes that are one setting — the near and far ends of a span — with the
+   word between them read as a word rather than as a label of its own. They
+   share the width the field has, so the pair is no wider than a single box
+   beside it in the row. */
+.field .pair {
 	display: flex;
 	align-items: center;
 	gap: 0.4rem;
+	min-width: 0;
+}
+
+.field .pair input {
+	min-width: 0;
+	flex: 1 1 0;
+}
+
+.field .between {
 	font-size: 0.85rem;
 	color: var(--quiet);
 	white-space: nowrap;
-}
-
-.field .under input {
-	margin: 0;
 }
 
 /* How a job was set up: a label and its value, one setting to a line, in as

@@ -439,11 +439,11 @@ func TestReshape_ChangesThePoolOfThatJobAndOfNoOther(t *testing.T) {
 		t.Fatalf("CreateJob: %v", err)
 	}
 
-	if err := s.Reshape(context.Background(), mine, 11, 3, 5, 0, false); err != nil {
+	if err := s.Reshape(context.Background(), mine, 3, 5, 0, 0); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
-	if ports, threads := poolOf(t, s, mine); ports != 11 || threads != 3 {
-		t.Errorf("the reshaped job runs on %d ports and %d threads, want 11 and 3", ports, threads)
+	if _, threads := poolOf(t, s, mine); threads != 3 {
+		t.Errorf("the reshaped job runs %d queries at once, want 3", threads)
 	}
 	if ports, threads := poolOf(t, s, theirs); ports != 9 || threads != 2 {
 		t.Errorf("another job was reshaped to %d ports and %d threads, want the 9 and 2 it asked for",
@@ -451,14 +451,42 @@ func TestReshape_ChangesThePoolOfThatJobAndOfNoOther(t *testing.T) {
 	}
 }
 
-func TestCreateJobAndReshape_KeepThePauseTheJobNamed(t *testing.T) {
-	// The gap between two requests on one identity is the job's own. It is
-	// written in milliseconds and set in seconds, so a job that named forty-five
-	// seconds and reads back as forty-five thousand of anything is a unit lost
-	// between the form and the column.
+func TestReshape_LeavesThePortsAndTheWholeListAsTheJobWasMade(t *testing.T) {
+	// Neither is offered any more: a thread needs one port, and which addresses
+	// the sessions spread over is the keeper's rule. The columns stay for the
+	// jobs that were made when they were asked for — and a reshape that wrote
+	// them from a form that no longer has the boxes would file every job it
+	// touched as one that named nothing.
 	s := testStore(t)
 	id, err := s.CreateJob(context.Background(),
-		JobSpec{Name: "careful", Pages: 1, Cooldown: 45 * time.Second}, []string{"a"})
+		JobSpec{Name: "made-then", Pages: 1, Ports: 4, Threads: 7, WholePool: true}, []string{"a"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	if err := s.Reshape(context.Background(), id, 2, 5, time.Minute, 2*time.Minute); err != nil {
+		t.Fatalf("Reshape: %v", err)
+	}
+	if ports, threads := poolOf(t, s, id); ports != 4 || threads != 2 {
+		t.Errorf("the job runs on %d ports and %d threads, want the 4 it was made with and the 2 it was changed to",
+			ports, threads)
+	}
+	if !wholePoolOf(t, s, id) {
+		t.Error("the reshape took the whole list off a job that was made spending it")
+	}
+}
+
+func TestCreateJobAndReshape_KeepBothEndsOfTheRestTheJobNamed(t *testing.T) {
+	// The rest between two requests on one identity is the job's own, and it is
+	// a span: the near end and the far one. Both are written in milliseconds and
+	// set in seconds, so a job that named forty-five seconds and reads back as
+	// forty-five thousand of anything is a unit lost between the form and the
+	// column — and a far end that reads back as the near one is a span the
+	// sessions would take as a metronome.
+	s := testStore(t)
+	id, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "careful", Pages: 1, Cooldown: 45 * time.Second, RestUpTo: 75 * time.Second},
+		[]string{"a"})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
@@ -466,19 +494,32 @@ func TestCreateJobAndReshape_KeepThePauseTheJobNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Progress: %v", err)
 	}
-	if sum.Cooldown != 45*time.Second {
-		t.Errorf("the job rests %v between two requests on one identity, want 45s", sum.Cooldown)
+	if sum.Cooldown != 45*time.Second || sum.RestUpTo != 75*time.Second {
+		t.Errorf("the job rests between %v and %v, want 45s to 75s", sum.Cooldown, sum.RestUpTo)
 	}
 
-	if err := s.Reshape(context.Background(), id, 2, 1, 5, 90*time.Second, false); err != nil {
+	if err := s.Reshape(context.Background(), id, 1, 5, 90*time.Second, 150*time.Second); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
 	sum, err = s.Progress(context.Background(), id)
 	if err != nil {
 		t.Fatalf("Progress: %v", err)
 	}
-	if sum.Cooldown != 90*time.Second {
-		t.Errorf("after the reshape the job rests %v, want the 90s it was changed to", sum.Cooldown)
+	if sum.Cooldown != 90*time.Second || sum.RestUpTo != 150*time.Second {
+		t.Errorf("after the reshape the job rests between %v and %v, want the 90s to 150s it was changed to",
+			sum.Cooldown, sum.RestUpTo)
+	}
+
+	// A job that named the near end only keeps the far one at nought, which is
+	// where the keeper reads "this end and half again" rather than a span of
+	// nothing.
+	near, err := s.CreateJob(context.Background(),
+		JobSpec{Name: "one-end", Pages: 1, Cooldown: time.Minute}, []string{"b"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if sum, _ := s.Progress(context.Background(), near); sum.RestUpTo != 0 {
+		t.Errorf("a job that named one end reads back with a far end of %v, want nought", sum.RestUpTo)
 	}
 }
 
@@ -508,10 +549,10 @@ func TestReshape_RefusesAJobThatHasAlreadyFinished(t *testing.T) {
 		t.Fatalf("FinishJob: %v", err)
 	}
 
-	if err := s.Reshape(context.Background(), done, 11, 3, 5, 0, false); !errors.Is(err, ErrJobFinished) {
+	if err := s.Reshape(context.Background(), done, 3, 5, 0, 0); !errors.Is(err, ErrJobFinished) {
 		t.Errorf("Reshape returned %v, want ErrJobFinished", err)
 	}
-	if err := s.Reshape(context.Background(), running, 11, 3, 5, 0, false); err != nil {
+	if err := s.Reshape(context.Background(), running, 3, 5, 0, 0); err != nil {
 		t.Errorf("a job with work left could not be reshaped: %v", err)
 	}
 	if ports, threads := poolOf(t, s, done); ports != 4 || threads != 7 {
@@ -525,7 +566,7 @@ func TestReshape_RefusesAJobThatIsNotThere(t *testing.T) {
 	// the wrong id that their change landed.
 	s := testStore(t)
 	jobWith(t, s, "a")
-	if err := s.Reshape(context.Background(), 4242, 11, 3, 5, 0, false); !errors.Is(err, ErrNoJob) {
+	if err := s.Reshape(context.Background(), 4242, 3, 5, 0, 0); !errors.Is(err, ErrNoJob) {
 		t.Errorf("Reshape returned %v, want ErrNoJob", err)
 	}
 }
@@ -540,7 +581,7 @@ func TestReshape_TakesTheNumbersAJobIsAlreadyOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.Reshape(context.Background(), id, 4, 7, 5, 0, false); err != nil {
+	if err := s.Reshape(context.Background(), id, 7, 5, 0, 0); err != nil {
 		t.Errorf("Reshape of a job onto the pool it already has: %v", err)
 	}
 	if ports, threads := poolOf(t, s, id); ports != 4 || threads != 7 {
@@ -558,12 +599,11 @@ func TestReshape_ReadsAPoolBelowNothingAsOneThatWasNeverNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if err := s.Reshape(context.Background(), id, -4, -7, 5, 0, false); err != nil {
+	if err := s.Reshape(context.Background(), id, -7, -5, 0, 0); err != nil {
 		t.Fatalf("Reshape: %v", err)
 	}
-	if ports, threads := poolOf(t, s, id); ports != 0 || threads != 0 {
-		t.Errorf("a reshape to %d ports and %d threads stored %d and %d, want zero for both",
-			-4, -7, ports, threads)
+	if _, threads := poolOf(t, s, id); threads != 0 {
+		t.Errorf("a reshape to %d threads stored %d, want nothing named", -7, threads)
 	}
 }
 
@@ -784,36 +824,6 @@ func TestTryFailedAgain_PutsTheFailuresBackInTheQueueAndLeavesTheRest(t *testing
 	// runs, so a job left stamped ran on behind a screen that sat still.
 	if sum.Finished {
 		t.Error("the job is still stamped finished with work back in front of it")
-	}
-}
-
-func TestReshape_CarriesWhetherTheJobSpendsTheWholeList(t *testing.T) {
-	// The four numbers beside it can be changed on a job's own page, and so can
-	// this: a run that has not started yet is a run whose pool is still an open
-	// question. A reshape that dropped it would tick the box on the screen and
-	// start the job on the pool it always had.
-	s := testStore(t)
-	id, err := s.CreateJob(context.Background(), JobSpec{Name: "whole", Pages: 1}, []string{"a"})
-	if err != nil {
-		t.Fatalf("CreateJob: %v", err)
-	}
-	if wholePoolOf(t, s, id) {
-		t.Fatal("a job that asked for nothing was written spending the whole list")
-	}
-
-	if err := s.Reshape(context.Background(), id, 2, 1, 5, 0, true); err != nil {
-		t.Fatalf("Reshape: %v", err)
-	}
-	if !wholePoolOf(t, s, id) {
-		t.Error("the reshape did not carry the whole list the reader asked for")
-	}
-
-	// And back off again, which is the half a flag written only when true loses.
-	if err := s.Reshape(context.Background(), id, 2, 1, 5, 0, false); err != nil {
-		t.Fatalf("Reshape back: %v", err)
-	}
-	if wholePoolOf(t, s, id) {
-		t.Error("the tick could not be taken off again")
 	}
 }
 

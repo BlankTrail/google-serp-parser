@@ -10,6 +10,20 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
+// DefaultRest and DefaultRestUpTo are the span a session rests when nobody has
+// said otherwise: a minute to two, as the operator set it.
+//
+// They live here rather than at each of the doors a job comes in by, because a
+// job set up in the browser and the same job from the command line have to cost
+// the same. What the number is about is a session, which is what this package
+// holds: a session is a person reading results, and a minute to two between two
+// of their pages is what one looks like. Nothing is bought by hurrying it —
+// the thread does not wait through the rest, it works another session.
+const (
+	DefaultRest     = time.Minute
+	DefaultRestUpTo = 2 * time.Minute
+)
+
 // Want is what a caller asks a session to be.
 type Want struct {
 	// Device is the kind of result page: "desktop" or "mobile". A phone's
@@ -20,11 +34,18 @@ type Want struct {
 	Browser string
 	OS      string
 	Release int
-	// Pause is how long a session rests after it was last used before it may be
-	// handed out again. It is the taker's rather than the keeper's: a job, the
-	// warmer and a search answered inside a request share the sessions, and not
-	// the pause.
+	// Pause and UpTo are the rest a session takes after it was last used,
+	// before it may be handed out again: the least and the most of it. Each
+	// session draws its own rest between the two afresh at every use, so a
+	// session asked again every sixty seconds to the millisecond — which is a
+	// description of a program and not of a reader — does not happen.
+	//
+	// The rest is the taker's rather than the keeper's: a job, the warmer and a
+	// search answered inside a request share the sessions, and not the rest.
+	// UpTo below Pause is a caller naming one end only, and the other is that
+	// end and half again — what the single number meant before there were two.
 	Pause time.Duration
+	UpTo  time.Duration
 }
 
 // matches says whether a session's fingerprint is what the want narrows to.

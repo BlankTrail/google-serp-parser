@@ -104,7 +104,7 @@ func TestNewJob_KeepsTheJobsOwnPoolInAGroupOfItsOwn(t *testing.T) {
 	if !strings.Contains(html.UnescapeString(group), LangEN.T("form.tries.why")) {
 		t.Errorf("the group does not say what its boxes are: %s", group)
 	}
-	for _, field := range []string{`name="threads"`, `name="ports"`, `name="tries"`} {
+	for _, field := range []string{`name="threads"`, `name="tries"`, `name="cooldown"`, `name="restupto"`} {
 		if !strings.Contains(group, field) {
 			t.Errorf("%s is not in the group that says these belong to the job", field)
 		}
@@ -828,25 +828,69 @@ func TestNewForm_AsksForTheDesktopPageUnlessSomebodySaysOtherwise(t *testing.T) 
 	}
 }
 
-func TestNewJob_OffersTheNumbersThatWereMeasured(t *testing.T) {
-	// One identity a thread and five seconds between two requests on it. Both
-	// are measured and both are in the code's own comments: an identity asked
-	// every two seconds answered twelve requests before it was challenged and
-	// one asked every five answered around forty, and three ports a thread —
-	// which is what this offered while a thread stood still through its own
-	// pause — buy nothing now that a thread works its other walks through it,
-	// while every identity in play is one more the licensed solver has to carry.
+func TestNewJob_OffersTheRestTheOperatorSet(t *testing.T) {
+	// A minute to two between two requests on one session, as the operator set
+	// it: a session is a person reading results, and that is what one looks
+	// like. The waiting costs nothing now — the thread works another session
+	// through it — so the number that used to buy speed buys nothing back.
 	//
 	// A default nobody meets is a default that does not matter, so this checks
 	// the page a reader actually opens rather than the struct behind it.
 	page := get(t, testServer(t), "/new").Body.String()
 	for _, want := range []string{
-		`id="ports" name="ports" type="number" min="1" value="1"`,
-		`id="cooldown" name="cooldown" type="number" min="0" value="5"`,
+		`id="cooldown" name="cooldown" type="number" min="0" value="60"`,
+		`id="restupto" name="restupto" type="number" min="0" value="120"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the new-job form does not offer %s", want)
 		}
+	}
+}
+
+func TestNewJob_NoLongerAsksForPortsPerThreadOrTheWholeList(t *testing.T) {
+	// A thread needs one port: it hands the port back between two pages and
+	// works another session while the one it just used rests. And which
+	// addresses the sessions are spread over is the keeper's rule, not a tick.
+	// Both boxes were settings that no longer settle anything, which is worse
+	// than no box at all — a reader fills one in and is told the run will use
+	// it.
+	page := get(t, testServer(t), "/new").Body.String()
+	for _, gone := range []string{`name="ports"`, `name="wholepool"`} {
+		if strings.Contains(page, gone) {
+			t.Errorf("the new-job form still offers %s", gone)
+		}
+	}
+}
+
+func TestCreateJob_MakesAJobOnOnePortAThread(t *testing.T) {
+	// The form no longer asks, so the job carries the rule instead: a port a
+	// thread, written down with the job so a pool raised for it later is the
+	// pool it was made for, whatever the machine is set to. A job written
+	// naming nothing would be run at whatever number the server happened to be
+	// started with.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name": {"one port a thread"}, "queries": {"кондиционер"}, "pages": {"1"},
+		"threads": {"4"},
+		// Sent by hand, the way an old bookmark or a script would send them.
+		"ports": {"7"}, "wholepool": {"1"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the job was refused with %d: %s", rec.Code, rec.Body.String())
+	}
+	sums, err := s.store.Jobs(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("Jobs: %v", err)
+	}
+	if len(sums) != 1 {
+		t.Fatalf("the history holds %d jobs, want the one", len(sums))
+	}
+	if sums[0].Ports != 1 || sums[0].Threads != 4 {
+		t.Errorf("the job runs on %d ports a thread and %d threads, want one and the four asked for",
+			sums[0].Ports, sums[0].Threads)
+	}
+	if sums[0].WholePool {
+		t.Error("the job was written spending the whole list, which nothing on the form asks for any more")
 	}
 }
 
@@ -923,7 +967,7 @@ func TestJobPage_PointsAJobAtAnotherProfile(t *testing.T) {
 	rec := postForm(t, s, "/api/reshape", url.Values{
 		"job":     {strconv.FormatInt(id, 10)},
 		"profile": {strconv.FormatInt(second, 10)},
-		"threads": {"2"}, "ports": {"3"}, "tries": {"4"}, "cooldown": {"5"},
+		"threads": {"2"}, "tries": {"4"}, "cooldown": {"5"}, "restupto": {"9"},
 	})
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("saving gave %d, want a redirect: %s", rec.Code, rec.Body)
@@ -937,69 +981,9 @@ func TestJobPage_PointsAJobAtAnotherProfile(t *testing.T) {
 	}
 	// And the numbers beside it went through the same press, because a save that
 	// wrote one of the two would be a save the reader cannot tell apart.
-	if sum.Threads != 2 || sum.Ports != 3 || sum.Tries != 4 || sum.Cooldown != 5*time.Second {
-		t.Errorf("the pool reads %d threads, %d ports, %d tries, %v pause",
-			sum.Threads, sum.Ports, sum.Tries, sum.Cooldown)
-	}
-}
-
-func TestCreateJob_TakesTheWholeListTickAndLeavesThePortsBoxUnread(t *testing.T) {
-	// The tick is what is sent and the number beside it is not read. A form
-	// that took both would let a job say two things about its pool — spend the
-	// whole list, and open seven ports a thread — and the pool would have to
-	// pick one without saying which.
-	s := testServerWithSupervisor(t)
-	rec := postForm(t, s, "/new?do=start", url.Values{
-		"name":      {"whole"},
-		"queries":   {"кондиционер"},
-		"pages":     {"1"},
-		"threads":   {"4"},
-		"ports":     {"7"},
-		"wholepool": {"1"},
-	})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("the job was refused with %d: %s", rec.Code, rec.Body.String())
-	}
-
-	sums, err := s.store.Jobs(t.Context(), 10)
-	if err != nil {
-		t.Fatalf("ListJobs: %v", err)
-	}
-	if len(sums) != 1 {
-		t.Fatalf("the history holds %d jobs, want the one", len(sums))
-	}
-	if !sums[0].WholePool {
-		t.Error("the job was written without the tick that was sent")
-	}
-	if sums[0].Threads != 4 {
-		t.Errorf("threads=%d, want the four that were asked for", sums[0].Threads)
-	}
-}
-
-func TestJobPage_RefusesThePortsBoxWhileTheWholeListIsTicked(t *testing.T) {
-	// Said on the page as well as in the handler. A box a job's settings ignore
-	// must not be fillable: a reader who types into it and sees the number kept
-	// has been told the run will use it.
-	s := testServerWithSupervisor(t)
-	if rec := postForm(t, s, "/new?do=start", url.Values{
-		"name": {"whole"}, "queries": {"кондиционер"}, "pages": {"1"},
-		"threads": {"4"}, "ports": {"7"}, "wholepool": {"1"},
-	}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("the job was refused with %d", rec.Code)
-	}
-	sums, err := s.store.Jobs(t.Context(), 10)
-	if err != nil || len(sums) != 1 {
-		t.Fatalf("ListJobs: %v, %d jobs", err, len(sums))
-	}
-
-	body := get(t, s, jobPath(sums[0].ID)).Body.String()
-	at := strings.Index(body, `name="ports"`)
-	if at < 0 {
-		t.Fatal("the job page does not show the ports box at all")
-	}
-	box := body[at : at+strings.Index(body[at:], ">")]
-	if !strings.Contains(box, "disabled") {
-		t.Errorf("the ports box is offered as %q, want it refused while the whole list is ticked", box)
+	if sum.Threads != 2 || sum.Tries != 4 || sum.Cooldown != 5*time.Second || sum.RestUpTo != 9*time.Second {
+		t.Errorf("the pool reads %d threads, %d tries, a rest of %v to %v",
+			sum.Threads, sum.Tries, sum.Cooldown, sum.RestUpTo)
 	}
 }
 
@@ -1092,4 +1076,34 @@ func hasComplaint(complaints []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestCreateJob_RefusesARestSpanFilledInTheWrongOrder(t *testing.T) {
+	// Two boxes in a row are filled in the wrong order sooner or later. Taken as
+	// written, a far end nearer than the near one is not read as a span at all —
+	// that is how a job says it named one end — so the sessions would rest the
+	// larger number and half again, which is neither of the numbers the reader
+	// typed and nothing on the page would say so.
+	s := testServerWithSupervisor(t)
+	rec := postForm(t, s, "/new?do=start", url.Values{
+		"name": {"backwards"}, "queries": {"кондиционер"}, "pages": {"1"},
+		"cooldown": {"120"}, "restupto": {"60"},
+	})
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("a rest of a hundred and twenty seconds to sixty was accepted")
+	}
+	// Unescaped, because the message carries an apostrophe and the template
+	// writes it as an entity.
+	if body := html.UnescapeString(rec.Body.String()); !strings.Contains(body, LangEN.T("form.rest.backwards")) {
+		t.Errorf("the page does not say what is wrong with the span:\n%s", body)
+	}
+
+	// One end named is not the wrong order: the far box left empty is how a job
+	// asks for the near end and half again.
+	if rec := postForm(t, s, "/new?do=start", url.Values{
+		"name": {"one end"}, "queries": {"кондиционер"}, "pages": {"1"},
+		"cooldown": {"120"}, "restupto": {"0"},
+	}); rec.Code != http.StatusSeeOther {
+		t.Errorf("a job naming the near end only was refused with %d: %s", rec.Code, rec.Body)
+	}
 }

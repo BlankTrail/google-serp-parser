@@ -139,29 +139,26 @@
 <label for="threads">{{.T "form.threads"}}</label>
 <input id="threads" name="threads" type="number" min="1" value="{{.Form.Threads}}">
 </div>
-{{/* The tick stands under the box it takes the meaning out of, because that is
-     what it is about: a job spending the whole list has no number of ports a
-     thread to name, and the box is refused while it is ticked. */}}
-<div class="field">
-<label for="ports">{{.T "form.ports"}}</label>
-<input id="ports" name="ports" type="number" min="1" value="{{.Form.Ports}}"{{if .Form.WholePool}} disabled{{end}}>
-<label class="under"><input id="wholepool" name="wholepool" type="checkbox" value="1"{{if .Form.WholePool}} checked{{end}}> {{.T "form.wholepool"}}</label>
-</div>
 <div class="field">
 <label for="tries">{{.T "form.tries"}}</label>
 <input id="tries" name="tries" type="number" min="1" value="{{.Form.Tries}}">
 </div>
+{{/* The two ends of the rest stand side by side under one label, because they
+     are one setting: a session's rest is drawn between them at every use. */}}
 <div class="field">
-<label for="cooldown">{{.T "form.pause"}}</label>
-<input id="cooldown" name="cooldown" type="number" min="0" value="{{.Form.Cooldown}}">
+<label for="cooldown">{{.T "form.rest"}}</label>
+<div class="pair">
+<input id="cooldown" name="cooldown" type="number" min="0" value="{{.Form.Cooldown}}" aria-label="{{.T "form.rest.from"}}">
+<span class="between">{{.T "form.rest.to"}}</span>
+<input id="restupto" name="restupto" type="number" min="0" value="{{.Form.RestUpTo}}" aria-label="{{.T "form.rest.to"}}">
+</div>
 </div>
 </div>
 <details class="help">
 <summary>{{.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{.T "form.tries.why"}}</li>
-<li>{{.T "form.pause.why"}}</li>
-<li>{{.T "form.wholepool.why"}}</li>
+<li>{{.T "form.rest.why"}}</li>
 </ul>
 <p class="empty">{{.T "form.pool.why"}}</p>
 </details>

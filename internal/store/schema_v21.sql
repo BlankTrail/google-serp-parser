@@ -1,0 +1,11 @@
+-- The far end of the rest a session takes between two of its requests.
+--
+-- cooldown_ms beside it is the near end. A session draws its own rest between
+-- the two afresh at every use, so a pool of them is not asked again on a
+-- metronome — one number could only say "this often", and this often to the
+-- millisecond is a description of the program making the requests.
+--
+-- Nought is not a missing value and needs no backfill: it means the job named
+-- one end only, and the other is that end and half again, which is exactly what
+-- the single number meant to every job written before this column existed.
+ALTER TABLE jobs ADD COLUMN rest_up_to_ms INTEGER NOT NULL DEFAULT 0 CHECK (rest_up_to_ms >= 0);
