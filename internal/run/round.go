@@ -5,6 +5,7 @@ package run
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
@@ -80,9 +81,15 @@ type crew struct {
 	// every other thread stops too rather than spending the rest of the list on
 	// an empty pool.
 	starve func()
-	// results is the run's own slice. Every index belongs to one thread, so
-	// nothing here is shared.
+	// results is the run's own slice. In a run that keeps sessions a query is
+	// carried by whichever thread holds its session, so the slice is shared and
+	// mu guards it; in one that does not, every index belongs to one thread and
+	// the lock is never contended.
 	results []QueryResult
+	mu      *sync.Mutex
+	// walks is the register of queries the sessions are carrying. It is one per
+	// job, shared by every thread; see carry.
+	walks *walks
 	// settle is what a finished query goes through: its addresses read, its
 	// results written down, its stages reported.
 	settle func(ctx context.Context, at int, began time.Time)

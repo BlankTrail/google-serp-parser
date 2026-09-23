@@ -563,6 +563,43 @@ func TestKeeper_NeverHandsOutASessionPastItsTwelveHoursBetweenSweeps(t *testing.
 	}
 }
 
+func TestKeeper_TakesOneOfTheNamedSessionsAndMakesNone(t *testing.T) {
+	// A thread walking queries asks for the sessions carrying one, and for no
+	// others: the page it would take next is addressed to one of those and
+	// nothing else can take it. So where none of them has rested, the answer is
+	// that none is due — Take would answer the same asking with a new session,
+	// and a thread looking every few milliseconds would collect one per glance.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	pa, pb := listPort(1, "a", "a", "b"), listPort(2, "b", "a", "b")
+	carrying, _ := k.Take(ctx, pa, desktop)
+	other, _ := k.Take(ctx, pb, desktop)
+	_ = carrying.Answered(ctx, pa)
+	_ = other.Answered(ctx, pb)
+
+	// A thread carrying nothing names nothing, and is given nothing.
+	if _, err := k.TakeOneOf(ctx, listPort(3, "a", "a", "b"), desktop, nil); !errors.Is(err, ErrNothingDue) {
+		t.Fatalf("naming no session answered %v, want nothing due", err)
+	}
+	// Both have just answered, so neither has rested the pause.
+	if _, err := k.TakeOneOf(ctx, listPort(4, "a", "a", "b"), desktop, []int64{carrying.ID}); !errors.Is(err, ErrNothingDue) {
+		t.Fatalf("a session that has not rested was handed out: %v", err)
+	}
+
+	c.pass(time.Minute)
+	got, err := k.TakeOneOf(ctx, listPort(5, "b", "a", "b"), desktop, []int64{carrying.ID})
+	if err != nil {
+		t.Fatalf("TakeOneOf: %v", err)
+	}
+	if got.ID != carrying.ID {
+		t.Errorf("took session %d, want %d, the one named", got.ID, carrying.ID)
+	}
+	if all, _ := h.Sessions(ctx, "desktop", time.Time{}); len(all) != 2 {
+		t.Errorf("the history holds %d sessions, want the two that were made — this asking makes none", len(all))
+	}
+}
+
 func TestKeeper_TakesTheColdestSessionThatHasRestedLongEnough(t *testing.T) {
 	c, h := startClock(), NewMemory()
 	k := keeperAt(h, c)

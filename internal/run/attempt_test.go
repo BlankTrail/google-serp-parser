@@ -31,10 +31,12 @@ func serpBody(host string) string {
 }
 
 // serpBodyWithBar is a result page whose pagination bar links further than the
-// page in hand. Without a bar reaching onwards a walk stops on the first page,
-// and a test of what a multi-page walk costs would measure a single page.
+// page in hand: the numbered links, and the onward one Google marks as next.
+// Without a bar reaching onwards a walk stops on the first page, and a test of
+// what a multi-page walk costs would measure a single page.
 func serpBodyWithBar(host string) string {
-	return serpBody(host) + `<div role="navigation"><a href="/search?q=x&amp;start=90">10</a></div>`
+	return serpBody(host) + `<div role="navigation"><a href="/search?q=x&amp;start=90">10</a>` +
+		`<a href="/search?q=x&amp;start=10&amp;sa=N" id="pnnext">Next</a></div>`
 }
 
 // shellBody is the page that carries no results at all.

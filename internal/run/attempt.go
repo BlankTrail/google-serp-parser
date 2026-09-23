@@ -295,6 +295,23 @@ func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP,
 	return serp, err
 }
 
+// SearchAt is Search for a page whose address the page before it carried; see
+// google.Session.SearchAt. It is braked and reported exactly as Search is.
+func (b boundSearcher) SearchAt(ctx context.Context, q google.Query, target string) (google.SERP, error) {
+	if err := b.attempt.Brake.Hold(ctx); err != nil {
+		return google.SERP{}, err
+	}
+	var search *google.Session
+	if b.held != nil {
+		search = b.attempt.searchFor(b.held, b.lease)
+	} else {
+		search = b.attempt.sessionFor(b.lease)
+	}
+	serp, err := search.SearchAt(ctx, q, target)
+	b.attempt.caught(serp, err)
+	return serp, err
+}
+
 // caught tells whoever is watching that a page came back. A refused request
 // brought no page and is not one: what this counts is what the run has, not
 // what it asked for.

@@ -139,10 +139,36 @@ func (k *Keeper) Take(ctx context.Context, p Port, w Want) (*Held, error) {
 	if err := k.sweep(ctx); err != nil {
 		return nil, err
 	}
-	if s := k.pick(p, w); s != nil {
+	if s := k.pick(p, w, nil); s != nil {
 		return k.put(ctx, p, s)
 	}
 	return k.fresh(ctx, p, w)
+}
+
+// TakeOneOf hands the caller whichever of the named sessions is due, and makes
+// none: where Take would answer with a new session, this answers ErrNothingDue.
+//
+// It is what a caller asks when it has no work a new session could do. A thread
+// walking queries names the sessions carrying one part way: the page it would
+// take next is addressed to one of those and to no other, so a new session
+// could not take it, and a thread that asked Take every time it looked for one
+// would make a session for every glance.
+func (k *Keeper) TakeOneOf(ctx context.Context, p Port, w Want, only []int64) (*Held, error) {
+	if err := k.load(ctx, w.Device); err != nil {
+		return nil, err
+	}
+	if err := k.sweep(ctx); err != nil {
+		return nil, err
+	}
+	among := make(map[int64]bool, len(only))
+	for _, id := range only {
+		among[id] = true
+	}
+	s := k.pick(p, w, among)
+	if s == nil {
+		return nil, ErrNothingDue
+	}
+	return k.put(ctx, p, s)
 }
 
 // TakeColdest hands the caller the session unused longest, provided it has been
@@ -188,8 +214,9 @@ func fitsPort(s *kept, portExit string, busy map[string]int, limit int, p Port) 
 }
 
 // pick takes the free session that fits, rested for the caller's pause and used
-// most recently, and marks it held.
-func (k *Keeper) pick(p Port, w Want) *kept {
+// most recently, and marks it held. Where only is given, no session outside it
+// is considered.
+func (k *Keeper) pick(p Port, w Want, only map[int64]bool) *kept {
 	portExit, limit := p.Exit(), p.Limit()
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -198,6 +225,9 @@ func (k *Keeper) pick(p Port, w Want) *kept {
 	var best *kept
 	for _, s := range k.known {
 		r := s.record
+		if only != nil && !only[r.ID] {
+			continue
+		}
 		if s.held || r.Device != w.Device || !w.matches(r.Browser, r.OS, r.Release) ||
 			!s.rested(w.Pause, now) || now.Sub(r.UsedAt) > KeptFor ||
 			!fitsPort(s, portExit, busy, limit, p) {
