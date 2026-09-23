@@ -41,7 +41,7 @@ type stubConnect struct {
 	// exits a job would have gone out by as well as which connection.
 	through []store.Profile
 	sizes   [][2]int
-	gaps    []time.Duration
+	gaps    [][2]time.Duration
 	err     error
 }
 
@@ -51,7 +51,7 @@ func (c *stubConnect) open(_ context.Context, saved settings.Settings, want Want
 	c.with = append(c.with, saved)
 	c.through = append(c.through, want.Profile)
 	c.sizes = append(c.sizes, [2]int{want.Ports, want.Threads})
-	c.gaps = append(c.gaps, want.Cooldown)
+	c.gaps = append(c.gaps, [2]time.Duration{want.Cooldown, want.RestUpTo})
 	if c.err != nil {
 		return Identities{}, c.err
 	}
@@ -61,14 +61,15 @@ func (c *stubConnect) open(_ context.Context, saved settings.Settings, want Want
 	return Identities{}, errNoLivePool
 }
 
-// lastGap is the pause between two requests on one identity the last raise was
-// asked for. It is the job's own, so a raiser that read it from the machine's
-// settings instead would look identical from outside without this.
-func (c *stubConnect) lastGap() time.Duration {
+// lastGap is the two ends of the rest between two requests on one session the
+// last raise was asked for. They are the job's own, so a raiser that read them
+// from the machine's settings instead would look identical from outside
+// without this.
+func (c *stubConnect) lastGap() [2]time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.gaps) == 0 {
-		return 0
+		return [2]time.Duration{}
 	}
 	return c.gaps[len(c.gaps)-1]
 }
@@ -302,14 +303,14 @@ func TestSaveSettings_HandsTheJobsAfterThisOneTheConnectionItJustWrote(t *testin
 		t.Errorf("the pool was raised at %v, want the 9 ports and 4 threads the job asked for", got)
 	}
 }
-func TestRaise_TakesThePauseFromTheJobAndNotFromTheMachine(t *testing.T) {
-	// How long one identity rests between two requests belongs to the job. It was
-	// a setting of the machine, and a machine-wide answer meant that changing it
-	// for the job in hand changed it for every job after — with nothing on either
-	// job's page saying so.
+func TestRaise_TakesTheRestFromTheJobAndNotFromTheMachine(t *testing.T) {
+	// How long one session rests between two requests belongs to the job, both
+	// ends of it. It was a setting of the machine, and a machine-wide answer
+	// meant that changing it for the job in hand changed it for every job after
+	// — with nothing on either job's page saying so.
 	//
-	// Nought is a job that named none, and what an unnamed pause becomes is the
-	// pool's own business. This is about the number a job did name.
+	// Nought is a job that named none, and what an unnamed rest becomes is the
+	// pool's own business. This is about the numbers a job did name.
 	st := testStore(t)
 	v := newSupervisor(st, nil)
 	t.Cleanup(func() { _ = v.Close() })
@@ -328,7 +329,7 @@ func TestRaise_TakesThePauseFromTheJobAndNotFromTheMachine(t *testing.T) {
 
 	if _, err := v.Enqueue(store.JobSpec{
 		Name: "a careful one", Pages: 1, Country: "us", Language: "en",
-		Ports: 2, Threads: 1, Cooldown: 45 * time.Second,
+		Ports: 2, Threads: 1, Cooldown: 45 * time.Second, RestUpTo: 75 * time.Second,
 	}, []string{"a"}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -337,8 +338,8 @@ func TestRaise_TakesThePauseFromTheJobAndNotFromTheMachine(t *testing.T) {
 		_, asked := opener.asked()
 		return asked
 	})
-	if got := opener.lastGap(); got != 45*time.Second {
-		t.Errorf("the pool was raised with a pause of %v, want the 45s the job asked for", got)
+	if got := opener.lastGap(); got != [2]time.Duration{45 * time.Second, 75 * time.Second} {
+		t.Errorf("the pool was raised with a rest of %v, want the 45s to 75s the job asked for", got)
 	}
 }
 

@@ -138,14 +138,21 @@ type JobSpec struct {
 	// list, and the list is somebody's: one operator's addresses are fresh this
 	// morning and another's have been hammered for a week.
 	Tries int
-	// Cooldown is the gap this job leaves between two requests on one identity.
-	// It is the job's for the reason the three above are: how hard a list may be
-	// pushed depends on the list, and one machine runs a careful job and a fast
-	// one on the same afternoon.
+	// Cooldown and RestUpTo are the two ends of the rest this job leaves between
+	// two requests on one identity: the least and the most of it. Each session
+	// draws its own rest between them afresh at every use, so a pool of them is
+	// not asked again on a metronome.
 	//
-	// Nought is a job that named none, and what that becomes is decided where the
-	// pool is opened.
+	// They are the job's for the reason the three above are: how hard a list may
+	// be pushed depends on the list, and one machine runs a careful job and a
+	// fast one on the same afternoon.
+	//
+	// Nought in Cooldown is a job that named no rest at all, and what that
+	// becomes is decided where the pool is opened. Nought in RestUpTo is a job
+	// that named the near end only, and the far one is then that end and half
+	// again — what the single number meant before there were two of them.
 	Cooldown time.Duration
+	RestUpTo time.Duration
 	// WholePool says this job spends the whole proxy list: a port of its own for
 	// every address the list can spare, opened as the run asks for identities,
 	// instead of the fixed Threads × Ports opened before it starts.
@@ -283,11 +290,11 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, whole_pool, browser, os, browser_release, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, rest_up_to_ms, fields, profile_id, whole_pool, browser, os, browser_release, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
 		spec.Device, spec.Country, spec.Language, ports, threads, tries,
-		spec.Cooldown.Milliseconds(), string(spec.Fields), spec.ProfileID, spec.WholePool,
+		spec.Cooldown.Milliseconds(), spec.RestUpTo.Milliseconds(), string(spec.Fields), spec.ProfileID, spec.WholePool,
 		spec.Browser, spec.OS, spec.Release)
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
@@ -390,16 +397,16 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 	// The gap is read as a number and turned back into a span below: a duration
 	// in a database has to be a number, and this is one of the two places that
 	// has to know which unit the column is written in.
-	var cooldownMS int64
+	var cooldownMS, restUpToMS int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, fields, profile_id, whole_pool, browser, os, browser_release
+		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, rest_up_to_ms, fields, profile_id, whole_pool, browser, os, browser_release
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
 		  LIMIT 1`, name).
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
 			&j.Spec.Device, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads,
-			&j.Spec.Tries, &cooldownMS, &j.Spec.Fields, &j.Spec.ProfileID, &j.Spec.WholePool,
+			&j.Spec.Tries, &cooldownMS, &restUpToMS, &j.Spec.Fields, &j.Spec.ProfileID, &j.Spec.WholePool,
 			&j.Spec.Browser, &j.Spec.OS, &j.Spec.Release)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
@@ -408,6 +415,7 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 		return UnfinishedJob{}, fmt.Errorf("store: looking for an unfinished %q: %w", name, err)
 	}
 	j.Spec.Cooldown = time.Duration(cooldownMS) * time.Millisecond
+	j.Spec.RestUpTo = time.Duration(restUpToMS) * time.Millisecond
 	return j, nil
 }
 
@@ -415,9 +423,17 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 // to change.
 var ErrJobFinished = errors.New("store: this job has already finished")
 
-// Reshape changes the pool a job will be run on: how many identities, how many
-// at once, how many a phrase may be taken to, and how long one identity rests
-// between two requests.
+// Reshape changes the pool a job will be run on: how many queries at once, how
+// many identities a phrase may be taken to, and the two ends of the rest one
+// identity takes between two requests.
+//
+// How many ports a thread holds and whether the job spends the whole list are
+// not among them. A thread needs one port — it works another session while the
+// one it just used rests — and which addresses the sessions are spread over is
+// the keeper's rule rather than a tick on a form. The columns stay for the jobs
+// that were made when they were asked for, and this leaves them as they are:
+// writing them from a form that no longer offers them would quietly reset every
+// job it touched.
 //
 // It changes nothing about the pool a job is running on this minute. The numbers
 // are read when a pool is raised, so a job already under way keeps the one it
@@ -431,8 +447,8 @@ var ErrJobFinished = errors.New("store: this job has already finished")
 // The reading and the write are one transaction because they are one decision:
 // a job that finished between a check outside a transaction and the write after
 // it would take a change this refuses, which is the exact case being refused.
-func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads, tries int,
-	cooldown time.Duration, wholePool bool) error {
+func (s *Store) Reshape(ctx context.Context, jobID int64, threads, tries int,
+	cooldown, restUpTo time.Duration) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin reshaping job %d: %w", jobID, err)
@@ -452,9 +468,9 @@ func (s *Store) Reshape(ctx context.Context, jobID int64, ports, threads, tries 
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE jobs SET ports = ?, threads = ?, tries = ?, cooldown_ms = ?, whole_pool = ? WHERE id = ?`,
-		atLeastNone(ports), atLeastNone(threads), atLeastNone(tries),
-		cooldown.Milliseconds(), wholePool, jobID); err != nil {
+		`UPDATE jobs SET threads = ?, tries = ?, cooldown_ms = ?, rest_up_to_ms = ? WHERE id = ?`,
+		atLeastNone(threads), atLeastNone(tries),
+		cooldown.Milliseconds(), restUpTo.Milliseconds(), jobID); err != nil {
 		return fmt.Errorf("store: reshaping job %d: %w", jobID, err)
 	}
 	if err := tx.Commit(); err != nil {

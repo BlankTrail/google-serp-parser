@@ -128,25 +128,24 @@
 <input id="threads" name="threads" type="number" min="1" value="{{.Job.Threads}}">
 </div>
 <div class="field">
-<label for="ports">{{.T "form.ports"}}</label>
-<input id="ports" name="ports" type="number" min="1" value="{{.Job.Ports}}"{{if .Job.WholePool}} disabled{{end}}>
-<label class="under"><input id="wholepool" name="wholepool" type="checkbox" value="1"{{if .Job.WholePool}} checked{{end}}> {{.T "form.wholepool"}}</label>
-</div>
-<div class="field">
 <label for="tries">{{.T "form.tries"}}</label>
 <input id="tries" name="tries" type="number" min="1" value="{{.Job.Tries}}">
 </div>
+{{/* The two ends of the rest, side by side under one label: see new.html. */}}
 <div class="field">
-<label for="cooldown">{{.T "form.pause"}}</label>
-<input id="cooldown" name="cooldown" type="number" min="0" value="{{.Job.Pause}}">
+<label for="cooldown">{{.T "form.rest"}}</label>
+<div class="pair">
+<input id="cooldown" name="cooldown" type="number" min="0" value="{{.Job.Pause}}" aria-label="{{.T "form.rest.from"}}">
+<span class="between">{{.T "form.rest.to"}}</span>
+<input id="restupto" name="restupto" type="number" min="0" value="{{.Job.RestUpTo}}" aria-label="{{.T "form.rest.to"}}">
+</div>
 </div>
 </div>
 <details class="help">
 <summary>{{.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{.T "job.reshape.why"}}</li>
-<li>{{.T "job.reshape.total"}}</li>
-<li>{{.T "form.wholepool.why"}}</li>
+<li>{{.T "form.rest.why"}}</li>
 </ul>
 </details>
 {{/* What came of the last press. It is the answer to something the reader has

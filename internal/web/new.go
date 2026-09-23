@@ -41,17 +41,10 @@ type jobForm struct {
 	Device  string
 	Pages   int
 	Threads int
-	Ports   int
 	// Tries is how many identities one query may be taken to before it is
 	// written off, and From says which of the two ways the phrases arrived by.
 	Tries int
 	From  string
-	// WholePool says this job spends the whole proxy list: a port of its own
-	// for every address it can spare, opened as the run asks for identities,
-	// rather than the fixed Threads × Ports. Ports means nothing while it is
-	// set, and the form refuses that box rather than leaving a number on it
-	// that nothing will read.
-	WholePool bool
 	// Browser, OS and Release are the identity this job's ports wear. Nothing
 	// named in any of the three is the spread over every browser and system
 	// this program knows, which is the default and what most jobs should run
@@ -63,10 +56,16 @@ type jobForm struct {
 	Browser string
 	OS      string
 	Release int
-	// Cooldown is how long one identity rests between two requests, in seconds,
-	// because that is the unit a person setting it thinks in. Nought is a job
-	// that named none, and the pool then works one out from its own size.
+	// Cooldown and RestUpTo are the two ends of the rest a session takes between
+	// two of its requests, in seconds, because that is the unit a person setting
+	// it thinks in. Each session draws its own rest between them afresh at every
+	// use, so a pool of them is not asked again on a metronome.
+	//
+	// Nought in the near end is a job that named no rest at all; a far end at or
+	// below the near one is a job naming one end, and the other is then that end
+	// and half again.
 	Cooldown int
+	RestUpTo int
 	// Profile is the proxy profile this job goes out through. Nought is a job
 	// that named none and runs on whichever is default, which is what a form
 	// offering no profiles at all can only mean.
@@ -93,40 +92,42 @@ type jobForm struct {
 // name one now types over a name that already tells two jobs of the same list
 // apart. It is the local time, written largest part first so a listing sorts by
 // it, and it is a default and not a stamp: whatever is typed over it wins.
-// defaultCooldown is the pause the form offers between two requests on one
-// identity, in seconds.
+// defaultCooldown and defaultRestUpTo are the two ends of the rest the form
+// offers between two requests on one session, in seconds.
 //
-// Five, and the number is measured. An identity asked every two seconds
-// answered twelve requests before Google challenged it; one asked every five
-// answered around forty. Above five the measurement could not tell the arms
-// apart — 39, 42, 77 and 40 at five, ten, fifteen and thirty seconds — so five
-// is where the buying stops and the waiting starts.
-const defaultCooldown = 5
+// Sixty to a hundred and twenty, as the operator set it. The earlier number was
+// five, measured on the arrangement that came before: an identity asked every
+// two seconds answered twelve requests before Google challenged it, and one
+// asked every five answered around forty. What that measured was a port asked
+// again and again with nothing else to do; a session is a person reading
+// results, and a minute to two between two pages is what one looks like. The
+// waiting costs nothing now — the thread works another session through it.
+const (
+	defaultCooldown = 60
+	defaultRestUpTo = 120
+)
 
-// defaultPortsPerThread is how many identities the form offers a thread.
+// portsPerThread is how many ports a job is run on for each of its threads.
 //
-// One, and it used to be three. The three was measured — ten threads for
-// twenty minutes an arm, both arms at the same minute on a live list: three
-// ports a thread answered 259 against 164 for one, and 154 against 54 in the
-// second half once the identities were warm — and what that measured no longer
-// exists. A thread then took one query, walked it to the end, and stood still
-// through the pause it owed; the extra ports were what let the next query start
-// while the last one rested. A thread now holds several walks at once and takes
-// another identity only when it is about to stand still, so the overlap those
-// ports were bought for is had without them.
+// One, and it is no longer a box on the form. It used to be three, and the
+// three was measured — ten threads for twenty minutes an arm, both arms at the
+// same minute on a live list: three ports a thread answered 259 against 164 for
+// one, and 154 against 54 in the second half once the identities were warm —
+// and what that measured no longer exists. A thread then took one query, walked
+// it to the end and stood still through the pause it owed; the extra ports were
+// what let the next query start while the last one rested. A thread now walks
+// its queries on sessions that rest off the port, takes another session
+// whenever it would otherwise stand still, and hands the port back between two
+// pages, so there is nothing left for a second port to do.
 //
-// What they still cost is the thing that ends a run. Every identity in play is
-// one more that has to be challenged and solved, and the solver is licensed:
-// measured on a live run of a hundred threads at three ports each, three
-// hundred identities against ten Challenge Breaker processes climbed to 1307
-// pages a minute and fell to 105 within six, with every port warm, none set
-// aside and no thread waiting for an egress. Nothing was failing; everything
-// was queueing for a solver. Runs since, at one identity a thread, showed no
-// advantage to the three in speed or in challenges met.
-//
-// It is a default and not a rule: an operator whose service has solver
-// processes to spare says so in the box.
-const defaultPortsPerThread = 1
+// What a second port still costs is the thing that ends a run. Every identity
+// in play is one more that has to be challenged and solved, and the solver is
+// licensed: measured on a live run of a hundred threads at three ports each,
+// three hundred identities against ten Challenge Breaker processes climbed to
+// 1307 pages a minute and fell to 105 within six, with every port warm, none
+// set aside and no thread waiting for an egress. Nothing was failing;
+// everything was queueing for a solver.
+const portsPerThread = 1
 
 // defaultTries is what the form offers when nobody has said otherwise. It is
 // the run layer's own number, spelled here so the box a reader sees and the
@@ -179,9 +180,9 @@ func blankForm() jobForm {
 		Device:   blanktrail.DeviceDesktop,
 		Pages:    1,
 		Threads:  2,
-		Ports:    defaultPortsPerThread,
 		Tries:    defaultTries,
 		Cooldown: defaultCooldown,
+		RestUpTo: defaultRestUpTo,
 		// Everything the parser reads, because that is what somebody who has not
 		// thought about it means. Turning a part off is a decision about room, and
 		// a decision about room is one nobody makes before they have a list.
@@ -363,6 +364,14 @@ func (f jobForm) faults() []string {
 	if f.depth() < 1 {
 		complaints = append(complaints, "form.pages.positive")
 	}
+	// A span whose far end is nearer than its near one is a pair of boxes filled
+	// in the wrong order. Taken as written it would not be read as a span at all
+	// — a far end at or below the near one is how a job says it named one end —
+	// so the sessions would rest the larger number and half again, which is
+	// neither of the numbers the reader typed.
+	if f.RestUpTo != 0 && f.RestUpTo < f.Cooldown {
+		complaints = append(complaints, "form.rest.backwards")
+	}
 	// An identity that never existed is refused here, because this is the only
 	// place that can see both halves of it. Safari on Windows is the pair
 	// somebody will actually pick out of two boxes, and a run on it goes out
@@ -436,22 +445,25 @@ func (f jobForm) parse() ([]string, []string) {
 // spec is the job as the history will file it.
 func (f jobForm) spec() store.JobSpec {
 	return store.JobSpec{
-		Name:      strings.TrimSpace(f.Name),
-		Kind:      f.Kind,
-		Target:    strings.TrimSpace(f.Target),
-		UniqueBy:  f.filter(),
-		Pages:     f.depth(),
-		Country:   f.Country,
-		Language:  f.Language,
-		Device:    f.Device,
-		Browser:   f.Browser,
-		OS:        f.OS,
-		Release:   f.Release,
-		Ports:     f.Ports,
+		Name:     strings.TrimSpace(f.Name),
+		Kind:     f.Kind,
+		Target:   strings.TrimSpace(f.Target),
+		UniqueBy: f.filter(),
+		Pages:    f.depth(),
+		Country:  f.Country,
+		Language: f.Language,
+		Device:   f.Device,
+		Browser:  f.Browser,
+		OS:       f.OS,
+		Release:  f.Release,
+		// A port a thread, decided here rather than asked for: see
+		// portsPerThread. The job carries the number so a pool raised for it
+		// later is the pool it was made for, whatever the machine is set to.
+		Ports:     portsPerThread,
 		Threads:   f.Threads,
 		Tries:     f.Tries,
-		WholePool: f.WholePool,
 		Cooldown:  time.Duration(f.Cooldown) * time.Second,
+		RestUpTo:  time.Duration(f.RestUpTo) * time.Second,
 		ProfileID: f.Profile,
 		Fields:    store.FieldsOf(f.Keep),
 	}
@@ -465,27 +477,26 @@ func formOf(r *http.Request) jobForm {
 		return n
 	}
 	return jobForm{
-		Name:      strings.TrimSpace(r.FormValue("name")),
-		Kind:      strings.TrimSpace(r.FormValue("kind")),
-		Target:    strings.TrimSpace(r.FormValue("target")),
-		Unique:    strings.TrimSpace(r.FormValue("unique")),
-		Queries:   r.FormValue("queries"),
-		Country:   strings.TrimSpace(r.FormValue("country")),
-		Language:  strings.TrimSpace(r.FormValue("language")),
-		Device:    strings.TrimSpace(r.FormValue("device")),
-		Browser:   strings.TrimSpace(r.FormValue("browser")),
-		OS:        strings.TrimSpace(r.FormValue("os")),
-		Release:   atoi("release"),
-		Pages:     atoi("pages"),
-		Threads:   atoi("threads"),
-		Ports:     atoi("ports"),
-		Tries:     atoi("tries"),
-		WholePool: r.FormValue("wholepool") != "",
-		Cooldown:  atoi("cooldown"),
-		Profile:   atoi64(r, profileField),
-		From:      strings.TrimSpace(r.FormValue(fromField)),
-		Keep:      r.Form["keep"],
-		Chose:     r.FormValue(choseField) != "",
+		Name:     strings.TrimSpace(r.FormValue("name")),
+		Kind:     strings.TrimSpace(r.FormValue("kind")),
+		Target:   strings.TrimSpace(r.FormValue("target")),
+		Unique:   strings.TrimSpace(r.FormValue("unique")),
+		Queries:  r.FormValue("queries"),
+		Country:  strings.TrimSpace(r.FormValue("country")),
+		Language: strings.TrimSpace(r.FormValue("language")),
+		Device:   strings.TrimSpace(r.FormValue("device")),
+		Browser:  strings.TrimSpace(r.FormValue("browser")),
+		OS:       strings.TrimSpace(r.FormValue("os")),
+		Release:  atoi("release"),
+		Pages:    atoi("pages"),
+		Threads:  atoi("threads"),
+		Tries:    atoi("tries"),
+		Cooldown: atoi("cooldown"),
+		RestUpTo: atoi("restupto"),
+		Profile:  atoi64(r, profileField),
+		From:     strings.TrimSpace(r.FormValue(fromField)),
+		Keep:     r.Form["keep"],
+		Chose:    r.FormValue(choseField) != "",
 	}
 }
 

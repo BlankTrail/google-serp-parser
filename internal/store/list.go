@@ -51,9 +51,12 @@ type JobSummary struct {
 	// Device is which kind of result page this job asked Google for. Empty is a
 	// desktop — see JobSpec.Device.
 	Device string
-	// Cooldown is the gap this job leaves between two requests on one identity,
-	// and nought is a job that named none — see JobSpec.Cooldown.
+	// Cooldown and RestUpTo are the two ends of the rest this job leaves between
+	// two requests on one identity. Nought in the first is a job that named no
+	// rest, and nought in the second one that named the near end only — see
+	// JobSpec.Cooldown.
 	Cooldown time.Duration
+	RestUpTo time.Duration
 	// WholePool says this job spends the whole proxy list rather than a fixed
 	// number of ports — see JobSpec.WholePool. Ports means nothing when it is
 	// set.
@@ -105,7 +108,7 @@ const jobSummaryQuery = `
 	SELECT j.id, j.name, j.created_at, coalesce(j.finished_at, ''), j.kind, j.target,
 	       j.unique_by, j.dropped,
 	       j.pages, j.country, j.language, j.device,
-	       j.ports, j.threads, j.tries, j.cooldown_ms, j.fields, j.profile_id, j.whole_pool,
+	       j.ports, j.threads, j.tries, j.cooldown_ms, j.rest_up_to_ms, j.fields, j.profile_id, j.whole_pool,
 	       j.browser, j.os, j.browser_release, j.plan_ready,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
@@ -204,11 +207,11 @@ func scanSummary(row scanner) (JobSummary, error) {
 	// The gap is read as a number and turned back into a span below: a duration
 	// in a database has to be a number, and this is one of the two places that
 	// has to know which unit the column is written in.
-	var cooldownMS int64
+	var cooldownMS, restUpToMS int64
 	err := row.Scan(&sum.ID, &sum.Name, &created, &finished, &sum.Kind, &sum.Target,
 		&sum.UniqueBy, &sum.Dropped,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.Device,
-		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &sum.Fields, &sum.ProfileID, &sum.WholePool,
+		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &restUpToMS, &sum.Fields, &sum.ProfileID, &sum.WholePool,
 		&sum.Browser, &sum.OS, &sum.Release, &sum.PlanReady,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -220,6 +223,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 	// A stamp that cannot be read costs the reader a date, not the counts, so
 	// it comes back zero rather than ending the listing.
 	sum.Cooldown = time.Duration(cooldownMS) * time.Millisecond
+	sum.RestUpTo = time.Duration(restUpToMS) * time.Millisecond
 	sum.CreatedAt, _ = time.Parse(time.RFC3339, created)
 	if finished != "" {
 		sum.FinishedAt, _ = time.Parse(time.RFC3339, finished)

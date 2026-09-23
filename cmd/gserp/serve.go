@@ -531,10 +531,11 @@ func (o serveOptions) brakeOn(saved settings.Settings) *blanktrail.Brake {
 }
 
 // sessionsFor is what a job asks of the sessions it runs on: its kind of result
-// page, the identity it named, and its pause.
+// page, the identity it named, and the two ends of the rest it leaves between
+// two requests on one of them.
 func sessionsFor(want web.Wanted) sessions.Want {
 	return sessions.Want{Device: want.Device, Browser: want.Worn.Browser, OS: want.Worn.OS,
-		Release: want.Worn.Release, Pause: want.Cooldown}
+		Release: want.Worn.Release, Pause: want.Cooldown, UpTo: want.RestUpTo}
 }
 
 // ofSessions makes a pool configuration one of sessions, where there is a

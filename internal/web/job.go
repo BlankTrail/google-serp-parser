@@ -79,29 +79,31 @@ type jobSetup struct {
 	// fields any of which can be absent, and a template asking that question is
 	// a template with a paragraph of logic in it.
 	Identity string
-	// Ports, Threads, Tries and Pause are the pool this job runs on, and the
-	// four things about it that can still be changed. Everything above them is what
-	// the job is: the depth, the country and the filter are settled by the work
+	// Threads, Tries and the two ends of the rest are the pool this job runs on,
+	// and what about it can still be changed. Everything above them is what the
+	// job is: the depth, the country and the filter are settled by the work
 	// already done under them, and changing one afterwards would leave a job
 	// whose results were gathered under two rules with nothing saying which.
 	//
+	// How many ports a thread holds is not among them: a thread needs one, and
+	// works another session while the one it just used rests. Nor is whether the
+	// job spends the whole list — which addresses the sessions are spread over
+	// is the keeper's rule.
+	//
 	// Nought in any of them is a job that named none, and the page shows it as
 	// what the run will use rather than as a nought nobody typed.
-	Ports   int
 	Threads int
 	Tries   int
-	// WholePool says this job spends the whole proxy list. Ports means nothing
-	// while it is ticked, and the box beside it is refused rather than left to
-	// be filled in with a number nothing will read.
-	WholePool bool
 	// Profiles are the sets of exits this job could go out through, the one it
 	// names marked. Changing it is the same press as the numbers beside it and
 	// reaches the job the same way: what is written is what the next raise
 	// reads, so a job in flight keeps the pool it already has.
 	Profiles []profileChoice
-	// Pause is how long one identity rests between two requests, in seconds,
-	// which is the unit the box is filled in.
-	Pause int
+	// Pause and RestUpTo are the two ends of the rest one session takes between
+	// two of its requests, in seconds, which is the unit the boxes are filled
+	// in. A far end at or below the near one is a job naming one end only.
+	Pause    int
+	RestUpTo int
 	// KeptAds and KeptRelated say whether this job captured what the page
 	// carried besides its results. The extra downloads are offered only where
 	// there is something to download: a link to an empty file reads as a page
@@ -263,11 +265,10 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			Device:      device,
 			Identity:    identityOf(sum.Browser, sum.OS, sum.Release),
 			Profiles:    profilesOffered(s.profilesFor(r), sum.ProfileID),
-			Ports:       sum.Ports,
 			Threads:     sum.Threads,
 			Tries:       sum.Tries,
-			WholePool:   sum.WholePool,
 			Pause:       int(sum.Cooldown / time.Second),
+			RestUpTo:    int(sum.RestUpTo / time.Second),
 			KeptAds:     sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldAds),
 			KeptRelated: sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldRelated),
 		},
@@ -412,9 +413,9 @@ func (s *Server) apiReshape(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	err = s.store.Reshape(r.Context(), id,
-		countOf(r.FormValue("ports")), countOf(r.FormValue("threads")), countOf(r.FormValue("tries")),
+		countOf(r.FormValue("threads")), countOf(r.FormValue("tries")),
 		time.Duration(countOf(r.FormValue("cooldown")))*time.Second,
-		r.FormValue("wholepool") != "")
+		time.Duration(countOf(r.FormValue("restupto")))*time.Second)
 	switch {
 	case errors.Is(err, store.ErrNoJob):
 		http.NotFound(w, r)
