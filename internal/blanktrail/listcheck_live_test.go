@@ -321,8 +321,22 @@ func byCount(why map[string]int) []refusalShape {
 }
 
 // staleAges are how long after the list was read each batch is asked about.
-var staleAges = []time.Duration{0, 30 * time.Second, time.Minute, 2 * time.Minute,
-	5 * time.Minute, 10 * time.Minute}
+var staleAges = staleAgesAsked()
+
+// staleAgesAsked is the ages the batches are asked at. The long set is for the
+// question the short one cannot answer: whether a list dies all at once at some
+// hour of its own rather than fading.
+func staleAgesAsked() []time.Duration {
+	if envNumber("GSERP_STALE_LONG", 0) == 0 {
+		return []time.Duration{0, 30 * time.Second, time.Minute, 2 * time.Minute,
+			5 * time.Minute, 10 * time.Minute}
+	}
+	var out []time.Duration
+	for at := 0; at <= envNumber("GSERP_STALE_LONG", 60); at += envNumber("GSERP_STALE_EVERY", 5) {
+		out = append(out, time.Duration(at)*time.Minute)
+	}
+	return out
+}
 
 // staleBatch is how many addresses each age is judged on, and staleAtOnce how
 // many of them are asked at a time — enough that a batch is answered inside a

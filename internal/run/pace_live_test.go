@@ -121,6 +121,16 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	ctx := context.Background()
 	control, key, listURL := liveEnv(t)
 	ups := addressList(ctx, t, listURL)
+	// Who resolves the name. Read as socks5 the service resolves it and hands
+	// the proxy an address; read as socks5h the proxy is handed the name and
+	// resolves it itself — which is the exit's own view of where Google is, and
+	// one round trip through the chain fewer.
+	if scheme := envOr("GSERP_PACE_SCHEME", ""); scheme != "" {
+		for i := range ups {
+			ups[i].Scheme = scheme
+		}
+		logf(t, "MEASUREMENT the addresses are used as %s", scheme)
+	}
 	client, err := blanktrail.NewClient(control, key)
 	if err != nil {
 		fatalf(t, "control client: %v", err)
@@ -169,6 +179,13 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	// Where the port resolves names. The service's own answer on a chained port
 	// is to resolve through the exit, and with UDP unavailable it does so over
 	// TCP — a round trip through the whole chain before the request itself.
+	// How long the service is given to reach the address. It makes three
+	// attempts of this each, so what is set here is a third of the patience a
+	// request has for a slow exit.
+	if secs := envInt("GSERP_PACE_CONNECT", 0); secs > 0 {
+		spec.ConnectTimeoutSeconds = secs
+		logf(t, "MEASUREMENT the service is given %ds to reach an address, three attempts of it", secs)
+	}
 	if mode := envOr("GSERP_PACE_VDNS", ""); mode != "" {
 		spec.VDNSMode = mode
 		logf(t, "MEASUREMENT names are resolved with vdns_mode=%q", mode)
