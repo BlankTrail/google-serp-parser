@@ -41,7 +41,11 @@ type deepOrigin struct {
 	// unsolved. It is the address's failure rather than the session's, and what
 	// it costs the session is the address.
 	shells func(n int) bool
-	mu     sync.Mutex
+	// walls, when set, says which searches are answered with Google refusing
+	// the session itself, one request at a time — which refuse cannot say,
+	// being every request from where it is set.
+	walls func(n int) bool
+	mu    sync.Mutex
 
 	asked []string
 	count int
@@ -72,6 +76,10 @@ func newDeepOrigin(t *testing.T, depth int) *deepOrigin {
 		}
 		if o.shells != nil && o.shells(n) {
 			_, _ = io.WriteString(w, shellBody)
+			return
+		}
+		if o.walls != nil && o.walls(n) {
+			_, _ = io.WriteString(w, wallBody)
 			return
 		}
 		defer func() {
@@ -559,5 +567,123 @@ func TestRunner_SaysSoWhenThereIsNoAddressLeftToOpenASessionOn(t *testing.T) {
 
 	if got := watching.Ramping(); !got.Short {
 		t.Errorf("the run reads %+v, want it short of addresses to open a session on", got)
+	}
+}
+
+func TestRunner_AsksTheAddressAgainThroughTheSameSessionWhereGoogleWouldNotShowThePage(t *testing.T) {
+	// A page Google would not show is its check on the address, handed back
+	// unsolved. Condemning the address on the first one costs more than the
+	// request: the session is taken off it, lands somewhere else, and pays a
+	// check to be let in there. Asked again where it stands, it costs one
+	// request and the address keeps the session that was on it.
+	o := newDeepOrigin(t, 1)
+	o.shells = func(n int) bool { return n == 1 }
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	h := sessions.NewMemory()
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(h),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, ShellTries: 1}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 5})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the query took %d pages and ended with %v, want the one the second asking brought",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if asked := o.seen(); len(asked) != 2 {
+		t.Fatalf("the origin was asked %d times: %q, want the shell and the asking after it", len(asked), asked)
+	}
+	// Nothing was held against the address: the pool was never told this was
+	// not an answer, so the session is still standing where it stood.
+	if got := f.Pool.Stats().Rejections; got != 0 {
+		t.Errorf("Stats().Rejections=%d, want none - the address was condemned for a check it then passed", got)
+	}
+	if all, _ := h.Sessions(context.Background(), "desktop", time.Time{}); len(all) != 1 {
+		t.Errorf("the run holds %d sessions, want the one that asked twice", len(all))
+	}
+}
+
+func TestRunner_CondemnsTheAddressWhereTheSecondAskingIsRefusedTheSameWay(t *testing.T) {
+	// The second chance is one. An address that would not show the page twice
+	// running is not one waiting to be asked again — the check at the end of it
+	// is the address's to pass, and its browser could not — so the session is
+	// taken off it, as it was before the second chance existed.
+	o := newDeepOrigin(t, 1)
+	o.shells = func(n int) bool { return n <= 2 }
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, ShellTries: 1}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 5})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the query took %d pages and ended with %v, want the one the third asking brought",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if asked := o.seen(); len(asked) != 3 {
+		t.Fatalf("the origin was asked %d times: %q, want two shells and the asking elsewhere", len(asked), asked)
+	}
+	if got := f.Pool.Stats().Rejections; got != 1 {
+		t.Errorf("Stats().Rejections=%d, want the one the second shell earned", got)
+	}
+}
+
+func TestRunner_CondemnsTheAddressAtOnceWhereTheJobAllowsNoSecondAsking(t *testing.T) {
+	// And with no second chance allowed, which is what a job that says nothing
+	// gets, the first shell is what it always was: the address's failure, and
+	// the session leaves it.
+	o := newDeepOrigin(t, 1)
+	o.shells = func(n int) bool { return n == 1 }
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 5})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the query took %d pages and ended with %v, want the one it got after the shell",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if got := f.Pool.Stats().Rejections; got != 1 {
+		t.Errorf("Stats().Rejections=%d, want the one the shell earned", got)
+	}
+}
+
+func TestRunner_AsksNoRefusalOtherThanAShellAgainAtTheSameAddress(t *testing.T) {
+	// Only the shell is the address's. A refusal that answers the session —
+	// the wall Google puts up in front of one it has decided about — says the
+	// same thing however often it is asked, and asking again at the same
+	// address spends a request to be told it twice.
+	o := newDeepOrigin(t, 2)
+	o.walls = func(n int) bool { return n == 2 }
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, ShellTries: 1}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 2, Tries: 5})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the query took %d pages and ended with %v, want the one page it had before the wall",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if asked := o.seen(); len(asked) != 2 {
+		t.Errorf("the origin was asked %d times: %q, want the page and the wall that ended the walk",
+			len(asked), asked)
+	}
+}
+
+func TestRunner_BoundsTheSecondAskingsByTheTriesThePhraseIsAllowed(t *testing.T) {
+	// A second chance is a request, and every request a phrase is allowed is
+	// counted against it. An address that answers nothing but shells would
+	// otherwise be asked as many times as the second chances allow, on top of
+	// the tries the phrase was given.
+	o := newDeepOrigin(t, 1)
+	o.shells = func(int) bool { return true }
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, ShellTries: 5}
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 1, Tries: 2})
+	if rep.Results[0].Err == nil {
+		t.Fatal("a query nothing but shells answered came back as a page")
+	}
+	if asked := o.seen(); len(asked) != 2 {
+		t.Errorf("the origin was asked %d times: %q, want the two the phrase was allowed",
+			len(asked), asked)
 	}
 }

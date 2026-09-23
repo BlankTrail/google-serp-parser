@@ -200,6 +200,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	var serp google.SERP
 	var err error
 	moved := false
+	shells := 0
 	for {
 		asked := time.Now()
 		if one.next == "" {
@@ -213,7 +214,16 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 		if err == nil || ctx.Err() != nil {
 			break
 		}
-		if _, judged := google.ClassOf(err); judged {
+		if class, judged := google.ClassOf(err); judged {
+			// A page Google would not show is its check on the address, handed
+			// back unsolved. Asked again through the same session and the same
+			// address, it costs one more request; condemned at once, it costs
+			// the session its address and a check to be let in at the next one.
+			if class == google.ClassShell && shells < c.r.ShellTries &&
+				c.walks.spend(held.ID) < c.triesAllowed() {
+				shells++
+				continue
+			}
 			break
 		}
 		// Nothing reached Google, so nothing about this is the session's and

@@ -222,6 +222,16 @@ type Runner struct {
 	// Ramp, when set, watches this run widen into its speed: how many sessions
 	// it has had made for it, and whether it has stopped needing more.
 	Ramp *Ramp
+	// ShellTries is how many times a page Google would not show — its check on
+	// the address, handed back unsolved — is asked for again through the same
+	// session and the same address before the address is blamed for it.
+	//
+	// Nought condemns the address on the first one, which is what this did
+	// before the number existed. What it buys is the thing a shell costs beyond
+	// the request itself: the session is taken off its address, lands on another
+	// one, and pays Google's check to be let in there — so a shell that would
+	// have passed on a second asking costs a check as well as a page.
+	ShellTries int
 }
 
 // Run works through a job and reports what came of every query.
