@@ -491,6 +491,26 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   pace it is asked at. On a run that has stopped taking sessions on, checks
   oftener than one in seven of those requests say the sessions are being asked
   again before they have rested, which the page says.
+- And it says **where its threads are standing**: every one of them is in
+  exactly one of six places at each instant — waiting for a port, taking a
+  session, held back by the brake, asking Google, giving the session back,
+  writing the result down, or waiting for something to be due — so the shares
+  are the whole of the run's time and can be read against each other. Asking is
+  the wait that is the work and everything else is a place to go and look at.
+  The last column is how long the thread that has been in a place longest has
+  been there, which tells a place threads pass through from one they are stuck
+  in. It is what a slow run is taken apart with: measured on a job doing a tenth
+  of its speed, the threads were not idle anywhere — they were asking, and every
+  ask ended in a refusal within fifteen seconds.
+- A profile's **list can be checked** from the profile's own screen, as many
+  addresses at once as the box says, along the road that profile's ports take.
+  The service is asked to reach each address itself, and where the profile names
+  a first hop both roads are reported: measured on a live list of fifteen
+  thousand, 75 of 80 addresses answered through the hop and 48 of 80 without it.
+  A check that took the road nobody uses would call a working list dead, which
+  is why there was no list check at all until there was one that could take the
+  right road. The sample is spread across the whole list and shuffled — the
+  first hundred of a list are the same hundred every time.
 - The gateway list is read once and held for a couple of minutes, with a
   **Refresh** that asks the service again — for when a configuration has just
   been added or the tunnels have just been measured.
