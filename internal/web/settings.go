@@ -46,6 +46,10 @@ const (
 	// which terminates TLS itself.
 	mitmField  = "allow_mitm"
 	http3Field = "http3"
+	// How names are resolved once they are resolved at all, and the resolvers
+	// a reader names where that is the choice.
+	resolverField  = "resolver"
+	resolversField = "custom_resolvers"
 	// The road a list's ports take to their addresses: which kind of first hop,
 	// and the proxy or the gateway it is.
 	firstHopField   = "first_hop"

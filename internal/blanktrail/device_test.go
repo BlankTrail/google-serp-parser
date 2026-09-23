@@ -3,6 +3,7 @@
 package blanktrail
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -57,7 +58,7 @@ func TestSpecsFor_ChangesNothingButTheBrowserAndTheSystem(t *testing.T) {
 		want := base
 		want.Browser = phone.Spec.Browser
 		want.OS = phone.Spec.OS
-		if phone.Spec != want {
+		if !reflect.DeepEqual(phone.Spec, want) {
 			t.Errorf("the %s template differs from the default by more than the browser "+
 				"and the system:\n got %+v\nwant %+v", phone.Name, phone.Spec, want)
 		}

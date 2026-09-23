@@ -296,3 +296,58 @@ func TestJobs_OpenTheStandingIdentitiesOnTheDefaultProfileAndSaySo(t *testing.T)
 		t.Errorf("the standing identities say they were opened on profile %d, want the default %d", on, id)
 	}
 }
+
+func TestDial_OpensAListsPortsWithWhatItsProfileSaysAboutNamesAndTLS(t *testing.T) {
+	// Two answers that live on the profile and are worth nothing until they
+	// reach the ports. Measured on a live list: seven addresses in ten
+	// terminate TLS themselves, and a port that refuses that answers 526 on
+	// every one of them while the service's own check walks straight through —
+	// which is how a working list read as a dead one for a night.
+	//
+	// The other is where the name is resolved. Delegating hands it to the proxy,
+	// so it is resolved by whatever the exit itself uses.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	saved, _ := opts.saved(io.Discard)
+
+	prof := listProfile(t, "")
+	prof.Resolver, prof.CustomResolvers = "custom", []string{"1.1.1.1:53"}
+	want, err := opts.dial(t.Context(), saved, web.Wanted{
+		Profile: prof, Threads: 2, Ports: 1, Device: blanktrail.DeviceDesktop, Addresses: true})
+	if err != nil {
+		t.Fatalf("opening the identities: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = want.Search.Close()
+		_ = want.Addresses.Close()
+	})
+	searching := opensOf(fake)
+	if len(searching) == 0 {
+		t.Fatal("no port was opened at all")
+	}
+	// And the ports that read a hidden address, which are opened from the job's
+	// single template rather than from the spread of browsers: an answer set
+	// only on the spread is an answer those ports never get.
+	if _, err := want.Addresses.Identities(t.Context()); err != nil {
+		t.Fatalf("opening the ports that read addresses: %v", err)
+	}
+	lookups := opensOf(fake)[len(searching):]
+	if len(lookups) == 0 {
+		t.Fatal("no port was opened to read addresses through")
+	}
+
+	for what, bodies := range map[string][]string{"searching": searching, "reading addresses": lookups} {
+		for _, body := range bodies {
+			for _, said := range []string{
+				`"allow_mitm_upstream":true`,
+				`"resolver_strategy":"custom"`,
+				`"custom_resolvers":["1.1.1.1:53"]`,
+			} {
+				if !strings.Contains(body, said) {
+					t.Errorf("a port %s was opened without %s", what, said)
+				}
+			}
+		}
+	}
+}

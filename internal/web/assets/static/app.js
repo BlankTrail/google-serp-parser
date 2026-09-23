@@ -350,6 +350,25 @@
 		apply();
 	}
 
+	// The resolvers somebody names belong to one of the six ways a name can be
+	// resolved, and a box for a list nobody is filling in is a box to wonder
+	// about. Drawn already right by the page; this keeps it right as the choice
+	// changes, the way the first hop's boxes are kept.
+	function resolverFields(root) {
+		var choice = root.querySelector("[name=resolver]");
+		if (!choice) {
+			return;
+		}
+		var shapes = root.querySelectorAll("[data-resolver]");
+		var apply = function () {
+			for (var i = 0; i < shapes.length; i++) {
+				shapes[i].hidden = shapes[i].getAttribute("data-resolver") !== choice.value;
+			}
+		};
+		choice.addEventListener("change", apply);
+		apply();
+	}
+
 	// mark hides or shows the field a box stands in, along with whatever the page
 	// wrote under it: a box put away without its own sentence leaves the sentence
 	// explaining something nobody can see.
@@ -784,6 +803,7 @@
 	shape(document);
 	sourceFields(document);
 	hopFields(document);
+	resolverFields(document);
 
 	// A form that arrived with a swapped screen has to be shaped as well, or it
 	// is the one screen where this works only on a reload.
@@ -791,6 +811,7 @@
 		shape(document);
 		sourceFields(document);
 		hopFields(document);
+		resolverFields(document);
 	});
 
 	watch();

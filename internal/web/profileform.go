@@ -56,6 +56,11 @@ type profileForm struct {
 	// AllowMITM lets this profile's ports work through an exit that terminates
 	// TLS itself. On by default; see store.Profile.
 	AllowMITM bool
+	// Resolver is how names are resolved once they are resolved at all, and
+	// Resolvers the ones named where the choice is to name them — one to a
+	// line, the way the gateways are.
+	Resolver  string
+	Resolvers string
 	HTTP3     bool
 
 	// The road the ports take to their addresses: HopKind is none, a SOCKS5
@@ -100,6 +105,8 @@ func profileShowing(p store.Profile) profileForm {
 		VDNS:        vdnsModeOr(p.VDNSMode),
 		Solver:      p.Solver,
 		AllowMITM:   p.AllowMITM,
+		Resolver:    resolverOr(p.Resolver),
+		Resolvers:   strings.Join(p.CustomResolvers, "\n"),
 		HTTP3:       p.HTTP3,
 	}.withHop(p.FirstHop)
 }
@@ -139,6 +146,8 @@ func profileFrom(r former) profileForm {
 		VDNS:      strings.TrimSpace(r.FormValue(vdnsField)),
 		Solver:    r.FormValue(solverField) != "",
 		AllowMITM: r.FormValue(mitmField) != "",
+		Resolver:  strings.TrimSpace(r.FormValue(resolverField)),
+		Resolvers: r.FormValue(resolversField),
 		HTTP3:     r.FormValue(http3Field) != "",
 
 		HopKind:    strings.TrimSpace(r.FormValue(firstHopField)),
@@ -163,6 +172,17 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 	}
 	next.Protocol = blanktrail.ProtocolOr(f.Wire)
 	next.Solver, next.HTTP3, next.AllowMITM = f.Solver, f.HTTP3, f.AllowMITM
+	// An unknown strategy is refused here rather than sent on, for the reason
+	// an unknown vdns mode is: the service answers it with a 400 naming the
+	// six, and a port that will not open because a form let a typo through is
+	// a fault a long way from its cause.
+	switch {
+	case blanktrail.KnownResolver(f.Resolver):
+		next.Resolver = f.Resolver
+	default:
+		b.complaints = append(b.complaints, "proxies.resolver.unknown")
+	}
+	next.CustomResolvers = linesOf(f.Resolvers)
 	// The switch wins over the list. A reader who turned vDNS off did not also
 	// say which way it should be on, and the list under the switch still holds
 	// whatever it was showing when they turned it off.
@@ -273,4 +293,26 @@ func vdnsModeOr(mode string) string {
 		return blanktrail.VDNSAuto
 	}
 	return mode
+}
+
+// linesOf reads a text box into the list it holds: one entry to a line, blanks
+// dropped, the way the gateways are read.
+func linesOf(text string) []string {
+	var out []string
+	for line := range strings.SplitSeq(text, "\n") {
+		if one := strings.TrimSpace(line); one != "" {
+			out = append(out, one)
+		}
+	}
+	return out
+}
+
+// resolverOr is the strategy a profile carries, or the one it ships with where
+// it carries nothing — a profile written before the column existed, or one a
+// test built by hand.
+func resolverOr(strategy string) string {
+	if strategy == "" {
+		return blanktrail.ResolverAuto
+	}
+	return strategy
 }

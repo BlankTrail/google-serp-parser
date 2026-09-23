@@ -127,6 +127,8 @@ type proxiesPage struct {
 	// VDNSModes are the four answers to where a port resolves names, each with
 	// the phrase the screen says it in.
 	VDNSModes []labelled
+	// Resolvers are the six answers to how they are resolved once they are.
+	Resolvers []labelled
 	// Profiles are the named sets of exits this machine has, the default one
 	// first, and they stand above everything else on the screen. Which addresses
 	// the work goes out through is the first thing to set up and the first thing
@@ -221,6 +223,20 @@ type labelled struct {
 // vdnsOffered is the four answers to where a port resolves names, in the order
 // the form offers them. The automatic one is first because it is the one nobody
 // has to think about.
+// resolversOffered is how names may be resolved, each with the phrase the
+// screen says it in, in the order the service lists them.
+func resolversOffered() []labelled {
+	out := make([]labelled, 0, len(blanktrail.Resolvers()))
+	for _, one := range blanktrail.Resolvers() {
+		name := one
+		if name == blanktrail.ResolverAuto {
+			name = "auto"
+		}
+		out = append(out, labelled{Code: one, Label: "proxies.resolver." + name})
+	}
+	return out
+}
+
 func vdnsOffered() []labelled {
 	out := make([]labelled, 0, len(blanktrail.VDNSModes()))
 	for _, mode := range blanktrail.VDNSModes() {
@@ -355,6 +371,7 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	}
 	view.Sources = sourcesOffered(view.Form.Source)
 	view.VDNSModes = vdnsOffered()
+	view.Resolvers = resolversOffered()
 	view.OnGateways = view.Form.Source == sourceGateways
 	view.OnFile = view.Form.Source == sourceFile
 	view.OnURL = view.Form.Source == sourceURL
@@ -501,6 +518,7 @@ func (s *Server) showProxies(w http.ResponseWriter, r *http.Request, lang Lang,
 	view.Form = form
 	view.Sources = sourcesOffered(form.Source)
 	view.VDNSModes = vdnsOffered()
+	view.Resolvers = resolversOffered()
 	view.OnGateways = form.Source == sourceGateways
 	view.Complaints = complaints
 	if editing {

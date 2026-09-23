@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -181,6 +182,15 @@ type PortSpec struct {
 	// from somewhere else is a request that says two different things about
 	// where it came from.
 	VDNSMode string
+	// Resolver is how the names are resolved once they are resolved at all:
+	// the ladder the service walks by itself, the exit's provider, a curated
+	// pool, the exit resolving for itself, resolvers named here, or the name
+	// handed to the proxy. See the Resolver constants.
+	//
+	// CustomResolvers are the ones named, and mean nothing under any other
+	// strategy.
+	Resolver        string
+	CustomResolvers []string
 
 	// UpstreamTLSInsecure trusts a self-signed certificate on an https:// proxy.
 	// It has no effect on any other scheme: the certificate it is about belongs
@@ -320,32 +330,34 @@ type PortInfo struct {
 // Note: auto_rotate is deliberately absent. It was removed from the control API
 // — a profile is applied on open by itself.
 type openPortRequest struct {
-	Port                  int     `json:"port"`
-	Protocol              string  `json:"protocol"`
-	Mode                  string  `json:"mode,omitempty"`
-	Browser               string  `json:"browser,omitempty"`
-	OS                    string  `json:"os,omitempty"`
-	Upstream              *string `json:"upstream,omitempty"`
-	UpstreamGateway       string  `json:"upstream_gateway,omitempty"`
-	H2Spoofing            *bool   `json:"h2_spoofing,omitempty"`
-	SpoofHeaders          *bool   `json:"spoof_headers,omitempty"`
-	SpoofUserAgent        *bool   `json:"spoof_user_agent,omitempty"`
-	JSSolver              *bool   `json:"js_solver,omitempty"`
-	KeepSessions          *bool   `json:"keep_sessions,omitempty"`
-	Decompress            *bool   `json:"decompress,omitempty"`
-	EnableHTTP3           *bool   `json:"enable_http3,omitempty"`
-	ForceIPv4Egress       *bool   `json:"egress_force_ipv4,omitempty"`
-	InjectECS             *bool   `json:"ecs_enabled,omitempty"`
-	MaxConcurrent         *int    `json:"max_concurrent,omitempty"`
-	RetryDelayMs          *int    `json:"retry_delay_ms,omitempty"`
-	IdleSeconds           *int    `json:"idle_seconds,omitempty"`
-	ConnectTimeoutSeconds *int    `json:"connect_timeout_seconds,omitempty"`
-	RequestTimeoutSeconds *int    `json:"request_timeout_seconds,omitempty"`
-	TimeoutSeconds        *int    `json:"timeout_seconds,omitempty"`
-	LeakGuard             string  `json:"leak_guard,omitempty"`
-	VDNSMode              string  `json:"vdns_mode,omitempty"`
-	UpstreamTLSInsecure   *bool   `json:"upstream_tls_insecure,omitempty"`
-	AllowMITMUpstream     *bool   `json:"allow_mitm_upstream,omitempty"`
+	Port                  int      `json:"port"`
+	Protocol              string   `json:"protocol"`
+	Mode                  string   `json:"mode,omitempty"`
+	Browser               string   `json:"browser,omitempty"`
+	OS                    string   `json:"os,omitempty"`
+	Upstream              *string  `json:"upstream,omitempty"`
+	UpstreamGateway       string   `json:"upstream_gateway,omitempty"`
+	H2Spoofing            *bool    `json:"h2_spoofing,omitempty"`
+	SpoofHeaders          *bool    `json:"spoof_headers,omitempty"`
+	SpoofUserAgent        *bool    `json:"spoof_user_agent,omitempty"`
+	JSSolver              *bool    `json:"js_solver,omitempty"`
+	KeepSessions          *bool    `json:"keep_sessions,omitempty"`
+	Decompress            *bool    `json:"decompress,omitempty"`
+	EnableHTTP3           *bool    `json:"enable_http3,omitempty"`
+	ForceIPv4Egress       *bool    `json:"egress_force_ipv4,omitempty"`
+	InjectECS             *bool    `json:"ecs_enabled,omitempty"`
+	MaxConcurrent         *int     `json:"max_concurrent,omitempty"`
+	RetryDelayMs          *int     `json:"retry_delay_ms,omitempty"`
+	IdleSeconds           *int     `json:"idle_seconds,omitempty"`
+	ConnectTimeoutSeconds *int     `json:"connect_timeout_seconds,omitempty"`
+	RequestTimeoutSeconds *int     `json:"request_timeout_seconds,omitempty"`
+	TimeoutSeconds        *int     `json:"timeout_seconds,omitempty"`
+	LeakGuard             string   `json:"leak_guard,omitempty"`
+	VDNSMode              string   `json:"vdns_mode,omitempty"`
+	ResolverStrategy      string   `json:"resolver_strategy,omitempty"`
+	CustomResolvers       []string `json:"custom_resolvers,omitempty"`
+	UpstreamTLSInsecure   *bool    `json:"upstream_tls_insecure,omitempty"`
+	AllowMITMUpstream     *bool    `json:"allow_mitm_upstream,omitempty"`
 	// ChainProxy and ChainGateway are the first hop: a SOCKS5 proxy, or the name
 	// of a gateway the service raises a tunnel for. A port with neither goes to
 	// its address directly.
@@ -353,29 +365,40 @@ type openPortRequest struct {
 	ChainGateway string `json:"chain_gateway,omitempty"`
 }
 
+// IsZero says this spec names nothing at all, which is how a caller asks for
+// the defaults whole.
+//
+// It is a method rather than a comparison with the empty struct because the
+// spec carries a list now, and Go will not compare a struct that holds one. A
+// field-wise check would go quietly out of date the next time a field is added,
+// which is exactly the mistake this guards against elsewhere.
+func (s PortSpec) IsZero() bool { return reflect.DeepEqual(s, PortSpec{}) }
+
 func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	h2, hdr, ua := s.H2Spoofing, s.SpoofHeaders, s.SpoofUserAgent
 	js, jar, dec, h3 := s.JSSolver, s.KeepSessions, s.Decompress, s.EnableHTTP3
 	v4, ecs := s.ForceIPv4Egress, s.InjectECS
 	req := openPortRequest{
-		Port:            port,
-		Protocol:        ProtocolOr(s.Protocol),
-		Mode:            s.Mode,
-		Browser:         s.Browser,
-		OS:              s.OS,
-		H2Spoofing:      &h2,
-		SpoofHeaders:    &hdr,
-		SpoofUserAgent:  &ua,
-		JSSolver:        &js,
-		KeepSessions:    &jar,
-		Decompress:      &dec,
-		EnableHTTP3:     &h3,
-		ForceIPv4Egress: &v4,
-		InjectECS:       &ecs,
-		LeakGuard:       s.LeakGuard,
-		VDNSMode:        s.VDNSMode,
-		ChainProxy:      s.FirstHop.Proxy,
-		ChainGateway:    s.FirstHop.Gateway,
+		Port:             port,
+		Protocol:         ProtocolOr(s.Protocol),
+		Mode:             s.Mode,
+		Browser:          s.Browser,
+		OS:               s.OS,
+		H2Spoofing:       &h2,
+		SpoofHeaders:     &hdr,
+		SpoofUserAgent:   &ua,
+		JSSolver:         &js,
+		KeepSessions:     &jar,
+		Decompress:       &dec,
+		EnableHTTP3:      &h3,
+		ForceIPv4Egress:  &v4,
+		InjectECS:        &ecs,
+		LeakGuard:        s.LeakGuard,
+		VDNSMode:         s.VDNSMode,
+		ResolverStrategy: s.Resolver,
+		CustomResolvers:  s.CustomResolvers,
+		ChainProxy:       s.FirstHop.Proxy,
+		ChainGateway:     s.FirstHop.Gateway,
 	}
 	if s.UpstreamTLSInsecure {
 		v := true

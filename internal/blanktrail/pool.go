@@ -651,7 +651,7 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 			// answers, and swapping the whole struct for DefaultPortSpec() would
 			// throw the caller's OS away and open a Windows desktop port that
 			// every label in the run then calls "mobile". Refuse loudly instead.
-			if specs[i].Spec == (PortSpec{}) {
+			if specs[i].Spec.IsZero() {
 				specs[i].Spec = DefaultPortSpec()
 				continue
 			}

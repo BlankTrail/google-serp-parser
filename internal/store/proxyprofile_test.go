@@ -417,3 +417,30 @@ func TestProfiles_WorkThroughExitsThatTerminateTLSAfterAnUpgrade(t *testing.T) {
 		}
 	}
 }
+
+func TestProfiles_DelegateTheNameToTheProxyAfterAnUpgrade(t *testing.T) {
+	// Every profile written before the column existed gets the strategy this
+	// parser wants, for the reason the column has a default at all: a name
+	// resolved by the exit itself cannot disagree with where the traffic comes
+	// out, and it costs no lookup before the request can start.
+	s := testStore(t)
+	if _, err := s.db.ExecContext(t.Context(),
+		`INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
+		        threads_per_upstream, protocol, gateways, is_default, vdns_mode,
+		        js_solver, http3, first_hop, allow_mitm)
+		 VALUES('from before', 'url', 'https://example.test/list', 0, 0, 1, 'socks5', '', 0, '', 1, 0, '', 1)`,
+	); err != nil {
+		t.Fatalf("writing a profile the way an older build did: %v", err)
+	}
+
+	all, err := s.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	for _, one := range all {
+		if one.Name == "from before" && one.Resolver != "delegate" {
+			t.Errorf("a profile written before the column resolves names by %q, want the name "+
+				"delegated to the proxy", one.Resolver)
+		}
+	}
+}

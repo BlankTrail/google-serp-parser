@@ -365,6 +365,25 @@
 {{range .VDNSModes}}<option value="{{.Code}}"{{if eq $.Form.VDNS .Code}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
 </div>
+{{/* How the name is resolved once it is resolved at all. It is a second
+     question from the one beside it — that one says whether the exit is asked,
+     this one says what is asked and by whom — and the service takes them
+     separately. */}}
+<div class="field">
+<label for="resolver">{{.T "proxies.resolver"}}</label>
+<select id="resolver" name="resolver">
+{{range .Resolvers}}<option value="{{.Code}}"{{if eq $.Form.Resolver .Code}} selected{{end}}>{{$.T .Label}}</option>
+{{end}}</select>
+</div>
+</div>
+{{/* The resolvers somebody names, drawn only where naming them is the choice:
+     a box for a list nobody is filling in is a box to wonder about. */}}
+<div class="row" data-resolver="custom"{{if ne .Form.Resolver "custom"}} hidden{{end}}>
+<div class="field">
+<label for="custom_resolvers">{{.T "proxies.resolver.own"}}</label>
+<textarea id="custom_resolvers" name="custom_resolvers" rows="3"
+ placeholder="1.1.1.1:53">{{.Form.Resolvers}}</textarea>
+</div>
 </div>
 <div class="row">
 <div class="field">
@@ -381,6 +400,7 @@
 <li>{{.T "proxies.vdns.why"}}</li>
 <li>{{.T "proxies.solver.why"}}</li>
 <li>{{.T "proxies.mitm.why"}}</li>
+<li>{{.T "proxies.resolver.why"}}</li>
 <li>{{.T "proxies.http3.why"}}</li>
 </ul>
 </details>

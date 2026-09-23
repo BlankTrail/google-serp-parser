@@ -334,3 +334,59 @@ func profileNamed(t *testing.T, s *Server, name string) store.Profile {
 	t.Fatalf("no profile named %q among %d", name, len(all))
 	return store.Profile{}
 }
+
+func TestProfile_DelegatesTheNameToTheProxyUnlessToldOtherwise(t *testing.T) {
+	// Two questions, not one: the switch beside it says whether the exit is
+	// asked at all, and this says what is asked and by whom. Delegating hands
+	// the name to the proxy, so it is resolved by whatever the exit itself uses
+	// — the one answer that cannot disagree with where the traffic comes out,
+	// and the only one that costs no lookup before the request can start.
+	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+
+	body := getBody(t, s, proxiesAt+"?"+profileField+"=new")
+	if !strings.Contains(body, `<option value="delegate" selected>`) {
+		t.Error("a fresh profile is not offered with the name delegated to the proxy")
+	}
+	// And the resolvers somebody names are not drawn until naming them is the
+	// choice: a box for a list nobody is filling in is a box to wonder about.
+	if !strings.Contains(body, `data-resolver="custom" hidden`) {
+		t.Error("the box for named resolvers is drawn although they are not the choice")
+	}
+
+	postForm(t, s, proxiesAt, url.Values{
+		"profile": {"0"}, "profile_name": {"datacentre"},
+		"source": {"url"}, "source_at": {"https://example.test/list"},
+		"resolver": {"custom"}, "custom_resolvers": {" 1.1.1.1:53 \n\n 9.9.9.9:53 "},
+	})
+
+	made := profileNamed(t, s, "datacentre")
+	if made.Resolver != "custom" {
+		t.Errorf("the profile resolves names by %q, want the way the form named", made.Resolver)
+	}
+	if !slices.Equal(made.CustomResolvers, []string{"1.1.1.1:53", "9.9.9.9:53"}) {
+		t.Errorf("the resolvers read back as %q, want the two named, trimmed and without the blank line",
+			made.CustomResolvers)
+	}
+}
+
+func TestSaveProxies_RefusesAWayOfResolvingTheServiceDoesNotTake(t *testing.T) {
+	// The service answers an unknown strategy with a refusal naming the six,
+	// and a port that will not open because a form let a typo through is a
+	// fault a long way from its cause.
+	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	postForm(t, s, proxiesAt, url.Values{
+		"profile": {"0"}, "profile_name": {"datacentre"},
+		"source": {"url"}, "source_at": {"https://example.test/list"},
+		"resolver": {"whatever"},
+	})
+
+	all, err := s.store.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	for _, one := range all {
+		if one.Name == "datacentre" {
+			t.Fatal("a profile was written with a way of resolving names the service does not take")
+		}
+	}
+}

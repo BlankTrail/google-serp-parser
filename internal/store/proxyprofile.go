@@ -97,6 +97,12 @@ type Profile struct {
 	// exit that terminates TLS can read what it carries. What goes through is a
 	// search on a public engine under an identity that exists to be spent.
 	AllowMITM bool
+	// Resolver is how this profile's ports resolve names once they resolve them
+	// at all, and CustomResolvers the ones named where that is the answer. See
+	// the blanktrail.Resolver constants; "delegate" is what a profile ships
+	// with and means the proxy resolves the name itself.
+	Resolver        string
+	CustomResolvers []string
 	// FirstHop is the road this profile's ports take to their addresses: empty
 	// for straight there, "gw:" and the name of one of the service's gateways,
 	// or a SOCKS5 proxy's address whole, login and password included. It is
@@ -125,6 +131,12 @@ func NewProfile() Profile {
 		Solver:    true,
 		HTTP3:     false,
 		AllowMITM: true,
+		// The word is written here rather than taken from the package that
+		// talks to the service: the column holds it and this package owns the
+		// column, and a store importing that package to name its own data
+		// would be the wrong way round — the same reason "gateways" is spelled
+		// out in Empty above.
+		Resolver: "delegate",
 	}
 }
 
@@ -159,21 +171,23 @@ func (p Profile) Empty() bool {
 // another.
 const profileColumns = `id, name, kind, location, refresh_ms, ban_ms,
 	threads_per_upstream, protocol, gateways, is_default,
-	vdns_mode, js_solver, http3, first_hop, allow_mitm`
+	vdns_mode, js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers`
 
 // scanProfile reads one row in the order profileColumns names.
 func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
 	var p Profile
 	var refreshMS, banMS int64
-	var gateways string
+	var gateways, resolvers string
 	if err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.Location, &refreshMS, &banMS,
 		&p.ThreadsPerUpstream, &p.Protocol, &gateways, &p.Default,
-		&p.VDNSMode, &p.Solver, &p.HTTP3, &p.FirstHop, &p.AllowMITM); err != nil {
+		&p.VDNSMode, &p.Solver, &p.HTTP3, &p.FirstHop, &p.AllowMITM,
+		&p.Resolver, &resolvers); err != nil {
 		return Profile{}, err
 	}
 	p.Refresh = time.Duration(refreshMS) * time.Millisecond
 	p.Ban = time.Duration(banMS) * time.Millisecond
 	p.Gateways = gatewaysOf(gateways)
+	p.CustomResolvers = gatewaysOf(resolvers)
 	return p, nil
 }
 
@@ -306,12 +320,13 @@ func (s *Store) CreateProfile(ctx context.Context, p Profile) (int64, error) {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
 			threads_per_upstream, protocol, gateways, is_default,
-			vdns_mode, js_solver, http3, first_hop, allow_mitm)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			vdns_mode, js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
 		p.Protocol, gatewayLines(p.Gateways), p.Default,
-		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.AllowMITM)
+		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.AllowMITM,
+		p.Resolver, gatewayLines(p.CustomResolvers))
 	if err != nil {
 		return 0, nameOr(err, "store: writing a proxy profile")
 	}
@@ -382,12 +397,13 @@ func (s *Store) SaveProfile(ctx context.Context, p Profile) error {
 		   SET name = ?, kind = ?, location = ?, refresh_ms = ?, ban_ms = ?,
 		       threads_per_upstream = ?, protocol = ?, gateways = ?,
 		       is_default = ?, vdns_mode = ?, js_solver = ?, http3 = ?, first_hop = ?,
-		       allow_mitm = ?
+		       allow_mitm = ?, resolver = ?, custom_resolvers = ?
 		 WHERE id = ?`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
 		p.Protocol, gatewayLines(p.Gateways), p.Default,
-		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.AllowMITM, p.ID)
+		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.AllowMITM,
+		p.Resolver, gatewayLines(p.CustomResolvers), p.ID)
 	if err != nil {
 		return nameOr(err, fmt.Sprintf("store: saving proxy profile %d", p.ID))
 	}

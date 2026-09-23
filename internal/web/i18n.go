@@ -508,6 +508,19 @@ var catalogue = map[Lang]map[string]string{
 			"seconds with this on. What goes through is a search on a public engine under an identity made to be " +
 			"spent, and the exit that carries it can read it — which is the same trade whoever chose the list " +
 			"already made.",
+		"proxies.resolver":          "How names are resolved",
+		"proxies.resolver.auto":     "automatic — the provider, then a pool, then the exit",
+		"proxies.resolver.delegate": "delegate — the exit resolves the name itself",
+		"proxies.resolver.isp":      "the exit provider's own resolvers, and nothing else",
+		"proxies.resolver.pool":     "a curated pool, asked through the exit",
+		"proxies.resolver.exit":     "the exit itself, asking the authoritative servers",
+		"proxies.resolver.custom":   "the resolvers named below",
+		"proxies.resolver.own":      "Resolvers, one to a line",
+		"proxies.resolver.unknown":  "That is not one of the ways a name can be resolved.",
+		"proxies.resolver.why": "The switch beside this says whether the exit is asked at all; this says what is " +
+			"asked and by whom. Delegating hands the name to the proxy, so it is resolved by whatever the exit " +
+			"itself uses — the one answer that cannot disagree with where the traffic comes out, and the only one " +
+			"that costs no lookup of its own before the request can start.",
 		"proxies.http3.why":            "Needs an exit that carries UDP. On a profile of ordinary proxies it changes nothing.",
 		"proxies.hop":                  "Connect through",
 		"proxies.hop.none":             "Nothing — straight to the address",
@@ -987,6 +1000,19 @@ var catalogue = map[Lang]map[string]string{
 			"адрес отвечал меньше чем за три секунды. Через выход идёт поиск в публичной выдаче под личностью, " +
 			"которая для того и заведена, и выход, который его везёт, может его прочитать — это та же сделка, " +
 			"которую уже совершил тот, кто выбрал список.",
+		"proxies.resolver":          "Резолвер имён",
+		"proxies.resolver.auto":     "автоматически — провайдер, затем пул, затем выход",
+		"proxies.resolver.delegate": "делегировать — имя резолвит сам выход",
+		"proxies.resolver.isp":      "резолверы провайдера выхода и только они",
+		"proxies.resolver.pool":     "подобранный пул, через выход",
+		"proxies.resolver.exit":     "сам выход, напрямую у авторитетных серверов",
+		"proxies.resolver.custom":   "резолверы, названные ниже",
+		"proxies.resolver.own":      "Резолверы, по одному в строке",
+		"proxies.resolver.unknown":  "Это не один из способов разрешить имя.",
+		"proxies.resolver.why": "Выключатель рядом говорит, спрашивают ли выход вообще; этот выбор — что именно " +
+			"спрашивают и у кого. «Делегировать» отдаёт имя прокси, и его разрешает то, чем пользуется сам выход: " +
+			"это единственный ответ, который не может разойтись с тем, откуда выходит трафик, и единственный, " +
+			"который не стоит отдельного запроса перед началом работы.",
 		"proxies.http3.why":            "Нужен выход, умеющий UDP. На профиле из обычных прокси ничего не меняет.",
 		"proxies.hop":                  "Соединяться через",
 		"proxies.hop.none":             "Ничего — прямо к адресу",
