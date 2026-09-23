@@ -53,6 +53,10 @@ type heldEngine struct {
 	// to tell a pool per job from one pool for all of them while jobs are running.
 	gone func()
 
+	// facts, when set, is what this engine says its pool is doing. Nil is the
+	// reading every other test shares.
+	facts *poolFacts
+
 	mu     sync.Mutex
 	jobs   []run.Job
 	live   int
@@ -101,7 +105,12 @@ var fakePool = poolFacts{
 	Cooldown: 3 * time.Second,
 }
 
-func (e *heldEngine) Pool() poolFacts { return fakePool }
+func (e *heldEngine) Pool() poolFacts {
+	if e.facts != nil {
+		return *e.facts
+	}
+	return fakePool
+}
 
 func (e *heldEngine) Close() error {
 	e.mu.Lock()
@@ -1481,5 +1490,62 @@ func TestPoolEngine_RunsAJobOnTheSessionsItWasHanded(t *testing.T) {
 	_ = e.Run(t.Context(), run.Job{Queries: []google.Query{{Text: "x"}}, Pages: 1, Tries: 1}, nil)
 	if all, _ := k.Count(); all == 0 {
 		t.Error("the job ran without taking a session from the keeper it was handed")
+	}
+}
+
+func TestPoolEngine_ReadsWhatTheRunIsUpAgainst(t *testing.T) {
+	// The reading a job's page draws, taken at one instant from the three places
+	// that hold it: the pool for its addresses and ports, the brake for what the
+	// challenge solver has in hand, and the run's own count of the checks its
+	// sessions have been made to pass.
+	//
+	// The addresses are two numbers of the same kind and the mistake they invite
+	// is one order: a list of three with none resting, read the other way round,
+	// puts "three banned out of none" on the screen.
+	fake := fakebt.New(t)
+	cl, err := blanktrail.NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ups, _ := blanktrail.Parse("192.0.2.1:1080\n192.0.2.2:1080\n192.0.2.3:1080", "socks5")
+	pool, err := blanktrail.NewPool(t.Context(), blanktrail.PoolConfig{
+		Client: cl, Threads: 1, PortsPerThread: 1, Spec: blanktrail.DefaultPortSpec(),
+		Channels: []blanktrail.Channel{blanktrail.NewListChannel("list", blanktrail.NewStaticRotor(ups))},
+		Insecure: true, MaxRetriesPerReq: 1, RequestTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = pool.Close() })
+
+	fake.SetSolverQueue(fakebt.SolverQueue{Queued: 5, Running: 2, MaxLen: 32})
+	brake := blanktrail.BrakeOn(cl)
+	// The brake reads the queue when it is asked to hold, which is what every
+	// request of a run does before it goes out.
+	if err := brake.Hold(t.Context()); err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	checks := &run.Challenges{}
+	checks.Answer("", "won-one") // a check paid for
+	checks.Answer("won-one", "won-one")
+	checks.Answer("won-one", "won-one") // and two answers on the clearance it won
+
+	e := &poolEngine{pool: pool, threads: 1, brake: brake, checks: checks,
+		keeper: sessions.NewKeeper(sessions.NewMemory()), want: sessions.Want{Device: "desktop"}}
+	facts := e.Pool()
+
+	if facts.Addresses != 3 || facts.Banned != 0 {
+		t.Errorf("the list reads %d addresses with %d banned, want three and none",
+			facts.Addresses, facts.Banned)
+	}
+	if facts.Queue.Running != 2 || facts.Queue.Queued != 5 {
+		t.Errorf("the solver reads %+v, want two being solved and five waiting", facts.Queue)
+	}
+	if facts.Checks.Met != 1 || facts.Checks.Answered != 2 || facts.Checks.Between != 2 {
+		t.Errorf("the checks read %+v, want one met, two answers and two requests between them",
+			facts.Checks)
+	}
+	if facts.Stats.Ports != 1 {
+		t.Errorf("the pool reads %d ports, want the one it was opened with", facts.Stats.Ports)
 	}
 }

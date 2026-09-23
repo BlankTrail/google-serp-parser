@@ -175,6 +175,10 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	q.Page = one.page + 1
 	search := boundSearcher{attempt: c.a, lease: lease, held: held}
 
+	// What Google's check left on this session before the request, so an answer
+	// that comes back with a new one can be read as a check just paid for.
+	held0 := held.Clearance()
+
 	var serp google.SERP
 	var err error
 	moved := false
@@ -216,6 +220,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	case err == nil:
 		// Written down and given back: its rest starts here, and the keeper
 		// will not hand it out again before the rest is over.
+		c.r.Challenges.Answer(held0, held.Clearance())
 		_ = held.Answered(ctx, port)
 		c.took(ctx, one, held.ID, serp)
 	case judged && moved:

@@ -75,10 +75,31 @@ type poolFacts struct {
 	// profile: a screen showing them under a profile that is not this one would
 	// be reporting somebody else's list as this one's.
 	Profile int64
+	// Addresses is how many the list behind these identities holds, and Banned
+	// how many of those are out of the rotation after a failure.
+	Addresses int
+	Banned    int
 	// Pool is the identities themselves, for the one screen that asks them
-	// something the counts cannot answer: how large the address list is and how
-	// much of it is resting. It is nil when there is no pool.
+	// something the counts cannot answer: which addresses refused a port and
+	// why. It is nil when there is no pool.
 	Pool *blanktrail.Pool
+	// Queue is what the challenge solver has in hand, as the run last read it.
+	// It is the whole service's queue and not this job's: the processes are
+	// licensed to the machine, and what a job waits behind is everything else
+	// asking of them.
+	Queue blanktrail.SolverQueue
+	// Checks is how often this job's sessions have been made to pass Google's
+	// check, and what that says about the rest they are given.
+	Checks run.Rhythm
+	// Sessions is how many sessions the program holds of the kind this job asks
+	// for, and SessionsResting how many of those are not due to be asked again
+	// yet.
+	//
+	// They are the program's rather than the job's: sessions outlive a job and
+	// two jobs of one kind share them. What they answer is whether a run is
+	// waiting on its own sessions.
+	Sessions        int
+	SessionsResting int
 }
 
 // poolEngine takes one job through one pool of identities.
@@ -108,13 +129,17 @@ type poolEngine struct {
 	// them; a nil keeper runs the job with a port as the identity.
 	keeper *sessions.Keeper
 	want   sessions.Want
+	// checks counts how often this job's sessions are made to pass Google's
+	// check. It is the job's own — a reading of how this run is going, not of
+	// the machine — so it is made with the engine and dies with it.
+	checks *run.Challenges
 }
 
 // Run builds a runner around the pool this job was raised. A runner is a few
 // fields, and the sink is the one part of it that belongs to a single job.
 func (e *poolEngine) Run(ctx context.Context, j run.Job, sink run.Sink) run.Report {
 	r := &run.Runner{Pool: e.pool, Threads: e.threads, Sink: sink, Watch: e.watch, Brake: e.brake,
-		Keeper: e.keeper, Want: e.want}
+		Keeper: e.keeper, Want: e.want, Challenges: e.checks}
 	if e.addresses != nil {
 		r.Addresses = e.addresses.Identities
 	}
@@ -145,7 +170,13 @@ func (e *poolEngine) Close() error {
 
 // Pool is this job's pool, as it stands right now.
 func (e *poolEngine) Pool() poolFacts {
-	return poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown(), Pool: e.pool}
+	facts := poolFacts{Stats: e.pool.Stats(), Threads: e.threads, Cooldown: e.pool.Cooldown(),
+		Pool: e.pool, Queue: e.brake.Queue(), Checks: e.checks.Rhythm()}
+	facts.Addresses, facts.Banned = e.pool.Addresses()
+	if e.keeper != nil {
+		facts.Sessions, facts.SessionsResting = e.keeper.Standing(e.want)
+	}
+	return facts
 }
 
 // Wanted is everything one job asks of the identities it will run on.
@@ -276,7 +307,8 @@ func dialing(open OpenPool, watch run.Watch) source {
 		// estimate: two answers to how wide this job runs would put a figure on the
 		// screen that no run ever matched.
 		return &poolEngine{pool: want.Search, addresses: want.Addresses, brake: want.Brake,
-			threads: asked.Threads, watch: watch, keeper: want.Keeper, want: want.Want}, nil
+			threads: asked.Threads, watch: watch, keeper: want.Keeper, want: want.Want,
+			checks: &run.Challenges{}}, nil
 	}}
 }
 

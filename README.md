@@ -234,12 +234,14 @@ different protocols:
 | Threads per proxy | How many threads may share one address or one gateway at a time | 1 for a long list, more for a short one |
 | Connection to a port | SOCKS5 carries UDP, so QUIC and far-side DNS work. HTTP is the fallback | SOCKS5 |
 
-While a job runs, the top of the screen reads the pool: addresses in the list,
-banned right now, ports open, of them warm, and in quarantine — then requests,
-attempts on the wire, the share that failed, and failures broken down by kind,
-so an address that never answered is told apart from Google refusing. *Clear the
-counts* starts a fresh measurement; *Clear the ban* puts every address back into
-rotation after a restart or an outage that was not their fault.
+This screen keeps what belongs to the profile: requests, attempts on the wire,
+the share that failed, and failures broken down by kind, so an address that
+never answered is told apart from Google refusing. *Clear the counts* starts a
+fresh measurement; *Clear the ban* puts every address back into rotation after a
+restart or an outage that was not their fault. What the pool is doing this
+minute — addresses in the list, banned right now, ports open, warm and in
+quarantine — is on the page of the job it is doing it for: a pool is raised for
+one job and taken down when that job lets go.
 
 ### 6. New job: the first run
 
@@ -456,9 +458,16 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 - **Status** screen: the job in flight, elapsed against estimated, share
   answered, what came back instead, ports held and ports set aside, threads
   waiting for a free proxy, queue.
-- **Proxies** screen: addresses in the list, banned right now, ports open and
-  warm; requests, attempts, failure share, address changes, ports opened again;
-  failures broken down by kind, with counters you can zero at any moment.
+- **Proxies** screen: requests, attempts, failure share, address changes, ports
+  opened again; failures broken down by kind, with counters you can zero at any
+  moment.
+- A running job's own page reads the identities under it: addresses in the list
+  and banned right now, ports open, warm and in quarantine, sessions and how
+  many of them are resting — and Google's checks: how many this job has been
+  made to pass, how many the solver is working on, how many are waiting for it,
+  and how many requests the run gets between one check and the next. Checks
+  oftener than one in seven requests say the sessions are being asked again
+  before they have rested, and the page says so.
 - The gateway list is read once and held for a couple of minutes, with a
   **Refresh** that asks the service again — for when a configuration has just
   been added or the tunnels have just been measured.

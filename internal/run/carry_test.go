@@ -32,7 +32,11 @@ type deepOrigin struct {
 	// served so far. It is for a test that changes the world under a walk — an
 	// address that dies between two of its pages.
 	then func(n int)
-	mu   sync.Mutex
+	// clears, when set, says what clearance to hand the session with the nth
+	// page, the way Google hands one out when its check has just been passed.
+	// An empty answer hands none.
+	clears func(n int) string
+	mu     sync.Mutex
 
 	asked []string
 	count int
@@ -71,6 +75,11 @@ func newDeepOrigin(t *testing.T, depth int) *deepOrigin {
 			_, _ = fmt.Sscanf(p, "%d", &page)
 		}
 		http.SetCookie(w, &http.Cookie{Name: "NID", Value: fmt.Sprintf("search-%d", n), Path: "/"})
+		if o.clears != nil {
+			if given := o.clears(n); given != "" {
+				http.SetCookie(w, &http.Cookie{Name: "GOOGLE_ABUSE_EXEMPTION", Value: given, Path: "/"})
+			}
+		}
 		body := serpBody("example.com")
 		if page < o.depth {
 			// The address of the next page, with a tag no address this program
@@ -346,5 +355,42 @@ func TestRunner_DoesNotCallAQueryCollectedWhenNothingWasCollected(t *testing.T) 
 	}
 	if all, _ := h.Sessions(context.Background(), "desktop", time.Time{}); len(all) != 0 {
 		t.Errorf("the history holds %+v, want nothing: a session refused after the move is given up", all)
+	}
+}
+
+func TestRunner_CountsACheckWhereGoogleHandsTheSessionAFreshClearance(t *testing.T) {
+	// How often the sessions are made to pass Google's check is the one reading
+	// that says whether they are being asked oftener than their rest allows.
+	// The answer that paid for a check looks like any other — it is the page
+	// that was asked for — and the only sign is the clearance that came with it.
+	o := newDeepOrigin(t, 1)
+	// The first search pays for a check; the second is answered on the
+	// clearance the first won, which is what an untroubled request looks like.
+	o.clears = func(n int) string {
+		if n == 1 {
+			return "won-it"
+		}
+		return ""
+	}
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	counting := &Challenges{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}, Challenges: counting}
+
+	rep := r.Run(context.Background(), Job{
+		Queries: []google.Query{usQuery("one"), usQuery("two")}, Pages: 1})
+	for i, got := range rep.Results {
+		if got.Err != nil {
+			t.Fatalf("query %d: %v", i, got.Err)
+		}
+	}
+
+	got := counting.Rhythm()
+	if got.Met != 1 || got.Answered != 1 {
+		t.Errorf("the run counted %d checks and %d plain answers, want one of each: %+v",
+			got.Met, got.Answered, got)
+	}
+	if !got.Known || got.Between != 1 {
+		t.Errorf("the run reads %v requests a check, want one", got.Between)
 	}
 }

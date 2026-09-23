@@ -74,16 +74,11 @@
 <p class="empty">{{.T "proxies.reading.elsewhere"}} {{.Elsewhere}}.</p>
 {{else}}
 
-<section class="card">
-<dl class="metrics">
-<div class="metric"><dt class="label">{{.T "proxies.addresses"}}</dt><dd class="figure" id="addresses">{{.Addresses}}</dd></div>
-<div class="metric"><dt class="label">{{.T "proxies.resting"}}</dt><dd class="figure" id="resting">{{.Resting}}</dd></div>
-<div class="metric"><dt class="label">{{.T "proxies.ports"}}</dt><dd class="figure" id="ports">{{.Ports}}</dd></div>
-<div class="metric"><dt class="label">{{.T "proxies.warm"}}</dt><dd class="figure" id="warm">{{.Warm}}</dd></div>
-<div class="metric"><dt class="label">{{.T "proxies.quarantined"}}</dt><dd class="figure" id="quarantined">{{.Quarantined}}</dd></div>
-</dl>
-</section>
-
+{{/* What the pool is doing this minute — its addresses, its ports and the
+     sessions on them — is on the page of the job it is doing it for: a pool is
+     raised for one job and taken down when that job lets go, so those numbers
+     are one run's rather than this profile's. What stays here is the profile's
+     own: what its addresses have done since the count was cleared. */}}
 <section class="card">
 <h2>{{.T "proxies.since"}} {{.Since}}</h2>
 <dl class="metrics">

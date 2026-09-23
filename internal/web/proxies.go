@@ -50,15 +50,6 @@ type proxiesPage struct {
 	// either the start of this session or the last press of the button.
 	Since string
 
-	// Addresses is the egress list: how many there are and how many are resting
-	// off a failure right now.
-	Addresses int
-	Resting   int
-	// Ports is what is open, and Quarantined how many of them are set aside.
-	Ports       int
-	Warm        int
-	Quarantined int
-
 	// Requests is how many identities were handed work since the counters were
 	// cleared and Attempts how many times a request actually went on the wire,
 	// which is the larger of the two: one query walks as many addresses as it
@@ -583,9 +574,6 @@ func (s *Server) proxiesOf() proxiesPage {
 	view.OnProfile = facts.Profile
 
 	st := facts.Stats
-	view.Ports = st.Ports
-	view.Warm = st.Warm
-	view.Quarantined = st.Quarantined
 	view.Requests = st.Requests
 	view.Attempts = st.Attempts
 	view.Rotations = st.EgressRotations
@@ -594,7 +582,6 @@ func (s *Server) proxiesOf() proxiesPage {
 	view.Reopenings = st.Reopenings
 	view.Rejections = st.Rejections
 	if facts.Pool != nil {
-		view.Addresses, view.Resting = facts.Pool.Addresses()
 		view.Refused = facts.Pool.Refused()
 	}
 

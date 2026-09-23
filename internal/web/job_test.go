@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/export"
 	"github.com/blanktrail/google-serp-parser/internal/google"
+	"github.com/blanktrail/google-serp-parser/internal/run"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -1149,5 +1151,141 @@ func TestJobPage_SaysWhatIdentityTheJobsPortsWore(t *testing.T) {
 	}
 	if body := get(t, s, jobPath(spread)).Body.String(); strings.Contains(body, "Safari") {
 		t.Errorf("the page of a job that named nothing names a browser:\n%s", body)
+	}
+}
+
+// runningWith puts a job in flight on an engine whose pool reads as given, and
+// answers the server, the supervisor and the job's id.
+func runningWith(t *testing.T, facts poolFacts) (*Server, *Supervisor, int64) {
+	t.Helper()
+	s, v, eng := heldServer(t)
+	eng.facts = &facts
+	id := enqueue(t, v, "nightly", "a", "b", "c")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == id
+	})
+	return s, v, id
+}
+
+func TestJobPage_ShowsWhatTheIdentitiesUnderTheRunningJobAreDoing(t *testing.T) {
+	// The reading used to be on the proxy screen, where it was the profile's.
+	// It is the job's: a pool is raised for one job and taken down when that job
+	// lets go, so how many ports are open and how many addresses are banned this
+	// minute is a fact about the run somebody is watching.
+	s, _, id := runningWith(t, poolFacts{
+		Stats:     blanktrail.Stats{Ports: 50, Warm: 7, Quarantined: 2},
+		Addresses: 15000, Banned: 40,
+		Sessions: 37, SessionsResting: 20,
+	})
+
+	body := get(t, s, jobPath(id)).Body.String()
+	for id, want := range map[string]string{
+		"addresses": "15000", "banned": "40",
+		"ports": "50", "warm": "7", "quarantined": "2",
+		"sessions": "37", "sessions-asleep": "20",
+	} {
+		if got := shown(t, body, id); got != want {
+			t.Errorf("the job's page says %s is %q, want %q", id, got, want)
+		}
+	}
+}
+
+func TestProxiesScreen_NoLongerCarriesWhatThePoolIsDoingThisMinute(t *testing.T) {
+	// The other half of moving it. Left on both screens, the same numbers would
+	// be read under a profile — where they are the list's — and under a job,
+	// where they are the run's, and a reader comparing the two would be
+	// comparing one pool with itself.
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+	s.sup.onProfile = prof
+	body := get(t, s, readingOf(prof)).Body.String()
+	for _, gone := range []string{`id="addresses"`, `id="banned"`, `id="ports"`, `id="warm"`, `id="quarantined"`} {
+		if strings.Contains(body, gone) {
+			t.Errorf("the proxy screen still carries %s, which is now the job's", gone)
+		}
+	}
+	// What belongs to the profile stays: what its addresses have done since the
+	// count was cleared.
+	if !strings.Contains(body, `id="rotations"`) {
+		t.Error("the proxy screen lost the count that is the profile's own")
+	}
+}
+
+func TestJobPage_ShowsGooglesChecksAndWhatTheSolverHasInHand(t *testing.T) {
+	// Three different things, and the page keeps them apart. What was passed is
+	// this run's own count; what is being solved and what is waiting are the
+	// service's, because the solver processes are licensed to the machine.
+	s, _, id := runningWith(t, poolFacts{
+		Queue:  blanktrail.SolverQueue{Running: 3, Queued: 4},
+		Checks: run.Rhythm{Met: 6, Answered: 78, Between: 13, Known: true},
+	})
+
+	body := get(t, s, jobPath(id)).Body.String()
+	for id, want := range map[string]string{
+		"checks-met": "6", "checks-solving": "3", "checks-queued": "4", "checks-between": "13.0",
+	} {
+		if got := shown(t, body, id); got != want {
+			t.Errorf("the job's page says %s is %q, want %q", id, got, want)
+		}
+	}
+	// And a run that has met none is not given a figure worked out from nothing.
+	s2, _, other := runningWith(t, poolFacts{Checks: run.Rhythm{Answered: 4}})
+	if got := shown(t, get(t, s2, jobPath(other)).Body.String(), "checks-between"); got != noFigure {
+		t.Errorf("a run that has met no check reports %q requests between them, want the mark", got)
+	}
+}
+
+func TestJobPage_AdvisesALongerRestOnlyWhenTheChecksAreCrowded(t *testing.T) {
+	// The advice is the point of the count: checks coming every few requests are
+	// sessions asked again before they have rested, and nothing the run does
+	// about it will help — only a longer rest will. Drawn on a run that is not
+	// meeting them often, the same sentence would send an operator to slow down
+	// a job that is going well.
+	s, _, id := runningWith(t, poolFacts{
+		Checks: run.Rhythm{Met: 9, Answered: 18, Between: 2, Known: true, Crowded: true},
+	})
+	body := get(t, s, jobPath(id)).Body.String()
+	if !strings.Contains(body, `id="checks-crowded"`) {
+		t.Error("the checks come every other request and the page says nothing about the rest")
+	}
+	// Unescaped, because the advice carries an apostrophe and the template
+	// writes it as an entity.
+	if want := catalogue[LangEN]["job.checks.crowded"]; !strings.Contains(html.UnescapeString(body), want) {
+		t.Errorf("the page does not carry the advice itself:\n%s", body)
+	}
+
+	easy, _, other := runningWith(t, poolFacts{
+		Checks: run.Rhythm{Met: 9, Answered: 900, Between: 100, Known: true},
+	})
+	if body := get(t, easy, jobPath(other)).Body.String(); strings.Contains(body, `id="checks-crowded"`) {
+		t.Error("a run meeting a check every hundred requests is told to rest its sessions longer")
+	}
+}
+
+func TestJobPage_DrawsNoIdentitiesForAJobThatIsNotTheOneRunning(t *testing.T) {
+	// The pool belongs to whichever job has it now. Drawn on another job's page
+	// it would be one run's numbers read as another's — and on a finished job's,
+	// numbers from a pool that no longer exists.
+	s, v, eng := heldServer(t)
+	eng.facts = &poolFacts{Stats: blanktrail.Stats{Ports: 50}, Addresses: 15000}
+	running := enqueue(t, v, "nightly", "a", "b", "c")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == running
+	})
+
+	other, err := v.st.CreateJob(t.Context(), store.JobSpec{Name: "another", Pages: 1}, []string{"z"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if body := get(t, s, jobPath(other)).Body.String(); strings.Contains(body, `id="pool"`) {
+		t.Error("a job that is not running is drawn with the identities of the one that is")
+	}
+
+	eng.let(t, 3)
+	waitUntil(t, "the job is over", func() bool { _, ok := v.Running(); return !ok })
+	if body := get(t, s, jobPath(running)).Body.String(); strings.Contains(body, `id="pool"`) {
+		t.Error("a job that has finished still shows a pool that was taken down with it")
 	}
 }

@@ -214,6 +214,11 @@ type Runner struct {
 	// it took, so a slow run can be taken apart second by second. Nil is a run
 	// nobody is watching, which costs nothing.
 	Watch Watch
+	// Challenges, when set, counts how often this run's sessions are made to
+	// pass Google's check. Nil is a run nobody is counting, and a run whose
+	// ports are the identities counts nothing either way: the clearance a check
+	// leaves belongs to a session, and there are none.
+	Challenges *Challenges
 }
 
 // Run works through a job and reports what came of every query.

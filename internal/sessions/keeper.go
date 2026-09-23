@@ -529,6 +529,34 @@ func (k *Keeper) sweep(ctx context.Context) error {
 	return err
 }
 
+// clearanceCookie is what Google leaves on a session that has passed its check.
+//
+// It is the only sign there is. The page that comes back from a request that
+// waited for the check is the page that was asked for — nothing in it says a
+// check was met — and the cookie is issued at the moment one is passed, so a
+// value that was not there before, or one that has changed, is a check newly
+// paid for.
+const clearanceCookie = "GOOGLE_ABUSE_EXEMPTION"
+
+// Clearance is what Google's check left on this session, and empty where this
+// session has never passed one.
+//
+// Every host the jar holds is looked at rather than one. A search for Russia
+// wins its clearance on google.ru and one for Germany on google.de, and a
+// caller asking "has this session just passed a check" has no business knowing
+// which host answered it.
+func (h *Held) Clearance() string {
+	if h == nil || h.Jar == nil {
+		return ""
+	}
+	for _, c := range h.Jar.Held() {
+		if c.Name == clearanceCookie {
+			return c.Value
+		}
+	}
+	return ""
+}
+
 // Save writes the session down after an answer and keeps holding it: its
 // cookies, the port's tickets for it, and where the port goes out now.
 //
@@ -762,6 +790,31 @@ func (k *Keeper) failed(ctx context.Context, h *Held) (bool, error) {
 	s.record.Failures++
 	s.spread = k.rand()
 	return false, nil
+}
+
+// Standing is how the sessions one caller can use stand at this moment: how
+// many there are, and how many of them are resting.
+//
+// Resting is the number a screen is really asking for. A run whose sessions are
+// nearly all resting is a run that will wait for them, and whether that is the
+// rest being long or the run being wide is a question the two numbers together
+// answer. A session in somebody's hands is neither resting nor free, and is
+// counted only in the total: it is working.
+func (k *Keeper) Standing(w Want) (all, resting int) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	now := k.now()
+	for _, s := range k.known {
+		r := s.record
+		if r.Device != w.Device || !w.matches(r.Browser, r.OS, r.Release) {
+			continue
+		}
+		all++
+		if !s.held && !s.rested(w, now) {
+			resting++
+		}
+	}
+	return all, resting
 }
 
 // Count is how many sessions the keeper knows, and how many are held now.

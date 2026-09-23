@@ -55,9 +55,9 @@ func TestProxies_ShowsTheReadingOfThePoolAndBreaksTheFailuresDown(t *testing.T) 
 	}
 
 	// And the counts the fake pool reports are on it rather than a placeholder.
+	// What the pool is doing this minute — its ports, its addresses, the
+	// sessions on them — is on the page of the job it is doing it for.
 	for _, want := range []string{
-		`id="ports">6<`,
-		`id="quarantined">1<`,
 		`id="rotations">4<`,
 		`id="revivals">2<`,
 	} {

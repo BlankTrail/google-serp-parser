@@ -49,6 +49,59 @@
 {{end}}
 </section>
 
+{{/* What the identities under this job are doing. It is drawn only while the
+     job is running: the pool is raised for one job and taken down when that job
+     lets go, so there is nothing to read afterwards — and what there is belongs
+     to whichever job has it now.
+
+     It stands here rather than on the proxy screen because it is a reading of
+     this run. The proxy screen keeps what belongs to the profile: what its
+     addresses have done since the count was cleared. */}}
+{{with .Pool}}
+<section class="card" id="pool">
+<h2>{{$.T "job.pool"}}</h2>
+<dl class="metrics">
+<div class="metric"><dt class="label">{{$.T "proxies.addresses"}}</dt><dd class="figure" id="addresses">{{.Addresses}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "proxies.resting"}}</dt><dd class="figure" id="banned">{{.Resting}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "proxies.ports"}}</dt><dd class="figure" id="ports">{{.Ports}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "proxies.warm"}}</dt><dd class="figure" id="warm">{{.Warm}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "proxies.quarantined"}}</dt><dd class="figure" id="quarantined">{{.Quarantined}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "job.sessions"}}</dt><dd class="figure" id="sessions">{{.Sessions}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "job.sessions.asleep"}}</dt><dd class="figure" id="sessions-asleep">{{.Asleep}}</dd></div>
+</dl>
+<details class="help">
+<summary>{{$.T "help.what"}}</summary>
+<ul class="notes">
+<li>{{$.T "job.sessions.why"}}</li>
+</ul>
+</details>
+</section>
+
+{{/* Google's checks. How many were met is this run's own count, read off the
+     clearance each one leaves on the session that paid for it; what the solver
+     is working on is the whole service's, because the processes are licensed to
+     the machine and a job waits behind everything else asking of them. */}}
+<section class="card" id="checks">
+<h2>{{$.T "job.checks"}}</h2>
+<dl class="metrics">
+<div class="metric"><dt class="label">{{$.T "job.checks.met"}}</dt><dd class="figure" id="checks-met">{{.Met}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "job.checks.solving"}}</dt><dd class="figure" id="checks-solving">{{.Solving}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "job.checks.queued"}}</dt><dd class="figure" id="checks-queued">{{.Queued}}</dd></div>
+<div class="metric"><dt class="label">{{$.T "job.checks.between"}}</dt><dd class="figure" id="checks-between">{{.Between}}</dd></div>
+</dl>
+{{/* The advice, and only where it is advice: the checks are coming oftener than
+     a run should meet them, and what mends that is the rest a session takes
+     rather than anything the run can do about it. */}}
+{{if .Crowded}}<p class="empty" id="checks-crowded">{{$.T "job.checks.crowded"}}</p>{{end}}
+<details class="help">
+<summary>{{$.T "help.what"}}</summary>
+<ul class="notes">
+<li>{{$.T "job.checks.why"}}</li>
+</ul>
+</details>
+</section>
+{{end}}
+
 {{/* Each button is a form that sends itself, by post. Nothing here needs a
      script, and a stop behind a link is a stop anything walking the pages can
      carry out on somebody else's run. */}}

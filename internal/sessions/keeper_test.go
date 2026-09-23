@@ -1107,3 +1107,44 @@ func TestKeeper_DrawsASessionsRestBetweenTheTwoEndsTheTakerNames(t *testing.T) {
 			got.ID, s.ID)
 	}
 }
+
+func TestKeeper_StandingCountsTheSessionsACallerCanUseAndThoseStillResting(t *testing.T) {
+	// The reading a screen shows while a job runs. What it is really asking is
+	// whether the run is waiting on its sessions: nearly all of them resting is
+	// a run that will wait, and the total beside it says whether that is the
+	// rest being long or the run being wide.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	pa, pb := listPort(1, "a", "a", "b"), listPort(2, "b", "a", "b")
+	first, _ := k.Take(ctx, pa, desktop)
+	second, _ := k.Take(ctx, pb, desktop)
+	_ = first.Answered(ctx, pa)
+	_ = second.Answered(ctx, pb)
+
+	// Both have just answered, so both are resting the five seconds this want
+	// asks of them.
+	if all, resting := k.Standing(desktop); all != 2 || resting != 2 {
+		t.Errorf("%d sessions, %d resting; want both of two resting", all, resting)
+	}
+	c.pass(time.Minute)
+	if all, resting := k.Standing(desktop); all != 2 || resting != 0 {
+		t.Errorf("a minute on, %d of %d sessions are resting; want none", resting, all)
+	}
+
+	// One in somebody's hands is working rather than resting, and is still one
+	// of the sessions there are.
+	held, err := k.Take(ctx, listPort(3, "a", "a", "b"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if all, resting := k.Standing(desktop); all != 2 || resting != 0 {
+		t.Errorf("with one in hand: %d sessions, %d resting; want two and none", all, resting)
+	}
+	held.PutBack()
+
+	// And the sessions of another kind of result page are another caller's.
+	if all, _ := k.Standing(Want{Device: "mobile"}); all != 0 {
+		t.Errorf("a phone job is told it has %d sessions, want the desktop ones left out", all)
+	}
+}

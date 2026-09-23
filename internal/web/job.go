@@ -112,6 +112,50 @@ type jobSetup struct {
 	KeptRelated bool
 }
 
+// jobPool is what the identities a job is running on are doing this moment.
+//
+// It stands on the job's page rather than on the proxy screen because it is a
+// reading of this run: the pool is raised for one job and taken down when that
+// job lets go, so the numbers are about the job somebody is watching and about
+// nothing else. The proxy screen keeps what belongs to the profile — what its
+// addresses have done since the count was cleared.
+//
+// It is nil for a job that is not running. There is no pool then, and drawing
+// one would be drawing the next job's.
+type jobPool struct {
+	// Addresses is how many the list holds and Resting how many of those are
+	// out of the rotation after a failure.
+	Addresses int
+	Resting   int
+	// Ports is how many are open, Warm how many have already answered — a warm
+	// one costs seconds where a cold one costs minutes — and Quarantined how
+	// many were set aside for failing too often.
+	Ports       int
+	Warm        int
+	Quarantined int
+	// Sessions is how many sessions the program holds of this job's kind, and
+	// Asleep how many of those are resting between two of their own requests.
+	// They are the program's rather than the job's: two jobs of one kind share
+	// them.
+	Sessions int
+	Asleep   int
+	// Met is how many of Google's checks this run's sessions have been made to
+	// pass, counted off the clearance each one leaves behind.
+	Met int
+	// Solving and Queued are what the challenge solver has in hand: the whole
+	// service's, not this job's — the processes are licensed to the machine,
+	// and what a job waits behind is everything else asking of them.
+	Solving int
+	Queued  int
+	// Between is how many requests this run gets for each check it meets, or
+	// the mark where nothing has been met yet to work it out from.
+	Between string
+	// Crowded says the checks come oftener than a run should meet them, which
+	// is the sessions being asked oftener than their rest allows. The page says
+	// what to do about it.
+	Crowded bool
+}
+
 // jobPage is one job: how it was set up, how far it has got, what it has
 // captured, and what may be pressed.
 type jobPage struct {
@@ -131,6 +175,9 @@ type jobPage struct {
 	// Reshaped is the key of what to say about a change that has just been made,
 	// and empty when the reader did not arrive from one.
 	Reshaped string
+	// Pool is what the identities this job runs on are doing, and nil for a job
+	// that is not running.
+	Pool *jobPool
 	// Rows is what a parse job captured, Standings is where a position check
 	// found its site, and Verdicts is what an index check established. A job is
 	// one kind, so exactly one of the three is ever filled, and the page draws
@@ -288,6 +335,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		Sampled:   len(rows)+len(standings)+len(verdicts) >= rowsShown,
 		Shown:     rowsShown,
 		Asking:    s.asking(sum.ID),
+		Pool:      s.poolOf(sum.ID),
 		Speed:     perMinute(pace.PerMinute()),
 		PageSpeed: pageSpeed(landed, pace),
 		Formats:   export.Formats(),
@@ -302,6 +350,34 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		CanRetry: s.sup != nil && sum.PlanReady &&
 			!at.Running && !at.Queued && at.Failed > 0,
 	})
+}
+
+// poolOf is what the identities this job is running on are doing, and nothing
+// at all for a job that is not running.
+//
+// The check that it is this job running is the whole of it. A pool is raised
+// for one job and given back when that job lets go, so the pool the supervisor
+// holds belongs to whichever job has it now — drawn on another job's page, it
+// would be one run's numbers read as another's.
+func (s *Server) poolOf(job int64) *jobPool {
+	if s.sup == nil {
+		return nil
+	}
+	if running, ok := s.sup.Running(); !ok || running != job {
+		return nil
+	}
+	facts := s.sup.pool()
+	out := &jobPool{
+		Addresses: facts.Addresses, Resting: facts.Banned,
+		Ports: facts.Stats.Ports, Warm: facts.Stats.Warm, Quarantined: facts.Stats.Quarantined,
+		Sessions: facts.Sessions, Asleep: facts.SessionsResting,
+		Met: facts.Checks.Met, Solving: facts.Queue.Running, Queued: facts.Queue.Queued,
+		Between: noFigure, Crowded: facts.Checks.Crowded,
+	}
+	if facts.Checks.Known {
+		out.Between = strconv.FormatFloat(facts.Checks.Between, 'f', 1, 64)
+	}
+	return out
 }
 
 // pageSpeed is how fast pages are coming back, measured over the ones this run
