@@ -317,14 +317,15 @@ func TestProfile_OffersToWorkThroughExitsThatTerminateTLSFromTheStart(t *testing
 	}
 }
 
-func TestProfile_KeepsNamesAwayFromTheProxyFromTheStartAndAsASwitch(t *testing.T) {
-	// A fresh profile is offered with the name kept away from the proxy — the
-	// one setting that lets the service's own resolving survive an address that
-	// fails once — and a reader who turns it off gets it off.
+func TestProfile_LetsNamesThroughToTheProxyUntilASwitchSaysOtherwise(t *testing.T) {
+	// A fresh profile is offered with the service's fallback to the name left
+	// in place — the operator's choice of the more dependable default — and a
+	// reader who ticks the switch, for a provider that refuses names, gets it
+	// on; one who unticks it gets it off.
 	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 	body := getBody(t, s, proxiesAt+"?"+profileField+"=new")
-	if !strings.Contains(body, `name="vdns_strict_bypass" type="checkbox" value="1" checked`) {
-		t.Error("a fresh profile is offered handing names to the proxy")
+	if !strings.Contains(body, `name="vdns_strict_bypass" type="checkbox" value="1">`) {
+		t.Error("a fresh profile is not offered the switch unticked")
 	}
 
 	postForm(t, s, proxiesAt, url.Values{

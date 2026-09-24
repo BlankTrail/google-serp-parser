@@ -107,7 +107,8 @@ type Profile struct {
 	// StrictBypass keeps the name of what a port asks for out of the road
 	// altogether: the service resolves it and hands the proxy an address, and a
 	// request whose name it cannot resolve fails rather than going out by name.
-	// On by default; see schema_v26.sql and blanktrail.PortSpec.VDNSStrictBypass.
+	// Off by default, on for a provider that refuses names; see schema_v27.sql
+	// and blanktrail.PortSpec.VDNSStrictBypass.
 	StrictBypass bool
 	// FirstHop is the road this profile's ports take to their addresses: empty
 	// for straight there, "gw:" and the name of one of the service's gateways,
@@ -142,7 +143,7 @@ func NewProfile() Profile {
 		// name was the default until a provider was found refusing the one
 		// name a challenge cannot be passed without — see schema_v25.sql.
 		Resolver:     "",
-		StrictBypass: true,
+		StrictBypass: false,
 	}
 }
 

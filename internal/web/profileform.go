@@ -63,7 +63,7 @@ type profileForm struct {
 	Resolvers string
 	HTTP3     bool
 	// StrictBypass keeps the name of what a port asks for away from the proxy
-	// altogether. On by default; see store.Profile.
+	// altogether. Off by default; see store.Profile.
 	StrictBypass bool
 
 	// The road the ports take to their addresses: HopKind is none, a SOCKS5

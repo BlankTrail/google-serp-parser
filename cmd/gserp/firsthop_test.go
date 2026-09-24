@@ -313,6 +313,7 @@ func TestDial_OpensAListsPortsWithWhatItsProfileSaysAboutNamesAndTLS(t *testing.
 
 	prof := listProfile(t, "")
 	prof.Resolver, prof.CustomResolvers = "custom", []string{"1.1.1.1:53"}
+	prof.StrictBypass = true
 	want, err := opts.dial(t.Context(), saved, web.Wanted{
 		Profile: prof, Threads: 2, Ports: 1, Device: blanktrail.DeviceDesktop, Addresses: true})
 	if err != nil {

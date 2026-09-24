@@ -419,27 +419,42 @@ func TestProfiles_WorkThroughExitsThatTerminateTLSAfterAnUpgrade(t *testing.T) {
 	}
 }
 
-func TestProfiles_KeepTheNameAwayFromTheProxyAfterAnUpgrade(t *testing.T) {
-	// Every profile written before the column existed gets it on: without it
-	// one address that fails to answer sends the name to the proxy after all,
-	// and on a provider that refuses the name of the host Google's reCAPTCHA
-	// script comes from, that port never passes a challenge again.
-	s := testStore(t)
-	if _, err := s.db.ExecContext(t.Context(),
-		`INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
-		        threads_per_upstream, protocol, gateways, is_default, vdns_mode,
-		        js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers)
-		 VALUES('from before', 'url', 'https://example.test/list', 0, 0, 1, 'socks5', '', 0, '', 1, 0, '', 1, '', '')`,
-	); err != nil {
-		t.Fatalf("writing a profile the way an older build did: %v", err)
+func TestOpen_LetsNamesThroughToTheProxyAgainAfterTheUpgrade(t *testing.T) {
+	// The step that added the switch turned it on for every profile; the
+	// operator chose the other way round — the service's own resolving with its
+	// fallback to the name is the more dependable default — so every profile
+	// goes back to off, and a profile on a provider that refuses names is the
+	// one to turn it on for.
+	path := filepath.Join(t.TempDir(), "gserp.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
 	}
-	all, err := s.Profiles(t.Context())
+	p := NewProfile()
+	p.Name, p.Kind, p.Location, p.StrictBypass = "switched on by the step before", "url", "https://example.test/list", true
+	if _, err := s.CreateProfile(t.Context(), p); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	// The step this is about changed only rows, so the version is all there is
+	// to wind back.
+	if _, err := s.db.ExecContext(t.Context(), `PRAGMA user_version = 26`); err != nil {
+		t.Fatalf("winding back to version 26: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a version-26 database: %v", err)
+	}
+	defer func() { _ = again.Close() }()
+	all, err := again.Profiles(t.Context())
 	if err != nil {
 		t.Fatalf("Profiles: %v", err)
 	}
 	for _, one := range all {
-		if one.Name == "from before" && !one.StrictBypass {
-			t.Error("a profile written before the column hands names to the proxy")
+		if one.StrictBypass {
+			t.Errorf("profile %q still keeps names away from the proxy after the upgrade", one.Name)
 		}
 	}
 }

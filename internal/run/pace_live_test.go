@@ -224,7 +224,7 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	// such exits with 526.
 	spec.AllowMITMUpstream = envInt("GSERP_PACE_MITM", 1) != 0
 	spec.Resolver = envOr("GSERP_PACE_RESOLVER", "")
-	spec.VDNSStrictBypass = envInt("GSERP_PACE_STRICT", 1) != 0
+	spec.VDNSStrictBypass = envInt("GSERP_PACE_STRICT", 0) != 0
 	logf(t, "MEASUREMENT ports allow exits terminating TLS: %v; names resolved by %q, never handed to the proxy: %v",
 		spec.AllowMITMUpstream, spec.Resolver, spec.VDNSStrictBypass)
 
