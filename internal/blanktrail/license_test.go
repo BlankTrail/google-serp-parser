@@ -197,3 +197,27 @@ func TestGateways_ReadsAMeasurementApartFromNoMeasurement(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckResult_TellsAnExitThatTerminatesTLSFromOneThatDoesNot(t *testing.T) {
+	// Two answers that are both "ok" and mean different things to whoever
+	// asked: one is an exit that carried the request to the site, the other is
+	// an exit that opened the connection itself and presented a certificate of
+	// its own. Read by the text of the detail they would be one thing, and the
+	// list check would report seven addresses in ten as plainly usable when a
+	// port refuses every one of them unless told otherwise.
+	plain := CheckResult{OK: true, Code: "ut.http_ok", Detail: "200 via …"}
+	if plain.Intercepts() {
+		t.Error("an exit that carried the request is read as one that terminated TLS")
+	}
+	mitm := CheckResult{OK: true, Code: "ut.http_ok_mitm", Detail: "200 via …",
+		Params: map[string]any{"issuer": `CN=None, O="None, LLC", L=Dallas`}}
+	if !mitm.Intercepts() {
+		t.Error("an exit that terminated TLS is read as a plain one")
+	}
+	if got := mitm.Issuer(); got != `CN=None, O="None, LLC", L=Dallas` {
+		t.Errorf("the issuer reads %q, want what the service reported", got)
+	}
+	if got := plain.Issuer(); got != "" {
+		t.Errorf("an answer carrying no issuer reads %q, want nothing", got)
+	}
+}

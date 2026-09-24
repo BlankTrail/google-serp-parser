@@ -479,6 +479,9 @@
 <h3>{{$.T "proxies.check.through"}}{{if .Gateway}} — {{.Gateway}}{{end}}</h3>
 <dl class="figures" id="check-through">
 <div><dt>{{$.T "proxies.check.ok"}}</dt><dd>{{.Through.OK}} / {{.Through.Asked}}{{if .Through.Asked}} — {{.Through.Share}}%{{end}}</dd></div>
+{{/* Part of the answered, counted apart: the switch above decides whether a
+     port may use them at all. */}}
+{{if .Through.Intercepts}}<div><dt>{{$.T "proxies.check.mitm"}}</dt><dd>{{.Through.Intercepts}}</dd></div>{{end}}
 <div><dt>{{$.T "proxies.check.refused"}}</dt><dd>{{.Through.Refused}}</dd></div>
 {{if .Through.Broke}}<div><dt>{{$.T "proxies.check.broke"}}</dt><dd>{{.Through.Broke}}</dd></div>{{end}}
 <div><dt>{{$.T "proxies.check.each"}}</dt><dd>{{.Through.Each}}</dd></div>
@@ -487,6 +490,7 @@
 <h3>{{$.T "proxies.check.direct"}}</h3>
 <dl class="figures" id="check-direct">
 <div><dt>{{$.T "proxies.check.ok"}}</dt><dd>{{.Direct.OK}} / {{.Direct.Asked}}{{if .Direct.Asked}} — {{.Direct.Share}}%{{end}}</dd></div>
+{{if .Direct.Intercepts}}<div><dt>{{$.T "proxies.check.mitm"}}</dt><dd>{{.Direct.Intercepts}}</dd></div>{{end}}
 <div><dt>{{$.T "proxies.check.refused"}}</dt><dd>{{.Direct.Refused}}</dd></div>
 {{if .Direct.Broke}}<div><dt>{{$.T "proxies.check.broke"}}</dt><dd>{{.Direct.Broke}}</dd></div>{{end}}
 <div><dt>{{$.T "proxies.check.each"}}</dt><dd>{{.Direct.Each}}</dd></div>

@@ -54,6 +54,12 @@ type roadTally struct {
 	OK      int
 	Refused int
 	Broke   int
+	// Intercepts counts the answers that came back from an exit which opened
+	// the connection to the site itself and presented a certificate of its own.
+	// They are part of OK — the road carries traffic — and they are counted
+	// apart because whether a port may use them is a switch on this same
+	// screen: with it off they answer a port with a refusal and nothing else.
+	Intercepts int
 	// Took is the time spent along this road, so an address can be priced
 	// against the other road rather than only counted.
 	Took time.Duration
@@ -151,12 +157,13 @@ type checkReading struct {
 
 // checkRoad is one road, drawn.
 type checkRoad struct {
-	Asked   int
-	OK      int
-	Refused int
-	Broke   int
-	Share   int
-	Each    string
+	Asked      int
+	OK         int
+	Refused    int
+	Broke      int
+	Intercepts int
+	Share      int
+	Each       string
 }
 
 // Reading is the check as it stands this instant.
@@ -187,7 +194,8 @@ func (c *listCheck) Reading() checkReading {
 
 func roadShown(t roadTally) checkRoad {
 	return checkRoad{Asked: t.Asked, OK: t.OK, Refused: t.Refused, Broke: t.Broke,
-		Share: t.share(), Each: t.each().Round(time.Millisecond).String()}
+		Intercepts: t.Intercepts, Share: t.share(),
+		Each: t.each().Round(time.Millisecond).String()}
 }
 
 // Running says a check is going on, which is what makes the screen ask for
@@ -319,7 +327,7 @@ func (c *listCheck) along(ctx context.Context, cl checksEgress, ups []blanktrail
 				cancel()
 				took := time.Since(at)
 
-				ok := verdictOf(res)
+				ok, intercepts := verdictOf(res)
 				c.mu.Lock()
 				into.Asked++
 				into.Took += took
@@ -329,6 +337,9 @@ func (c *listCheck) along(ctx context.Context, cl checksEgress, ups []blanktrail
 					into.Broke++
 				case ok:
 					into.OK++
+					if intercepts {
+						into.Intercepts++
+					}
 				default:
 					into.Refused++
 				}
@@ -358,16 +369,20 @@ func (c *listCheck) along(ctx context.Context, cl checksEgress, ups []blanktrail
 // An answer with no checks in it is not a pass. The service answers that way
 // when it skipped everything it was asked, and reading it as success would
 // report a list nobody tested as a list that works.
-func verdictOf(res map[string]blanktrail.CheckResult) bool {
+func verdictOf(res map[string]blanktrail.CheckResult) (ok, intercepts bool) {
 	if len(res) == 0 {
-		return false
+		return false, false
 	}
+	ok = true
 	for _, one := range res {
 		if !one.OK {
-			return false
+			ok = false
+		}
+		if one.Intercepts() {
+			intercepts = true
 		}
 	}
-	return true
+	return ok, intercepts
 }
 
 // spread takes want addresses from across the whole list rather than from the

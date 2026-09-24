@@ -170,10 +170,41 @@ func (c *Client) Gateways(ctx context.Context) (GatewayList, error) {
 }
 
 // CheckResult is the verdict of one pre-flight egress check.
+//
+// Code is the verdict in a word the service and this program both know, and it
+// carries what Detail cannot: two answers can both be "ok" and mean different
+// things to whoever asked. Params holds whatever that word needs — the issuer
+// of a certificate, for the one below.
 type CheckResult struct {
-	OK      bool   `json:"ok"`
-	Skipped bool   `json:"skipped"`
-	Detail  string `json:"detail"`
+	OK      bool           `json:"ok"`
+	Skipped bool           `json:"skipped"`
+	Detail  string         `json:"detail"`
+	Code    string         `json:"code"`
+	Params  map[string]any `json:"params"`
+}
+
+// checkMITM is the verdict for an exit that answered and terminated TLS itself
+// on the way — it opened the connection to the site and presented a certificate
+// of its own.
+//
+// It is not a failure and the service does not report one: the road carries
+// traffic. What it decides is whether a port may use it, which is the switch on
+// the profile — and until the service named this, the two could not be told
+// apart from outside. Measured on the live list the night it was named: seven
+// addresses in ten answered this way, and a port that refuses them answers 526
+// on every one.
+const checkMITM = "ut.http_ok_mitm"
+
+// Intercepts says the exit answered but terminated TLS itself.
+func (r CheckResult) Intercepts() bool { return r.Code == checkMITM }
+
+// Issuer is who signed the certificate such an exit presented, as the service
+// reported it, and empty where it said nothing.
+func (r CheckResult) Issuer() string {
+	if who, ok := r.Params["issuer"].(string); ok {
+		return who
+	}
+	return ""
 }
 
 // TestEgress probes an egress before any port is opened. Valid checks are

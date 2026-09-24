@@ -29,6 +29,8 @@ type askedCheck struct {
 	// hold, when set, is how long each answer takes, so a test can watch two
 	// questions overlap.
 	hold time.Duration
+	// code, when set, is the verdict word each answer carries.
+	code func(eg blanktrail.Egress) string
 }
 
 type askedOne struct {
@@ -63,7 +65,11 @@ func (a *askedCheck) TestEgress(ctx context.Context, eg blanktrail.Egress, hop b
 	if err != nil {
 		return nil, err
 	}
-	return map[string]blanktrail.CheckResult{"http": {OK: ok, Detail: "said"}}, nil
+	out := blanktrail.CheckResult{OK: ok, Detail: "said"}
+	if a.code != nil {
+		out.Code = a.code(eg)
+	}
+	return map[string]blanktrail.CheckResult{"http": out}, nil
 }
 
 // alongEach is how many questions took each road.
@@ -315,5 +321,31 @@ func TestProxies_OffersTheCheckOnAProfileNobodyHasCheckedYet(t *testing.T) {
 	}
 	if strings.Contains(body, `id="check-direct"`) {
 		t.Error("the screen draws a reading of a check nobody has made")
+	}
+}
+
+func TestListCheck_CountsTheAnswersThatCameFromAnExitTerminatingTLS(t *testing.T) {
+	// The verdict that settled a night of measurements: an exit can answer and
+	// still be one a port refuses, because it opens the connection to the site
+	// itself and presents its own certificate. It is part of what answered —
+	// the road carries traffic — and it is counted apart, because whether a
+	// port may use it is the switch on this same screen.
+	cl := &askedCheck{answer: func(eg blanktrail.Egress, _ blanktrail.FirstHop) (bool, error) {
+		return true, nil
+	}, code: func(eg blanktrail.Egress) string {
+		if strings.HasSuffix(eg.Upstream, ":1000") || strings.HasSuffix(eg.Upstream, ":1001") {
+			return "ut.http_ok_mitm"
+		}
+		return "ut.http_ok"
+	}}
+	var check listCheck
+	got := ranCheck(t, &check, cl, listCheckAsk{Profile: profileWithHop(""), Sample: 5, Threads: 5}, listOf(5))
+
+	if got.Direct.OK != 5 {
+		t.Fatalf("the reading counts %d answered of five, want all of them: they all answered", got.Direct.OK)
+	}
+	if got.Direct.Intercepts != 2 {
+		t.Errorf("%d of the answers are counted as coming from an exit that terminates TLS, want the two",
+			got.Direct.Intercepts)
 	}
 }

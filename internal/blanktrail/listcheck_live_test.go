@@ -88,8 +88,10 @@ func TestLiveList_SaysHowMuchOfTheListAnswersWithAndWithoutTheFirstHop(t *testin
 	// addresses that have since been handed to somebody else — and the two arms
 	// would differ by the minutes between them rather than by the road.
 	type verdict struct {
-		ok   bool
-		says string
+		ok     bool
+		mitm   bool
+		says   string
+		issuer string
 	}
 	ask := func(ctx context.Context, eg Egress, through FirstHop) (verdict, time.Duration) {
 		at := time.Now()
@@ -104,14 +106,20 @@ func TestLiveList_SaysHowMuchOfTheListAnswersWithAndWithoutTheFirstHop(t *testin
 				out.ok = false
 				out.says = shapeOf(one.Detail)
 			}
+			if one.Intercepts() {
+				out.mitm = true
+				if who := one.Issuer(); who != "" {
+					out.issuer = who
+				}
+			}
 		}
 		return out, took
 	}
 
 	type road struct {
-		ok, no int
-		took   time.Duration
-		why    map[string]int
+		ok, no, mitm int
+		took         time.Duration
+		why          map[string]int
 	}
 	roads := map[string]*road{
 		"straight to the address": {why: map[string]int{}},
@@ -139,9 +147,16 @@ func TestLiveList_SaysHowMuchOfTheListAnswersWithAndWithoutTheFirstHop(t *testin
 					mu.Lock()
 					r := roads[leg.name]
 					r.took += took
-					if got.ok {
+					switch {
+					case got.ok:
 						r.ok++
-					} else {
+						if got.mitm {
+							r.mitm++
+							if got.issuer != "" {
+								r.why["answered, terminating TLS itself, signed by "+got.issuer]++
+							}
+						}
+					default:
 						r.no++
 						r.why[got.says]++
 					}
@@ -163,8 +178,10 @@ func TestLiveList_SaysHowMuchOfTheListAnswersWithAndWithoutTheFirstHop(t *testin
 		if asked == 0 {
 			continue
 		}
-		t.Logf("MEASUREMENT %s: %d of %d answered (%d%%), %d did not; %v an address",
-			name, r.ok, asked, 100*r.ok/asked, r.no, (r.took / time.Duration(asked)).Round(time.Millisecond))
+		t.Logf("MEASUREMENT %s: %d of %d answered (%d%%), %d of those terminate TLS themselves, "+
+			"%d did not answer; %v an address",
+			name, r.ok, asked, 100*r.ok/asked, r.mitm, r.no,
+			(r.took / time.Duration(asked)).Round(time.Millisecond))
 		for _, one := range byCount(r.why) {
 			t.Logf("MEASUREMENT     %4d × %s", one.n, one.what)
 		}
