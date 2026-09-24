@@ -122,7 +122,13 @@ var pacePhrases = []string{
 func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	ctx := context.Background()
 	control, key, listURL := liveEnv(t)
-	ups := paceAddresses(ctx, t, listURL)
+	// A run on the service's own gateways goes out through them instead of a
+	// list: GSERP_PACE_GATEWAYS names them, separated by commas, or says "all".
+	onGateways := envOr("GSERP_PACE_GATEWAYS", "")
+	var ups []blanktrail.Upstream
+	if onGateways == "" {
+		ups = paceAddresses(ctx, t, listURL)
+	}
 	// Who resolves the name. Read as socks5 the service resolves it and hands
 	// the proxy an address; read as socks5h the proxy is handed the name and
 	// resolves it itself — which is the exit's own view of where Google is, and
@@ -165,7 +171,7 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 		UpTo:  time.Duration(envInt("GSERP_PACE_REST_UPTO", int(sessions.DefaultRestUpTo/time.Second))) * time.Second}
 	logf(t, "MEASUREMENT a session rests %v to %v between two of its requests", want.Pause, want.UpTo)
 	spec := blanktrail.DefaultPortSpec()
-	if envInt("GSERP_PACE_HOP", 1) != 0 {
+	if envInt("GSERP_PACE_HOP", 1) != 0 && onGateways == "" {
 		spec.FirstHop = liveFirstHop(t)
 	}
 	switch {
@@ -241,13 +247,24 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 		defer rotor.Close()
 		logf(t, "MEASUREMENT the list is read again every %v, as a job reads it", every)
 	}
+	channel := blanktrail.NewListChannel("list", rotor)
+	if onGateways != "" {
+		names := gatewaysNamed(ctx, t, client, onGateways)
+		logf(t, "MEASUREMENT on %d of the service's gateways, %.1f threads to a gateway: %s",
+			len(names), float64(paceThreads)/float64(len(names)), strings.Join(names, ", "))
+		channel = blanktrail.NewGatewayListChannel("gateways",
+			blanktrail.NewStaticRotor(blanktrail.GatewayUpstreams(names), blanktrail.WithRest(ban)))
+	}
 	attempts := &attemptTally{}
+	exits := &exitTally{}
 	p, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 		Client: client, Threads: paceThreads, PortsPerThread: 1, Spec: spec, CA: pre.CA,
-		Channels: []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)},
+		Channels: []blanktrail.Channel{channel},
 		Sessions: true, Choose: k.Choose, MaxPerUpstream: perUpstream,
 		ReviveAfter: time.Minute, WaitForIdentity: true, NoKeepAlives: true,
+		OnLease: exits.leased,
 		Trace: func(tr blanktrail.RequestTrace) {
+			exits.note(tr)
 			if n := attempts.note(tr); most > 0 && n >= most-paceThreads {
 				capped.Do(func() {
 					logf(t, "MEASUREMENT %d requests have gone out: the run stops here", n)
@@ -368,6 +385,9 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 		if after, err := solverStats(ctx); err == nil {
 			logf(t, "MEASUREMENT the solver, for this run: %s", after.since(solvedBefore))
 		}
+	}
+	for _, line := range exits.reading() {
+		logf(t, "MEASUREMENT   %s", line)
 	}
 
 	if pages == 0 {
@@ -618,6 +638,120 @@ var addressLike = regexp.MustCompile(`[0-9a-z.\-]+:[0-9]+`)
 
 func hostless(s string) string {
 	return addressLike.ReplaceAllString(s, "«address»")
+}
+
+// gatewaysNamed is the gateways a run goes out through: every one the service
+// holds, or the ones named, in the order given. A name the service does not
+// hold stops the run, since a run on fewer gateways than it says measures
+// something else.
+func gatewaysNamed(ctx context.Context, t *testing.T, client *blanktrail.Client, named string) []string {
+	t.Helper()
+	list, err := client.Gateways(ctx)
+	if err != nil {
+		fatalf(t, "asking the service for its gateways: %v", err)
+	}
+	if !list.Available {
+		t.Skipf("the service cannot raise a tunnel through a gateway: %s", list.Reason)
+	}
+	held := map[string]bool{}
+	var all []string
+	for _, g := range list.Gateways {
+		held[g.Name] = true
+		all = append(all, g.Name)
+	}
+	if named == "all" {
+		return all
+	}
+	var out []string
+	for _, name := range strings.Split(named, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if !held[name] {
+			fatalf(t, "the service holds no gateway named %q", name)
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// exitTally is what each gateway carried: the requests that went out through
+// it, how they came back, and how long they took. It is what says how many
+// threads one exit bears before Google turns on it — an exit that is being
+// turned on answers more and more of its requests slowly, with a challenge
+// solved, and then not at all.
+type exitTally struct {
+	mu sync.Mutex
+	// through is the gateway each port went out through at its last lease.
+	through map[int]string
+	by      map[string]*exitCounts
+}
+
+type exitCounts struct {
+	quick, solved, other, failed int
+	took                         []time.Duration
+}
+
+// waitedAnswer is where an answer stops being a plain one: a search that met no
+// challenge comes back in a few seconds, and one that met a challenge waited
+// for it to be solved, which takes tens.
+const waitedAnswer = 12 * time.Second
+
+func (e *exitTally) leased(l blanktrail.LeaseTrace) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.through == nil {
+		e.through = map[int]string{}
+	}
+	e.through[l.Port] = l.Gateway
+}
+
+func (e *exitTally) note(tr blanktrail.RequestTrace) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	gw := e.through[tr.Port]
+	if gw == "" {
+		return
+	}
+	if e.by == nil {
+		e.by = map[string]*exitCounts{}
+	}
+	c := e.by[gw]
+	if c == nil {
+		c = &exitCounts{}
+		e.by[gw] = c
+	}
+	switch {
+	case tr.Err != nil:
+		c.failed++
+	case tr.Status == http.StatusOK && tr.Total < waitedAnswer:
+		c.quick++
+	case tr.Status == http.StatusOK:
+		c.solved++
+	default:
+		c.other++
+	}
+	c.took = append(c.took, tr.Total)
+}
+
+// reading is one line per gateway, the busiest first.
+func (e *exitTally) reading() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	names := make([]string, 0, len(e.by))
+	for name := range e.by {
+		names = append(names, name)
+	}
+	total := func(c *exitCounts) int { return c.quick + c.solved + c.other + c.failed }
+	sort.Slice(names, func(i, j int) bool { return total(e.by[names[i]]) > total(e.by[names[j]]) })
+	var out []string
+	for _, name := range names {
+		c := e.by[name]
+		out = append(out, fmt.Sprintf("%-40s %4d requests: %4d answered quickly, %3d after a wait (a challenge), "+
+			"%3d other statuses, %3d never arrived %s", name, total(c), c.quick, c.solved, c.other, c.failed, spread(c.took)))
+	}
+	return out
 }
 
 // paceAddresses is the list the run goes out through: the one the program
