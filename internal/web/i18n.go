@@ -128,6 +128,8 @@ var catalogue = map[Lang]map[string]string{
 
 		"job.title":            "Job",
 		"job.progress":         "Progress",
+		"job.speed":            "Queries/min now",
+		"job.speed.pages":      "Pages/min now",
 		"job.reshape":          "Save these settings",
 		"job.reshape.why":      "Applies at the job's next start — after a stop, or when the queue reaches it. Ports already open are not changed.",
 		"job.reshape.done":     "Saved. The job will come up on this next time it starts.",
@@ -694,6 +696,8 @@ var catalogue = map[Lang]map[string]string{
 
 		"job.title":            "Задание",
 		"job.progress":         "Ход",
+		"job.speed":            "Запр./мин сейчас",
+		"job.speed.pages":      "Стр./мин сейчас",
 		"job.reshape":          "Сохранить настройки",
 		"job.reshape.why":      "Применится при следующем запуске задания — после остановки или когда до него дойдёт очередь. Уже открытые порты не меняются.",
 		"job.reshape.done":     "Сохранено. В следующий раз задание поднимется на этом.",

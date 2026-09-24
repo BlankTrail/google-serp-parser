@@ -453,6 +453,59 @@ h2 {
 	background: var(--accent);
 }
 
+/* The job's first reading is one strip. Each label stays with its value as
+   the strip wraps, including an optional repeat count or a long state. */
+.job-summary .progress-bar {
+	margin-bottom: 0.75rem;
+}
+
+.job-summary-stats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem 0;
+	margin: 0 -0.5rem;
+}
+
+.job-summary-stats > div {
+	border-inline-start: var(--hairline-width) solid var(--hairline);
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+	padding: 0 0.5rem;
+}
+
+.job-summary-stats > div:first-child {
+	border-inline-start-color: transparent;
+}
+
+.job-summary-stats .label {
+	margin-bottom: 0.15rem;
+}
+
+.job-summary-stats abbr {
+	text-decoration: none;
+}
+
+.job-summary-stats .figure {
+	font-size: 1.25rem;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.job-summary-stats .job-summary-state {
+	flex-grow: 2;
+}
+
+.job-summary-stats .state {
+	line-height: 1.75;
+	overflow-wrap: anywhere;
+}
+
+.job-summary > .field {
+	margin-top: 0.75rem;
+}
+
 .actions {
 	display: flex;
 	flex-wrap: wrap;

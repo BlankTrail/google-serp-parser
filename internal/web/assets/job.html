@@ -5,35 +5,35 @@
      comes back when it is asked for again — so a figure and the results beside
      it are never from two different moments. A reader with no script reads the
      job as it stood when the page was drawn. */}}
-<section class="card" data-job="{{.Progress.ID}}" id="progress">
+<section class="card job-summary" data-job="{{.Progress.ID}}" id="progress">
 {{/* The one thing on this screen filled with colour. It is drawn only for a job
      that has queries to get through: a bar with nothing behind it is a bar that
      says the job is at the beginning of nothing. */}}
 {{if .Progress.Total}}
 <progress class="progress-bar" max="{{.Progress.Total}}" value="{{.Progress.Done}}" aria-label="{{.T "job.progress"}}" id="bar"></progress>
 {{end}}
-<dl class="metrics">
-<div class="metric"><dt class="label">{{.T "jobs.queries"}}</dt><dd class="figure" id="count-total">{{.Progress.Total}}</dd></div>
-<div class="metric"><dt class="label">{{.T "jobs.done"}}</dt><dd class="figure" id="count-done">{{.Progress.Done}}</dd></div>
-<div class="metric"><dt class="label">{{.T "jobs.failed"}}</dt><dd class="figure" id="count-failed">{{.Progress.Failed}}</dd></div>
-<div class="metric"><dt class="label">{{.T "jobs.left"}}</dt><dd class="figure" id="count-pending">{{.Progress.Pending}}</dd></div>
+<dl class="job-summary-stats">
+<div><dt class="label">{{.T "jobs.queries"}}</dt><dd class="figure" id="count-total">{{.Progress.Total}}</dd></div>
+<div><dt class="label">{{.T "jobs.done"}}</dt><dd class="figure" id="count-done">{{.Progress.Done}}</dd></div>
+<div><dt class="label">{{.T "jobs.failed"}}</dt><dd class="figure" id="count-failed">{{.Progress.Failed}}</dd></div>
+<div><dt class="label">{{.T "jobs.left"}}</dt><dd class="figure" id="count-pending">{{.Progress.Pending}}</dd></div>
 {{/* Drawn only for a job that drops repeats. A figure reading nought on every
      other job would be a number asking to be explained, and there would be
      nothing to explain. */}}
-{{if .Filtering}}<div class="metric"><dt class="label">{{.T "jobs.dropped"}}</dt><dd class="figure" id="count-dropped">{{.Progress.Dropped}}</dd></div>{{end}}
+{{if .Filtering}}<div><dt class="label">{{.T "jobs.dropped"}}</dt><dd class="figure" id="count-dropped">{{.Progress.Dropped}}</dd></div>{{end}}
 {{/* What the job has actually collected. It stands among the counts of queries
      rather than under the table of results, because it is the figure somebody
      watching a run is waiting on: a job is run to collect something, and
      "eleven thousand queries done" says nothing about how much of it there is.
      It is counted afresh with every redraw of this page, like every other
      number on it, so it and the rows below it are never from two moments. */}}
-<div class="metric"><dt class="label">{{.T "jobs.collected"}}</dt><dd class="figure" id="count-collected">{{.Collected}}</dd></div>
+<div><dt class="label">{{.T "jobs.collected"}}</dt><dd class="figure" id="count-collected">{{.Collected}}</dd></div>
 {{/* How fast it is going now, measured over the last few queries that settled
      rather than averaged over the whole run: on a job that spent its first hour
      crawling, an average answers wrongly for the rest of the day. */}}
-<div class="metric"><dt class="label">{{.T "state.speed"}}</dt><dd class="figure" id="run-speed">{{.Speed}}</dd></div>
-<div class="metric"><dt class="label">{{.T "state.speed.pages"}}</dt><dd class="figure" id="run-page-speed">{{.PageSpeed}}</dd></div>
-<div class="metric"><dt class="label">{{.T "jobs.state"}}</dt><dd class="state" id="state">{{.T .State}}</dd></div>
+<div><dt class="label"><abbr title="{{.T "state.speed"}}">{{.T "job.speed"}}</abbr></dt><dd class="figure" id="run-speed">{{.Speed}}</dd></div>
+<div><dt class="label"><abbr title="{{.T "state.speed.pages"}}">{{.T "job.speed.pages"}}</abbr></dt><dd class="figure" id="run-page-speed">{{.PageSpeed}}</dd></div>
+<div class="job-summary-state"><dt class="label">{{.T "jobs.state"}}</dt><dd class="state" id="state">{{.T .State}}</dd></div>
 </dl>
 {{/* What one thread is fetching this second. It is in a box rather than in a
      line of text so the whole address can be selected and copied in one go, and
