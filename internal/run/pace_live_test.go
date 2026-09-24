@@ -26,6 +26,7 @@ package run
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -43,6 +44,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 // The run measured here is the shape of the job that is slow: as many threads,
@@ -120,7 +122,7 @@ var pacePhrases = []string{
 func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	ctx := context.Background()
 	control, key, listURL := liveEnv(t)
-	ups := addressList(ctx, t, listURL)
+	ups := paceAddresses(ctx, t, listURL)
 	// Who resolves the name. Read as socks5 the service resolves it and hands
 	// the proxy an address; read as socks5h the proxy is handed the name and
 	// resolves it itself — which is the exit's own view of where Google is, and
@@ -150,8 +152,13 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	defer st.Close()
 
 	k := sessions.NewKeeper(st)
+	// The rest a session takes between two of its requests. It decides how many
+	// sessions a speed needs — at a minute and a half, a thousand pages a minute
+	// wants about sixteen hundred of them — so it is a knob of its own.
 	want := sessions.Want{Device: blanktrail.DeviceDesktop,
-		Pause: sessions.DefaultRest, UpTo: sessions.DefaultRestUpTo}
+		Pause: time.Duration(envInt("GSERP_PACE_REST", int(sessions.DefaultRest/time.Second))) * time.Second,
+		UpTo:  time.Duration(envInt("GSERP_PACE_REST_UPTO", int(sessions.DefaultRestUpTo/time.Second))) * time.Second}
+	logf(t, "MEASUREMENT a session rests %v to %v between two of its requests", want.Pause, want.UpTo)
 	spec := blanktrail.DefaultPortSpec()
 	if envInt("GSERP_PACE_HOP", 1) != 0 {
 		spec.FirstHop = liveFirstHop(t)
@@ -190,7 +197,29 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 		spec.VDNSMode = mode
 		logf(t, "MEASUREMENT names are resolved with vdns_mode=%q", mode)
 	}
+	// The two answers a profile carries about exits that terminate TLS and
+	// about who resolves a name. Left off, this measures a road the job does
+	// not take: seven addresses in ten on this list answer a port that refuses
+	// such exits with 526.
+	spec.AllowMITMUpstream = envInt("GSERP_PACE_MITM", 1) != 0
+	spec.Resolver = envOr("GSERP_PACE_RESOLVER", "")
+	logf(t, "MEASUREMENT ports allow exits terminating TLS: %v; names resolved by %q",
+		spec.AllowMITMUpstream, spec.Resolver)
 
+	// The run is stopped by the clock rather than by the work: what is wanted is
+	// a reading of a run at its steady speed, not a run to the end of a list.
+	runCtx, stop := context.WithTimeout(ctx, paceFor)
+	defer stop()
+
+	// most is how many requests the run may put through its ports in all, for a
+	// list paid for by what goes through it. The run is stopped once that many
+	// less one per thread have gone out, so the ones still in flight end inside
+	// the figure rather than past it.
+	most := envInt("GSERP_PACE_MOST", 0)
+	if most > 0 {
+		logf(t, "MEASUREMENT the run stops before %d requests have gone through its ports", most)
+	}
+	var capped sync.Once
 	attempts := &attemptTally{}
 	p, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 		Client: client, Threads: paceThreads, PortsPerThread: 1, Spec: spec, CA: pre.CA,
@@ -198,7 +227,14 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 			blanktrail.NewStaticRotor(ups, blanktrail.WithRest(ban)))},
 		Sessions: true, Choose: k.Choose, MaxPerUpstream: perUpstream,
 		ReviveAfter: time.Minute, WaitForIdentity: true, NoKeepAlives: true,
-		Trace: attempts.note,
+		Trace: func(tr blanktrail.RequestTrace) {
+			if n := attempts.note(tr); most > 0 && n >= most-paceThreads {
+				capped.Do(func() {
+					logf(t, "MEASUREMENT %d requests have gone out: the run stops here", n)
+					stop()
+				})
+			}
+		},
 	})
 	if err != nil {
 		fatalf(t, "opening the pool: %v", err)
@@ -228,11 +264,21 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	for i, ph := range pacePhrases {
 		qs[i] = google.Query{Text: ph, Country: "ru", Language: "ru"}
 	}
+	// A run at a thousand pages a minute holds a session per query in flight,
+	// and a hundred and forty phrases cap it at a hundred and forty sessions —
+	// about a hundred pages a minute at the rest above, whatever else is true.
+	// So a measurement of speed takes its phrases from a real job's list.
+	if job := envInt("GSERP_PACE_JOB", 0); job > 0 {
+		qs = phrasesOf(t, job, envInt("GSERP_PACE_PHRASES", 3000))
+		logf(t, "MEASUREMENT %d phrases taken from job %d", len(qs), job)
+	}
 
-	// The run is stopped by the clock rather than by the work: what is wanted is
-	// a reading of a run at its steady speed, not a run to the end of a list.
-	runCtx, stop := context.WithTimeout(ctx, paceFor)
-	defer stop()
+	// What the service's solver had done before the run, so what it did for the
+	// run can be read as the difference.
+	solvedBefore, solverErr := solverStats(ctx)
+	if solverErr != nil {
+		logf(t, "MEASUREMENT the solver's counts could not be read: %v", solverErr)
+	}
 
 	pages := 0
 	var mu sync.Mutex
@@ -298,6 +344,11 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	rhythm := counting.Rhythm()
 	logf(t, "MEASUREMENT checks met %d, requests between them %.1f (over %d counted)",
 		rhythm.Met, rhythm.Between, rhythm.Asked)
+	if solverErr == nil {
+		if after, err := solverStats(ctx); err == nil {
+			logf(t, "MEASUREMENT the solver, for this run: %s", after.since(solvedBefore))
+		}
+	}
 
 	if pages == 0 {
 		fatalf(t, "nothing came back at all, so there is no speed to take apart")
@@ -374,7 +425,9 @@ type attemptTally struct {
 	first    []time.Duration
 }
 
-func (a *attemptTally) note(tr blanktrail.RequestTrace) {
+// note counts one attempt and says how many there have been, this one among
+// them.
+func (a *attemptTally) note(tr blanktrail.RequestTrace) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.statuses == nil {
@@ -413,6 +466,7 @@ func (a *attemptTally) note(tr blanktrail.RequestTrace) {
 	if tr.FirstByte > 0 {
 		a.first = append(a.first, tr.FirstByte)
 	}
+	return a.n
 }
 
 func (a *attemptTally) reading() string {
@@ -544,4 +598,132 @@ var addressLike = regexp.MustCompile(`[0-9a-z.\-]+:[0-9]+`)
 
 func hostless(s string) string {
 	return addressLike.ReplaceAllString(s, "«address»")
+}
+
+// paceAddresses is the list the run goes out through: the one the program
+// reads, or a file named by GSERP_PACE_LIST_FILE — a list put together for one
+// measurement, such as the sticky exits of a residential provider, one line per
+// exit. Every address in such a file is kept out of the log whole and in its
+// parts, because there the login and the password are the account.
+func paceAddresses(ctx context.Context, t *testing.T, listURL string) []blanktrail.Upstream {
+	t.Helper()
+	path := envOr("GSERP_PACE_LIST_FILE", "")
+	if path == "" {
+		return addressList(ctx, t, listURL)
+	}
+	ups, bad, err := blanktrail.Source{Kind: "file", Location: path, DefaultScheme: "socks5"}.Load(ctx)
+	for _, u := range ups {
+		keepOut(u.URL(), u.User, u.Pass, u.Host)
+	}
+	if err != nil {
+		fatalf(t, "reading the list file: %v", err)
+	}
+	logf(t, "MEASUREMENT list: %d addresses from a file, %d lines unusable", len(ups), len(bad))
+	return ups
+}
+
+// solverCounts is what the service's challenge solver has done since it
+// started: every attempt, the ones solved, by the kind of challenge, and why
+// the rest failed.
+type solverCounts struct {
+	Attempts int `json:"total_attempts"`
+	Solved   int `json:"total_solved"`
+	Families []struct {
+		Family   string `json:"family"`
+		Attempts int    `json:"attempts"`
+		Solved   int    `json:"solved"`
+	} `json:"families"`
+	FailReasons []struct {
+		Reason string `json:"reason"`
+		Count  int    `json:"count"`
+	} `json:"fail_reasons"`
+}
+
+// solverStats reads the solver's counts, the way portsAsOpened reads the ports.
+func solverStats(ctx context.Context) (solverCounts, error) {
+	base := strings.TrimRight(os.Getenv("BLANKTRAIL_URL"), "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/solver/stats", nil)
+	if err != nil {
+		return solverCounts{}, err
+	}
+	req.Header.Set("X-API-Key", os.Getenv("BLANKTRAIL_API_KEY"))
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return solverCounts{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out solverCounts
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return solverCounts{}, err
+	}
+	return out, nil
+}
+
+// since is what the solver did between two readings. The service is shared, so
+// on a machine where something else is running too this is an upper bound.
+func (c solverCounts) since(before solverCounts) string {
+	families := map[string][2]int{}
+	for _, f := range before.Families {
+		families[f.Family] = [2]int{-f.Attempts, -f.Solved}
+	}
+	for _, f := range c.Families {
+		was := families[f.Family]
+		families[f.Family] = [2]int{was[0] + f.Attempts, was[1] + f.Solved}
+	}
+	var kinds []string
+	for name, n := range families {
+		if n[0] != 0 {
+			kinds = append(kinds, fmt.Sprintf("%s %d of %d", name, n[1], n[0]))
+		}
+	}
+	sort.Strings(kinds)
+	reasons := map[string]int{}
+	for _, r := range before.FailReasons {
+		reasons[r.Reason] -= r.Count
+	}
+	for _, r := range c.FailReasons {
+		reasons[r.Reason] += r.Count
+	}
+	var why []string
+	for r, n := range reasons {
+		if n != 0 {
+			why = append(why, fmt.Sprintf("%d×%s", n, r))
+		}
+	}
+	sort.Strings(why)
+	return fmt.Sprintf("%d challenges attempted, %d solved; by kind %v; failures %v",
+		c.Attempts-before.Attempts, c.Solved-before.Solved, kinds, why)
+}
+
+// phrasesOf reads the phrases of a job from the database the running program
+// keeps, without touching it: read-only, and only the text, which is all a
+// measurement of speed needs of them.
+func phrasesOf(t *testing.T, job, most int) []google.Query {
+	t.Helper()
+	path := envOr("GSERP_DB", "")
+	if path == "" {
+		t.Skip("GSERP_DB is not set, so there is no job to take phrases from")
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro&_pragma=busy_timeout(8000)")
+	if err != nil {
+		t.Fatalf("opening the job's database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.Query(`SELECT text FROM queries WHERE job_id = ? ORDER BY ordinal LIMIT ?`, job, most)
+	if err != nil {
+		t.Fatalf("reading the job's phrases: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []google.Query
+	for rows.Next() {
+		var text string
+		if err := rows.Scan(&text); err != nil {
+			t.Fatalf("reading a phrase: %v", err)
+		}
+		out = append(out, google.Query{Text: text})
+	}
+	if len(out) == 0 {
+		t.Skipf("job %d has no phrases", job)
+	}
+	return out
 }
