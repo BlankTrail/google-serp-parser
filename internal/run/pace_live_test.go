@@ -208,8 +208,9 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	// such exits with 526.
 	spec.AllowMITMUpstream = envInt("GSERP_PACE_MITM", 1) != 0
 	spec.Resolver = envOr("GSERP_PACE_RESOLVER", "")
-	logf(t, "MEASUREMENT ports allow exits terminating TLS: %v; names resolved by %q",
-		spec.AllowMITMUpstream, spec.Resolver)
+	spec.VDNSStrictBypass = envInt("GSERP_PACE_STRICT", 1) != 0
+	logf(t, "MEASUREMENT ports allow exits terminating TLS: %v; names resolved by %q, never handed to the proxy: %v",
+		spec.AllowMITMUpstream, spec.Resolver, spec.VDNSStrictBypass)
 
 	// The run is stopped by the clock rather than by the work: what is wanted is
 	// a reading of a run at its steady speed, not a run to the end of a list.
