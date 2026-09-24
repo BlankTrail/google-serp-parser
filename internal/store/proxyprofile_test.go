@@ -419,6 +419,57 @@ func TestProfiles_WorkThroughExitsThatTerminateTLSAfterAnUpgrade(t *testing.T) {
 	}
 }
 
+func TestProfiles_KeepTheNameAwayFromTheProxyAfterAnUpgrade(t *testing.T) {
+	// Every profile written before the column existed gets it on: without it
+	// one address that fails to answer sends the name to the proxy after all,
+	// and on a provider that refuses the name of the host Google's reCAPTCHA
+	// script comes from, that port never passes a challenge again.
+	s := testStore(t)
+	if _, err := s.db.ExecContext(t.Context(),
+		`INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
+		        threads_per_upstream, protocol, gateways, is_default, vdns_mode,
+		        js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers)
+		 VALUES('from before', 'url', 'https://example.test/list', 0, 0, 1, 'socks5', '', 0, '', 1, 0, '', 1, '', '')`,
+	); err != nil {
+		t.Fatalf("writing a profile the way an older build did: %v", err)
+	}
+	all, err := s.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	for _, one := range all {
+		if one.Name == "from before" && !one.StrictBypass {
+			t.Error("a profile written before the column hands names to the proxy")
+		}
+	}
+}
+
+func TestProfiles_KeepAStrictBypassSwitchedOff(t *testing.T) {
+	// A switch rather than a rule: one turned off is written off and read off,
+	// not put back by the column's default.
+	s := testStore(t)
+	p := NewProfile()
+	p.Name, p.Kind, p.Location, p.StrictBypass = "loose", "url", "https://example.test/list", false
+	id, err := s.CreateProfile(t.Context(), p)
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	got, err := s.Profile(t.Context(), id)
+	if err != nil {
+		t.Fatalf("Profile: %v", err)
+	}
+	if got.StrictBypass {
+		t.Error("a profile made with names allowed through reads back keeping them away")
+	}
+	got.StrictBypass = true
+	if err := s.SaveProfile(t.Context(), got); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	if again, _ := s.Profile(t.Context(), id); !again.StrictBypass {
+		t.Error("switching it on and saving did not keep it on")
+	}
+}
+
 func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *testing.T) {
 	// Handing the name to the proxy was the default for a day, until a provider
 	// was found refusing the host Google's reCAPTCHA script is served from: a
@@ -437,11 +488,7 @@ func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *test
 			t.Fatalf("CreateProfile: %v", err)
 		}
 	}
-	// The step before this one left the schema as it is; only the version
-	// says the step is still to come.
-	if _, err := s.db.ExecContext(t.Context(), `PRAGMA user_version = 24`); err != nil {
-		t.Fatalf("winding the version back: %v", err)
-	}
+	windBackToVersion24(t, s)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -466,6 +513,22 @@ func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *test
 			if one.Resolver != "isp" {
 				t.Errorf("a profile that chose the provider's resolvers resolves by %q after the upgrade", one.Resolver)
 			}
+		}
+	}
+}
+
+// windBackToVersion24 undoes every step after the twenty-fourth: the resolver
+// step changed only rows and has nothing to undo in the schema, and the column
+// the step after it added is dropped. A step added later is undone here too, or
+// the step it adds runs twice when the database is opened again.
+func windBackToVersion24(t *testing.T, s *Store) {
+	t.Helper()
+	for _, statement := range []string{
+		`ALTER TABLE proxy_profiles DROP COLUMN vdns_strict_bypass`,
+		`PRAGMA user_version = 24`,
+	} {
+		if _, err := s.db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatalf("winding back to version 24: %v", err)
 		}
 	}
 }

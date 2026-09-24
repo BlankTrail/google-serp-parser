@@ -389,6 +389,7 @@
 <div class="field">
 <label class="switch"><input name="js_solver" type="checkbox" value="1"{{if .Form.Solver}} checked{{end}}> {{.T "proxies.solver"}}</label>
 <label class="switch"><input name="allow_mitm" type="checkbox" value="1"{{if .Form.AllowMITM}} checked{{end}}> {{.T "proxies.mitm"}}</label>
+<label class="switch"><input name="vdns_strict_bypass" type="checkbox" value="1"{{if .Form.StrictBypass}} checked{{end}}> {{.T "proxies.strict"}}</label>
 </div>
 <div class="field">
 <label class="switch"><input name="http3" type="checkbox" value="1"{{if .Form.HTTP3}} checked{{end}}> {{.T "proxies.http3"}}</label>
@@ -401,6 +402,7 @@
 <li>{{.T "proxies.solver.why"}}</li>
 <li>{{.T "proxies.mitm.why"}}</li>
 <li>{{.T "proxies.resolver.why"}}</li>
+<li>{{.T "proxies.strict.why"}}</li>
 <li>{{.T "proxies.http3.why"}}</li>
 </ul>
 </details>

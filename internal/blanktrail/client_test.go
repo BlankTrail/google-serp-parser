@@ -445,6 +445,28 @@ func TestDefaultPortSpec_AllowsAnUpstreamThatTerminatesTLSItself(t *testing.T) {
 	}
 }
 
+func TestPortSpec_KeepsTheNameOutOfTheRoadOnlyWhenAskedTo(t *testing.T) {
+	// A port that must never hand the proxy a name says so on open; one that
+	// says nothing leaves the service its fallback to the name, which is what
+	// the service does by default.
+	strict := DefaultPortSpec()
+	strict.VDNSStrictBypass = true
+	body, err := json.Marshal(strict.request(1, Egress{}))
+	if err != nil {
+		t.Fatalf("marshalling the request: %v", err)
+	}
+	if !strings.Contains(string(body), `"vdns_strict_bypass":true`) {
+		t.Errorf("the open request lets the name through to the proxy: %s", body)
+	}
+	body, err = json.Marshal(DefaultPortSpec().request(1, Egress{}))
+	if err != nil {
+		t.Fatalf("marshalling the request: %v", err)
+	}
+	if strings.Contains(string(body), "vdns_strict_bypass") {
+		t.Errorf("the open request says something about the name nobody asked it to: %s", body)
+	}
+}
+
 func TestPortSpec_OpensAndDialsOverSOCKS5UnlessHTTPWasNamed(t *testing.T) {
 	// A port is opened as SOCKS5 and reached as SOCKS5, and the two have to be
 	// the same word. An HTTP forward proxy speaks CONNECT and therefore only

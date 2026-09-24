@@ -191,6 +191,18 @@ type PortSpec struct {
 	// strategy.
 	Resolver        string
 	CustomResolvers []string
+	// VDNSStrictBypass keeps the name of what is asked for out of the road
+	// altogether: the service resolves it and hands the proxy an address, and
+	// when it cannot, the request fails rather than falling back to the name.
+	//
+	// Without it one dial by address that fails — or one name the service could
+	// not resolve — sends the name to the proxy after all, and the port
+	// remembers that its exit "takes no addresses" and sends names from then
+	// on. A provider that refuses a name then refuses it on that port for good:
+	// a residential gateway answered www.gstatic.com by name with "host
+	// unreachable" on every exit and carried the same host by address, and the
+	// script of Google's reCAPTCHA is served from there.
+	VDNSStrictBypass bool
 
 	// UpstreamTLSInsecure trusts a self-signed certificate on an https:// proxy.
 	// It has no effect on any other scheme: the certificate it is about belongs
@@ -356,6 +368,7 @@ type openPortRequest struct {
 	VDNSMode              string   `json:"vdns_mode,omitempty"`
 	ResolverStrategy      string   `json:"resolver_strategy,omitempty"`
 	CustomResolvers       []string `json:"custom_resolvers,omitempty"`
+	VDNSStrictBypass      *bool    `json:"vdns_strict_bypass,omitempty"`
 	UpstreamTLSInsecure   *bool    `json:"upstream_tls_insecure,omitempty"`
 	AllowMITMUpstream     *bool    `json:"allow_mitm_upstream,omitempty"`
 	// ChainProxy and ChainGateway are the first hop: a SOCKS5 proxy, or the name
@@ -407,6 +420,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 	if s.AllowMITMUpstream {
 		v := true
 		req.AllowMITMUpstream = &v
+	}
+	if s.VDNSStrictBypass {
+		v := true
+		req.VDNSStrictBypass = &v
 	}
 	if s.MaxConcurrent > 0 {
 		n := s.MaxConcurrent

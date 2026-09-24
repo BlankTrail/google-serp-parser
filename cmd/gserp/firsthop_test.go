@@ -341,6 +341,7 @@ func TestDial_OpensAListsPortsWithWhatItsProfileSaysAboutNamesAndTLS(t *testing.
 		for _, body := range bodies {
 			for _, said := range []string{
 				`"allow_mitm_upstream":true`,
+				`"vdns_strict_bypass":true`,
 				`"resolver_strategy":"custom"`,
 				`"custom_resolvers":["1.1.1.1:53"]`,
 			} {

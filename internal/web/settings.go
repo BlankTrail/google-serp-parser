@@ -46,6 +46,9 @@ const (
 	// which terminates TLS itself.
 	mitmField  = "allow_mitm"
 	http3Field = "http3"
+	// strictField is the switch that keeps the name of what a port asks for
+	// away from the proxy altogether.
+	strictField = "vdns_strict_bypass"
 	// How names are resolved once they are resolved at all, and the resolvers
 	// a reader names where that is the choice.
 	resolverField  = "resolver"

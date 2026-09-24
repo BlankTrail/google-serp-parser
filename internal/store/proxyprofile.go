@@ -104,6 +104,11 @@ type Profile struct {
 	// proxy an address.
 	Resolver        string
 	CustomResolvers []string
+	// StrictBypass keeps the name of what a port asks for out of the road
+	// altogether: the service resolves it and hands the proxy an address, and a
+	// request whose name it cannot resolve fails rather than going out by name.
+	// On by default; see schema_v26.sql and blanktrail.PortSpec.VDNSStrictBypass.
+	StrictBypass bool
 	// FirstHop is the road this profile's ports take to their addresses: empty
 	// for straight there, "gw:" and the name of one of the service's gateways,
 	// or a SOCKS5 proxy's address whole, login and password included. It is
@@ -136,7 +141,8 @@ func NewProfile() Profile {
 		// the name itself and hands the proxy an address. Handing the proxy the
 		// name was the default until a provider was found refusing the one
 		// name a challenge cannot be passed without — see schema_v25.sql.
-		Resolver: "",
+		Resolver:     "",
+		StrictBypass: true,
 	}
 }
 
@@ -171,7 +177,8 @@ func (p Profile) Empty() bool {
 // another.
 const profileColumns = `id, name, kind, location, refresh_ms, ban_ms,
 	threads_per_upstream, protocol, gateways, is_default,
-	vdns_mode, js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers`
+	vdns_mode, js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers,
+	vdns_strict_bypass`
 
 // scanProfile reads one row in the order profileColumns names.
 func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
@@ -181,7 +188,7 @@ func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
 	if err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.Location, &refreshMS, &banMS,
 		&p.ThreadsPerUpstream, &p.Protocol, &gateways, &p.Default,
 		&p.VDNSMode, &p.Solver, &p.HTTP3, &p.FirstHop, &p.AllowMITM,
-		&p.Resolver, &resolvers); err != nil {
+		&p.Resolver, &resolvers, &p.StrictBypass); err != nil {
 		return Profile{}, err
 	}
 	p.Refresh = time.Duration(refreshMS) * time.Millisecond
@@ -320,13 +327,14 @@ func (s *Store) CreateProfile(ctx context.Context, p Profile) (int64, error) {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
 			threads_per_upstream, protocol, gateways, is_default,
-			vdns_mode, js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			vdns_mode, js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers,
+			vdns_strict_bypass)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
 		p.Protocol, gatewayLines(p.Gateways), p.Default,
 		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.AllowMITM,
-		p.Resolver, gatewayLines(p.CustomResolvers))
+		p.Resolver, gatewayLines(p.CustomResolvers), p.StrictBypass)
 	if err != nil {
 		return 0, nameOr(err, "store: writing a proxy profile")
 	}
@@ -397,13 +405,13 @@ func (s *Store) SaveProfile(ctx context.Context, p Profile) error {
 		   SET name = ?, kind = ?, location = ?, refresh_ms = ?, ban_ms = ?,
 		       threads_per_upstream = ?, protocol = ?, gateways = ?,
 		       is_default = ?, vdns_mode = ?, js_solver = ?, http3 = ?, first_hop = ?,
-		       allow_mitm = ?, resolver = ?, custom_resolvers = ?
+		       allow_mitm = ?, resolver = ?, custom_resolvers = ?, vdns_strict_bypass = ?
 		 WHERE id = ?`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
 		p.Protocol, gatewayLines(p.Gateways), p.Default,
 		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.AllowMITM,
-		p.Resolver, gatewayLines(p.CustomResolvers), p.ID)
+		p.Resolver, gatewayLines(p.CustomResolvers), p.StrictBypass, p.ID)
 	if err != nil {
 		return nameOr(err, fmt.Sprintf("store: saving proxy profile %d", p.ID))
 	}

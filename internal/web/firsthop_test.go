@@ -317,6 +317,34 @@ func TestProfile_OffersToWorkThroughExitsThatTerminateTLSFromTheStart(t *testing
 	}
 }
 
+func TestProfile_KeepsNamesAwayFromTheProxyFromTheStartAndAsASwitch(t *testing.T) {
+	// A fresh profile is offered with the name kept away from the proxy — the
+	// one setting that lets the service's own resolving survive an address that
+	// fails once — and a reader who turns it off gets it off.
+	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	body := getBody(t, s, proxiesAt+"?"+profileField+"=new")
+	if !strings.Contains(body, `name="vdns_strict_bypass" type="checkbox" value="1" checked`) {
+		t.Error("a fresh profile is offered handing names to the proxy")
+	}
+
+	postForm(t, s, proxiesAt, url.Values{
+		"profile": {"0"}, "profile_name": {"residential"},
+		"source": {"url"}, "source_at": {"https://example.test/list"},
+		"vdns_strict_bypass": {"1"},
+	})
+	made := profileNamed(t, s, "residential")
+	if !made.StrictBypass {
+		t.Fatal("the switch was saved off although the form had it on")
+	}
+	postForm(t, s, proxiesAt, url.Values{
+		"profile": {strconv.FormatInt(made.ID, 10)}, "profile_name": {"residential"},
+		"source": {"url"}, "source_at": {"https://example.test/list"},
+	})
+	if again := profileNamed(t, s, "residential"); again.StrictBypass {
+		t.Error("the switch was left on although the form that saved it had it off")
+	}
+}
+
 func TestSaveProxies_KeepsTheAnswerAboutExitsThatTerminateTLS(t *testing.T) {
 	// And it is a switch rather than a rule: a reader who turns it off gets it
 	// off, and a form that quietly put it back would be a setting nobody can

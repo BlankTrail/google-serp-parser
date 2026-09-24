@@ -501,6 +501,13 @@ var catalogue = map[Lang]map[string]string{
 		"proxies.vdns.why":           "Names resolved somewhere other than where the traffic leaves tell the far end two places. Automatic resolves through the exit wherever there is one.",
 		"proxies.solver.why":         "Google answers a challenge with nothing a parser can read; the solver carries the session through. A tariff holds a fixed number of solver processes.",
 		"proxies.mitm":               "Work through exits that terminate TLS themselves",
+		"proxies.strict":             "Never hand the proxy a name",
+		"proxies.strict.why": "The service resolves every name itself and hands the proxy an address; a name it " +
+			"cannot resolve fails the request rather than going to the proxy. Off, one address that fails to " +
+			"answer sends the name to the proxy after all, and the port goes on sending names from then on. " +
+			"A residential gateway refused the name of the host Google's reCAPTCHA script comes from on every " +
+			"exit and carried the same host by address, so a port that fell back once could never pass a " +
+			"challenge again.",
 		"proxies.mitm.why": "Some exits open the connection to the site themselves and present a certificate of " +
 			"their own. Off, the port refuses them — which is right for an exit nobody has vouched for and wrong " +
 			"for the lists this parser is pointed at: measured on a live list, ten of fifteen addresses the " +
@@ -994,6 +1001,12 @@ var catalogue = map[Lang]map[string]string{
 		"proxies.vdns.why":           "Имена, разрешённые не там, откуда уходит трафик, называют дальнему концу два разных места. Авто — через выход везде, где он есть.",
 		"proxies.solver.why":         "На челлендж Google отвечает тем, что парсер прочитать не может, — через него сессию проводит решатель. Процессов решателя в тарифе конечное число.",
 		"proxies.mitm":               "Работать через выходы, подменяющие TLS",
+		"proxies.strict":             "Не отдавать прокси имена сайтов",
+		"proxies.strict.why": "Сервис сам резолвит каждое имя и передаёт прокси адрес; имя, которое он не " +
+			"смог разрешить, завершает запрос ошибкой, а не уходит прокси. Если выключить, один не ответивший " +
+			"адрес отправит прокси имя, и дальше порт будет отправлять имена всегда. Резидентский шлюз отказывал " +
+			"по имени хосту, с которого грузится скрипт reCAPTCHA, на каждом выходе и пропускал его по адресу — " +
+			"порт, хоть раз откатившийся на имя, больше не мог пройти проверку.",
 		"proxies.mitm.why": "Часть выходов сама открывает соединение к сайту и показывает собственный " +
 			"сертификат. Если выключено, порт таким выходам отказывает — это верно для выхода, за который никто " +
 			"не поручился, и неверно для списков, на которые нацелен этот парсер: на живом списке десять адресов " +

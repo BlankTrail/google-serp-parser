@@ -1,0 +1,11 @@
+-- Whether a profile's ports keep the name of what they ask for out of the road
+-- altogether: the service resolves it and hands the proxy an address, and a
+-- request whose name it cannot resolve fails rather than going out by name.
+--
+-- On for every profile, the ones already written included. Without it one dial
+-- by address that fails sends the name to the proxy after all, and the port
+-- goes on sending names from then on. A residential gateway refused the name of
+-- the host Google's reCAPTCHA script is served from on every exit, and carried
+-- the same host by address — so a port that fell back to the name once lost the
+-- solver's widget on that port for good.
+ALTER TABLE proxy_profiles ADD COLUMN vdns_strict_bypass INTEGER NOT NULL DEFAULT 1;

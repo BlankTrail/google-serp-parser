@@ -62,6 +62,9 @@ type profileForm struct {
 	Resolver  string
 	Resolvers string
 	HTTP3     bool
+	// StrictBypass keeps the name of what a port asks for away from the proxy
+	// altogether. On by default; see store.Profile.
+	StrictBypass bool
 
 	// The road the ports take to their addresses: HopKind is none, a SOCKS5
 	// proxy or one of the service's gateways, and HopProxy and HopGateway are
@@ -92,22 +95,23 @@ func newProfile() store.Profile { return store.NewProfile() }
 // profileShowing is a profile as the boxes that would hold it.
 func profileShowing(p store.Profile) profileForm {
 	return profileForm{
-		ID:          p.ID,
-		Name:        p.Name,
-		Source:      p.Kind,
-		Where:       p.Location,
-		Refresh:     spellUnits(p.Refresh, refreshUnit),
-		Ban:         spellUnits(p.Ban, banUnit),
-		PerUpstream: strconv.Itoa(atLeastOne(p.ThreadsPerUpstream)),
-		Wire:        blanktrail.ProtocolOr(p.Protocol),
-		Gateways:    p.Gateways,
-		VDNSOn:      p.VDNSMode != blanktrail.VDNSOff,
-		VDNS:        vdnsModeOr(p.VDNSMode),
-		Solver:      p.Solver,
-		AllowMITM:   p.AllowMITM,
-		Resolver:    resolverOr(p.Resolver),
-		Resolvers:   strings.Join(p.CustomResolvers, "\n"),
-		HTTP3:       p.HTTP3,
+		ID:           p.ID,
+		Name:         p.Name,
+		Source:       p.Kind,
+		Where:        p.Location,
+		Refresh:      spellUnits(p.Refresh, refreshUnit),
+		Ban:          spellUnits(p.Ban, banUnit),
+		PerUpstream:  strconv.Itoa(atLeastOne(p.ThreadsPerUpstream)),
+		Wire:         blanktrail.ProtocolOr(p.Protocol),
+		Gateways:     p.Gateways,
+		VDNSOn:       p.VDNSMode != blanktrail.VDNSOff,
+		VDNS:         vdnsModeOr(p.VDNSMode),
+		Solver:       p.Solver,
+		AllowMITM:    p.AllowMITM,
+		Resolver:     resolverOr(p.Resolver),
+		Resolvers:    strings.Join(p.CustomResolvers, "\n"),
+		HTTP3:        p.HTTP3,
+		StrictBypass: p.StrictBypass,
 	}.withHop(p.FirstHop)
 }
 
@@ -142,13 +146,14 @@ func profileFrom(r former) profileForm {
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
 		// These three are on the form whenever it is shown, so a box that sent
 		// nothing is a box somebody unticked rather than one that was not there.
-		VDNSOn:    r.FormValue(vdnsOnField) != "",
-		VDNS:      strings.TrimSpace(r.FormValue(vdnsField)),
-		Solver:    r.FormValue(solverField) != "",
-		AllowMITM: r.FormValue(mitmField) != "",
-		Resolver:  strings.TrimSpace(r.FormValue(resolverField)),
-		Resolvers: r.FormValue(resolversField),
-		HTTP3:     r.FormValue(http3Field) != "",
+		VDNSOn:       r.FormValue(vdnsOnField) != "",
+		VDNS:         strings.TrimSpace(r.FormValue(vdnsField)),
+		Solver:       r.FormValue(solverField) != "",
+		AllowMITM:    r.FormValue(mitmField) != "",
+		Resolver:     strings.TrimSpace(r.FormValue(resolverField)),
+		Resolvers:    r.FormValue(resolversField),
+		HTTP3:        r.FormValue(http3Field) != "",
+		StrictBypass: r.FormValue(strictField) != "",
 
 		HopKind:    strings.TrimSpace(r.FormValue(firstHopField)),
 		HopProxy:   strings.TrimSpace(r.FormValue(hopProxyField)),
@@ -172,6 +177,7 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 	}
 	next.Protocol = blanktrail.ProtocolOr(f.Wire)
 	next.Solver, next.HTTP3, next.AllowMITM = f.Solver, f.HTTP3, f.AllowMITM
+	next.StrictBypass = f.StrictBypass
 	// An unknown strategy is refused here rather than sent on, for the reason
 	// an unknown vdns mode is: the service answers it with a 400 naming the
 	// six, and a port that will not open because a form let a typo through is
