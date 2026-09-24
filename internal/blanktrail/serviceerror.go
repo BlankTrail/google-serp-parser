@@ -104,6 +104,18 @@ func (e *ServiceError) Is(target error) bool {
 // own answer, and 523 from something at the far end is a page — and on a list
 // where most requests fail, guessing wrong either way is thousands of addresses
 // blamed or thousands of refusals mistaken for pages.
+// ChallengeUnsolved says the service's own browser met Google's check on the
+// way and could not clear it.
+//
+// What stood behind such an answer is the page a check leaves a client that
+// will not run its script — the JavaScript shell — and a caller that reads
+// pages already has a name for that. The service used to hand the shell back
+// as the page; it now says so in words of its own, and without this a shell it
+// named would read as a request that never reached Google at all: the address
+// kept for nothing, the session carried off it as if the road had failed, and
+// a phrase that did reach Google left as one that never had.
+func (e *ServiceError) ChallengeUnsolved() bool { return e.Reason == solverFailedReason }
+
 func serviceRefusal(resp *http.Response) (*ServiceError, bool) {
 	if resp == nil {
 		return nil, false

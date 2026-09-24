@@ -4,6 +4,7 @@ package google
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,6 +110,15 @@ func (s *Session) at(ctx context.Context, q Query, target string) (SERP, error) 
 
 	body, finalURL, status, err := s.get(ctx, target, q)
 	if err != nil {
+		// A proxy whose own browser met Google's check and could not clear it
+		// may say so instead of handing the page back. It is the shell by
+		// another name, and it is judged as the shell: the check is the
+		// address's, and a refusal read as a road that failed would carry the
+		// session off with nothing learned.
+		var u unsolved
+		if errors.As(err, &u) && u.ChallengeUnsolved() {
+			return SERP{}, &ResponseError{Class: ClassShell, Query: q.Text, op: "search", err: err}
+		}
 		return SERP{}, err
 	}
 	s.last = target
@@ -160,6 +170,12 @@ func originOf(target string) string {
 	}
 	return u.Scheme + "://" + u.Host
 }
+
+// unsolved is an error that says whether a proxy's own browser met Google's
+// check on the way and could not clear it. It is an interface rather than a
+// type from the package that talks to the proxy, so this package knows what a
+// search is and nothing about who carries it.
+type unsolved interface{ ChallengeUnsolved() bool }
 
 func (s *Session) fetch(ctx context.Context, target string, q Query) ([]byte, error) {
 	body, _, _, err := s.get(ctx, target, q)

@@ -182,6 +182,41 @@ func TestSession_HandsBackTheClassOfAnUnusableResponse(t *testing.T) {
 	}
 }
 
+// checkNotCleared is a proxy's word that its own browser met Google's check and
+// could not clear it, the way a proxy's error carries it.
+type checkNotCleared struct{ cleared bool }
+
+func (e checkNotCleared) Error() string           { return "the proxy's browser did not clear the check" }
+func (e checkNotCleared) ChallengeUnsolved() bool { return !e.cleared }
+
+// saying answers every request with the same transport error.
+type saying struct{ err error }
+
+func (rt saying) RoundTrip(*http.Request) (*http.Response, error) { return nil, rt.err }
+
+func TestSession_JudgesACheckTheProxyCouldNotClearAsTheShell(t *testing.T) {
+	// A proxy that used to hand the unsolved shell back as the page now says in
+	// words of its own that its browser could not clear the check. It is the
+	// same answer, and it is judged the same way — a refusal the address met —
+	// rather than as a request that never reached Google.
+	s := NewSession(saying{err: checkNotCleared{}})
+	_, err := s.Search(context.Background(), Query{Text: "iphone"})
+	class, judged := ClassOf(err)
+	if !judged || class != ClassShell {
+		t.Errorf("a check the proxy could not clear came back as %v (class %q, judged %v), want the shell",
+			err, class, judged)
+	}
+
+	// And a failure of the road stays a failure of the road: nothing was
+	// judged because nothing arrived.
+	road := NewSession(saying{err: checkNotCleared{cleared: true}})
+	if _, err := road.Search(context.Background(), Query{Text: "iphone"}); err == nil {
+		t.Fatal("a request that never arrived came back as a page")
+	} else if _, judged := ClassOf(err); judged {
+		t.Errorf("a request that never arrived was judged: %v", err)
+	}
+}
+
 func TestSession_TreatsAnOversizedBodyAsAnError(t *testing.T) {
 	// LimitReader alone returns io.EOF at its boundary exactly as it would at
 	// a genuine end of body, so a response beyond maxBody would otherwise be

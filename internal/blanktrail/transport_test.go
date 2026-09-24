@@ -832,6 +832,25 @@ func TestLadder_DoesNotSpendTheAddressOnAServiceRefusalOfItsOwn(t *testing.T) {
 	}
 }
 
+func TestServiceError_SaysACheckItsBrowserCouldNotClearWasNotCleared(t *testing.T) {
+	// Only the solver's own failure is a check left standing. Every other word
+	// the service puts on an answer is about the road or the solver's
+	// capacity, and read as a check it would send a caller looking for a
+	// refusal Google never made.
+	rt := &fakeRT{steps: []func() (*http.Response, error){serviceSays(403, "solver_failed")}}
+	l := &ladder{rt: rt, port: 20103, rem: &fakeRemedy{retries: 3, addresses: 5}}
+	_, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	var said interface{ ChallengeUnsolved() bool }
+	if !errors.As(err, &said) || !said.ChallengeUnsolved() {
+		t.Fatalf("RoundTrip returned %v, which does not say the check was left standing", err)
+	}
+	for _, other := range []string{"upstream_unreachable", "chain_unreachable", "solver_timeout", "solver_capacity", "something new"} {
+		if (&ServiceError{Reason: other}).ChallengeUnsolved() {
+			t.Errorf("%q reads as a check the solver could not clear", other)
+		}
+	}
+}
+
 func TestLadder_StopsHuntingWhereThePortKeepsItsAddress(t *testing.T) {
 	// A port carrying a session that has answered stays where it is, so there
 	// is nowhere to hunt to: one unreachable answer ends the request, and what
