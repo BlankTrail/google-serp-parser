@@ -96,6 +96,9 @@ type facing struct {
 	dead map[string]bool
 	// allDead is every address at once, for a test whose whole list has gone.
 	allDead bool
+	// drops are the addresses that drop their next few requests and carry the
+	// ones after them, as an address that hiccups does.
+	drops map[string]int
 	// stood is every address each port stood on as it carried a request, in
 	// order, so a test can see a session moved and how often.
 	stood map[int][]string
@@ -118,11 +121,22 @@ func (f *facing) kill(address string) {
 	f.dead[address] = true
 }
 
+// drop makes the address drop the next n requests through it.
+func (f *facing) drop(address string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.drops[address] = n
+}
+
 // reaches says whether a request through this port gets anywhere.
 func (f *facing) reaches(port int) bool {
 	up := f.Fake.UpstreamOf(port)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.drops[up] > 0 {
+		f.drops[up]--
+		return false
+	}
 	return !f.allDead && !f.dead[up]
 }
 
@@ -185,7 +199,8 @@ func poolFacing(t *testing.T, originAddr string, ports int, tune ...func(*blankt
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	f := &facing{byPort: map[int]int{}, dead: map[string]bool{}, stood: map[int][]string{}, Fake: fake}
+	f := &facing{byPort: map[int]int{}, dead: map[string]bool{}, stood: map[int][]string{},
+		drops: map[string]int{}, Fake: fake}
 	// Reserving the numbers is what makes them a free consecutive run; holding
 	// them while the pool opens would defeat it. NewPool asks this machine
 	// whether a number is free before it asks the proxy to stand on it, because

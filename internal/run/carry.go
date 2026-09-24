@@ -209,6 +209,9 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	var err error
 	moved := false
 	shells := 0
+	// again says the page has been asked once more through the address the
+	// session was answered from, after the road there failed once.
+	again := false
 	c.r.Where.At(c.thread, DoingAsk)
 	for {
 		asked := time.Now()
@@ -241,6 +244,23 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 		// the road to Google everywhere else too.
 		if c.walks.spend(held.ID) >= c.triesAllowed() {
 			break
+		}
+		// An address Google has answered this session from is asked once more
+		// before the session is taken off it. One dropped connection is not an
+		// address that has stopped answering — the pool gives an address one
+		// miss for the same reason — and taking the session off costs it the
+		// clearance it holds there: it is a stranger at the next address, and
+		// pays a check to be let in. Measured on the wingate list through its
+		// first hop: of the addresses put away in the two minutes before, 20 of
+		// 22 answered again, and a check costs a thread over a minute where
+		// asking again costs one request.
+		//
+		// A session that is a stranger where it stands has no clearance there
+		// to keep. It pays a check wherever it goes, so it moves at once rather
+		// than spending a try on an address that has just failed it.
+		if known && !again {
+			again = true
+			continue
 		}
 		if err := held.MoveOn(ctx, port); err != nil {
 			break

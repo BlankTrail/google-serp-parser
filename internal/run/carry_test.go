@@ -238,8 +238,9 @@ func TestRunner_StopsAWalkAtTheDepthTheJobAskedFor(t *testing.T) {
 func TestRunner_MovesASessionOffADeadAddressAndCarriesItsWalkOn(t *testing.T) {
 	// A page that never reached Google says nothing about the session: the road
 	// failed, not the search. So the session keeps its cookies and its place in
-	// the walk, the port is moved to another address, and the page is asked for
-	// again at once — there is nothing to rest from, because nothing was asked.
+	// the walk, and once the address has failed it twice the port is moved to
+	// another one and the page is asked for again at once — there is nothing to
+	// rest from, because nothing was asked.
 	o := newDeepOrigin(t, 5)
 	f := poolFacing(t, o.addr(), 1, inSessions)
 	h := sessions.NewMemory()
@@ -254,7 +255,7 @@ func TestRunner_MovesASessionOffADeadAddressAndCarriesItsWalkOn(t *testing.T) {
 		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
 	port = f.onePort(t)
 
-	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 3, Tries: 2})
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 3, Tries: 3})
 	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 3 {
 		t.Fatalf("the walk took %d pages and ended with %v, want three and no error — the address died, not the session",
 			len(rep.Results[0].Pages), rep.Results[0].Err)
@@ -269,6 +270,44 @@ func TestRunner_MovesASessionOffADeadAddressAndCarriesItsWalkOn(t *testing.T) {
 	}
 	if all[0].Failures != 0 {
 		t.Errorf("the session carries %d refusals, want none: the road failed, not the session", all[0].Failures)
+	}
+}
+
+func TestRunner_AsksOnceMoreThroughTheAddressTheSessionWasAnsweredFrom(t *testing.T) {
+	// One dropped connection is not an address that has stopped answering, and
+	// taking a session off the address it was answered from costs it the
+	// clearance it holds there: it pays a check to be let in wherever it lands.
+	// Measured on the wingate list through its first hop, 20 of 22 addresses
+	// put away in the two minutes before answered again. So the page is asked
+	// once more where the session stands before it is moved.
+	o := newDeepOrigin(t, 3)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	h := sessions.NewMemory()
+	port := 0
+	o.then = func(n int) {
+		if n == 1 {
+			// The address that carried page one drops the next request, and
+			// only that one.
+			f.drop(f.Fake.UpstreamOf(port), 1)
+		}
+	}
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(h),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+	port = f.onePort(t)
+
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 3, Tries: 3})
+	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 3 {
+		t.Fatalf("the walk took %d pages and ended with %v, want three and no error",
+			len(rep.Results[0].Pages), rep.Results[0].Err)
+	}
+	if stood := f.stoodOn(port); len(stood) != 1 {
+		t.Errorf("the port stood on %d addresses: %q, want the one the session was answered from — "+
+			"it dropped one request and carried the next", len(stood), stood)
+	}
+	// Five requests, the dropped one among them: the front page a session opens
+	// with, page one, page two dropped and asked again, and page three.
+	if asks := f.carriedBy(port); asks != 5 {
+		t.Errorf("the port carried %d requests, want five — one of them dropped and asked again", asks)
 	}
 }
 
@@ -292,13 +331,13 @@ func TestRunner_StopsMovingASessionAtTheTriesThePhraseIsAllowed(t *testing.T) {
 		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
 	port := f.onePort(t)
 
-	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 9, Tries: 2})
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("x")}, Pages: 9, Tries: 3})
 	if rep.Results[0].Err != nil || len(rep.Results[0].Pages) != 1 {
 		t.Fatalf("the walk took %d pages and ended with %v, want the one page it got and no failure",
 			len(rep.Results[0].Pages), rep.Results[0].Err)
 	}
 	if stood := f.stoodOn(port); len(stood) != 2 {
-		t.Errorf("the port stood on %d addresses: %q, want two — the one it was on and the one try it was allowed",
+		t.Errorf("the port stood on %d addresses: %q, want two — the one it was on and the one try left for another",
 			len(stood), stood)
 	}
 	// And the session is put back as it was found. Nothing reached Google, so
@@ -308,11 +347,12 @@ func TestRunner_StopsMovingASessionAtTheTriesThePhraseIsAllowed(t *testing.T) {
 	if len(all) != 1 || all[0].Failures != 0 {
 		t.Errorf("after a walk stopped by the road the history holds %+v, want the session kept with nothing against it", all)
 	}
-	// Four requests went through the port and no more: the front page a session
-	// opens with, page one, and the two tries the phrase allows for the page
-	// that never arrived.
-	if asks := f.carriedBy(port); asks != 4 {
-		t.Errorf("the port carried %d requests, want four — the front page, page one, and two tries", asks)
+	// Five requests went through the port and no more: the front page a session
+	// opens with, page one, and the three tries the phrase allows for the page
+	// that never arrived — two through the address the session was answered
+	// from, and one through the next.
+	if asks := f.carriedBy(port); asks != 5 {
+		t.Errorf("the port carried %d requests, want five — the front page, page one, and three tries", asks)
 	}
 }
 
