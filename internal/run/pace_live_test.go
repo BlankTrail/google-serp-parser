@@ -194,6 +194,16 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 		spec.JSSolver = false
 		logf(t, "MEASUREMENT the service's JavaScript solver is switched off on these ports")
 	}
+	// How many connections one port may hold at once. The service counts the
+	// connections its solver's browser opens through the port against the same
+	// ceiling, so this is also how hard one challenge may hit one exit: a solve
+	// opens tens of connections within seconds, and a pool that falls in the
+	// first minute of every run — when every fresh session meets its first
+	// challenge — is a pool that may be answering exactly that.
+	if n := envInt("GSERP_PACE_MAX_CONCURRENT", 0); n > 0 {
+		spec.MaxConcurrent = n
+		logf(t, "MEASUREMENT a port holds at most %d connections at once, its solver's included", n)
+	}
 	// Where the port resolves names. The service's own answer on a chained port
 	// is to resolve through the exit, and with UDP unavailable it does so over
 	// TCP — a round trip through the whole chain before the request itself.
