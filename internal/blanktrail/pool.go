@@ -84,6 +84,12 @@ type LeaseTrace struct {
 	// Ports is how many identities the pool holds, so a line read on its own
 	// says what it is a lease out of.
 	Ports int
+	// Gateway is the gateway the identity goes out through, and empty for one
+	// that goes out through an address. What one exit can carry before Google
+	// turns on it is a question about that exit, and a trace that cannot say
+	// which exit a lease went to cannot answer it. An address is left out: it
+	// can carry a login and a password, and a trace is written down.
+	Gateway string
 }
 
 // PoolConfig configures a pool of worker ports.
@@ -1678,6 +1684,7 @@ func (p *Pool) acquire(ctx context.Context, specName string, wait bool) (*Lease,
 					Warm:     warm,
 					Requests: served,
 					Ports:    p.Size(),
+					Gateway:  pt.egress().Gateway,
 				})
 			}
 			return &Lease{pt: pt, pool: p}, nil

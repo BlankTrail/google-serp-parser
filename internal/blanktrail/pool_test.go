@@ -2727,6 +2727,50 @@ func TestPool_TellsATraceWhetherTheIdentityItHandedOutHadEverAnswered(t *testing
 	}
 }
 
+func TestPool_TellsATraceWhichGatewayALeaseGoesOutThrough(t *testing.T) {
+	// How many threads one exit carries before Google turns on it is a question
+	// about that exit, and it can only be asked of a trace that says which exit
+	// each lease went to. An address is never said: it can carry a login.
+	var seen []LeaseTrace
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	cfg.Channels = []Channel{NewGatewayListChannel("gateways", NewStaticRotor(GatewayUpstreams([]string{"north", "south"})))}
+	cfg.OnLease = func(l LeaseTrace) { seen = append(seen, l) }
+	p, err := NewPool(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer p.Close()
+	p.PaceAt(0)
+	l, err := p.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	want := l.Egress().Gateway
+	l.Release()
+	if len(seen) != 1 || want == "" || seen[0].Gateway != want {
+		t.Errorf("the trace says the lease went out through %q, want %q", seen[0].Gateway, want)
+	}
+
+	var onAddresses []LeaseTrace
+	plain := testPoolConfig(t, fakebt.New(t), newFakeClock(), 1, 1)
+	plain.OnLease = func(l LeaseTrace) { onAddresses = append(onAddresses, l) }
+	q, err := NewPool(context.Background(), plain)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer q.Close()
+	a, err := q.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	a.Release()
+	if len(onAddresses) != 1 || onAddresses[0].Gateway != "" {
+		t.Errorf("a lease on an address was traced as going out through %q", onAddresses[0].Gateway)
+	}
+}
+
 func TestPool_OpensOnAnotherGatewayWhenOneWillNotStart(t *testing.T) {
 	// Measured on a live service: fourteen of fifteen chosen gateways answered
 	// "xray gw … exited during startup", and the service says it with the same
