@@ -201,6 +201,7 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	if err != nil {
 		return opts.scrubbed(err)
 	}
+	startProfiler(out, opts.logger(os.Stderr))
 
 	// Read before the server is built, because the languages it finds are the
 	// ones the switcher offers on the first page that goes out. Where this
