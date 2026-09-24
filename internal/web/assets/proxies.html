@@ -245,7 +245,7 @@
 {{/* Why there are none to choose from stands inside the box it is about, so it
      is away with it: a profile going out through a proxy is not missing
      anything by the service holding no gateways. */}}
-{{if .HopFault}}<p class="empty">{{.T .HopFault}}</p>{{end}}
+{{if .HopFault}}<p class="empty">{{.T .HopFault}}{{if .HopWhy}} <code>{{.HopWhy}}</code>{{end}}</p>{{end}}
 </div>
 </div>
 <details class="help" data-source="file url"{{if not .OnList}} hidden{{end}}>
@@ -271,7 +271,7 @@
      are drawn for every form and shown for the kind they belong to: a reader
      who picks them in the box above wants the list under it there and then,
      rather than after saving a profile with nothing chosen yet. */}}
-{{if .GatewayFault}}<p class="empty" data-source="gateways"{{if not .OnGateways}} hidden{{end}}>{{.T .GatewayFault}}{{if .GatewayFaultAt}} {{.T "proxies.gateways.asked"}} <code>{{.GatewayFaultAt}}</code>{{end}}</p>{{end}}
+{{if .GatewayFault}}<p class="empty" data-source="gateways"{{if not .OnGateways}} hidden{{end}}>{{.T .GatewayFault}}{{if .GatewayFaultAt}} {{.T "proxies.gateways.asked"}} <code>{{.GatewayFaultAt}}</code>{{end}}{{if .GatewayWhy}} <code>{{.GatewayWhy}}</code>{{end}}</p>{{end}}
 {{if .Groups}}
 {{/* The list stands as its own band with a header: without one, the pair of
      words that ticks it sat directly under the last input of the form above and

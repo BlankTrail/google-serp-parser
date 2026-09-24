@@ -103,6 +103,26 @@ func TestProfileShowing_PutsTheFirstHopBackInItsBoxes(t *testing.T) {
 	}
 }
 
+// screenAgainst is the proxies page for one profile against a service the
+// caller has already set up.
+func screenAgainst(t *testing.T, f *fakebt.Server, prof store.Profile) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := settings.Save(path, settings.Settings{ControlURL: f.URL(), APIKey: f.Key()}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	st := testStore(t)
+	id, err := st.CreateProfile(t.Context(), prof)
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	s, err := New(Config{Store: st, Logger: quiet(), SettingsPath: path})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return get(t, s, boxesOf(id)).Body.String()
+}
+
 // hopScreen is the proxies page for one profile against a service holding gws,
 // and the server that drew it.
 func hopScreen(t *testing.T, gws []fakebt.Gateway, prof store.Profile) (string, *Server, int64) {

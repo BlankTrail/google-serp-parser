@@ -203,6 +203,38 @@ func TestGatewaysOffered_CarriesTheThreePingStatesApart(t *testing.T) {
 	}
 }
 
+func TestProxies_DrawsTheGatewaysAServiceCannotRaiseAndSaysWhy(t *testing.T) {
+	// A service with no program on its machine to raise a tunnel still holds
+	// its gateways, and its own panel draws them, with their pings. Drawn here
+	// as "there are none", the reader went looking for a fault in the list; the
+	// fault was the missing program, which the service names — so its words
+	// stand beside the list, and the list stands.
+	const why = "xray: xray not found (place it in bin/xray next to the app, or on PATH)"
+	f := fakebt.New(t)
+	f.SetGateways([]fakebt.Gateway{{Name: "WiseKeys.FI-Finlyandiya", Kind: "vless"}, {Name: "vless-185", Kind: "vless"}})
+	f.SetGatewayBackendMissing(why)
+	said := LangEN.T("proxies.gateways.unavailable") + " <code>" + why + "</code></p>"
+
+	onGateways := screenAgainst(t, f, store.Profile{Name: "Default", Kind: settings.ProxyGateways})
+	for _, want := range []string{`value="WiseKeys.FI-Finlyandiya"`, `value="vless-185"`} {
+		if !strings.Contains(onGateways, want) {
+			t.Errorf("a profile on gateways is not offered %s", want)
+		}
+	}
+	if !strings.Contains(onGateways, `data-source="gateways">`+said) {
+		t.Error("the list of gateways does not say, in the service's words, why none will carry a port yet")
+	}
+
+	onList := screenAgainst(t, f, store.Profile{Name: "Default", Kind: sourceURL,
+		Location: "https://example.test/list.txt", Solver: true})
+	if !strings.Contains(onList, `<option value="vless-185"`) {
+		t.Error("the gateways are not offered as a first hop")
+	}
+	if !strings.Contains(onList, `<p class="empty">`+said) {
+		t.Error("the first-hop box does not say, in the service's words, why no gateway will carry a port yet")
+	}
+}
+
 // gatewayScreen draws the proxies page against a service holding gws.
 func gatewayScreen(t *testing.T, gws []fakebt.Gateway, chosen []string) string {
 	t.Helper()

@@ -169,6 +169,11 @@ type proxiesPage struct {
 	// the service answered and simply had nothing to offer, where an address
 	// would only be noise.
 	GatewayFaultAt string
+	// GatewayWhy is what the service said when it answered that it cannot
+	// raise a tunnel through any of its gateways — in its own words, because
+	// they name the thing to install, which a sentence of this program's could
+	// only paraphrase.
+	GatewayWhy string
 	// Taken is when the list on the screen came from the service, so the refresh
 	// button has something to say for itself. Empty when no list was read.
 	Taken string
@@ -190,9 +195,12 @@ type proxiesPage struct {
 	// HopGateways are the gateways a list's ports may go through first, by
 	// name, as the service holds them — with the one already chosen among them
 	// even when the service no longer has it, so a form drawn over it does not
-	// quietly change it. HopFault is why they could not be asked for.
+	// quietly change it. HopFault is why they could not be asked for, or why
+	// none of them will carry a port yet, and HopWhy is the service's own words
+	// for the second.
 	HopGateways []string
 	HopFault    string
+	HopWhy      string
 }
 
 // failureRow is one kind of failure and how often it happened.
@@ -382,12 +390,20 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	// then, rather than after a save of a profile with nothing chosen. It is the
 	// same list the first-hop box above was filled from, held for a couple of
 	// minutes, so asking for it costs nothing here.
+	//
+	// A service that says it cannot raise a tunnel still has its gateways drawn.
+	// It holds them, and what it lacks is a program on its own machine: drawn as
+	// "there are none", the screen said the opposite of what the service's own
+	// panel showed — thirty-six configurations, twenty of them answering a
+	// ping — and sent the reader looking for a fault in the list rather than
+	// for the missing program, which the service names.
 	if list, taken, err := s.askForGateways(r.Context(), saved, false); err != nil {
 		view.GatewayFault = gatewayFault(err)
 		view.GatewayFaultAt = saved.ControlURL
-	} else if !list.Available {
-		view.GatewayFault = "proxies.gateways.unavailable"
 	} else {
+		if !list.Available {
+			view.GatewayFault, view.GatewayWhy = "proxies.gateways.unavailable", list.Reason
+		}
 		view.Groups, view.Missing = gatewaysOffered(list, view.Form.Gateways)
 		for _, g := range view.Groups {
 			view.Chosen += g.Chosen
@@ -683,12 +699,14 @@ func (s *Server) offerHops(ctx context.Context, saved settings.Settings, view *p
 		return
 	}
 	list, _, err := s.askForGateways(ctx, saved, false)
-	switch {
-	case err != nil:
+	if err != nil {
 		view.HopFault = gatewayFault(err)
-	case !list.Available:
-		view.HopFault = "proxies.gateways.unavailable"
-	default:
+	} else {
+		// Offered even while the service cannot raise a tunnel, and said so
+		// beside them: see the gateways under the form.
+		if !list.Available {
+			view.HopFault, view.HopWhy = "proxies.gateways.unavailable", list.Reason
+		}
 		for _, g := range list.Gateways {
 			view.HopGateways = append(view.HopGateways, g.Name)
 		}
