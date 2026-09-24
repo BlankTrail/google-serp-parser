@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -418,29 +419,53 @@ func TestProfiles_WorkThroughExitsThatTerminateTLSAfterAnUpgrade(t *testing.T) {
 	}
 }
 
-func TestProfiles_DelegateTheNameToTheProxyAfterAnUpgrade(t *testing.T) {
-	// Every profile written before the column existed gets the strategy this
-	// parser wants, for the reason the column has a default at all: a name
-	// resolved by the exit itself cannot disagree with where the traffic comes
-	// out, and it costs no lookup before the request can start.
-	s := testStore(t)
-	if _, err := s.db.ExecContext(t.Context(),
-		`INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
-		        threads_per_upstream, protocol, gateways, is_default, vdns_mode,
-		        js_solver, http3, first_hop, allow_mitm)
-		 VALUES('from before', 'url', 'https://example.test/list', 0, 0, 1, 'socks5', '', 0, '', 1, 0, '', 1)`,
-	); err != nil {
-		t.Fatalf("writing a profile the way an older build did: %v", err)
+func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *testing.T) {
+	// Handing the name to the proxy was the default for a day, until a provider
+	// was found refusing the host Google's reCAPTCHA script is served from: a
+	// port that hands it that name cannot load the widget its solver has to
+	// pass. A profile still on the old default moves to the service's own
+	// ladder, and one that chose any other strategy keeps what it chose.
+	path := filepath.Join(t.TempDir(), "gserp.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, one := range []struct{ name, resolver string }{{"on the old default", "delegate"}, {"chosen", "isp"}} {
+		p := NewProfile()
+		p.Name, p.Kind, p.Location, p.Resolver = one.name, "url", "https://example.test/list", one.resolver
+		if _, err := s.CreateProfile(t.Context(), p); err != nil {
+			t.Fatalf("CreateProfile: %v", err)
+		}
+	}
+	// The step before this one left the schema as it is; only the version
+	// says the step is still to come.
+	if _, err := s.db.ExecContext(t.Context(), `PRAGMA user_version = 24`); err != nil {
+		t.Fatalf("winding the version back: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 
-	all, err := s.Profiles(t.Context())
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a version-24 database: %v", err)
+	}
+	defer func() { _ = again.Close() }()
+	all, err := again.Profiles(t.Context())
 	if err != nil {
 		t.Fatalf("Profiles: %v", err)
 	}
 	for _, one := range all {
-		if one.Name == "from before" && one.Resolver != "delegate" {
-			t.Errorf("a profile written before the column resolves names by %q, want the name "+
-				"delegated to the proxy", one.Resolver)
+		switch one.Name {
+		case "on the old default":
+			if one.Resolver != "" {
+				t.Errorf("a profile on the old default resolves names by %q after the upgrade, "+
+					"want the service's own ladder", one.Resolver)
+			}
+		case "chosen":
+			if one.Resolver != "isp" {
+				t.Errorf("a profile that chose the provider's resolvers resolves by %q after the upgrade", one.Resolver)
+			}
 		}
 	}
 }

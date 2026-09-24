@@ -54,6 +54,14 @@ const (
 	// provider first, then a curated pool through the exit, then the exit
 	// resolving for itself. It is the empty string because that is what the
 	// service reads as "you did not say".
+	//
+	// It is what this parser asks for unless somebody says otherwise. The
+	// service resolves the name and hands the proxy an address, so a proxy that
+	// refuses names cannot refuse this one: a residential gateway answered a
+	// request for www.gstatic.com — where the script of Google's reCAPTCHA
+	// lives — with "host unreachable" on every exit, and a port handing it the
+	// name could never load the widget its solver has to pass. The ladder costs
+	// a lookup before the request; the service picks what works.
 	ResolverAuto = ""
 	// ResolverISP is the exit provider's own resolvers and nothing else, and it
 	// answers with a failure rather than walking on where they are unknown or
@@ -71,11 +79,12 @@ const (
 	// ResolverDelegate hands the name to the proxy and lets it resolve: a SOCKS5
 	// request by name rather than by address.
 	//
-	// It is what this parser asks for unless somebody says otherwise. The name
-	// is then resolved by whatever the exit itself uses, which is the one answer
-	// that cannot disagree with where the traffic comes out — and it costs no
-	// round trip of its own, where every other answer here asks a resolver
-	// before the request can start.
+	// The name is then resolved by whatever the exit itself uses, which cannot
+	// disagree with where the traffic comes out, and it costs no round trip of
+	// its own. It also puts every name at the proxy's mercy: a proxy that
+	// refuses one — as a residential gateway refused the host Google's
+	// reCAPTCHA script is served from — refuses it on every port that asks this
+	// way, and nothing on this side can route round it.
 	ResolverDelegate = "delegate"
 )
 

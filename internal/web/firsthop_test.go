@@ -355,17 +355,18 @@ func profileNamed(t *testing.T, s *Server, name string) store.Profile {
 	return store.Profile{}
 }
 
-func TestProfile_DelegatesTheNameToTheProxyUnlessToldOtherwise(t *testing.T) {
+func TestProfile_LetsTheServiceResolveTheNameUnlessToldOtherwise(t *testing.T) {
 	// Two questions, not one: the switch beside it says whether the exit is
-	// asked at all, and this says what is asked and by whom. Delegating hands
-	// the name to the proxy, so it is resolved by whatever the exit itself uses
-	// — the one answer that cannot disagree with where the traffic comes out,
-	// and the only one that costs no lookup before the request can start.
+	// asked at all, and this says what is asked and by whom. The service's own
+	// ladder resolves the name itself and hands the proxy an address, so a
+	// proxy that refuses names — as a residential gateway refused the host
+	// Google's reCAPTCHA script is served from — cannot refuse this one.
 	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 
 	body := getBody(t, s, proxiesAt+"?"+profileField+"=new")
-	if !strings.Contains(body, `<option value="delegate" selected>`) {
-		t.Error("a fresh profile is not offered with the name delegated to the proxy")
+	box, _, _ := strings.Cut(body[strings.Index(body, `name="resolver"`):], "</select>")
+	if !strings.Contains(box, `<option value="" selected>`) {
+		t.Error("a fresh profile is not offered with the service resolving the name itself")
 	}
 	// And the resolvers somebody names are not drawn until naming them is the
 	// choice: a box for a list nobody is filling in is a box to wonder about.

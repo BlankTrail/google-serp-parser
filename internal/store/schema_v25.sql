@@ -1,0 +1,17 @@
+-- How a profile's ports resolve names unless somebody says otherwise: the
+-- service's own ladder, which resolves the name itself and hands the proxy an
+-- address.
+--
+-- Handing the name to the proxy ("delegate") was the default until a provider
+-- was found refusing names: a residential gateway answered a request for
+-- www.gstatic.com — where the script of Google's reCAPTCHA lives — with "host
+-- unreachable" on every one of its exits, while the same exits carried
+-- www.google.com. A port that hands that name to such a proxy can never load
+-- the widget its solver has to pass, and every challenge fails after the
+-- solver's whole wait. The ladder costs a lookup before the request, and in
+-- exchange the service picks the answer that works.
+--
+-- Every profile still on the old default moves with it. The word was only ever
+-- written by this program's default, a day before this step; a profile that
+-- chose any other strategy keeps it.
+UPDATE proxy_profiles SET resolver = '' WHERE resolver = 'delegate';

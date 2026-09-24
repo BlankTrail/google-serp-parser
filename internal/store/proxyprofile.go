@@ -99,8 +99,9 @@ type Profile struct {
 	AllowMITM bool
 	// Resolver is how this profile's ports resolve names once they resolve them
 	// at all, and CustomResolvers the ones named where that is the answer. See
-	// the blanktrail.Resolver constants; "delegate" is what a profile ships
-	// with and means the proxy resolves the name itself.
+	// the blanktrail.Resolver constants; empty is what a profile ships with and
+	// is the service's own ladder, which resolves the name itself and hands the
+	// proxy an address.
 	Resolver        string
 	CustomResolvers []string
 	// FirstHop is the road this profile's ports take to their addresses: empty
@@ -131,12 +132,11 @@ func NewProfile() Profile {
 		Solver:    true,
 		HTTP3:     false,
 		AllowMITM: true,
-		// The word is written here rather than taken from the package that
-		// talks to the service: the column holds it and this package owns the
-		// column, and a store importing that package to name its own data
-		// would be the wrong way round — the same reason "gateways" is spelled
-		// out in Empty above.
-		Resolver: "delegate",
+		// Empty is the service's own ladder for resolving a name: it resolves
+		// the name itself and hands the proxy an address. Handing the proxy the
+		// name was the default until a provider was found refusing the one
+		// name a challenge cannot be passed without — see schema_v25.sql.
+		Resolver: "",
 	}
 }
 
