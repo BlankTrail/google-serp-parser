@@ -153,6 +153,31 @@ func TestSessionPool_HandsOutAPortWhoseLastAddressIsBusyElsewhere(t *testing.T) 
 	}
 }
 
+func TestLease_BelievesWhatThePortSaysItWearsAndNotTheStatus(t *testing.T) {
+	// Up to 1.4.973 the service answered 200 to a fingerprint named for a port
+	// and left the port wearing what it wore, whenever neither the mode nor the
+	// filter changed along with the name. A session put on such a port sends the
+	// cookies it won under one fingerprint under another — a session that
+	// disagrees with itself. The answer names what the port wears, and that is
+	// what is believed.
+	fake := fakebt.New(t)
+	p, _ := sessionPool(t, fake, 1, nil)
+	ctx := context.Background()
+	l, err := p.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer l.Release()
+
+	if err := l.Wear(ctx, "Chrome_150_win"); err != nil {
+		t.Fatalf("Wear on a port that puts the fingerprint on: %v", err)
+	}
+	fake.IgnoreNamedFingerprints(true)
+	if err := l.Wear(ctx, "Firefox_155_lin"); err == nil {
+		t.Error("the port goes on wearing Chrome_150_win, and Wear said Firefox_155_lin was put on")
+	}
+}
+
 func TestLease_ReadsTheTemplateItWasOpenedUnder(t *testing.T) {
 	cases := []struct {
 		spec PortSpec

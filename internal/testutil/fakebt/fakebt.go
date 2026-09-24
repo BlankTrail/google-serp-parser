@@ -114,9 +114,12 @@ type Server struct {
 	// it restarts.
 	down        bool
 	rotateDrift bool
-	fails       map[string][]failure
-	seen        []Recorded
-	nextPort    int
+	// namesIgnored makes a port told to wear a fingerprint by name go on
+	// wearing what it wore.
+	namesIgnored bool
+	fails        map[string][]failure
+	seen         []Recorded
+	nextPort     int
 
 	// solverQueue is what the service reports the challenge solver has in hand.
 	solverQueue SolverQueue
@@ -245,6 +248,19 @@ func (s *Server) SetRotateDrift(on bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rotateDrift = on
+}
+
+// IgnoreNamedFingerprints makes a port told to wear a fingerprint by name answer
+// 200 and go on wearing what it wore — what the service did up to 1.4.973
+// whenever neither the mode nor the filter changed along with the name.
+//
+// A caller that only ever meets a service that obeys cannot tell a guard that
+// reads what the port says it wears from one that trusts the status, and the
+// status was 200 either way.
+func (s *Server) IgnoreNamedFingerprints(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.namesIgnored = on
 }
 
 // otherOS returns an OS that is deliberately not the one given.
@@ -784,7 +800,9 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 		was := prof.Name
 		switch {
 		case req.SpecificProfile != "":
-			prof.Name = req.SpecificProfile
+			if !s.namesIgnored {
+				prof.Name = req.SpecificProfile
+			}
 		case req.Mode != "" && req.Mode != "specific":
 			prof.Name = ""
 			if req.Browser != "" {
