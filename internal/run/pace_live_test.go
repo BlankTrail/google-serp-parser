@@ -145,7 +145,12 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 		}
 		t.Skip("preflight refused the run")
 	}
-	st, err := store.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	// Where the sessions are kept. A run of its own starts from none; a run that
+	// is one step of several — the same list asked wider and wider — names a
+	// file in GSERP_PACE_STORE and takes up the sessions the step before it
+	// made, so each step measures its width rather than a cold start.
+	at := envOr("GSERP_PACE_STORE", filepath.Join(t.TempDir(), "sessions.db"))
+	st, err := store.Open(at)
 	if err != nil {
 		fatalf(t, "store.Open: %v", err)
 	}
@@ -220,11 +225,25 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 		logf(t, "MEASUREMENT the run stops before %d requests have gone through its ports", most)
 	}
 	var capped sync.Once
+	// The list a job reads is read again on the profile's interval, and what a
+	// reading does to the sessions going out through the list is part of the
+	// speed: a reading that carried them off their addresses cost each one a
+	// challenge. A static list never shows it, so a run may read its list again
+	// the way a job does.
+	rotor := blanktrail.NewStaticRotor(ups, blanktrail.WithRest(ban))
+	if every := time.Duration(envInt("GSERP_PACE_REFRESH", 0)) * time.Second; every > 0 &&
+		envOr("GSERP_PACE_LIST_FILE", "") == "" {
+		if rotor, err = blanktrail.NewRotor(ctx, blanktrail.Source{Kind: "url", Location: listURL,
+			Refresh: every, DefaultScheme: "socks5"}, blanktrail.WithRest(ban)); err != nil {
+			fatalf(t, "reading the list to read it again: %v", err)
+		}
+		defer rotor.Close()
+		logf(t, "MEASUREMENT the list is read again every %v, as a job reads it", every)
+	}
 	attempts := &attemptTally{}
 	p, err := blanktrail.NewPool(ctx, blanktrail.PoolConfig{
 		Client: client, Threads: paceThreads, PortsPerThread: 1, Spec: spec, CA: pre.CA,
-		Channels: []blanktrail.Channel{blanktrail.NewListChannel("list",
-			blanktrail.NewStaticRotor(ups, blanktrail.WithRest(ban)))},
+		Channels: []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)},
 		Sessions: true, Choose: k.Choose, MaxPerUpstream: perUpstream,
 		ReviveAfter: time.Minute, WaitForIdentity: true, NoKeepAlives: true,
 		Trace: func(tr blanktrail.RequestTrace) {
