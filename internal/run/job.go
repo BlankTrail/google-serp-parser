@@ -21,8 +21,9 @@ import (
 // one method is what keeps this package clear of storage: whatever writes the
 // history knows about databases and files, and this does not.
 //
-// Record is called from every thread of a job, and by more than one of them at
-// once. An implementation has to be safe for concurrent use.
+// Record is called for every query a job finishes, from whichever goroutine
+// settles it, and for more than one query at once. An implementation has to be
+// safe for concurrent use.
 type Sink interface {
 	Record(ctx context.Context, res QueryResult) error
 }
@@ -341,6 +342,8 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 		}
 		r.step(thread, StageQuery, began, text, results[at].Err)
 	}
+	// Where a walking job's threads leave the queries they finish; see aside.
+	put := newAside(ctx, threads)
 
 	// What every thread of a job that walks shares: the queries the sessions
 	// are carrying, and the slice their pages are filed in. A query is carried
@@ -379,7 +382,9 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 					results: results,
 					mu:      &filing,
 					walks:   carrying,
-					settle:  func(ctx context.Context, at int, began time.Time) { settle(ctx, thread, at, began) },
+					settle: func(_ context.Context, at int, began time.Time) {
+						put.hand(func(ctx context.Context) { settle(ctx, thread, at, began) })
+					},
 				}
 				// A run that keeps its own sessions walks a query through the
 				// session that opened it, page by page, letting the port go
@@ -478,24 +483,27 @@ sending:
 	// settles takes them with it. Measured on a live job: a hundred threads at
 	// ten pages a query lost three hundred and seventy pages to one press.
 	//
-	// The context is the one that just ended, so the writing is done under one
-	// that is not cancelled — with a bound of its own, because a run being
-	// stopped is a run somebody is waiting for.
+	// They are settled aside with the queries the threads finished, under the
+	// one bound: the context is the one that just ended, so the writing is done
+	// under one that is not cancelled — with a bound of its own, because a run
+	// being stopped is a run somebody is waiting for.
+	var left []*walk
 	if attempt.Keeper != nil {
-		if left := carrying.left(); len(left) > 0 {
-			keeping, stop := context.WithTimeout(context.WithoutCancel(ctx), settlingTheRest)
-			for _, one := range left {
-				if len(results[one.at].Pages) == 0 {
-					// Nothing was collected, so there is nothing to keep and
-					// nothing to say: the query stays as the history has it and
-					// the next run takes it up again.
-					continue
-				}
-				settle(keeping, 0, one.at, one.began)
-			}
-			stop()
-		}
+		left = carrying.left()
 	}
+	if ctx.Err() != nil || len(left) > 0 {
+		put.stop()
+	}
+	for _, one := range left {
+		if len(results[one.at].Pages) == 0 {
+			// Nothing was collected, so there is nothing to keep and nothing to
+			// say: the query stays as the history has it and the next run takes
+			// it up again.
+			continue
+		}
+		put.hand(func(ctx context.Context) { settle(ctx, 0, one.at, one.began) })
+	}
+	put.wait()
 
 	rep := Report{Results: results, Requests: r.Pool.Stats().Requests - before}
 	select {

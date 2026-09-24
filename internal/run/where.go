@@ -43,7 +43,10 @@ const (
 	// the line in the history.
 	DoingGiveBack Doing = "giving the session back"
 	// DoingRecord is settling a finished query — the hidden addresses looked
-	// up, and the result written down.
+	// up, and the result written down. A thread of a walking job does not do
+	// that itself: it hands the query aside and stands here only while there is
+	// no room to hand it to, which is the history falling behind the walks (see
+	// aside).
 	DoingRecord Doing = "writing the result down"
 	// DoingIdle is a thread with nothing to do: every session it could carry on
 	// with is resting, and there is no query left to open one for.
