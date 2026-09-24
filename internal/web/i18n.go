@@ -502,6 +502,21 @@ var catalogue = map[Lang]map[string]string{
 		"proxies.solver.why":         "Google answers a challenge with nothing a parser can read; the solver carries the session through. A tariff holds a fixed number of solver processes.",
 		"proxies.mitm":               "Work through exits that terminate TLS themselves",
 		"proxies.strict":             "Never hand the proxy a name",
+		"proxies.pick":               "Pick the best way",
+		"proxies.pick.going":         "Trying",
+		"proxies.pick.way":           "Way",
+		"proxies.pick.live":          "Reached Google",
+		"proxies.pick.chosen":        "Picked:",
+		"proxies.pick.saved":         "saved in the profile",
+		"proxies.pick.none":          "No way reached every host on the addresses that answered; the profile is unchanged.",
+		"proxies.pick.dead":          "None of the addresses tried reached Google; the profile is unchanged.",
+		"proxies.pick.unsaved":       "The way was picked but the profile could not be saved.",
+		"proxies.pick.why": "The pick tries the ways on up to twenty of this profile's own addresses, over the road its " +
+			"ports take: first handing the name to the proxy, which costs no lookup and no connection of its " +
+			"own, then the exit provider's resolvers, then the public pool. The first way that reaches Google " +
+			"and the hosts its check loads from on nearly every address that answered is kept. A way other than " +
+			"handing the name over is kept because the proxy refused a name, so names are then kept away from " +
+			"the proxy altogether.",
 		"proxies.strict.why": "The service resolves every name itself and hands the proxy an address; a name it " +
 			"cannot resolve fails the request rather than going to the proxy. Off, one address that fails to " +
 			"answer sends the name to the proxy after all, and the port goes on sending names from then on. " +
@@ -1002,6 +1017,20 @@ var catalogue = map[Lang]map[string]string{
 		"proxies.solver.why":         "На челлендж Google отвечает тем, что парсер прочитать не может, — через него сессию проводит решатель. Процессов решателя в тарифе конечное число.",
 		"proxies.mitm":               "Работать через выходы, подменяющие TLS",
 		"proxies.strict":             "Не отдавать прокси имена сайтов",
+		"proxies.pick":               "Подобрать оптимальный метод",
+		"proxies.pick.going":         "Проверяю",
+		"proxies.pick.way":           "Метод",
+		"proxies.pick.live":          "Дошли до Google",
+		"proxies.pick.chosen":        "Выбран:",
+		"proxies.pick.saved":         "сохранён в профиль",
+		"proxies.pick.none":          "Ни один метод не открыл все нужные домены на ответивших адресах — профиль не изменён.",
+		"proxies.pick.dead":          "Ни один из проверенных адресов не дошёл до Google — профиль не изменён.",
+		"proxies.pick.unsaved":       "Метод подобран, но профиль сохранить не удалось.",
+		"proxies.pick.why": "Подбор пробует методы на двадцати (или меньше) адресах самого профиля, той же дорогой, " +
+			"что его порты: сначала делегирование — оно не тратит ни запроса к резолверу, ни лишнего соединения, — " +
+			"затем резолверы провайдера выхода, затем публичный пул. Оставляется первый метод, который почти на " +
+			"всех ответивших адресах открывает Google и домены, откуда грузится его проверка. Если выбран не " +
+			"делегирование, значит прокси отказал в имени — тогда имена прокси больше не отдаются вовсе.",
 		"proxies.strict.why": "Сервис сам резолвит каждое имя и передаёт прокси адрес; имя, которое он не " +
 			"смог разрешить, завершает запрос ошибкой, а не уходит прокси. Если выключить, один не ответивший " +
 			"адрес отправит прокси имя, и дальше порт будет отправлять имена всегда. Резидентский шлюз отказывал " +

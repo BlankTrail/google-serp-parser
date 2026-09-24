@@ -159,6 +159,10 @@
 <section class="card">
 <h2>{{if .Form.ID}}{{.T "proxies.profile.editing"}} {{.Form.Name}}{{else}}{{.T "proxies.profile.new"}}{{end}}</h2>
 <form id="gateways-afresh" method="post" action="/proxies/gateways"></form>
+{{/* The pick of a way of resolving names has a form of its own for the reason
+     the refresh above does: a press inside the profile's form would send the
+     profile. */}}
+<form id="resolver-pick" method="post" action="/proxies/resolver"><input type="hidden" name="profile" value="{{.Form.ID}}"></form>
 <form method="post" action="/proxies">
 {{/* Which profile is being written. Nought is one being made, and the same
      button writes both: making and editing differ by a number rather than by a
@@ -374,8 +378,21 @@
 <select id="resolver" name="resolver">
 {{range .Resolvers}}<option value="{{.Code}}"{{if eq $.Form.Resolver .Code}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
+{{/* Tries the ways on this profile's own addresses and keeps the cheapest one
+     that reaches everything a search needs. Only a profile that is written
+     down has addresses to try it on. */}}
+<button type="submit" form="resolver-pick" id="pick-resolver"{{if or (not .Form.ID) .Pick.Running}} disabled{{end}}>{{.T "proxies.pick"}}</button>
 </div>
 </div>
+{{with .Pick}}{{if .Asked}}<div class="pick" id="resolver-pick-reading">
+{{if .Running}}<p class="empty">{{$.T "proxies.pick.going"}} <strong>{{$.T (printf "proxies.resolver.%s" .Trying)}}</strong>: {{.Done}} / {{.Sample}}</p>{{end}}
+{{if .Tallies}}<table class="pick-tally">
+<thead><tr><th>{{$.T "proxies.pick.way"}}</th><th>{{$.T "proxies.pick.live"}}</th>{{range .Hosts}}<th><code>{{.}}</code></th>{{end}}</tr></thead>
+<tbody>{{range .Tallies}}<tr><td>{{$.T (printf "proxies.resolver.%s" .Method)}}</td><td>{{.Live}} / {{.Asked}}</td>{{range .Reached}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
+</table>{{end}}
+{{if .Chosen}}<p>{{$.T "proxies.pick.chosen"}} <strong>{{$.T (printf "proxies.resolver.%s" .Chosen)}}</strong>{{if .Saved}} — {{$.T "proxies.pick.saved"}}{{end}}</p>{{end}}
+{{if .Fault}}<p class="empty">{{$.T .Fault}}</p>{{end}}
+</div>{{end}}{{end}}
 {{/* The resolvers somebody names, drawn only where naming them is the choice:
      a box for a list nobody is filling in is a box to wonder about. */}}
 <div class="row" data-resolver="custom"{{if ne .Form.Resolver "custom"}} hidden{{end}}>
@@ -403,6 +420,7 @@
 <li>{{.T "proxies.mitm.why"}}</li>
 <li>{{.T "proxies.resolver.why"}}</li>
 <li>{{.T "proxies.strict.why"}}</li>
+<li>{{.T "proxies.pick.why"}}</li>
 <li>{{.T "proxies.http3.why"}}</li>
 </ul>
 </details>

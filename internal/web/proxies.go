@@ -192,6 +192,10 @@ type proxiesPage struct {
 	CheckSample  int
 	CheckThreads int
 
+	// Pick is the last pick of a way of resolving names made for this profile,
+	// or the one going on now. It is drawn only under the profile it belongs to.
+	Pick pickReading
+
 	// HopGateways are the gateways a list's ports may go through first, by
 	// name, as the service holds them — with the one already chosen among them
 	// even when the service no longer has it, so a form drawn over it does not
@@ -360,6 +364,12 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	}
 	view.Form = profileShowing(editing)
 	view.CheckSample, view.CheckThreads = listCheckSample, listCheckThreads
+	if pick := s.picking.Reading(); pick.Of == editing.ID && editing.ID != 0 {
+		view.Pick = pick
+		if pick.Running {
+			view.Refresh = proxiesRefresh.Milliseconds()
+		}
+	}
 	// The reading belongs to one profile. A check made on another one is not
 	// shown here at all rather than shown under this heading.
 	if check := s.checking.Reading(); check.Of == editing.ID && editing.ID != 0 {
