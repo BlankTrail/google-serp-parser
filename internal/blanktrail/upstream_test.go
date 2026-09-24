@@ -456,10 +456,13 @@ func TestRotor_AReloadedListDoesNotRestartOrCancelARest(t *testing.T) {
 	}
 }
 
-func TestRotor_AReloadForgetsAnAddressItNoLongerLists(t *testing.T) {
-	// An address the source has dropped cannot be handed out again, so its rest
-	// is a record of nothing. Kept, it would inflate the count of resting
-	// addresses for as long as the rotor lives.
+func TestRotor_AReloadKeepsTheRestOfAnAddressItNoLongerLists(t *testing.T) {
+	// An address the source has dropped has not stopped working by being
+	// dropped, and sessions go on through it after the list has moved on. What
+	// they need to know about it is whether it has stopped — its rest — and a
+	// reading of the list does not end the rest early. Nor does it count
+	// towards what this list has resting, which is about what is left to hand
+	// out.
 	clock := time.Unix(1700000000, 0)
 	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
 	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
@@ -470,8 +473,77 @@ func TestRotor_AReloadForgetsAnAddressItNoLongerLists(t *testing.T) {
 	reloaded, _ := Parse("2.2.2.2:2\n3.3.3.3:3", "socks5")
 	r.reconcile(reloaded)
 
+	if !r.Rests(ups[0].Key()) {
+		t.Error("a reload that dropped a resting address ended its rest")
+	}
+	if got := r.RestingHere(); got != 0 {
+		t.Errorf("RestingHere()=%d after a reload that dropped the only resting address, want 0", got)
+	}
+	if r.Rests(ups[1].Key()) {
+		t.Error("an address that never failed rests")
+	}
+
+	// The rest runs out on its own, and takes its record with it.
+	clock = clock.Add(time.Hour)
+	if r.Rests(ups[0].Key()) {
+		t.Error("the address still rests an hour on")
+	}
 	if got := r.Benched(); got != 0 {
-		t.Errorf("Benched()=%d after a reload that dropped the address, want 0", got)
+		t.Errorf("Benched()=%d once the rest ran out, want 0", got)
+	}
+}
+
+func TestRotor_AReloadForgetsACountShortOfARestForAnAddressItNoLongerLists(t *testing.T) {
+	// A failure short of the threshold is not a verdict on anything, and kept
+	// for an address no reading of the list holds any more, it would be kept for
+	// as long as the rotor lives — one for every address a session ever went out
+	// through.
+	clock := time.Unix(1700000000, 0)
+	ups, _ := Parse("1.1.1.1:1\n2.2.2.2:2", "socks5")
+	r := NewStaticRotor(ups, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+
+	r.MarkBad(ups[0])
+	r.MarkBad(ups[1])
+	r.reconcile(ups[1:])
+	if _, kept := r.fails[ups[0].Key()]; kept {
+		t.Error("a count short of a rest was kept for an address the list no longer holds")
+	}
+	if r.fails[ups[1].Key()] != 1 {
+		t.Error("a reload that still lists an address forgot its count")
+	}
+}
+
+func TestRotor_RestsOfAddressesTheListNoLongerHoldsTakeNoShareOfTheBench(t *testing.T) {
+	// The bench's ceiling is about what is left of this list to hand out. A
+	// rest kept for an address the list has since dropped is there for the
+	// sessions still going out through it; counted against the ceiling, it
+	// would send an address of this list back early, which nothing about the
+	// list asked for.
+	clock := time.Unix(1700000000, 0)
+	var dropped []string
+	for i := range 8 {
+		dropped = append(dropped, fmt.Sprintf("10.1.0.%d:1080", i+1))
+	}
+	old, _ := Parse(strings.Join(dropped, "\n"), "socks5")
+	r := NewStaticRotor(old, WithRest(time.Hour), WithClock(func() time.Time { return clock }))
+	for _, u := range old[:6] {
+		clock = clock.Add(time.Second)
+		r.MarkDead(u)
+	}
+
+	fresh, _ := Parse("10.2.0.1:1080\n10.2.0.2:1080\n10.2.0.3:1080\n10.2.0.4:1080", "socks5")
+	r.reconcile(fresh)
+	for _, u := range fresh[:3] {
+		clock = clock.Add(time.Second)
+		r.MarkDead(u)
+	}
+	if got := r.RestingHere(); got != 3 {
+		t.Errorf("%d of this list's four addresses rest, want the three that stopped", got)
+	}
+	for _, u := range old[:6] {
+		if !r.Rests(u.Key()) {
+			t.Errorf("%s was sent back to make room on a list it is no longer on", u.Key())
+		}
 	}
 }
 

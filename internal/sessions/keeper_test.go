@@ -56,16 +56,12 @@ func (p *port) Exit() string {
 	return p.exit
 }
 
-func (p *port) Offers(a string) bool {
+// Rests reads the rests alone, as the proxy service's list does: an address the
+// list no longer holds keeps the rest it was serving.
+func (p *port) Rests(a string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return slices.Contains(p.list, a) && !p.resting[a]
-}
-
-func (p *port) Knows(a string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return slices.Contains(p.list, a)
+	return p.resting[a]
 }
 
 func (p *port) Stay(on bool) {
@@ -366,22 +362,22 @@ func TestKeeper_KeepsAGatewaySessionToItsGateway(t *testing.T) {
 	}
 }
 
-func TestKeeper_MovesASessionWhoseAddressIsGoneByTheSameRule(t *testing.T) {
-	// A session whose address has left the list — or is resting after failing
-	// to carry anything — takes another, chosen the way a new session's is.
-	// There it pays a challenge; that is what changing exit costs.
+func TestKeeper_MovesASessionWhoseAddressHasStoppedByTheSameRule(t *testing.T) {
+	// A session with nothing to wait for whose address is resting after failing
+	// to carry anything takes another, chosen the way a new session's is.
 	c, h := startClock(), NewMemory()
 	k := keeperAt(h, c)
 	ctx := context.Background()
-	p := listPort(1, "a", "a", "b")
+	p := listPort(1, "a", "a", "b", "c")
 	s, _ := k.Take(ctx, p, desktop)
-	_ = s.Answered(ctx, p)
+	s.PutBack()
 	c.pass(time.Minute)
 
-	// The list no longer holds a. The port stands on c; the rule picks b — both
-	// carry nothing and neither has rested less, and b comes first — so a move
-	// to b is the rule deciding, not the port's address being taken as found.
-	q := listPort(2, "c", "b", "c")
+	// The port stands on c; the rule picks b — both carry nothing and neither
+	// has rested less, and b comes first — so a move to b is the rule deciding,
+	// not the port's address being taken as found.
+	q := listPort(2, "c", "a", "b", "c")
+	q.resting["a"] = true
 	again, _ := k.Take(ctx, q, desktop)
 	if again.ID != s.ID {
 		t.Fatalf("got %d, want the rested session", again.ID)
@@ -744,19 +740,92 @@ func TestKeeper_KeepsASessionThatHasAnsweredWaitingForItsRestingAddress(t *testi
 	}
 }
 
-func TestKeeper_MovesASessionThatHasAnsweredOnlyWhenItsAddressLeavesTheList(t *testing.T) {
+func TestKeeper_KeepsASessionOnItsAddressAfterTheListDropsIt(t *testing.T) {
+	// A list read again is not a verdict on the addresses it leaves out: a
+	// wingate list changes half of them in twenty seconds, and the ones it
+	// dropped go on answering. A session is taken off its address when the
+	// address stops carrying its requests, and never because a reading of the
+	// list no longer has it — carried off an address that works, it pays a
+	// challenge where it lands for nothing.
 	c, h := startClock(), NewMemory()
 	k := keeperAt(h, c)
+	ctx := context.Background()
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+
+	// The list no longer holds a, and the port stands on b.
+	p := listPort(1, "b", "b")
+	got, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if got.ID != s.ID || p.Exit() != "addr:a" {
+		t.Fatalf("got session %d on %q, want %d on its own address a", got.ID, p.Exit(), s.ID)
+	}
+	if !p.stayed {
+		t.Error("the port was not told to keep the session's address")
+	}
+	_ = got.Answered(ctx, p)
+	if kept, _ := h.Get(s.ID); kept.Exit != "addr:a" {
+		t.Errorf("the history has the session going out through %q, want a", kept.Exit)
+	}
+
+	// A session that has never answered keeps its address the same way: nothing
+	// about the address has changed but the list.
+	fresh, err := k.Take(ctx, listPort(2, "c", "c"), desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	fresh.PutBack()
+	c.pass(time.Minute)
+	q := listPort(3, "b", "b")
+	if got, err := k.TakeOneOf(ctx, q, desktop, []int64{fresh.ID}); err != nil || q.Exit() != "addr:c" {
+		t.Errorf("got %v on %q (%v), want session %d on its own address c", got, q.Exit(), err, fresh.ID)
+	}
+}
+
+func TestKeeper_KeepsASessionThatHasAnsweredWaitingForItsRestingAddressAfterTheListDropsIt(t *testing.T) {
+	// The address stopped and then went from the list. What the session waits
+	// for is the rest, and a reading of the list does not cut it short.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
 	s := answeredOn(t, k, "a", "a", "b")
 	c.pass(time.Minute)
 
 	p := listPort(1, "b", "b")
-	got, err := k.Take(context.Background(), p, desktop)
+	p.resting["a"] = true
+	got, err := k.Take(ctx, p, desktop)
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	if got.ID != s.ID || p.Exit() != "addr:b" {
-		t.Errorf("got session %d on %q, want %d moved to b: its address has left the list", got.ID, p.Exit(), s.ID)
+	if got.ID == s.ID {
+		t.Errorf("a session that has answered was carried off its resting address to %q", p.Exit())
+	}
+}
+
+func TestKeeper_HoldsAnAddressTheListNoLongerHasToItsShareOfSessions(t *testing.T) {
+	// An address carries as many sessions at once as it may, listed or not: the
+	// share is about what one exit can bear, and a reading of the list does not
+	// change the exit.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	first := answeredOn(t, k, "a", "a")
+	second := answeredOn(t, k, "a", "a")
+	c.pass(time.Minute)
+
+	one, err := k.Take(ctx, listPort(1, "b", "b"), desktop)
+	if err != nil || (one.ID != first.ID && one.ID != second.ID) {
+		t.Fatalf("got %v (%v), want one of the two sessions on a", one, err)
+	}
+	p := listPort(2, "b", "b")
+	other, err := k.Take(ctx, p, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	if other.ID == first.ID || other.ID == second.ID {
+		t.Errorf("session %d went out through a while another already was, over a share of one", other.ID)
 	}
 }
 

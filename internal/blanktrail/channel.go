@@ -98,12 +98,10 @@ func (c *listChannel) Free() []Egress {
 	return out
 }
 
-// Lists says whether the list holds the address at all, resting or not.
-func (c *listChannel) Lists(address string) bool { return c.rotor.Lists(address) }
-
-// Holds says whether the list holds the address and it is not resting. The
-// address is an egress's Upstream, which is the rotor's key.
-func (c *listChannel) Holds(address string) bool { return c.rotor.Holds(address) }
+// Rests says whether the address is resting after it stopped carrying requests,
+// whether or not the list still holds it. The address is an egress's Upstream,
+// which is the rotor's key.
+func (c *listChannel) Rests(address string) bool { return c.rotor.Rests(address) }
 
 func (c *listChannel) Renew(_ context.Context, _ Egress) (Egress, error) {
 	eg, ok := c.Next()

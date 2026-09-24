@@ -215,10 +215,21 @@ func (k *Keeper) TakeColdest(ctx context.Context, p Port, w Want, idle time.Dura
 // on its gateway, an address's only on an address, and not on an address already
 // working as many sessions as it may.
 //
+// A session's address is its own for as long as the address carries its
+// requests, and whether the list still holds it does not come into it. A list
+// read again is somebody else's new copy of it, not a verdict on the addresses
+// it leaves out: measured on a wingate list, half the addresses changed between
+// two readings twenty seconds apart, while addresses read ten minutes earlier
+// answered as often as fresh ones. A session carried off an address that still
+// works pays a challenge where it lands, for nothing. What takes a session off
+// its address is the address stopping: a request it did not carry puts it to
+// rest.
+//
 // A session that has answered and whose address is resting waits for it. It
 // holds a clearance for that address, and taken elsewhere it would spend it on a
-// challenge; the rest runs out, and the address carries it again or leaves the
-// list. A session that has never answered has nothing to wait for.
+// challenge; the rest runs out, and the address carries it again. A session
+// that has never answered has nothing to wait for, and goes where an address is
+// free.
 func fitsPort(s *kept, portExit string, busy map[string]int, limit int, p Port) bool {
 	if onGateway(portExit) || onGateway(s.record.Exit) {
 		return s.record.Exit == portExit
@@ -227,14 +238,10 @@ func fitsPort(s *kept, portExit string, busy map[string]int, limit int, p Port) 
 	if !ok {
 		return true
 	}
-	offered := p.Offers(a)
-	if !offered && hasAnswered(s.record) && p.Knows(a) {
-		return false
+	if p.Rests(a) {
+		return !hasAnswered(s.record)
 	}
-	if offered && busy[a] >= limit {
-		return false
-	}
-	return true
+	return busy[a] < limit
 }
 
 // pick takes the free session that fits, rested for the caller's pause and used
@@ -320,11 +327,13 @@ func (k *Keeper) put(ctx context.Context, p Port, s *kept) (*Held, error) {
 	pinned := hasAnswered(s.record)
 	if !onGateway(s.record.Exit) {
 		a, ok := addressOf(s.record.Exit)
-		// A session that has never answered goes wherever an address is free.
-		// One that has answered moves only when its address has left the list
-		// — a resting one it waited for — and pays a challenge where it lands:
-		// that is what changing exit costs.
-		if move := !ok || (pinned && !p.Knows(a)) || (!pinned && !p.Offers(a)); move {
+		// A session goes out through its own address, listed or not, until the
+		// address stops carrying its requests. One that has never answered and
+		// whose address is resting goes wherever an address is free; one that
+		// has answered waited for its address instead (see fitsPort), and is
+		// moved off it only by a request it did not carry — paying a challenge
+		// where it lands, which is what changing exit costs.
+		if move := !ok || (!pinned && p.Rests(a)); move {
 			if a, ok = k.reserve(candidatesOf(p), p.Limit()); !ok {
 				k.release(s)
 				return nil, ErrNoAddress
@@ -594,11 +603,11 @@ func (h *Held) Admitted() bool {
 // Moved says this session is going out from an address other than the one it
 // last answered from.
 //
-// A session is moved when the address it answered on has left the list or would
-// not carry a request, and it arrives at the new one as a stranger: the same
-// cookies from another part of the world are what a check is for. So a check
-// met just after a move is the price of the address rather than a reading of
-// how fast the session is being asked.
+// A session is moved when the address it answered on would not carry a request,
+// or could not carry it past a check, and it arrives at the new one as a
+// stranger: the same cookies from another part of the world are what a check is
+// for. So a check met just after a move is the price of the address rather than
+// a reading of how fast the session is being asked.
 func (h *Held) Moved() bool {
 	if h == nil || h.keeper == nil {
 		return false

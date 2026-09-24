@@ -36,19 +36,13 @@ func (l *Lease) Exit() string {
 	}
 }
 
-// Offers says whether the port may be moved onto the address: the list the
-// port's addresses come from holds it, and it is not resting.
-func (l *Lease) Offers(address string) bool {
-	h, ok := l.pt.ch.(interface{ Holds(string) bool })
-	return ok && h.Holds(address)
-}
-
-// Knows says whether the list the port's addresses come from holds the address
-// at all, resting or not. A session whose address is resting waits for it; one
-// whose address has left the list takes another.
-func (l *Lease) Knows(address string) bool {
-	h, ok := l.pt.ch.(interface{ Lists(string) bool })
-	return ok && h.Lists(address)
+// Rests says whether the address has stopped carrying requests and is serving
+// its rest. Whether the list the port's addresses come from still holds it does
+// not come into it: a session keeps its address until the address stops, and a
+// list read again says nothing about that.
+func (l *Lease) Rests(address string) bool {
+	r, ok := l.pt.ch.(interface{ Rests(string) bool })
+	return ok && r.Rests(address)
 }
 
 // Stay says whether the port keeps its address whatever it meets, for as long as

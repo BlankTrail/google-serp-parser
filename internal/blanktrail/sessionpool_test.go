@@ -92,15 +92,6 @@ func TestSessionPool_OffersOnlyAddressesItsListHoldsAndThatAreNotResting(t *test
 	defer l.Release()
 
 	rotor.MarkDead(sessionAddrs[0])
-	if l.Offers(sessionAddrs[0].URL()) {
-		t.Error("an address resting after failing is offered")
-	}
-	if !l.Offers(sessionAddrs[1].URL()) {
-		t.Error("an address in the list and not resting is not offered")
-	}
-	if l.Offers("socks5://198.51.100.9:1080") {
-		t.Error("an address the list does not hold is offered")
-	}
 	if got := l.Candidates(); len(got) != 2 || slices.Contains(got, sessionAddrs[0].URL()) {
 		t.Errorf("candidates %v, want the two addresses not resting", got)
 	}
@@ -222,9 +213,9 @@ func TestLease_ThatStaysTriesOneAddressAndForgetsItOnRelease(t *testing.T) {
 	}
 }
 
-func TestLease_KnowsAnAddressItsListHoldsEvenWhileItRests(t *testing.T) {
-	// A session whose address rests waits for it; one whose address has left
-	// the list takes another. The two are told apart here.
+func TestLease_SaysAnAddressRestsWhetherOrNotItsListStillHoldsIt(t *testing.T) {
+	// What a session asks of its address is whether it has stopped, and a
+	// reading of the list that leaves the address out does not answer that.
 	p, rotor := sessionPool(t, fakebt.New(t), 1, nil)
 	l, err := p.Acquire(context.Background())
 	if err != nil {
@@ -232,10 +223,18 @@ func TestLease_KnowsAnAddressItsListHoldsEvenWhileItRests(t *testing.T) {
 	}
 	defer l.Release()
 	rotor.MarkDead(sessionAddrs[0])
-	if !l.Knows(sessionAddrs[0].URL()) || l.Offers(sessionAddrs[0].URL()) {
-		t.Error("a resting address is either not known or still offered")
+	if !l.Rests(sessionAddrs[0].URL()) {
+		t.Error("an address resting after failing does not rest")
 	}
-	if l.Knows("socks5://198.51.100.9:1080") {
-		t.Error("an address the list does not hold is known")
+	if l.Rests(sessionAddrs[1].URL()) {
+		t.Error("an address that never failed rests")
+	}
+	elsewhere, _ := Parse("socks5://198.51.100.9:1080", "socks5")
+	if l.Rests(elsewhere[0].URL()) {
+		t.Error("an address nobody saw fail rests because the list does not hold it")
+	}
+	rotor.MarkDead(elsewhere[0])
+	if !l.Rests(elsewhere[0].URL()) {
+		t.Error("an address the list does not hold was seen to stop and does not rest")
 	}
 }

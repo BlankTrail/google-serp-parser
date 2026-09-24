@@ -542,24 +542,19 @@ func (r *Rotor) Free() []Upstream {
 	return out
 }
 
-// Lists says whether the list holds the address with this key at all, resting
-// or not.
-func (r *Rotor) Lists(key string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.held[key]
-}
-
-// Holds says whether the list holds the address with this key and it is not
-// resting.
-func (r *Rotor) Holds(key string) bool {
+// Rests says whether the address with this key is serving a rest: it stopped
+// carrying requests, and its rest has not run out.
+//
+// Whether the list still holds the address does not come into it. A session
+// keeps the address it was given for as long as that address carries its
+// requests, and a list read again is not a verdict on any address in it — see
+// reconcile. So this is the one question a session's address is asked.
+func (r *Rotor) Rests(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.releaseRested(r.now())
-	if _, resting := r.benched[key]; resting {
-		return false
-	}
-	return r.held[key]
+	_, resting := r.benched[key]
+	return resting
 }
 
 // refreshNextRelease recomputes the earliest instant a rest ends. Called with
@@ -704,9 +699,14 @@ func (r *Rotor) bench(key string) {
 // The longest-rested go first, which is the only ordering with an argument
 // behind it: whatever was true when they were put away is the least likely to
 // still be true.
+//
+// Only the addresses the list holds are counted, and only they are taken back.
+// A rest kept for an address the list has since dropped is there for the
+// sessions still going out through it, and has nothing to do with how much of
+// the list is left to hand out.
 func (r *Rotor) keepBenchInBounds() {
 	ceiling := int(float64(len(r.ups)) * benchShare)
-	if ceiling < 1 || len(r.benched) <= ceiling {
+	if ceiling < 1 {
 		return
 	}
 	type rested struct {
@@ -715,10 +715,15 @@ func (r *Rotor) keepBenchInBounds() {
 	}
 	all := make([]rested, 0, len(r.benched))
 	for key, since := range r.benched {
-		all = append(all, rested{key: key, since: since})
+		if r.held[key] {
+			all = append(all, rested{key: key, since: since})
+		}
+	}
+	if len(all) <= ceiling {
+		return
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].since.Before(all[j].since) })
-	for _, one := range all[:len(r.benched)-ceiling] {
+	for _, one := range all[:len(all)-ceiling] {
 		delete(r.benched, one.key)
 		delete(r.fails, one.key)
 	}
@@ -836,15 +841,23 @@ func (r *Rotor) refreshLoop() {
 	}
 }
 
-// reconcile swaps in a freshly loaded list while keeping the cursor position and
-// forgetting failure counts and rests for proxies that are no longer present.
+// reconcile swaps in a freshly loaded list while keeping the cursor position.
 //
-// An address the source still lists keeps the rest it is serving. The rest
-// belongs to the address, not to the copy of the list it was read from, and a
-// source that reloads more often than the rest is long would otherwise never
-// let a rest run out. An address the source has dropped cannot be handed out
-// again, so its record is kept for nothing and would count as resting for as
-// long as the rotor lives.
+// Every address keeps the rest it is serving, whether the source still lists it
+// or not. The rest belongs to the address, not to the copy of the list it was
+// read from: a source that reloads more often than the rest is long would
+// otherwise never let a rest run out, and an address the source has dropped has
+// not stopped working by being dropped. Sessions go on through the addresses
+// they were given after the list has moved on — a list that turns over half its
+// addresses between two readings would otherwise carry every session off its
+// address, and every one of them would pay a challenge where it landed — so what
+// they need to know about such an address is still whether it has stopped. A
+// rest ends by itself, so keeping one costs nothing past its length.
+//
+// What is forgotten is a count of failures short of a rest, for an address the
+// source no longer lists. It is not a verdict on anything, and kept, it would
+// be kept for as long as the rotor lives for every address a session ever went
+// out through.
 func (r *Rotor) reconcile(ups []Upstream) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -857,12 +870,6 @@ func (r *Rotor) reconcile(ups []Upstream) {
 			delete(r.fails, k)
 		}
 	}
-	for k := range r.benched {
-		if !present[k] {
-			delete(r.benched, k)
-		}
-	}
-	r.refreshNextRelease()
 	r.setList(ups)
 	if len(ups) > 0 {
 		r.pos %= len(ups)

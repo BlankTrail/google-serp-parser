@@ -89,11 +89,9 @@ type Port interface {
 	// Exit is where the port goes out now: "addr:" and the address whole,
 	// "gw:" and a gateway's name, or empty.
 	Exit() string
-	// Offers says whether the port may be moved onto the address: the list
-	// holds it and it is not resting.
-	Offers(address string) bool
-	// Knows says whether the list holds the address at all, resting or not.
-	Knows(address string) bool
+	// Rests says whether the address has stopped carrying requests and is
+	// serving its rest, whether or not the list still holds it.
+	Rests(address string) bool
 	// Stay says whether the port keeps its address whatever it meets while this
 	// session is on it: a request its address does not carry ends there rather
 	// than being carried to another address.
