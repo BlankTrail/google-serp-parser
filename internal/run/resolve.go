@@ -4,7 +4,10 @@ package run
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
@@ -45,8 +48,10 @@ type spot struct{ page, at int }
 
 // resolveQuery reads every address one query's pages are missing.
 //
-// One address, one identity, and a fresh one for every attempt. That is the
-// whole of the arrangement, and it is what the measurement leaves standing: a
+// One address to an attempt, and a fresh identity for every attempt — though
+// not always an identity to itself: where the run has ports for the lookups
+// alone, several share a port at once (see lanes). That is the whole of the
+// arrangement, and it is what the measurement leaves standing: a
 // hidden address is read out of a Location header, and reading it needs nothing
 // a session provides. Measured on the live list, the same links through three
 // kinds of port — as a search runs, with the challenge solver switched off, and
@@ -151,7 +156,7 @@ func (r *Runner) readAddress(ctx context.Context, pool *blanktrail.Pool, res *Qu
 		if ctx.Err() != nil {
 			return total, nil
 		}
-		lease, err := pool.Acquire(ctx)
+		held, err := r.portFor(ctx, pool)
 		if err != nil {
 			if ctx.Err() != nil {
 				// The pool was fine; this worker was stopped because another
@@ -161,7 +166,7 @@ func (r *Runner) readAddress(ctx context.Context, pool *blanktrail.Pool, res *Qu
 			return total, err
 		}
 
-		client := lease.Client()
+		client := held.lease.Client()
 		resolver := google.NewResolver(client.Transport)
 		// The pool was told how long one request may take. A resolver built on
 		// the transport alone would drop that bound, and a call with no
@@ -179,11 +184,187 @@ func (r *Runner) readAddress(ctx context.Context, pool *blanktrail.Pool, res *Qu
 			// stayed on Google is the same verdict from the other direction —
 			// this identity is being sent to a challenge — and nothing below
 			// this layer can see it, because the request succeeded.
-			_ = lease.Reject(ctx)
+			held.refuse(ctx)
 		}
-		lease.Release()
+		held.leave()
 	}
 	return total, nil
+}
+
+// portFor is a port to read one link through.
+//
+// The lookups of a run that has ports of its own for them share those ports,
+// lookupsAtOnce to a port. A run that reads them through its searching ports
+// takes one each, as it always did: a searching port carries a session, and
+// what goes out through it at the same moment as its own search is what that
+// session is seen doing.
+func (r *Runner) portFor(ctx context.Context, pool *blanktrail.Pool) (*lane, error) {
+	if r.Addresses == nil {
+		lease, err := pool.Acquire(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return &lane{lease: lease, users: 1}, nil
+	}
+	// Asking for the set again is what lets it widen while its ports are all
+	// carrying lookups: a lookup that shares a port stands in no queue, and a
+	// set that waited for one to widen would put ten on one address while the
+	// ports it is allowed stood unopened.
+	return r.lookupLanes().take(ctx, pool, func(ctx context.Context) { _, _ = r.addresses(ctx) })
+}
+
+// lookupLanes is the run's register of shared lookup ports, made the first
+// time a lookup asks for one.
+func (r *Runner) lookupLanes() *lanes {
+	r.lanesOnce.Do(func() { r.lanes = &lanes{} })
+	return r.lanes
+}
+
+// lookupsAtOnce is how many lookups one port of the set they have to themselves
+// carries at the same moment.
+//
+// One was the rule while each lookup took a port for itself, and it was the
+// ceiling a job with addresses ran into. A hundred ports reading one link each
+// read about seven thousand a minute — 0.86 s a link on average — while a
+// hundred threads searching at full speed wanted about nine thousand four
+// hundred, nine to a page. The queue of finished queries waiting for their
+// addresses filled, and the threads stood in it: over the pair of runs of
+// 2026-09-25, 59 of 100 threads were asking Google with the lookups and 94
+// without them, 821 pages a minute against 1054, and the captchas a thousand
+// pages cost were the same in both.
+//
+// Ten is the user's number. The service holds no limit of its own on how many
+// connections a port carries unless a port is opened with one, and a request in
+// flight survives the port being moved to another address.
+const lookupsAtOnce = 10
+
+// lanes shares the ports the hidden addresses are read through.
+//
+// A lookup takes a port of its own while one stands free, so the lookups spread
+// over every address the set holds before any address carries two at once: what
+// Google sees of one exit is as little as the set allows. Only when every port
+// is carrying lookups does one join another, on the least crowded port with
+// room — and a port one lookup came back empty from takes no more until it has
+// been given back, since whatever that said about its address holds for the
+// next lookup too.
+type lanes struct {
+	mu   sync.Mutex
+	open []*lane
+}
+
+// lane is one port and the lookups on it.
+type lane struct {
+	// from is the register the lane is shared through, and nil for a port
+	// taken for one lookup alone.
+	from  *lanes
+	pool  *blanktrail.Pool
+	lease *blanktrail.Lease
+	// users and shut are the register's, read and written under its lock.
+	users int
+	shut  bool
+	// blaming keeps two lookups from refusing the same address at once: a
+	// refusal may move the port, which is a call to the service.
+	blaming sync.Mutex
+}
+
+// take is a place on a port for one lookup.
+func (ls *lanes) take(ctx context.Context, pool *blanktrail.Pool, widen func(context.Context)) (*lane, error) {
+	for {
+		lease, err := pool.TryAcquire(ctx)
+		if err == nil {
+			return ls.opened(pool, lease), nil
+		}
+		if !errors.Is(err, blanktrail.ErrPoolExhausted) {
+			return nil, err
+		}
+		if l := ls.join(pool); l != nil {
+			widen(ctx)
+			return l, nil
+		}
+		// Every port is carrying all it may. The lookup queues for one — which
+		// is also what tells the set it is too narrow — but only for a moment
+		// before it looks again: a place on a shared port comes free long
+		// before the whole port does, and a lookup that waited for the port
+		// could wait for as long as others kept joining it.
+		wait, cancel := context.WithTimeout(ctx, lookupsLookAgain)
+		lease, err = pool.Acquire(wait)
+		cancel()
+		if err == nil {
+			return ls.opened(pool, lease), nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+	}
+}
+
+// lookupsLookAgain is how long a lookup that found every port full queues for
+// one before it looks for a place on a shared one again.
+const lookupsLookAgain = 50 * time.Millisecond
+
+// opened registers a port just taken, with its first lookup on it.
+func (ls *lanes) opened(pool *blanktrail.Pool, lease *blanktrail.Lease) *lane {
+	l := &lane{from: ls, pool: pool, lease: lease, users: 1}
+	ls.mu.Lock()
+	ls.open = append(ls.open, l)
+	ls.mu.Unlock()
+	return l
+}
+
+// join puts one more lookup on the least crowded port of the pool with room.
+func (ls *lanes) join(pool *blanktrail.Pool) *lane {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	var best *lane
+	for _, l := range ls.open {
+		if l.pool != pool || l.shut || l.users >= lookupsAtOnce {
+			continue
+		}
+		if best == nil || l.users < best.users {
+			best = l
+		}
+	}
+	if best != nil {
+		best.users++
+	}
+	return best
+}
+
+// refuse says nothing came back through the lane's address: the address is
+// blamed, as a lookup on a port of its own blamed it, and no further lookup
+// joins the lane.
+func (l *lane) refuse(ctx context.Context) {
+	if l.from != nil {
+		l.from.mu.Lock()
+		l.shut = true
+		l.from.mu.Unlock()
+	}
+	l.blaming.Lock()
+	_ = l.lease.Reject(ctx)
+	l.blaming.Unlock()
+}
+
+// leave ends one lookup's place on the lane. The last one out gives the port
+// back.
+func (l *lane) leave() {
+	ls := l.from
+	if ls == nil {
+		l.lease.Release()
+		return
+	}
+	ls.mu.Lock()
+	l.users--
+	last := l.users == 0
+	if last {
+		ls.open = slices.DeleteFunc(ls.open, func(o *lane) bool { return o == l })
+	}
+	ls.mu.Unlock()
+	if last {
+		l.lease.Release()
+	}
 }
 
 // addresses is the pool the lookups go through.

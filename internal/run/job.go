@@ -257,6 +257,10 @@ type Runner struct {
 	// carrying, kept here so what is under a session can be asked of the run
 	// from outside it.
 	carrying *walks
+	// lanes is how the lookups share the ports they have to themselves; see
+	// portFor.
+	lanes     *lanes
+	lanesOnce sync.Once
 }
 
 // Run works through a job and reports what came of every query.

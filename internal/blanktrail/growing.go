@@ -9,7 +9,7 @@ import (
 )
 
 // Growing is a pool that is not opened until something asks for it, and widens
-// while callers are queueing for an identity.
+// while more identities are wanted than it holds.
 //
 // It is what the second set of ports wants to be — the ones the hidden
 // addresses are read through. Whether a job needs any of them is not knowable
@@ -21,10 +21,10 @@ import (
 // machine.
 //
 // So it opens one port the first time an address actually has to be read, and
-// takes another whenever somebody is standing in the queue for one. A region
-// that states its addresses never opens a single port; one that hides them
-// climbs to what it needs within seconds of the first query settling and stops
-// there.
+// takes another whenever somebody is standing in the queue for one, or every
+// port it holds is taken. A region that states its addresses never opens a
+// single port; one that hides them climbs to what it needs within seconds of
+// the first query settling and stops there.
 type Growing struct {
 	// open makes a pool of n ports. It is a function rather than a config
 	// because what those ports are made of belongs to whoever is opening them —
@@ -67,7 +67,7 @@ func NewGrowing(most int, open func(ctx context.Context, ports int) (*Pool, erro
 }
 
 // Identities returns the pool, opening it the first time and widening it when
-// somebody is queueing for an identity.
+// somebody is queueing for an identity or every identity it holds is taken.
 //
 // A failure to open is remembered and handed back to every later caller rather
 // than retried on each: the reasons a pool will not open are the service being
@@ -96,7 +96,11 @@ func (g *Growing) Identities(ctx context.Context) (*Pool, error) {
 	}
 
 	if g.pool.Size() < g.most && g.now().Sub(g.grewAt) >= g.gap {
-		if st := g.pool.Stats(); st.Waiting > 0 {
+		// Taken counts as well as a queue does. The lookups share the ports they
+		// read through, and one that joins a busy port stands in no queue: a set
+		// that widened only for a queue would pile them onto the address it
+		// opened first while the ports it is allowed stood unopened.
+		if st := g.pool.Stats(); st.Waiting > 0 || g.pool.InUse() >= st.Available {
 			// A failure to widen is not a failure to answer: the caller has a
 			// pool, it is merely narrower than it would like.
 			if err := g.pool.Grow(ctx, 1); err == nil {
@@ -106,6 +110,9 @@ func (g *Growing) Identities(ctx context.Context) (*Pool, error) {
 	}
 	return g.pool, nil
 }
+
+// Ceiling is how many ports the set may widen to.
+func (g *Growing) Ceiling() int { return g.most }
 
 // Opened is the pool if one was ever opened, and nil if nothing ever asked. It
 // is what a screen reporting the run's ports reads, and what tells the two

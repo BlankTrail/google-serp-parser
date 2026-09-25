@@ -1427,6 +1427,33 @@ func TestDial_OpensPlainPortsForTheAddressesOnlyOnceOneHasToBeRead(t *testing.T)
 	}
 }
 
+func TestDial_LetsTheLookupsWidenToAPortAThreadButNoFurtherThanAHundred(t *testing.T) {
+	// A lookup port carries several lookups at once, so a hundred of them read
+	// more links than the fastest run wants. More would be ports taken from
+	// the searches, out of the thousand the service holds for everything: a
+	// job of three hundred threads holds four hundred rather than six hundred.
+	fake := fakebt.New(t)
+	fake.SetCA(testCAPEM)
+	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
+	saved, _ := opts.saved(io.Discard)
+
+	for _, c := range []struct{ threads, want int }{{20, 20}, {101, 100}} {
+		want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.NewProfile(), Threads: c.threads, Ports: 1,
+			Device: blanktrail.DeviceDesktop, Addresses: true})
+		if err != nil {
+			t.Fatalf("opening the identities of a job of %d threads: %v", c.threads, err)
+		}
+		if want.Addresses == nil {
+			t.Fatalf("a job of %d threads that keeps addresses was given nowhere to read them from", c.threads)
+		}
+		if got := want.Addresses.Ceiling(); got != c.want {
+			t.Errorf("a job of %d threads may read addresses through %d ports, want %d", c.threads, got, c.want)
+		}
+		_ = want.Search.Close()
+		_ = want.Addresses.Close()
+	}
+}
+
 func TestDial_OpensNoAddressPortsForAJobThatKeepsNone(t *testing.T) {
 	// Ports are the scarce thing. A job with nothing to look up would hold a
 	// second set of them idle for the length of the run.

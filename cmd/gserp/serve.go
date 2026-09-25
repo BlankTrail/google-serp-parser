@@ -708,9 +708,8 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	// knowable yet: it depends on what Google answers with, and most regions
 	// put the address in the markup, where reading it costs no request at all.
 	// So the set opens its first port when the first address actually has to be
-	// read and widens while the lookups queue for one — up to the size of the
-	// pool above, which is where it would end on a region that hides every
-	// address, because that is where most of a job's requests then go.
+	// read and widens while the lookups want more ports than it holds — up to a
+	// port a thread, and never past lookupPortsAtMost.
 	//
 	// There is no cooldown worth keeping on them either: nothing is carried
 	// between two lookups, so there is no session for a rest to protect.
@@ -723,7 +722,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	plain.Spec.KeepSessions = false
 	plain.Specs = nil
 	plain.Cooldown = time.Millisecond
-	most := threads * ports
+	most := min(threads*ports, lookupPortsAtMost)
 	if most < 1 {
 		most = 1
 	}
@@ -735,6 +734,17 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 				return blanktrail.NewPool(ctx, one)
 			})}, nil
 }
+
+// lookupPortsAtMost is the most ports a job's lookups may widen to, whatever
+// its threads.
+//
+// A lookup port carries several lookups at once (see the run package), so a
+// hundred of them read far more links a minute than the fastest run measured
+// here wants. Past that, a port given to the lookups would be taken from the
+// searches: the service holds a thousand ports for everything, and a job of
+// three hundred threads holds four hundred of them rather than six hundred.
+// The number is the user's.
+const lookupPortsAtMost = 100
 
 // rests is where the addresses this machine has found dead are kept between
 // runs. It is an interface rather than the history itself so that the command

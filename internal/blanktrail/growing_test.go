@@ -88,7 +88,7 @@ func TestGrowing_OpensOnePortWhenTheFirstAddressHasToBeRead(t *testing.T) {
 	}
 }
 
-func TestGrowing_TakesAnotherPortOnlyWhileSomebodyIsQueueingForOne(t *testing.T) {
+func TestGrowing_TakesAnotherPortOnlyWhileMoreAreWanted(t *testing.T) {
 	// Demand, and nothing else, decides the size. A set that widened because it
 	// was asked would climb to its ceiling on a region that hides one address
 	// in a hundred, which is the waste this exists to avoid.
@@ -128,6 +128,52 @@ func TestGrowing_TakesAnotherPortOnlyWhileSomebodyIsQueueingForOne(t *testing.T)
 	}
 	if got := pool.Size(); got != 4 {
 		t.Errorf("the set grew past its ceiling to %d ports", got)
+	}
+}
+
+func TestGrowing_TakesAnotherPortWhileEveryPortItHoldsIsTaken(t *testing.T) {
+	// The lookups share the ports they read through, several to a port, and a
+	// lookup that joins a busy port stands in no queue. A set that widened only
+	// for a queue would carry all of them on the one address it opened first,
+	// with the ports it is allowed never opened at all.
+	f := fakebt.New(t)
+	g, _ := growingOver(t, f, 4)
+
+	pool, err := g.Identities(t.Context())
+	if err != nil {
+		t.Fatalf("Identities: %v", err)
+	}
+	lease, err := pool.TryAcquire(t.Context())
+	if err != nil {
+		t.Fatalf("taking the one port: %v", err)
+	}
+	defer lease.Release()
+	if st := pool.Stats(); st.Waiting != 0 {
+		t.Fatalf("%d are waiting, want nobody: the case is a taken port with no queue", st.Waiting)
+	}
+
+	if _, err := g.Identities(t.Context()); err != nil {
+		t.Fatalf("Identities: %v", err)
+	}
+	if got := pool.Size(); got != 2 {
+		t.Errorf("the set holds %d ports with its only one taken, want another opened", got)
+	}
+	// And the new one standing free, it takes no third.
+	if _, err := g.Identities(t.Context()); err != nil {
+		t.Fatalf("Identities: %v", err)
+	}
+	if got := pool.Size(); got != 2 {
+		t.Errorf("the set holds %d ports with one of them free, want the 2", got)
+	}
+}
+
+func TestGrowing_SaysHowFarItMayWiden(t *testing.T) {
+	g := NewGrowing(7, func(context.Context, int) (*Pool, error) { return nil, errors.New("not asked") })
+	if got := g.Ceiling(); got != 7 {
+		t.Errorf("Ceiling() = %d, want 7", got)
+	}
+	if got := NewGrowing(0, nil).Ceiling(); got != 1 {
+		t.Errorf("a ceiling of nought reads %d, want one", got)
 	}
 }
 
