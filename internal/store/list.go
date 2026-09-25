@@ -92,6 +92,10 @@ type JobSummary struct {
 	// reached the database, and nothing will run it.
 	PlanReady bool
 
+	// ChecksMet is how many of Google's checks the job has paid for over all its
+	// runs: the captchas the challenge solver solved for it. See AddChecks.
+	ChecksMet int
+
 	Total   int
 	Done    int
 	Failed  int
@@ -109,7 +113,7 @@ const jobSummaryQuery = `
 	       j.unique_by, j.dropped,
 	       j.pages, j.country, j.language, j.device,
 	       j.ports, j.threads, j.tries, j.cooldown_ms, j.rest_up_to_ms, j.fields, j.profile_id, j.whole_pool,
-	       j.browser, j.os, j.browser_release, j.plan_ready,
+	       j.browser, j.os, j.browser_release, j.plan_ready, j.checks_met,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
 	       sum(CASE WHEN q.state = 'failed'  THEN 1 ELSE 0 END),
@@ -165,6 +169,22 @@ func (s *Store) Progress(ctx context.Context, jobID int64) (JobSummary, error) {
 	return sum, nil
 }
 
+// AddChecks adds the checks one run of a job paid for to the job's count.
+//
+// A run knows what it paid for only while it runs, so it is written down as the
+// run lets go and adds up over a job's runs: what a job cost is then there to
+// be read once it is done, beside what it collected and how fast.
+func (s *Store) AddChecks(ctx context.Context, jobID int64, n int) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE jobs SET checks_met = checks_met + ? WHERE id = ?`, n, jobID)
+	if err != nil {
+		return fmt.Errorf("store: adding the checks of job %d: %w", jobID, err)
+	}
+	if got, err := res.RowsAffected(); err == nil && got == 0 {
+		return fmt.Errorf("%w: %d", ErrNoJob, jobID)
+	}
+	return nil
+}
+
 // ResultCount is how many results a job has collected.
 //
 // It is not part of the summary above and is asked for on its own. The summary
@@ -212,7 +232,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 		&sum.UniqueBy, &sum.Dropped,
 		&sum.Pages, &sum.Country, &sum.Language, &sum.Device,
 		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &restUpToMS, &sum.Fields, &sum.ProfileID, &sum.WholePool,
-		&sum.Browser, &sum.OS, &sum.Release, &sum.PlanReady,
+		&sum.Browser, &sum.OS, &sum.Release, &sum.PlanReady, &sum.ChecksMet,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobSummary{}, err

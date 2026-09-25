@@ -183,6 +183,9 @@ type jobPage struct {
 	page
 	Job      jobSetup
 	Progress progressJSON
+	// Captchas is how many of Google's checks the job has paid for over all its
+	// runs, the one in hand included: the captchas the solver solved for it.
+	Captchas int
 	// State is the key of what to call the job's state, not the word itself.
 	State string
 	// Collected is how many results this job has written down.
@@ -301,6 +304,16 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		flying, landed = s.sup.InFlight(sum.ID)
 	}
 	at := s.progress(sum)
+	// The captchas the job has cost: what its earlier runs wrote down, and while
+	// a run is going what it has paid so far on top. The count the running pool
+	// keeps is the run's own, so the card of checks is given the job's too — it
+	// says "passed by this job".
+	pool := s.poolOf(sum.ID)
+	captchas := sum.ChecksMet
+	if pool != nil {
+		captchas += pool.Met
+		pool.Met = captchas
+	}
 	// A kind the catalogue has no word for is not drawn as a search. It is a job
 	// nothing here can describe, and naming it wrongly is worse than the key.
 	kind, _ := kindKey(sum.Kind)
@@ -353,7 +366,8 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		Sampled:   len(rows)+len(standings)+len(verdicts) >= rowsShown,
 		Shown:     rowsShown,
 		Asking:    s.asking(sum.ID),
-		Pool:      s.poolOf(sum.ID),
+		Pool:      pool,
+		Captchas:  captchas,
 		Speed:     perMinute(pace.PerMinute()),
 		PageSpeed: pageSpeed(landed, pace),
 		// Neither button is offered by a server started to read a history: it has

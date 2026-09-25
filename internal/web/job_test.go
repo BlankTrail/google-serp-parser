@@ -1490,3 +1490,47 @@ func TestScript_HoldsTheDrawingAgainWhileAPressIsUnderWay(t *testing.T) {
 		t.Error("a screen that arrives in the middle of a press is drawn over it")
 	}
 }
+
+func TestJobPage_CountsTheCaptchasTheJobCostOverAllItsRuns(t *testing.T) {
+	// The count stands in the job's summary, where it outlives the run: the
+	// checks earlier runs of the job paid for, and while a run is going the ones
+	// it has paid for so far on top.
+	s, v, eng := heldServer(t)
+	eng.facts = &poolFacts{Checks: run.Rhythm{Met: 7}}
+	id := enqueue(t, v, "nightly", "a", "b")
+	waitUntil(t, "the job is inside its engine", func() bool {
+		_, in := eng.ran(0)
+		return in
+	})
+	if got := shown(t, get(t, s, jobPath(id)).Body.String(), "captchas"); got != "7" {
+		t.Errorf("the first run reads %q captchas, want its own seven", got)
+	}
+	if err := v.Stop(id); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitUntil(t, "the job has let go", func() bool {
+		_, ok := v.Running()
+		return !ok
+	})
+	if got := shown(t, get(t, s, jobPath(id)).Body.String(), "captchas"); got != "7" {
+		t.Errorf("a stopped job reads %q captchas, want the seven its run paid for", got)
+	}
+
+	if err := v.Resume(id); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	waitUntil(t, "the job is inside its engine again", func() bool {
+		_, in := eng.ran(1)
+		return in
+	})
+	body := get(t, s, jobPath(id)).Body.String()
+	if got := shown(t, body, "captchas"); got != "14" {
+		t.Errorf("the second run reads %q captchas, want the first run's seven and its own", got)
+	}
+	if got := shown(t, body, "checks-met"); got != "14" {
+		t.Errorf("the checks passed by this job read %q, want the whole job's fourteen", got)
+	}
+	if err := v.Stop(id); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}

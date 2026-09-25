@@ -820,11 +820,11 @@ func (v *Supervisor) work() {
 				return
 			}
 		}
-		v.runJob(ctx, src, id)
+		met := v.runJob(ctx, src, id)
 		// Before the job is settled, because a pool the job has left holds ports
 		// for nothing and settling takes a write to a database.
 		v.release()
-		v.settle(id)
+		v.settle(id, met)
 		// The job stops being the one running and the swap that was waiting for
 		// it is taken, both here and both under one lock, so that a caller who
 		// finds no job in flight finds the swap already made.
@@ -1009,7 +1009,10 @@ func (v *Supervisor) finished() {
 // it was found: nothing has been recorded against it and nothing stamps it, so
 // it is still there to be carried on, and the reason is in the log because it is
 // a refusal from something on this machine rather than anything the job did.
-func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
+//
+// It answers with how many of Google's checks the run paid for, for settle to
+// write down.
+func (v *Supervisor) runJob(ctx context.Context, src source, id int64) int {
 	// How long each part of starting takes, said out loud.
 	//
 	// An operator who has just pressed start watches a screen of noughts, and
@@ -1023,10 +1026,10 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
 		if ctx.Err() == nil {
 			v.log.Error("a job could not be read back before it ran", "job", id, "error", err)
 		}
-		return
+		return 0
 	}
 	if len(j.Queries) == 0 {
-		return
+		return 0
 	}
 	read := time.Now()
 	v.log.Info("a job was read back and is about to have its identities raised",
@@ -1039,7 +1042,7 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
 				"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
 				"error", err)
 		}
-		return
+		return 0
 	}
 	v.log.Info("the identities are up and the first query is going out",
 		"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
@@ -1059,6 +1062,9 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) {
 	if rep := eng.Run(ctx, j, jobSink{st: v.st, jobID: id, caught: &v.caught}); rep.Err != nil {
 		v.log.Error("a job was refused before anything was sent", "job", id, "error", rep.Err)
 	}
+	// Read before the pool is given up, which is when the run's count goes with
+	// it.
+	return eng.Pool().Checks.Met
 }
 
 // plan is the work a job has left, dressed in the settings it was created
@@ -1106,18 +1112,29 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSumm
 	return j, sum, nil
 }
 
-// settle stamps a job that has nothing left and leaves alone one that has.
+// settle writes down what the run paid in Google's checks, and stamps a job
+// that has nothing left while leaving alone one that has.
 //
-// What is left decides it, not how the run ended. A job somebody stopped keeps
+// What is left decides the stamp, not how the run ended. A job somebody stopped keeps
 // its unfinished queries unfinished and no stamp, which is exactly what there
 // is for a resume to take up; a job whose last query landed the instant before
 // the stop has nothing left and is done.
 //
 // The context is its own, because the one the job ran on is the one the stop
 // ended and every read here takes a context.
-func (v *Supervisor) settle(id int64) {
+func (v *Supervisor) settle(id int64, met int) {
 	ctx, cancel := context.WithTimeout(context.Background(), jobSettleGrace)
 	defer cancel()
+
+	// What the run paid Google's checks, added to the job's count now that the
+	// run has let go — a stopped run as much as a finished one. After the pool
+	// is given up and not before, so a screen reading the job and the run in
+	// hand side by side does not count the run twice.
+	if met > 0 {
+		if err := v.st.AddChecks(ctx, id, met); err != nil {
+			v.log.Error("what a run paid in checks could not be written down", "job", id, "error", err)
+		}
+	}
 
 	left, err := v.st.Pending(ctx, id)
 	if err != nil {

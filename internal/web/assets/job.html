@@ -33,6 +33,10 @@
      crawling, an average answers wrongly for the rest of the day. */}}
 <div><dt class="label"><abbr title="{{.T "state.speed"}}">{{.T "job.speed"}}</abbr></dt><dd class="figure" id="run-speed">{{.Speed}}</dd></div>
 <div><dt class="label"><abbr title="{{.T "state.speed.pages"}}">{{.T "job.speed.pages"}}</abbr></dt><dd class="figure" id="run-page-speed">{{.PageSpeed}}</dd></div>
+{{/* What the job has cost the challenge solver, over all its runs. It stays
+     after the run, beside what the job collected and how fast: the rest a
+     session takes is chosen by both. */}}
+<div><dt class="label"><abbr title="{{.T "job.captchas.why"}}">{{.T "job.captchas"}}</abbr></dt><dd class="figure" id="captchas">{{.Captchas}}</dd></div>
 <div class="job-summary-state"><dt class="label">{{.T "jobs.state"}}</dt><dd class="state" id="state">{{.T .State}}</dd></div>
 </dl>
 {{/* What one thread is fetching this second. It is in a box rather than in a

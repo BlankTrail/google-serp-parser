@@ -435,8 +435,9 @@ func TestOpen_LetsNamesThroughToTheProxyAgainAfterTheUpgrade(t *testing.T) {
 	if _, err := s.CreateProfile(t.Context(), p); err != nil {
 		t.Fatalf("CreateProfile: %v", err)
 	}
-	// The step this is about changed only rows, so the version is all there is
-	// to wind back.
+	// The step this is about changed only rows, so past the steps after it the
+	// version is all there is to wind back.
+	windBackToVersion27(t, s)
 	if _, err := s.db.ExecContext(t.Context(), `PRAGMA user_version = 26`); err != nil {
 		t.Fatalf("winding back to version 26: %v", err)
 	}
@@ -532,12 +533,31 @@ func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *test
 	}
 }
 
+// windBackToVersion27 undoes the twenty-eighth step: the count of the checks a
+// job has paid for.
+//
+// Every step that changes the schema needs one of these, chained from the wind
+// backs to the versions before it, or the step runs twice when the database is
+// opened again and stops on a duplicate name.
+func windBackToVersion27(t *testing.T, s *Store) {
+	t.Helper()
+	for _, statement := range []string{
+		`ALTER TABLE jobs DROP COLUMN checks_met`,
+		`PRAGMA user_version = 27`,
+	} {
+		if _, err := s.db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatalf("winding back to version 27: %v", err)
+		}
+	}
+}
+
 // windBackToVersion24 undoes every step after the twenty-fourth: the resolver
 // step changed only rows and has nothing to undo in the schema, and the column
 // the step after it added is dropped. A step added later is undone here too, or
 // the step it adds runs twice when the database is opened again.
 func windBackToVersion24(t *testing.T, s *Store) {
 	t.Helper()
+	windBackToVersion27(t, s)
 	for _, statement := range []string{
 		`ALTER TABLE proxy_profiles DROP COLUMN vdns_strict_bypass`,
 		`PRAGMA user_version = 24`,

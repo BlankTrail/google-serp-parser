@@ -1637,3 +1637,37 @@ func TestCaught_KeepsNoMoreMomentsThanItsBoundWhateverTheWindowHolds(t *testing.
 		t.Errorf("%d moments are kept, want the bound of %d", len(pages), pagesKept)
 	}
 }
+
+func TestSupervisor_WritesDownTheChecksEachRunOfAJobPaidFor(t *testing.T) {
+	// The captchas a job cost were a figure of the run in hand and went with it.
+	// Every run adds what it paid for to the job's own count as it lets go —
+	// a stopped run as much as a finished one — so the count is the job's.
+	s, v, eng := heldServer(t)
+	eng.facts = &poolFacts{Checks: run.Rhythm{Met: 7}}
+	id := enqueue(t, v, "nightly", "a", "b")
+	for runs := 1; runs <= 2; runs++ {
+		waitUntil(t, "the job is inside its engine", func() bool {
+			_, in := eng.ran(runs - 1)
+			return in
+		})
+		if err := v.Stop(id); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		waitUntil(t, "the job has let go", func() bool {
+			_, ok := v.Running()
+			return !ok
+		})
+		sum, err := s.store.Progress(t.Context(), id)
+		if err != nil {
+			t.Fatalf("Progress: %v", err)
+		}
+		if want := 7 * runs; sum.ChecksMet != want {
+			t.Errorf("after %d runs of seven checks the job reads %d, want %d", runs, sum.ChecksMet, want)
+		}
+		if runs == 1 {
+			if err := v.Resume(id); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+		}
+	}
+}
