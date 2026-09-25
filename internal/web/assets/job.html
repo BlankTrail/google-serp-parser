@@ -28,9 +28,11 @@
      It is counted afresh with every redraw of this page, like every other
      number on it, so it and the rows below it are never from two moments. */}}
 <div><dt class="label">{{.T "jobs.collected"}}</dt><dd class="figure" id="count-collected">{{.Collected}}</dd></div>
-{{/* How fast it is going now, measured over the last few queries that settled
-     rather than averaged over the whole run: on a job that spent its first hour
-     crawling, an average answers wrongly for the rest of the day. */}}
+{{/* How fast it is going: the average of the last five minutes rather than of
+     the whole run — on a job that spent its first hour crawling, an average
+     answers wrongly for the rest of the day — and not of the last few queries,
+     which jumped with every burst. The label says a minute and nothing more: a
+     span in it read as a count over that span. */}}
 <div><dt class="label"><abbr title="{{.T "state.speed"}}">{{.T "job.speed"}}</abbr></dt><dd class="figure" id="run-speed">{{.Speed}}</dd></div>
 <div><dt class="label"><abbr title="{{.T "state.speed.pages"}}">{{.T "job.speed.pages"}}</abbr></dt><dd class="figure" id="run-page-speed">{{.PageSpeed}}</dd></div>
 {{/* What the job has cost the challenge solver, over all its runs. It stays

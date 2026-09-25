@@ -68,6 +68,24 @@ func TestCatalogue_SaysNothingTwiceTheSameWay(t *testing.T) {
 	}
 }
 
+func TestCatalogue_NamesTheSpeedsByTheMinuteAndNothingMore(t *testing.T) {
+	// The speeds are averaged over the last five minutes, and a label that said
+	// so — "Queries/min (5 min)" — was read as the queries of five minutes. A
+	// speed is named by the minute alone, in every language; how long it is
+	// averaged over is the page's business, not the reader's arithmetic.
+	for lang, phrases := range catalogue {
+		for _, key := range []string{"job.speed", "job.speed.pages", "state.speed", "state.speed.pages"} {
+			phrase := phrases[key]
+			if phrase == "" {
+				t.Errorf("%s has no %s", lang, key)
+			}
+			if strings.ContainsAny(phrase, "0123456789") {
+				t.Errorf("%s %s is %q: it names a span beside the minute", lang, key, phrase)
+			}
+		}
+	}
+}
+
 func TestCatalogue_KeepsItsExceptionsHonest(t *testing.T) {
 	// An exception for a key the catalogue no longer holds, or for one whose two
 	// languages have since been written differently, is an exception nobody would
