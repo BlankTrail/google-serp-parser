@@ -42,15 +42,10 @@ type profileForm struct {
 
 	// What the ports of this profile are made of, beyond where they go out.
 	//
-	// VDNSOn says names are resolved through the exit at all and VDNS which of
-	// the three ways; Solver says the challenge solver is on them; HTTP3 lets
-	// them re-originate over HTTP/3.
-	//
-	// The switch and the mode are two controls because they are two questions,
-	// and one list holding both made the answer to the first unreadable: a
-	// reader looking for "off" had to recognise it among three phrasings of
-	// "on". Off is now the switch, and the list holds only ways of being on.
-	VDNSOn bool
+	// VDNS is where the ports resolve names, one of the three ways the service's
+	// own interface offers — on, the default; only on a leak; off — held as the
+	// value that interface sends. Solver says the challenge solver is on them;
+	// HTTP3 lets them re-originate over HTTP/3.
 	VDNS   string
 	Solver bool
 	// AllowMITM lets this profile's ports work through an exit that terminates
@@ -104,12 +99,11 @@ func profileShowing(p store.Profile) profileForm {
 		PerUpstream:  strconv.Itoa(atLeastOne(p.ThreadsPerUpstream)),
 		Wire:         blanktrail.ProtocolOr(p.Protocol),
 		Gateways:     p.Gateways,
-		VDNSOn:       p.VDNSMode != blanktrail.VDNSOff,
-		VDNS:         vdnsModeOr(p.VDNSMode),
+		VDNS:         vdnsShown(p.VDNSMode),
 		Solver:       p.Solver,
 		AllowMITM:    p.AllowMITM,
 		Resolver:     resolverOr(p.Resolver),
-		Resolvers:    strings.Join(p.CustomResolvers, "\n"),
+		Resolvers:    strings.Join(p.CustomResolvers, ", "),
 		HTTP3:        p.HTTP3,
 		StrictBypass: p.StrictBypass,
 	}.withHop(p.FirstHop)
@@ -146,7 +140,6 @@ func profileFrom(r former) profileForm {
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
 		// These three are on the form whenever it is shown, so a box that sent
 		// nothing is a box somebody unticked rather than one that was not there.
-		VDNSOn:       r.FormValue(vdnsOnField) != "",
 		VDNS:         strings.TrimSpace(r.FormValue(vdnsField)),
 		Solver:       r.FormValue(solverField) != "",
 		AllowMITM:    r.FormValue(mitmField) != "",
@@ -188,19 +181,12 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 	default:
 		b.complaints = append(b.complaints, "proxies.resolver.unknown")
 	}
-	next.CustomResolvers = linesOf(f.Resolvers)
-	// The switch wins over the list. A reader who turned vDNS off did not also
-	// say which way it should be on, and the list under the switch still holds
-	// whatever it was showing when they turned it off.
+	next.CustomResolvers = resolversOf(f.Resolvers)
 	switch {
-	case !f.VDNSOn:
-		next.VDNSMode = blanktrail.VDNSOff
-	case !blanktrail.KnownVDNSMode(f.VDNS) || f.VDNS == blanktrail.VDNSOff:
+	case !blanktrail.KnownVDNSMode(f.VDNS):
 		// Refused here rather than sent on: the service answers an unknown mode
 		// with a refusal naming the four it takes, and a port that will not open
 		// because a form let a typo through is a fault a long way from its cause.
-		// Off among the ways of being on is the same kind of nonsense, arriving
-		// from a form nobody drew.
 		next.VDNSMode = p.VDNSMode
 		b.complaints = append(b.complaints, "proxies.vdns.unknown")
 	default:
@@ -288,25 +274,27 @@ type former interface {
 	FormValue(string) string
 }
 
-// vdnsModeOr is the way of resolving names a form shows beside the switch.
+// vdnsShown is the way a profile's ports resolve names, as the list draws it.
 //
-// A profile with vDNS off still has to show something in that list, because the
-// list is on the screen whether or not the switch is on. It shows the automatic
-// one, which is what turning the switch back on without touching the list then
-// means — and what a new profile starts on.
-func vdnsModeOr(mode string) string {
-	if mode == blanktrail.VDNSOff || !blanktrail.KnownVDNSMode(mode) {
-		return blanktrail.VDNSAuto
+// The list holds the three ways the service's own interface offers. A profile
+// set to always resolving through the exit — which the service still takes and
+// its interface no longer offers — is drawn as on, the default, and saved as
+// on, which is what that interface does with a port set so. A mode this program
+// does not know is drawn as the default too.
+func vdnsShown(mode string) string {
+	switch mode {
+	case blanktrail.VDNSOnLeak, blanktrail.VDNSOff:
+		return mode
 	}
-	return mode
+	return blanktrail.VDNSAuto
 }
 
-// linesOf reads a text box into the list it holds: one entry to a line, blanks
-// dropped, the way the gateways are read.
-func linesOf(text string) []string {
+// resolversOf is the resolvers a box names: separated by commas, as the
+// service's own interface takes them, or one to a line.
+func resolversOf(text string) []string {
 	var out []string
-	for line := range strings.SplitSeq(text, "\n") {
-		if one := strings.TrimSpace(line); one != "" {
+	for part := range strings.FieldsFuncSeq(text, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' }) {
+		if one := strings.TrimSpace(part); one != "" {
 			out = append(out, one)
 		}
 	}

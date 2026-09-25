@@ -799,10 +799,10 @@ func TestHistoryScreen_LinesThePressUpWithTheBoxItSends(t *testing.T) {
 
 func TestProfileForm_LinesTheResolverUpWithTheListBesideIt(t *testing.T) {
 	// The press that picks a resolver stood inside the resolver's field, under
-	// its list. That made the field a line taller than the ones beside it, and
-	// a row lined up by its feet stood the resolver's list a line above the
-	// vDNS list it belongs beside. The press stands in a cell of its own under
-	// the resolver, and the three settings are lined up by their lists.
+	// its list. That made the field a line taller than the one beside it, and a
+	// row lined up by its feet stood the resolver's list a line above the vDNS
+	// list it belongs beside. The press stands in a cell of its own under the
+	// resolver, and the two settings are lined up by their lists.
 	s := testServerWithSupervisor(t)
 	prof := onlyProfile(t, s)
 	body := get(t, s, boxesOf(prof)).Body.String()
@@ -820,18 +820,18 @@ func TestProfileForm_LinesTheResolverUpWithTheListBesideIt(t *testing.T) {
 	}
 	row, _, _ := strings.Cut(body, `<select id="vdns_mode"`)
 	if i := strings.LastIndex(row, `<div class="row`); i < 0 || !strings.HasPrefix(row[i:], `<div class="row aligned resolving">`) {
-		t.Error("the switch, the vDNS list and the resolver do not stand in one row laid out as columns")
+		t.Error("the vDNS list and the resolver do not stand in one row laid out as columns")
 	}
 
 	decls := stylesheet(t)
 	if got := valuesIn(decls, ".row.resolving", "display"); len(got) != 1 || got[0] != "grid" {
 		t.Errorf("the row is laid out as %v, not as columns the press can stand under", got)
 	}
-	if got := valuesIn(decls, ".row.resolving > .pick-cell", "grid-column"); len(got) != 1 || got[0] != "3" {
+	if got := valuesIn(decls, ".row.resolving > .pick-cell", "grid-column"); len(got) != 1 || got[0] != "2" {
 		t.Errorf("the press stands in column %v, not under the resolver", got)
 	}
-	// And a window too narrow for three columns takes them one under another,
-	// as a row that wraps would, rather than being dragged sideways.
+	// And a window too narrow for two columns takes them one under another, as
+	// a row that wraps would, rather than being dragged sideways.
 	narrow := false
 	for _, d := range decls {
 		if strings.HasPrefix(d.Selector, "@media (max-width:") && strings.HasSuffix(d.Selector, " .row.resolving") &&

@@ -39,7 +39,6 @@ const (
 	whereField   = "source_at"
 	refreshField = "source_refresh"
 	// What the ports of a profile are made of, beyond where they go out.
-	vdnsOnField = "vdns"
 	vdnsField   = "vdns_mode"
 	solverField = "js_solver"
 	// mitmField is the switch that lets a profile's ports work through an exit

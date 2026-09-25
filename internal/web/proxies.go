@@ -248,22 +248,14 @@ func resolversOffered() []labelled {
 }
 
 func vdnsOffered() []labelled {
-	out := make([]labelled, 0, len(blanktrail.VDNSModes()))
-	for _, mode := range blanktrail.VDNSModes() {
-		// Off is the switch beside this list rather than an entry in it. Left
-		// in, a reader looking for "off" had to find it among three phrasings
-		// of "on", and the list could say one thing while the switch said the
-		// other.
-		if mode == blanktrail.VDNSOff {
-			continue
-		}
-		name := mode
-		if name == blanktrail.VDNSAuto {
-			name = "auto"
-		}
-		out = append(out, labelled{Code: mode, Label: "proxies.vdns." + name})
+	// The three ways the service's own interface offers, in its order: on, the
+	// default; only on a leak; off. Always, which the service still takes and
+	// its interface no longer offers, is not offered here either.
+	return []labelled{
+		{Code: blanktrail.VDNSAuto, Label: "proxies.vdns.auto"},
+		{Code: blanktrail.VDNSOnLeak, Label: "proxies.vdns.on_leak"},
+		{Code: blanktrail.VDNSOff, Label: "proxies.vdns.off"},
 	}
-	return out
 }
 
 // profileRows are the profiles as the list draws them.

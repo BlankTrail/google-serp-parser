@@ -355,29 +355,23 @@
      "on", and a reader looking for it did not find it. */}}
 <fieldset>
 <legend>{{.T "proxies.madeof"}}</legend>
-{{/* The switch and the list it governs stand on one line, in that order: the
-     list means nothing until the switch is on, and a reader meets them in the
-     order they are answered. The other two are settings of their own and stand
-     under it.
+{{/* Where the ports resolve names and how, as the service's own interface
+     offers them: one list for vDNS — on, the default; only on a leak; off — and
+     one for the resolver, in the service's order and words. The operator sets
+     the same ports in both places, and the same setting drawn two ways read as
+     two settings.
 
-     The three are laid out as columns so the press that picks a resolver can
+     The two are laid out as columns so the press that picks a resolver can
      stand under the resolver's list in a cell of its own. Inside the field it
-     made the field a line taller than its neighbours, and a row lined up by its
+     made the field a line taller than its neighbour, and a row lined up by its
      feet stood the resolver's list a line above the vDNS list beside it. */}}
 <div class="row aligned resolving">
 <div class="field">
-<label class="switch"><input id="vdns" name="vdns" type="checkbox" value="1"{{if .Form.VDNSOn}} checked{{end}}> {{.T "proxies.vdns.on"}}</label>
-</div>
-<div class="field">
 <label for="vdns_mode">{{.T "proxies.vdns"}}</label>
-<select id="vdns_mode" name="vdns_mode"{{if not .Form.VDNSOn}} disabled{{end}}>
+<select id="vdns_mode" name="vdns_mode">
 {{range .VDNSModes}}<option value="{{.Code}}"{{if eq $.Form.VDNS .Code}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
 </div>
-{{/* How the name is resolved once it is resolved at all. It is a second
-     question from the one beside it — that one says whether the exit is asked,
-     this one says what is asked and by whom — and the service takes them
-     separately. */}}
 <div class="field">
 <label for="resolver">{{.T "proxies.resolver"}}</label>
 <select id="resolver" name="resolver">
@@ -405,8 +399,8 @@
 <div class="row" data-resolver="custom"{{if ne .Form.Resolver "custom"}} hidden{{end}}>
 <div class="field">
 <label for="custom_resolvers">{{.T "proxies.resolver.own"}}</label>
-<textarea id="custom_resolvers" name="custom_resolvers" rows="3"
- placeholder="1.1.1.1:53">{{.Form.Resolvers}}</textarea>
+<input id="custom_resolvers" name="custom_resolvers" value="{{.Form.Resolvers}}"
+ placeholder="8.8.8.8:53, 208.67.222.222:53" spellcheck="false">
 </div>
 </div>
 <div class="row">

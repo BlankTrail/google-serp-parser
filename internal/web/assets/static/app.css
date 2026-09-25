@@ -691,22 +691,22 @@ legend {
 	align-items: end;
 }
 
-/* The switch, the list it governs and the resolver, laid out as columns and
-   lined up by their lists, with the press that picks a resolver standing under
-   the resolver's list. Inside the resolver's field the press made that field a
-   line taller than its neighbours, and a row lined up by its feet stood the
-   resolver's list a line above the vDNS list beside it. */
+/* The vDNS list and the resolver, laid out as columns and lined up by their
+   lists, with the press that picks a resolver standing under the resolver's
+   list. Inside the resolver's field the press made that field a line taller
+   than its neighbour, and a row lined up by its feet stood the resolver's list
+   a line above the vDNS list beside it. */
 .row.resolving {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) minmax(0, 2fr);
+	grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
 }
 
 .row.resolving > .pick-cell {
-	grid-column: 3;
+	grid-column: 2;
 }
 
-/* A window too narrow for three columns takes them one under another, as a
-   row that wraps would. */
+/* A window too narrow for two columns takes them one under another, as a row
+   that wraps would. */
 @media (max-width: 40rem) {
 	.row.resolving {
 		grid-template-columns: minmax(0, 1fr);

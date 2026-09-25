@@ -88,11 +88,12 @@ const (
 	ResolverDelegate = "delegate"
 )
 
-// Resolvers is every answer, in the order a form offers them, the automatic one
-// first.
+// Resolvers is every answer, in the order the service's own interface offers
+// them: auto, native, pool, exit, custom, delegate. A form here offers them in
+// the same order, so the same choice reads the same in both places.
 func Resolvers() []string {
-	return []string{ResolverAuto, ResolverDelegate, ResolverISP, ResolverPool,
-		ResolverExit, ResolverCustom}
+	return []string{ResolverAuto, ResolverISP, ResolverPool, ResolverExit,
+		ResolverCustom, ResolverDelegate}
 }
 
 // KnownResolver reports whether a strategy is one the service takes. Anything

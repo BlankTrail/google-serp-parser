@@ -3,10 +3,13 @@
 package web
 
 import (
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -680,24 +683,28 @@ func TestProfileForm_OffersWhatThePortsAreMadeOfBeyondWhereTheyGoOut(t *testing.
 
 	body := get(t, s, proxiesAt+"?"+profileField+"="+strconv.FormatInt(all[0].ID, 10)).Body.String()
 	for _, want := range []string{
-		`name="vdns"`, `name="vdns_mode"`, `name="js_solver"`, `name="http3"`,
-		`value="on_leak"`, `value="forced"`,
+		`name="vdns_mode"`, `name="js_solver"`, `name="http3"`,
+		`value="on_leak"`, `value="off"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the profile form offers no %s", want)
 		}
 	}
-	// vDNS is a switch and a list of ways of being on, not one list of four.
-	// Held in one, "off" was a fourth entry that a reader looking for it had to
-	// recognise among three phrasings of "on" — and the screenshot that came
-	// back said they had not found it.
-	if strings.Contains(body, `value="off"`) {
-		t.Error("the mode list still carries off, which is the switch beside it")
+	// vDNS is one list of the three ways the service's own interface offers —
+	// on, the default; only on a leak; off — rather than a switch beside a list
+	// of ways of being on. The operator sets the same ports in both places, and
+	// one setting drawn two ways read as two settings. "Always", which the
+	// service still takes and its interface no longer offers, is not offered
+	// here either.
+	if strings.Contains(body, `name="vdns"`) {
+		t.Error("vDNS is still a switch beside the list")
 	}
-	// Both of the boxes a profile ships with are ticked: the solver, without
-	// which a challenged search produces nothing, and vDNS, without which the
-	// port's names are resolved somewhere other than where its traffic leaves.
-	for _, box := range []string{`name="js_solver"`, `name="vdns"`} {
+	if strings.Contains(body, `value="forced"`) {
+		t.Error("the list still offers always, which the service's own interface does not")
+	}
+	// The box a profile ships with is ticked: the solver, without which a
+	// challenged search produces nothing.
+	for _, box := range []string{`name="js_solver"`} {
 		at := strings.Index(body, box)
 		if at < 0 {
 			t.Fatalf("no %s box at all", box)
@@ -706,8 +713,8 @@ func TestProfileForm_OffersWhatThePortsAreMadeOfBeyondWhereTheyGoOut(t *testing.
 			t.Errorf("the %s box is offered as %q, want it ticked on a new profile", box, tag)
 		}
 	}
-	// And the mode beside the switch is the automatic one, which is the answer
-	// nobody has to think about.
+	// And the list starts on the default, on, which is the answer nobody has
+	// to think about.
 	at := strings.Index(body, `name="vdns_mode"`)
 	rest := body[at:]
 	if first := strings.Index(rest, "<option"); !strings.Contains(rest[first:first+60], "selected") {
@@ -715,39 +722,92 @@ func TestProfileForm_OffersWhatThePortsAreMadeOfBeyondWhereTheyGoOut(t *testing.
 	}
 }
 
-func TestProfileForm_TurnsVDNSOffWithTheSwitchRatherThanWithTheList(t *testing.T) {
-	// The switch is the whole answer to whether names go through the exit. A
-	// reader who turns it off has not also said which way it should be on, and
-	// the list under it still shows whatever it was showing — so the switch has
-	// to win over it, or unticking the box would save the mode it happens to be
-	// displaying.
-	off := profileForm{Name: "exits", VDNSOn: false, VDNS: blanktrail.VDNSForced}
-	got, complaints := off.onto(store.NewProfile())
-	if len(complaints) != 0 {
-		t.Fatalf("turning vDNS off was refused: %v", complaints)
-	}
-	if got.VDNSMode != blanktrail.VDNSOff {
-		t.Errorf("the profile was saved as %q, want vDNS off", got.VDNSMode)
+func TestProfileForm_TakesVDNSFromOneListAsTheServiceDoes(t *testing.T) {
+	// One list, the three ways the service's own interface offers, each saved as
+	// the value that interface sends: "" for on, the default; "on_leak"; "off".
+	for _, mode := range []string{blanktrail.VDNSAuto, blanktrail.VDNSOnLeak, blanktrail.VDNSOff} {
+		got, complaints := profileForm{Name: "exits", VDNS: mode}.onto(store.NewProfile())
+		if len(complaints) != 0 {
+			t.Errorf("vDNS %q was refused: %v", mode, complaints)
+		}
+		if got.VDNSMode != mode {
+			t.Errorf("vDNS %q was saved as %q", mode, got.VDNSMode)
+		}
 	}
 
-	// And back on, at the way the list was showing.
-	on := profileForm{Name: "exits", VDNSOn: true, VDNS: blanktrail.VDNSForced}
-	if got, _ := on.onto(store.NewProfile()); got.VDNSMode != blanktrail.VDNSForced {
-		t.Errorf("the profile was saved as %q, want the way the list named", got.VDNSMode)
-	}
-
-	// A profile saved with vDNS off still shows a way of being on beside the
-	// switch, because the list is on the screen whether or not the switch is.
-	// Empty there would be a fifth entry meaning "off" in a list that no longer
-	// has one.
+	// A profile set to always — which the service still takes and its own
+	// interface no longer offers — is drawn as on, the default, which is what
+	// that interface does with a port set so; saved, it is saved as on.
 	stored := store.NewProfile()
-	stored.VDNSMode = blanktrail.VDNSOff
-	shown := profileShowing(stored)
-	if shown.VDNSOn {
-		t.Error("a profile with vDNS off is drawn with the switch on")
+	stored.VDNSMode = blanktrail.VDNSForced
+	if shown := profileShowing(stored); shown.VDNS != blanktrail.VDNSAuto {
+		t.Errorf("a profile set to always is drawn as %q, want on, the default", shown.VDNS)
 	}
-	if shown.VDNS != blanktrail.VDNSAuto {
-		t.Errorf("the list beside the off switch shows %q, want the automatic way", shown.VDNS)
+	// Off is drawn as off: it is one of the three.
+	stored.VDNSMode = blanktrail.VDNSOff
+	if shown := profileShowing(stored); shown.VDNS != blanktrail.VDNSOff {
+		t.Errorf("a profile with vDNS off is drawn as %q, want off", shown.VDNS)
+	}
+
+	// And a mode nobody offers is refused rather than sent on.
+	if _, complaints := (profileForm{Name: "exits", VDNS: "sideways"}).onto(store.NewProfile()); !slices.Contains(complaints, "proxies.vdns.unknown") {
+		t.Errorf("an unknown vDNS mode gave %v, want it refused", complaints)
+	}
+}
+
+func TestProfileForm_OffersVDNSInTheWordsOfTheService(t *testing.T) {
+	// The same setting, under the same name and the same three words as in the
+	// service's own interface.
+	s := testServer(t)
+	fresh := store.NewProfile()
+	fresh.Name = "exits"
+	id, err := s.store.CreateProfile(t.Context(), fresh)
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, boxesOf(id), nil)
+	req.Header.Set("Accept-Language", "ru")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, label := range []string{`<label for="vdns_mode">VDNS (нативный DNS)</label>`, `<label for="resolver">Резолвер VDNS</label>`} {
+		if !strings.Contains(body, label) {
+			t.Errorf("the form does not name the setting %s", label)
+		}
+	}
+	_, list, ok := strings.Cut(body, `<select id="vdns_mode" name="vdns_mode">`)
+	if !ok {
+		t.Fatalf("the form has no vDNS list:\n%s", body)
+	}
+	list, _, _ = strings.Cut(list, "</select>")
+	got := regexp.MustCompile(`<option value="([^"]*)"[^>]*>([^<]*)</option>`).FindAllStringSubmatch(list, -1)
+	want := [][2]string{{"", "вкл (по умолчанию)"}, {"on_leak", "только при утечке"}, {"off", "выключен"}}
+	if len(got) != len(want) {
+		t.Fatalf("the list offers %d ways, want %d: %q", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i][1] != w[0] || html.UnescapeString(got[i][2]) != w[1] {
+			t.Errorf("way %d is %q %q, want %q %q", i, got[i][1], got[i][2], w[0], w[1])
+		}
+	}
+}
+
+func TestProfileForm_TakesItsOwnResolversSeparatedByCommas(t *testing.T) {
+	// The service's interface takes them in one line, separated by commas; the
+	// same line pasted here is the same list. One to a line still reads.
+	for _, typed := range []string{"8.8.8.8:53, 208.67.222.222:53", "8.8.8.8:53\n208.67.222.222:53"} {
+		got, complaints := profileForm{Name: "exits", Resolver: blanktrail.ResolverCustom, Resolvers: typed}.onto(store.NewProfile())
+		if len(complaints) != 0 {
+			t.Fatalf("%q was refused: %v", typed, complaints)
+		}
+		if want := []string{"8.8.8.8:53", "208.67.222.222:53"}; !slices.Equal(got.CustomResolvers, want) {
+			t.Errorf("%q was saved as %q, want %q", typed, got.CustomResolvers, want)
+		}
+	}
+	stored := store.NewProfile()
+	stored.Resolver, stored.CustomResolvers = blanktrail.ResolverCustom, []string{"8.8.8.8:53", "208.67.222.222:53"}
+	if shown := profileShowing(stored); shown.Resolvers != "8.8.8.8:53, 208.67.222.222:53" {
+		t.Errorf("the resolvers are drawn as %q, want them in one line, separated by commas", shown.Resolvers)
 	}
 }
 
@@ -909,5 +969,47 @@ func TestProxiesReading_DrawsAProfileNothingHasRunOnAsNoughts(t *testing.T) {
 	}
 	if !strings.Contains(body, `action="/api/proxies/reset"`) {
 		t.Error("the profile the pool is on is not offered its reset")
+	}
+}
+
+func TestProfileForm_OffersTheResolversInTheOrderAndWordsOfBlankTrail(t *testing.T) {
+	// The resolvers are the service's, and the operator sets them in its own
+	// interface as often as in this one. Offered in another order and under
+	// other names, the same choice read as a different one in each: the list
+	// here follows the service's — auto, native, pool, exit, custom, delegate —
+	// in its words.
+	s := testServer(t)
+	fresh := store.NewProfile()
+	fresh.Name = "exits"
+	id, err := s.store.CreateProfile(t.Context(), fresh)
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, boxesOf(id), nil)
+	req.Header.Set("Accept-Language", "ru")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	_, list, ok := strings.Cut(body, `<select id="resolver" name="resolver">`)
+	if !ok {
+		t.Fatalf("the form has no resolver list:\n%s", body)
+	}
+	list, _, _ = strings.Cut(list, "</select>")
+	got := regexp.MustCompile(`<option value="([^"]*)"[^>]*>([^<]*)</option>`).FindAllStringSubmatch(list, -1)
+	want := [][2]string{
+		{"", "авто — провайдер → пул → на выходе"},
+		{"isp", "нативный — резолвер провайдера (принудительно, fail-closed)"},
+		{"pool", "пул — подобранные резолверы через выход (ECS)"},
+		{"exit", "выход — резолвит сам выход итеративно (принудительно, fail-closed)"},
+		{"custom", "свои"},
+		{"delegate", "делегировать — резолвит сам выход"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("the list offers %d resolvers, want %d: %q", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i][1] != w[0] || html.UnescapeString(got[i][2]) != w[1] {
+			t.Errorf("resolver %d is %q %q, want %q %q", i, got[i][1], got[i][2], w[0], w[1])
+		}
 	}
 }

@@ -385,8 +385,8 @@ func profileNamed(t *testing.T, s *Server, name string) store.Profile {
 }
 
 func TestProfile_LetsTheServiceResolveTheNameUnlessToldOtherwise(t *testing.T) {
-	// Two questions, not one: the switch beside it says whether the exit is
-	// asked at all, and this says what is asked and by whom. The service's own
+	// Two questions, not one: the VDNS list beside it says whether the exit
+	// is asked at all, and this says what is asked and by whom. The service's own
 	// ladder resolves the name itself and hands the proxy an address, so a
 	// proxy that refuses names — as a residential gateway refused the host
 	// Google's reCAPTCHA script is served from — cannot refuse this one.
