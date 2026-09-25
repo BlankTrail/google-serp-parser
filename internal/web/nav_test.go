@@ -418,3 +418,33 @@ func TestScript_FollowsAScreenByFetchingTheWholeOfIt(t *testing.T) {
 		t.Error("the script does not read how often the server said to ask")
 	}
 }
+
+func TestStateScreen_SaysTheJobIsStoppingRatherThanOfferingTheStopAgain(t *testing.T) {
+	// The screen a run is watched from carries the stop too, and it drew the same
+	// stop again for as long as the job took to let go, which read as a press
+	// that had not worked.
+	s, v, eng := heldServer(t)
+	eng.linger = make(chan struct{})
+	id := enqueue(t, v, "nightly", "a", "b", "c")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == id
+	})
+	// Inside its engine, and not merely taken: a job told to stop while its pool
+	// is still going up lets go at once, and there is no stretch to look at.
+	waitUntil(t, "the job is inside its engine", func() bool {
+		_, in := eng.ran(0)
+		return in
+	})
+	if err := v.Stop(id); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	watched := get(t, s, stateAt).Body.String()
+	if strings.Contains(watched, `action="/api/stop"`) {
+		t.Error("the screen offers the stop again to a job already told to stop")
+	}
+	if !strings.Contains(watched, `id="stopping"`) {
+		t.Errorf("the screen does not say the job is stopping:\n%s", watched)
+	}
+	close(eng.linger)
+}

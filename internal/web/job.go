@@ -359,7 +359,9 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
 		// somebody presses until they conclude the job cannot be stopped at all.
-		CanStop: s.sup != nil && at.Running,
+		// Nor to a job already told to stop: pressed again it does nothing, and
+		// offered again it reads as a press that did not work.
+		CanStop: s.sup != nil && at.Running && !at.Stopping,
 		// A job whose list never finished arriving is not offered either. The
 		// queries it holds are a fraction of a list, and nothing will run them.
 		CanResume: s.sup != nil && sum.PlanReady &&
@@ -518,6 +520,10 @@ func stateOf(p progressJSON, listReady bool) string {
 		return "job.state.listunfinished"
 	case p.Finished:
 		return "job.state.finished"
+	case p.Stopping:
+		// Told to stop and still putting itself away, however far it had got:
+		// a job stopped while it was connecting is not connecting any more.
+		return "job.state.stopping"
 	case p.Running && p.Done+p.Failed == 0:
 		// Running and nothing settled yet. What is happening is that the
 		// identities are being reached: a cold one meets a challenge on its first

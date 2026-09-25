@@ -1395,3 +1395,56 @@ func TestScript_KeepsAFoldAsTheReaderLeftItWhenTheScreenIsDrawnAgain(t *testing.
 		t.Error("folds are kept on more than the drawing again of the same screen")
 	}
 }
+
+func TestJobPage_SaysAJobToldToStopIsStoppingAndOffersNoSecondStop(t *testing.T) {
+	// The stop returns as soon as the job has been told, and the job counts as
+	// running until it has written down what it collected and given its ports
+	// back — on a busy service, minutes. The page the press landed on offered the
+	// same stop again, and a reader who saw it read a press that had not worked
+	// and pressed again, and again. It says the job is stopping instead, offers
+	// nothing to press, and goes on watching until the job has let go.
+	s, v, eng := heldServer(t)
+	eng.linger = make(chan struct{})
+	id := enqueue(t, v, "nightly", "a", "b", "c")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == id
+	})
+	// Inside its engine, and not merely taken: a job told to stop while its pool
+	// is still going up lets go at once, and there is no stretch to look at.
+	waitUntil(t, "the job is inside its engine", func() bool {
+		_, in := eng.ran(0)
+		return in
+	})
+
+	rec := postForm(t, s, "/api/stop", url.Values{"job": {strconv.FormatInt(id, 10)}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the stop gave %d, want 303", rec.Code)
+	}
+	body := get(t, s, jobPath(id)).Body.String()
+	if strings.Contains(body, `action="/api/stop"`) {
+		t.Error("the page offers the stop again to a job already told to stop")
+	}
+	if !strings.Contains(body, `id="stopping"`) {
+		t.Errorf("the page does not say the job is stopping:\n%s", body)
+	}
+	if got, want := shown(t, body, "state"), LangEN.T("job.state.stopping"); got != want {
+		t.Errorf("the job is said to be %q, want %q", got, want)
+	}
+	if !strings.Contains(body, `data-refresh=`) {
+		t.Error("the page stops watching a job that has not let go yet")
+	}
+
+	close(eng.linger)
+	waitUntil(t, "the job has let go", func() bool {
+		_, ok := v.Running()
+		return !ok
+	})
+	after := get(t, s, jobPath(id)).Body.String()
+	if strings.Contains(after, `id="stopping"`) {
+		t.Error("the page still says stopping about a job that has let go")
+	}
+	if !strings.Contains(after, `action="/api/resume"`) {
+		t.Error("a stopped job with queries left is not offered a resume")
+	}
+}

@@ -446,7 +446,11 @@ type Supervisor struct {
 	queue   []int64
 	running int64
 	cancel  context.CancelFunc
-	closed  bool
+	// told is the context the job in flight runs under, ended by a stop, by a
+	// shutdown and at last by the job's own end. It is read only while running
+	// names a job, and next replaces it with the next job's own.
+	told   context.Context
+	closed bool
 	// src is where the pool for the next job comes from. It is empty on a machine
 	// whose connection has not been set up yet, and it is replaced while the
 	// server runs, which is why it is here rather than among the fields set once.
@@ -596,6 +600,21 @@ func (v *Supervisor) Stop(jobID int64) error {
 	}
 	v.cancel()
 	return nil
+}
+
+// Stopping says whether the job in flight is this one and has been told to
+// stop — by a stop, or by the server shutting down.
+//
+// Stop returns as soon as the job has been told, and the job goes on counting
+// as running until it has put itself away: what its threads collected is
+// written down, which may take twenty seconds, and its ports are given back to
+// the service. A screen drawn in that stretch that offered the same stop again
+// was read as a press that had not worked, and pressed again for as long as the
+// job took to let go. This is how a screen tells the two apart.
+func (v *Supervisor) Stopping(jobID int64) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.running != 0 && v.running == jobID && v.told.Err() != nil
 }
 
 // Reconnect changes where the pools for the jobs after this one come from.
@@ -841,7 +860,7 @@ func (v *Supervisor) next() (int64, context.Context, source, bool) {
 	id := v.queue[0]
 	v.queue = v.queue[1:]
 	ctx, cancel := context.WithCancel(context.Background())
-	v.running, v.cancel = id, cancel
+	v.running, v.cancel, v.told = id, cancel, ctx
 	v.inUse = v.src.held
 	v.last = v.inUse
 	// Which exits this one runs on is not settled until raise has read the job.

@@ -65,6 +65,11 @@
 <input type="hidden" name="job" value="{{.Progress.ID}}">
 <button type="submit">{{.T "job.stop"}}</button>
 </form>
+{{else if .Progress.Stopping}}
+{{/* The stop has been taken and the job is putting itself away. The press
+     stands where it was, in its shape and not to be pressed, so the reader sees
+     their press answered rather than the same button offered again. */}}
+<button type="button" id="stopping" disabled title="{{.T "job.stopping.why"}}">{{.T "job.stopping"}}</button>
 {{end}}
 {{if .CanResume}}
 <form method="post" action="/api/resume">

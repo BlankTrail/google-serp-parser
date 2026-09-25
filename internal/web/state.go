@@ -110,6 +110,9 @@ type runningView struct {
 	// themselves rather than the queries they belong to.
 	PageSpeed string
 	Rest      string
+	// Stopping is a job told to stop and still putting itself away, which is
+	// drawn instead of the stop.
+	Stopping bool
 }
 
 // successView is how much of a job is coming back answered, and what the rest
@@ -254,6 +257,7 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 		return statePage{}, err
 	}
 	view.Running = s.runningView(sum, pace)
+	view.Running.Stopping = s.sup.Stopping(id)
 	answered, err := s.answeredOf(ctx, sum)
 	if err != nil {
 		return statePage{}, err

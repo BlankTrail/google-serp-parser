@@ -1552,3 +1552,53 @@ func TestPoolEngine_ReadsWhatTheRunIsUpAgainst(t *testing.T) {
 		t.Errorf("the pool reads %d ports, want the one it was opened with", facts.Stats.Ports)
 	}
 }
+
+func TestSupervisor_SaysAJobToldToStopIsStoppingUntilItHasLetGo(t *testing.T) {
+	// A stop returns as soon as the job has been told, and the job goes on
+	// counting as running until it has put itself away: what its threads
+	// collected is written down and its ports are given back to the service.
+	// The screens have to be able to tell that stretch from a run nobody has
+	// stopped, or they offer the same stop again to somebody who has just pressed
+	// it.
+	st := testStore(t)
+	eng := &heldEngine{hold: make(chan struct{}), linger: make(chan struct{})}
+	v := newSupervisor(st, eng)
+	t.Cleanup(func() { _ = v.Close() })
+	id := enqueue(t, v, "nightly", "a", "b")
+	waitUntil(t, "the job is running", func() bool {
+		got, ok := v.Running()
+		return ok && got == id
+	})
+	// Inside its engine, and not merely taken: a job told to stop while its pool
+	// is still going up lets go at once, and there is no stretch to look at.
+	waitUntil(t, "the job is inside its engine", func() bool {
+		_, in := eng.ran(0)
+		return in
+	})
+	if v.Stopping(id) {
+		t.Error("a job nobody has told to stop is stopping")
+	}
+
+	if err := v.Stop(id); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// The engine is holding the job: it has been told, and has not let go.
+	if got, ok := v.Running(); !ok || got != id {
+		t.Fatalf("the job stopped counting as running while still inside its engine (%d, %v)", got, ok)
+	}
+	if !v.Stopping(id) {
+		t.Error("a job told to stop and still putting itself away is not stopping")
+	}
+	if v.Stopping(id + 1) {
+		t.Error("a job that is not running is stopping")
+	}
+
+	close(eng.linger)
+	waitUntil(t, "the job has let go", func() bool {
+		_, ok := v.Running()
+		return !ok
+	})
+	if v.Stopping(id) {
+		t.Error("a job that has let go is still stopping")
+	}
+}

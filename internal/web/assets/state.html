@@ -36,11 +36,17 @@
      most want to read it. Like every other button here it is a form that sends
      itself, and it needs no script. */}}
 <div class="actions">
+{{if .Running.Stopping}}
+{{/* Already told, and putting itself away: the press answered, not offered
+     again. */}}
+<button type="button" id="stopping" disabled title="{{.T "job.stopping.why"}}">{{.T "job.stopping"}}</button>
+{{else}}
 <form method="post" action="/api/stop">
 <input type="hidden" name="job" value="{{.Running.ID}}">
 <input type="hidden" name="back" value="{{.Back}}">
 <button type="submit">{{.T "job.stop"}}</button>
 </form>
+{{end}}
 </div>
 </section>
 {{else}}

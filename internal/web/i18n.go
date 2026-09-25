@@ -112,6 +112,7 @@ var catalogue = map[Lang]map[string]string{
 		"job.state.starting":   "connecting",
 		"job.state.running":    "running",
 		"job.state.waiting":    "waiting its turn",
+		"job.state.stopping":   "stopping",
 		// Said of a job whose file stopped arriving. It names what happened and
 		// what follows from it, and it judges nothing: the queries that did arrive
 		// are there to be looked at.
@@ -136,6 +137,8 @@ var catalogue = map[Lang]map[string]string{
 		"job.reshape.finished": "This job has finished, so there is nothing left to set up.",
 		"job.settings":         "Job settings",
 		"job.stop":             "Stop",
+		"job.stopping":         "Stopping…",
+		"job.stopping.why":     "The stop has been taken. What was collected is being written down and the ports are being given back; the page will say when the job has stopped.",
 		"job.resume":           "Carry on",
 		"job.retry":            "Try the failed ones again",
 		"job.results":          "Results",
@@ -711,6 +714,7 @@ var catalogue = map[Lang]map[string]string{
 		"job.state.starting":   "подключается",
 		"job.state.running":    "выполняется",
 		"job.state.waiting":    "ждёт очереди",
+		"job.state.stopping":   "останавливается",
 
 		"job.state.listunfinished": "список загружен не полностью, задание выполняться не будет",
 		"history.title":            "История",
@@ -733,6 +737,8 @@ var catalogue = map[Lang]map[string]string{
 		"job.reshape.finished": "Задание завершено — менять параметры уже не на что.",
 		"job.settings":         "Параметры задания",
 		"job.stop":             "Остановить",
+		"job.stopping":         "Останавливается…",
+		"job.stopping.why":     "Остановка принята. Собранное дописывается, порты возвращаются сервису; страница покажет, когда задание остановится.",
 		"job.resume":           "Продолжить",
 		"job.retry":            "Повторить неудавшиеся",
 		"job.results":          "Результаты",

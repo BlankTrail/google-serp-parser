@@ -29,6 +29,10 @@ type progressJSON struct {
 
 	Finished bool `json:"finished"`
 	Running  bool `json:"running"`
+	// Stopping is a running job that has been told to stop and is still putting
+	// itself away. It still counts as running: it holds its ports and is still
+	// writing, and the page goes on watching it until it has let go.
+	Stopping bool `json:"stopping"`
 	Queued   bool `json:"queued"`
 	// Watch says whether anything is going to answer differently later. It is
 	// worked out here rather than in the browser so that the page as it is first
@@ -53,6 +57,10 @@ func (s *Server) progress(sum store.JobSummary) progressJSON {
 		Dropped:  sum.Dropped,
 		Finished: sum.Finished,
 		Running:  running,
+		// Asked after running, so a job that let go between the two reads is at
+		// worst drawn running for one more drawing, and never as stopping once
+		// it has stopped.
+		Stopping: running && s.sup.Stopping(sum.ID),
 		Queued:   queued,
 		// A job nobody is running will read at three in the morning exactly as it
 		// reads now. A page that goes on asking anyway knocks all night for an

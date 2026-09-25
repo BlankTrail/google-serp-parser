@@ -537,6 +537,19 @@ button:hover {
 	background: var(--sunken);
 }
 
+/* A press already made and still being carried out. It keeps the button's shape
+   where the button stood, so the reader sees their press answered rather than a
+   button gone missing, and it says so in a quieter voice and takes no second
+   press. */
+button:disabled {
+	color: var(--quiet);
+	cursor: default;
+}
+
+button:disabled:hover {
+	background: var(--surface);
+}
+
 /* A press that happens to be a link.
    
    Some of what can be done to a row is a link and some is a form — opening a
