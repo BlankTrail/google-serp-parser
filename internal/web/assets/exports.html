@@ -1,0 +1,74 @@
+{{define "main"}}
+<h1>{{.T "exports.title"}}</h1>
+{{if not .Job}}
+<p class="empty">{{.T "exports.none"}}</p>
+{{else}}
+{{/* One form for the whole choice. "Show" draws this screen again from it,
+     which is how a browser running no script sees its choice take effect, and
+     "Download" sends the same choice to the file. The moves are links rather
+     than buttons: each carries the whole choice with it, so a field moved loses
+     nothing chosen, and a press of Enter in the separator's box shows the file
+     rather than moving the first field. */}}
+<form id="export-builder" method="get" action="/exports"{{if .Explicit}} data-explicit="1"{{end}}>
+<section class="card">
+<div class="field">
+<label for="export-job">{{.T "exports.job"}}</label>
+<select id="export-job" name="job">
+{{range .Jobs}}<option value="{{.ID}}"{{if eq .ID $.Job.ID}} selected{{end}}>{{.Name}} — {{.CreatedAt.Local.Format "2006-01-02 15:04"}}</option>
+{{end}}</select>
+</div>
+<fieldset>
+<legend>{{.T "exports.part"}}</legend>
+<div class="row">
+{{range .Parts}}<div class="field"><label><input type="radio" name="part" value="{{.Name}}"{{if .Current}} checked{{end}}> {{$.T .Label}}</label></div>
+{{end}}</div>
+</fieldset>
+<fieldset class="export-fields">
+<legend>{{.T "exports.fields"}}</legend>
+<input type="hidden" name="order" value="{{.Order}}">
+<ol>
+{{range .Fields}}<li data-field="{{.Name}}"><label><input type="checkbox" name="cols" value="{{.Name}}"{{if .Chosen}} checked{{end}}> {{$.T .Label}}</label>
+{{if .Up}}<a href="{{.Up}}" data-move="up" aria-label="{{$.T "exports.up"}}">↑</a>{{end}}
+{{if .Down}}<a href="{{.Down}}" data-move="down" aria-label="{{$.T "exports.down"}}">↓</a>{{end}}</li>
+{{end}}</ol>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<p class="empty">{{.T "exports.fields.why"}}</p>
+</details>
+</fieldset>
+<fieldset>
+<legend>{{.T "exports.file"}}</legend>
+<div class="row">
+{{range .Formats}}<div class="field"><label><input type="radio" name="format" value="{{.}}"{{if eq . $.Format}} checked{{end}}> {{.}}</label></div>
+{{end}}</div>
+<div class="field">
+<label for="sep">{{.T "job.export.sep"}}</label>
+<input id="sep" name="sep" class="narrow" size="4" maxlength="3" value="{{.Sep}}" placeholder="TAB">
+</div>
+<div class="row">
+<div class="field"><label><input type="radio" name="eol" value="lf"{{if not .CRLF}} checked{{end}}> {{.T "exports.eol.lf"}}</label></div>
+<div class="field"><label><input type="radio" name="eol" value="crlf"{{if .CRLF}} checked{{end}}> {{.T "exports.eol.crlf"}}</label></div>
+</div>
+<div class="row">
+<div class="field"><label><input type="radio" name="header" value="1"{{if .Header}} checked{{end}}> {{.T "exports.header.on"}}</label></div>
+<div class="field"><label><input type="radio" name="header" value="0"{{if not .Header}} checked{{end}}> {{.T "exports.header.off"}}</label></div>
+</div>
+<div class="field"><label><input type="checkbox" name="unique" value="1"{{if .Unique}} checked{{end}}> {{.T "exports.unique"}}</label></div>
+<div class="field"><label><input type="checkbox" name="bom" value="1"{{if .BOM}} checked{{end}}> {{.T "exports.bom"}}</label></div>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<p class="empty">{{.T "exports.file.why"}}</p>
+</details>
+</fieldset>
+<div class="actions">
+<button type="submit">{{.T "exports.show"}}</button>
+<button type="submit" class="primary" formaction="/export">{{.T "exports.download"}}</button>
+</div>
+</section>
+</form>
+<section class="card">
+<h2>{{.T "exports.preview"}}</h2>
+<pre id="export-preview">{{if .Note}}{{.T .Note}}{{else}}{{.Preview}}{{end}}</pre>
+</section>
+{{end}}
+{{end}}

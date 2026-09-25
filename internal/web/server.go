@@ -223,6 +223,7 @@ func (s *Server) routes() {
 	// as it arrives and a form the server reads whole cannot be.
 	s.mux.HandleFunc("POST "+uploadAt, s.uploadList)
 	s.mux.HandleFunc("GET /job/{id}", s.job)
+	s.mux.HandleFunc("GET "+exportsAt, s.exports)
 	s.mux.HandleFunc("GET "+proxiesAt, s.proxies)
 	s.mux.HandleFunc("POST "+proxiesAt, s.saveProxies)
 	// Making one the default and removing one are presses of their own rather

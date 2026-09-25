@@ -14,8 +14,11 @@ const (
 	// the road that profile's ports take.
 	checkListAt = "/proxies/check"
 	newAt       = "/new"
-	proxiesAt   = "/proxies"
-	historyAt   = "/history"
+	// exportsAt is where a job's findings are laid out as a file before they
+	// are taken away.
+	exportsAt = "/exports"
+	proxiesAt = "/proxies"
+	historyAt = "/history"
 )
 
 // What the script works on, named here because the markup and the script have
@@ -61,6 +64,11 @@ type tab struct {
 var tabs = []tab{
 	{Key: "state.title", At: stateAt, Slug: "state"},
 	{Key: "jobs.title", At: jobsAt, Slug: "jobs"},
+	// Where a job's findings are taken away, laid out as the reader wants them.
+	// A tab of its own rather than a card on a job's page: the page is drawn
+	// again every few seconds while the job runs, and a choice of columns half
+	// made would be drawn away with it.
+	{Key: "exports.title", At: exportsAt, Slug: "exports"},
 	{Key: "proxies.title", At: proxiesAt, Slug: "proxies"},
 	{Key: "history.title", At: historyAt, Slug: "history"},
 }

@@ -660,7 +660,7 @@ func TestStyles_LetEveryBoxNarrowWithTheWindow(t *testing.T) {
 var formPages = []string{
 	"assets/new.html", "assets/proxies.html",
 	"assets/settings.html", "assets/job.html",
-	"assets/history.html",
+	"assets/history.html", "assets/exports.html",
 }
 
 func TestForms_FoldTheirExplanationsRatherThanPrintingThemUnderEveryBox(t *testing.T) {
