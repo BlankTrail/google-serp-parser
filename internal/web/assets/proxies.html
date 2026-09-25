@@ -32,12 +32,13 @@
 <tbody>
 {{range .Profiles}}<tr>
 <td>{{.Name}}{{if .Default}} — {{$.T "proxies.profile.default"}}{{end}}</td>
-<td>{{$.T .Source}}{{if .Where}} · {{.Where}}{{end}}{{if .Gateways}} · {{.Gateways}}{{end}}</td>
+<td class="wraps">{{$.T .Source}}{{if .Where}} · {{.Where}}{{end}}{{if .Gateways}} · {{.Gateways}}{{end}}</td>
 {{/* The presses stand in a row rather than in a column: each is a form of its
      own — a press that carried the form below it would save whatever happened
      to be typed in the boxes — and three forms one under another turn a table
-     of two profiles into half a screen. */}}
-<td><div class="deeds">
+     of two profiles into half a screen. Their cell is as wide as they are, and
+     the address beside it is what gives way. */}}
+<td class="acts"><div class="deeds">
 {{if not .Editing}}<a href="/proxies?profile={{.ID}}">{{$.T "proxies.profile.open"}}</a>{{end}}
 {{/* What this profile's exits have been doing, on its own press rather than
      under the list. One pool runs at a time and it runs on one profile, so a
@@ -68,18 +69,13 @@
      list somebody bought, and a program that judges that wrongly once is not
      believed afterwards about anything else it says.
 
-     It is drawn only for the profile whose press asked for it, and only when
-     the pool being read is the one that profile names. A reading shown under
-     another profile's name would be one list's failures reported as another's,
-     which is worse than reporting nothing — so where it is not this profile's,
-     the screen says whose it is and draws no figures at all. */}}
+     It is drawn for the profile whose press asked for it. The counters are the
+     pool's, and a pool runs on one profile at a time, so a profile the pool is
+     not on has had nothing counted against it: its figures are noughts, in the
+     same places as anybody's, rather than a sentence saying there is nothing to
+     read — that is what there is to read. */}}
 {{if .Reading}}
 <h2>{{.T "proxies.reading"}} {{.ReadingOf}}</h2>
-{{if .Nothing}}
-<p class="empty">{{.T "proxies.reading.none"}}</p>
-{{else if .Elsewhere}}
-<p class="empty">{{.T "proxies.reading.elsewhere"}} {{.Elsewhere}}.</p>
-{{else}}
 
 {{/* What the pool is doing this minute — its addresses, its ports and the
      sessions on them — is on the page of the job it is doing it for: a pool is
@@ -135,6 +131,10 @@
 <p class="empty">{{.T "proxies.refused.why.note"}}</p>
 {{end}}
 
+{{/* The presses act on the pool, so they are offered only under the profile
+     the pool is on: under any other name they would clear or release another
+     profile's addresses. */}}
+{{if not .Unused}}
 <div class="actions">
 <form method="post" action="/api/proxies/reset">
 <button type="submit">{{.T "proxies.reset"}}</button>
@@ -145,8 +145,8 @@
 </div>
 <p class="empty">{{.T "proxies.reset.why"}}</p>
 <p class="empty">{{.T "proxies.release.why"}}</p>
-</section>
 {{end}}
+</section>
 {{end}}
 
 {{/* Where the addresses come from and how the ports on them are reached. It
@@ -358,8 +358,13 @@
 {{/* The switch and the list it governs stand on one line, in that order: the
      list means nothing until the switch is on, and a reader meets them in the
      order they are answered. The other two are settings of their own and stand
-     under it. */}}
-<div class="row aligned">
+     under it.
+
+     The three are laid out as columns so the press that picks a resolver can
+     stand under the resolver's list in a cell of its own. Inside the field it
+     made the field a line taller than its neighbours, and a row lined up by its
+     feet stood the resolver's list a line above the vDNS list beside it. */}}
+<div class="row aligned resolving">
 <div class="field">
 <label class="switch"><input id="vdns" name="vdns" type="checkbox" value="1"{{if .Form.VDNSOn}} checked{{end}}> {{.T "proxies.vdns.on"}}</label>
 </div>
@@ -378,9 +383,11 @@
 <select id="resolver" name="resolver">
 {{range .Resolvers}}<option value="{{.Code}}"{{if eq $.Form.Resolver .Code}} selected{{end}}>{{$.T .Label}}</option>
 {{end}}</select>
+</div>
 {{/* Tries the ways on this profile's own addresses and keeps the cheapest one
      that reaches everything a search needs. Only a profile that is written
      down has addresses to try it on. */}}
+<div class="pick-cell">
 <button type="submit" form="resolver-pick" id="pick-resolver"{{if or (not .Form.ID) .Pick.Running}} disabled{{end}}>{{.T "proxies.pick"}}</button>
 </div>
 </div>

@@ -847,3 +847,67 @@ func TestProxies_PutsTheListOfProfilesAwayWhileAFormIsOpen(t *testing.T) {
 		t.Error("the reading of one profile's counters hides the list of the others")
 	}
 }
+
+func TestProxiesReading_KeepsTheRowsOwnPressToOpenIt(t *testing.T) {
+	// The reading marked its profile's row as the one being edited, and the mark
+	// is what hides a row's own press to open it: pressing «statistics» took
+	// «edit» away. Nothing is being edited while a reading is shown.
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+	s.sup.onProfile = prof
+	body := get(t, s, readingOf(prof)).Body.String()
+	if !strings.Contains(body, `href="`+boxesOf(prof)+`"`) {
+		t.Errorf("the reading of a profile takes away the press that opens its boxes:\n%s", body)
+	}
+}
+
+func TestProxiesReading_DrawsAProfileNothingHasRunOnAsNoughts(t *testing.T) {
+	// A profile the pool being read is not on was answered with a sentence
+	// saying there was no reading. There is one: nothing has been counted
+	// against it, and the figures say so — the same figures in the same places,
+	// each a nought, whether no pool has been raised yet or the pool stands on
+	// another profile. The presses that act on the pool are not offered under
+	// its name: they would clear or release another profile's.
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+	other, err := s.store.CreateProfile(t.Context(), store.Profile{Name: "the other list"})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		on   int64
+	}{
+		{"no pool raised yet", 0},
+		{"the pool on another profile", other},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s.sup.onProfile = c.on
+			body := get(t, s, readingOf(prof)).Body.String()
+			for _, id := range []string{"requests", "attempts", "failed", "rotations", "quarantines",
+				"revivals", "reopenings", "rejections"} {
+				if got := shown(t, body, id); got != "0" {
+					t.Errorf("the profile nothing ran on shows %s as %q, want 0", id, got)
+				}
+			}
+			if got := shown(t, body, "share"); got != noFigure {
+				t.Errorf("a share of nothing is shown as %q", got)
+			}
+			for _, press := range []string{"/api/proxies/reset", "/api/proxies/release"} {
+				if strings.Contains(body, `action="`+press+`"`) {
+					t.Errorf("the reading of a profile the pool is not on offers %s, which acts on another's pool", press)
+				}
+			}
+		})
+	}
+
+	// The profile the pool is on keeps its own figures and its presses.
+	s.sup.onProfile = prof
+	body := get(t, s, readingOf(prof)).Body.String()
+	if got := shown(t, body, "rotations"); got != "4" {
+		t.Errorf("the profile the pool is on shows rotations %q, want its own 4", got)
+	}
+	if !strings.Contains(body, `action="/api/proxies/reset"`) {
+		t.Error("the profile the pool is on is not offered its reset")
+	}
+}

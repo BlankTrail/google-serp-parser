@@ -99,22 +99,20 @@ type proxiesPage struct {
 	Editing bool
 	Reading bool
 	// ReadingOf is the name of the profile whose counters are being read, and
-	// Elsewhere the name of the profile the pool actually stands on when that is
-	// a different one. Nothing says no pool has been raised at all.
+	// Unused says the pool being read is not on it — none has been raised since
+	// the server started, or it stands on another profile.
 	//
 	// One pool runs at a time and it runs on one profile, so the counters belong
-	// to that profile and to no other. Drawing them under a profile they are not
-	// about would be this screen reporting one list's failures as another's,
-	// which is worse than reporting nothing.
+	// to that profile and to no other. A profile the pool is not on has had
+	// nothing counted against it, and its figures are drawn as the noughts they
+	// are; the pool's own figures under its name would be one list's failures
+	// reported as another's.
 	ReadingOf string
-	Elsewhere string
-	Nothing   bool
-	// OnProfile is the profile the pool being read stands on, and OnName its
-	// name. They are read off the pool rather than guessed from the address: the
-	// screen can be opened on any profile, and only one of them is the one
-	// anything is running through.
+	Unused    bool
+	// OnProfile is the profile the pool being read stands on. It is read off the
+	// pool rather than guessed from the address: the screen can be opened on any
+	// profile, and only one of them is the one anything is running through.
 	OnProfile int64
-	OnName    string
 
 	// Form is where the addresses come from and how the ports on them are
 	// reached, which is settled on this screen rather than in the settings.
@@ -336,17 +334,15 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 	view.Reading = asked != "" && r.URL.Query().Has(statsField)
 	view.Editing = asked != "" && !view.Reading
 	if view.Reading {
-		for _, p := range profiles {
-			if p.ID == view.OnProfile {
-				view.OnName = p.Name
-			}
-		}
 		view.readingOf(editing)
 		view.page = s.frame(r, lang, "proxies.title", proxiesAt)
 		if view.Running {
 			view.Refresh = proxiesRefresh.Milliseconds()
 		}
-		view.Profiles = profileRows(profiles, editing.ID)
+		// Nothing is being edited on a reading. The mark is what hides a row's
+		// own press to open it, and marking the profile being read took «edit»
+		// away the moment «statistics» was pressed.
+		view.Profiles = profileRows(profiles, 0)
 		s.render(w, r, "proxies.html", view)
 		return
 	}
@@ -434,18 +430,18 @@ func editingOr(id int64, editing bool) int64 {
 	return 0
 }
 
-// readingOf settles whose counters these are, and says so rather than drawing
-// them under the wrong name.
+// readingOf settles whose counters these are. A profile the pool is not on —
+// because nothing has been raised since this server started, or because the
+// pool stands on another profile — has had nothing counted against it, and its
+// figures are noughts rather than the pool's.
 func (v *proxiesPage) readingOf(profile store.Profile) {
 	v.ReadingOf = profile.Name
-	switch {
-	case v.OnProfile == 0:
-		// Nothing has been raised since this server started. There is no reading
-		// to show and no profile to hang one on.
-		v.Nothing = true
-	case v.OnProfile != profile.ID:
-		v.Elsewhere = v.OnName
+	if v.OnProfile != 0 && v.OnProfile == profile.ID {
+		return
 	}
+	v.Unused = true
+	v.count(blanktrail.Stats{})
+	v.Refused = nil
 }
 
 // saveProxies writes one profile down: the one the form names, or a new one
@@ -660,31 +656,40 @@ func (s *Server) proxiesOf() proxiesPage {
 
 	view.OnProfile = facts.Profile
 
-	st := facts.Stats
-	view.Requests = st.Requests
-	view.Attempts = st.Attempts
-	view.Rotations = st.EgressRotations
-	view.Quarantines = st.Quarantines
-	view.Revivals = st.Revivals
-	view.Reopenings = st.Reopenings
-	view.Rejections = st.Rejections
+	view.count(facts.Stats)
 	if facts.Pool != nil {
 		view.Refused = facts.Pool.Refused()
 	}
+	return view
+}
 
+// count works every figure on the screen out of one reading of a pool's
+// counters.
+func (v *proxiesPage) count(st blanktrail.Stats) {
+	v.Requests = st.Requests
+	v.Attempts = st.Attempts
+	v.Rotations = st.EgressRotations
+	v.Quarantines = st.Quarantines
+	v.Revivals = st.Revivals
+	v.Reopenings = st.Reopenings
+	v.Rejections = st.Rejections
+
+	// Worked out whole and then put in place, so a second reading of the same
+	// screen replaces the first rather than adding to it.
+	var failed int64
 	for _, kind := range blanktrail.Failures {
-		view.Failed += st.Failures[kind]
+		failed += st.Failures[kind]
 	}
-	view.Share = shareOf(view.Failed, view.Attempts)
+	kinds := make([]failureRow, 0, len(blanktrail.Failures))
 	for _, kind := range blanktrail.Failures {
 		n := st.Failures[kind]
-		view.Kinds = append(view.Kinds, failureRow{
+		kinds = append(kinds, failureRow{
 			Key:   failureKeys[kind],
 			Count: n,
-			Share: shareOf(n, view.Failed),
+			Share: shareOf(n, failed),
 		})
 	}
-	return view
+	v.Failed, v.Share, v.Kinds = failed, shareOf(failed, v.Attempts), kinds
 }
 
 // shareOf is n as a percentage of total, or the mark that stands where a figure

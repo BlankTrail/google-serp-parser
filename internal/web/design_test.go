@@ -766,3 +766,106 @@ func TestForms_SetTheirBoxesAndTheirPressesApartByOneGap(t *testing.T) {
 		}
 	}
 }
+
+// valuesIn is every value one property is given under one rule, or nothing
+// when the rule is not written.
+func valuesIn(decls []declaration, selector, property string) []string {
+	var out []string
+	for _, d := range decls {
+		if d.Selector == selector && d.Property == property {
+			out = append(out, d.Value)
+		}
+	}
+	return out
+}
+
+func TestHistoryScreen_LinesThePressUpWithTheBoxItSends(t *testing.T) {
+	// The press stood level with the word above the box rather than with the
+	// box: a row lines its fields up by their tops, and a press has no word
+	// above it. A row holding a labelled box and a press beside it is lined up
+	// by their feet, as the rows of the settings and proxy screens already are.
+	body := get(t, testServer(t), historyAt).Body.String()
+	form := regexp.MustCompile(`<form[^>]*action="` + historyAt + `"[^>]*>`).FindString(body)
+	if form == "" {
+		t.Fatalf("the history screen has no form sending to %s:\n%s", historyAt, body)
+	}
+	if !regexp.MustCompile(`class="[^"]*\baligned\b`).MatchString(form) {
+		t.Errorf("the box and the press beside it are not lined up by their feet: %s", form)
+	}
+	if got := valuesIn(stylesheet(t), ".row.aligned", "align-items"); len(got) != 1 || got[0] != "end" {
+		t.Errorf("a row lined up by its feet is given align-items %v", got)
+	}
+}
+
+func TestProfileForm_LinesTheResolverUpWithTheListBesideIt(t *testing.T) {
+	// The press that picks a resolver stood inside the resolver's field, under
+	// its list. That made the field a line taller than the ones beside it, and
+	// a row lined up by its feet stood the resolver's list a line above the
+	// vDNS list it belongs beside. The press stands in a cell of its own under
+	// the resolver, and the three settings are lined up by their lists.
+	s := testServerWithSupervisor(t)
+	prof := onlyProfile(t, s)
+	body := get(t, s, boxesOf(prof)).Body.String()
+
+	_, field, ok := strings.Cut(body, `<select id="resolver"`)
+	if !ok {
+		t.Fatalf("the form has no resolver list:\n%s", body)
+	}
+	field, _, _ = strings.Cut(field, "</div>")
+	if strings.Contains(field, `id="pick-resolver"`) {
+		t.Error("the press still stands inside the resolver's field, a line taller than its neighbours")
+	}
+	if !regexp.MustCompile(`<div class="pick-cell">\s*<button[^>]*id="pick-resolver"`).MatchString(body) {
+		t.Error("the press that picks a resolver does not stand in a cell of its own")
+	}
+	row, _, _ := strings.Cut(body, `<select id="vdns_mode"`)
+	if i := strings.LastIndex(row, `<div class="row`); i < 0 || !strings.HasPrefix(row[i:], `<div class="row aligned resolving">`) {
+		t.Error("the switch, the vDNS list and the resolver do not stand in one row laid out as columns")
+	}
+
+	decls := stylesheet(t)
+	if got := valuesIn(decls, ".row.resolving", "display"); len(got) != 1 || got[0] != "grid" {
+		t.Errorf("the row is laid out as %v, not as columns the press can stand under", got)
+	}
+	if got := valuesIn(decls, ".row.resolving > .pick-cell", "grid-column"); len(got) != 1 || got[0] != "3" {
+		t.Errorf("the press stands in column %v, not under the resolver", got)
+	}
+	// And a window too narrow for three columns takes them one under another,
+	// as a row that wraps would, rather than being dragged sideways.
+	narrow := false
+	for _, d := range decls {
+		if strings.HasPrefix(d.Selector, "@media (max-width:") && strings.HasSuffix(d.Selector, " .row.resolving") &&
+			d.Property == "grid-template-columns" && d.Value == "minmax(0, 1fr)" {
+			narrow = true
+		}
+	}
+	if !narrow {
+		t.Error("a narrow window keeps the three columns side by side and has to be dragged sideways")
+	}
+}
+
+func TestProfileList_KeepsARowsPressesOnOneLine(t *testing.T) {
+	// A profile's presses came apart into a column: the table gave their cell
+	// whatever a long list address left over, and the presses wrapped in it. The
+	// cell is as wide as its presses, which do not wrap, and the address is what
+	// gives way.
+	s := testServerWithSupervisor(t)
+	onlyProfile(t, s)
+	body := get(t, s, proxiesAt).Body.String()
+	if !strings.Contains(body, `<td class="acts"><div class="deeds">`) {
+		t.Errorf("a profile's presses do not stand in a cell as wide as they are:\n%s", body)
+	}
+	if !strings.Contains(body, `<td class="wraps">`) {
+		t.Error("the list address is not the cell that gives way")
+	}
+	decls := stylesheet(t)
+	if got := valuesIn(decls, ".deeds", "flex-wrap"); len(got) != 1 || got[0] != "nowrap" {
+		t.Errorf("a row's presses wrap: flex-wrap %v", got)
+	}
+	if got := valuesIn(decls, ".acts", "width"); len(got) != 1 || got[0] != "1%" {
+		t.Errorf("the presses' cell takes width %v rather than only what its presses need", got)
+	}
+	if got := valuesIn(decls, ".acts", "white-space"); len(got) != 1 || got[0] != "nowrap" {
+		t.Errorf("the presses' cell breaks its line: white-space %v", got)
+	}
+}
