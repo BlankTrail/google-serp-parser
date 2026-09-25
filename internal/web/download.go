@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,73 +31,154 @@ var exportTypes = map[string]string{
 // every proxy between here and the reader has a limit on how long one may be.
 const nameLimit = 60
 
-// download writes a job's results to the reader as a file.
-//
-// The order is the whole of it: the format is settled, then the job is found,
-// then the headers go out, and only then the first byte of the body. Every
-// refusal there is has to happen before the response is committed, because once
-// a byte of a file has gone out the only thing left to do with a mistake is
-// stop writing, and a file that stops looks finished to whoever downloaded it.
+// download writes a part of a job to the reader as a file, laid out as its
+// address asks. Everything the address can get wrong is refused by askedExport
+// before the headers go out.
 //
 // Nothing is gathered on the way. The export is as large as the job behind it,
 // and the reader sees the first rows while the last are still being read.
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
-	format := r.URL.Query().Get("format")
-	if !export.Writes(format) {
-		http.Error(w, "That is not a format this program writes.", http.StatusBadRequest)
-		return
-	}
-	// What a text file separates its columns with, refused here rather than half
-	// way down the file: a separator this program cannot write has to be said
-	// before a byte has gone out, because a file that stops looks finished to
-	// whoever downloaded it. Every other format ignores it.
-	sep, err := export.SeparatorOf(r.URL.Query().Get(separatorField))
-	if err != nil {
-		http.Error(w, "That cannot separate columns.", http.StatusBadRequest)
-		return
-	}
-
-	id, err := strconv.ParseInt(r.URL.Query().Get("job"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	job, err := s.store.Progress(r.Context(), id)
-	if errors.Is(err, store.ErrNoJob) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-
-	// Which part of the job is being asked for. The results are what a download
-	// with nothing said means, because that is what a job is for; the other two
-	// are offered only by a job that kept them. A part the job never captured is
-	// refused rather than handed over empty — and it is refused here, before a
-	// byte of the answer has gone out, like every other refusal on this route.
-	part, ok := partOf(job, r.URL.Query().Get(partField))
+	ask, ok := s.askedExport(w, r)
 	if !ok {
-		http.NotFound(w, r)
 		return
 	}
-	layout := export.DefaultLayout(format, fieldsOf(job, part))
-	layout.Sep = sep
-	ask := exportAsk{job: job, part: part, layout: layout}
-
+	format := ask.layout.Format
 	kind, named := exportTypes[format]
 	if !named {
 		kind = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", kind)
-	w.Header().Set("Content-Disposition", `attachment; filename="`+attachmentName(job, format)+`"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+attachmentName(ask.job, format, ask.part)+`"`)
 
 	if err := s.writePart(r.Context(), w, ask, false); err != nil {
 		// The header is out and part of the file with it, so there is nothing
 		// left to tell the reader. The log is where this has to be visible.
-		s.log.Error("an export stopped part way through", "job", job.ID, "format", format, "error", err)
+		s.log.Error("an export stopped part way through", "job", ask.job.ID, "format", format, "error", err)
 	}
+}
+
+// What a download says about how its file is written. Nothing said is the file
+// this program always wrote.
+const (
+	colsField   = "cols"
+	headerField = "header"
+	eolField    = "eol"
+	uniqueField = "unique"
+	bomField    = "bom"
+)
+
+// colsOf is the columns a download asked for, in its order. A link names them
+// in one value separated by commas; a form sends one value a box, in the order
+// its boxes stand. Both are read.
+func colsOf(q url.Values) []string {
+	var cols []string
+	for _, value := range q[colsField] {
+		for name := range strings.SplitSeq(value, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				cols = append(cols, name)
+			}
+		}
+	}
+	return cols
+}
+
+// eolOf reads how the lines of a file end: the Unix way unless Windows' was
+// asked for, and anything else is not an answer.
+func eolOf(asked string) (string, bool) {
+	switch asked {
+	case "", "lf":
+		return export.LF, true
+	case "crlf":
+		return export.CRLF, true
+	}
+	return "", false
+}
+
+// checkLayout asks the part's own catalog whether it can write the layout.
+func checkLayout(part string, l export.Layout) error {
+	switch part {
+	case partAds:
+		return export.Ads.Check(l)
+	case partRelated:
+		return export.Suggestions.Check(l)
+	case partVerdicts:
+		return export.Verdicts.Check(l)
+	}
+	return export.Results.Check(l)
+}
+
+// askedExport reads a file off its address and refuses, before a byte of the
+// answer has gone out, anything this program cannot write. It answers the
+// reader itself when it refuses, and says so.
+//
+// The order is the whole of it: the format is settled, then the job is found,
+// then its part and the columns, and only then may headers go out. Once a byte
+// of a file has gone the only thing left to do with a mistake is stop writing,
+// and a file that stops looks finished to whoever downloaded it.
+func (s *Server) askedExport(w http.ResponseWriter, r *http.Request) (exportAsk, bool) {
+	q := r.URL.Query()
+	format := q.Get("format")
+	if !export.Writes(format) {
+		http.Error(w, "That is not a format this program writes.", http.StatusBadRequest)
+		return exportAsk{}, false
+	}
+	// What a text file separates its columns with. Every other format ignores
+	// it, and it is refused here all the same: a separator this program cannot
+	// write has to be said before the file starts.
+	sep, err := export.SeparatorOf(q.Get(separatorField))
+	if err != nil {
+		http.Error(w, "That cannot separate columns.", http.StatusBadRequest)
+		return exportAsk{}, false
+	}
+	id, err := strconv.ParseInt(q.Get("job"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return exportAsk{}, false
+	}
+	job, err := s.store.Progress(r.Context(), id)
+	if errors.Is(err, store.ErrNoJob) {
+		http.NotFound(w, r)
+		return exportAsk{}, false
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return exportAsk{}, false
+	}
+	// Which part of the job is being asked for. The results are what a download
+	// with nothing said means, because that is what a job is for; the other two
+	// are offered only by a job that kept them. A part the job never captured is
+	// refused rather than handed over empty.
+	part, ok := partOf(job, q.Get(partField))
+	if !ok {
+		http.NotFound(w, r)
+		return exportAsk{}, false
+	}
+	lang := pickLang(r)
+	eol, ok := eolOf(q.Get(eolField))
+	if !ok {
+		http.Error(w, lang.T("exports.refused.eol"), http.StatusBadRequest)
+		return exportAsk{}, false
+	}
+	allowed := fieldsOf(job, part)
+	fields := colsOf(q)
+	if !q.Has(colsField) {
+		fields = allowed
+	}
+	// A column the part has but this job never kept is refused like one nobody
+	// has heard of: it would stand in the file empty.
+	for _, name := range fields {
+		if !slices.Contains(allowed, name) {
+			http.Error(w, lang.T("exports.refused.fields"), http.StatusBadRequest)
+			return exportAsk{}, false
+		}
+	}
+	layout := export.Layout{Format: format, Fields: fields, Header: q.Get(headerField) != "0",
+		EOL: eol, Sep: sep, Unique: q.Get(uniqueField) == "1", BOM: q.Get(bomField) == "1"}
+	if err := checkLayout(part, layout); err != nil {
+		http.Error(w, lang.T("exports.refused.fields"), http.StatusBadRequest)
+		return exportAsk{}, false
+	}
+	return exportAsk{job: job, part: part, layout: layout}, true
 }
 
 // exportAsk is one file asked for: of which job, which part of it, and how it
@@ -291,12 +373,19 @@ func firstOf[T any](out *export.Table[T]) func(T) error {
 // arrive as one file overwriting the other. A job whose stamp could not be read
 // is dated 0001-01-01, which says plainly that the date is unknown rather than
 // putting today's in its place.
-func attachmentName(job store.JobSummary, format string) string {
+func attachmentName(job store.JobSummary, format, part string) string {
 	name := headerSafe(job.Name)
 	if name == "" {
 		name = "export"
 	}
-	return name + "-" + job.CreatedAt.Local().Format("2006-01-02") + "." + headerSafe(format)
+	name += "-" + job.CreatedAt.Local().Format("2006-01-02")
+	// The results are what a job is for and keep the plain name; the other two
+	// are told apart from them, or a browser saving all three renames two into
+	// names nobody can tell apart.
+	if part == partAds || part == partRelated {
+		name += "-" + part
+	}
+	return name + "." + headerSafe(format)
 }
 
 // headerSafe keeps the letters, digits and marks a file name is made of, and
