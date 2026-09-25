@@ -1009,14 +1009,11 @@ func (p *Pool) Shrink(ctx context.Context) (int, error) {
 	p.ports = keep
 	p.mu.Unlock()
 
-	var firstErr error
-	for _, pt := range drop {
-		if err := p.cl.ClosePort(ctx, pt.num); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		pt.base.CloseIdleConnections()
-	}
-	return len(drop), firstErr
+	// Side by side, for the reason Close gives them back that way: this is what
+	// a job that grew the pool waits for as it lets go.
+	return len(drop), p.closePorts(drop, func() (context.Context, context.CancelFunc) {
+		return context.WithCancel(ctx)
+	})
 }
 
 // AcquireIdleHot leases a standing port that nobody has used for at least the
@@ -1951,6 +1948,50 @@ func (p *Pool) giveBack(pt *poolPort) {
 	pt.mu.Unlock()
 }
 
+// closeWidth is how many ports are given back to the service at once.
+//
+// One after another, a pool of a hundred ports took a hundred round trips to put
+// away, each of which could wait out its time limit on a service still busy with
+// the run that had just stopped — and the job counted as running until the last
+// of them came back, so its page went on offering the stop somebody had just
+// pressed. Side by side they take about the time of the slowest few. Sixteen is
+// well inside what a run of a hundred threads asks of the same service every
+// second, and not a burst of a hundred requests landing on it together.
+const closeWidth = 16
+
+// closePorts gives ports back to the service side by side, at most closeWidth at
+// a time, and reports one of the refusals if there were any. each is the context
+// one close is asked under.
+func (p *Pool) closePorts(ports []*poolPort, each func() (context.Context, context.CancelFunc)) error {
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	room := make(chan struct{}, closeWidth)
+	for _, pt := range ports {
+		room <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-room }()
+			ctx, cancel := each()
+			err := p.cl.ClosePort(ctx, pt.num)
+			cancel()
+			pt.base.CloseIdleConnections()
+			if err != nil {
+				mu.Lock()
+				if first == nil {
+					first = err
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return first
+}
+
 // Close closes every opened port and every channel. Safe to call more than once.
 func (p *Pool) Close() error {
 	var firstErr error
@@ -1962,14 +2003,9 @@ func (p *Pool) Close() error {
 		p.closed = true
 		p.mu.Unlock()
 
-		for _, pt := range ports {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := p.cl.ClosePort(ctx, pt.num); err != nil && firstErr == nil {
-				firstErr = err
-			}
-			cancel()
-			pt.base.CloseIdleConnections()
-		}
+		firstErr = p.closePorts(ports, func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), 5*time.Second)
+		})
 		p.mixer.Close()
 	})
 	return firstErr
