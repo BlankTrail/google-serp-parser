@@ -7,9 +7,20 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
+
+// verdictsIn is a table of verdicts in a format the test knows is written.
+func verdictsIn(t *testing.T, format string, w io.Writer) *Table[Verdict] {
+	t.Helper()
+	out, err := NewTable(w, Verdicts, DefaultLayout(format, Verdicts.Names()))
+	if err != nil {
+		t.Fatalf("NewTable(%q): %v", format, err)
+	}
+	return out
+}
 
 func verdicts() []Verdict {
 	return []Verdict{
@@ -23,7 +34,7 @@ func TestVerdictCSV_CarriesTheAddressesNothingWasFoundFor(t *testing.T) {
 	// which addresses are held and which are not, and a file holding only the
 	// held ones answers half the question while looking complete.
 	var buf bytes.Buffer
-	w := NewVerdictCSV(&buf)
+	w := verdictsIn(t, "csv", &buf)
 	for _, v := range verdicts() {
 		if err := w.Write(v); err != nil {
 			t.Fatalf("Write: %v", err)
@@ -55,7 +66,7 @@ func TestVerdictCSV_SaysWhichLineOfTheListEachAnswerBelongsTo(t *testing.T) {
 	// A file of a million addresses is read beside the file it was made from.
 	// Without the ordinal, an answer cannot be laid against the line it is about.
 	var buf bytes.Buffer
-	w := NewVerdictCSV(&buf)
+	w := verdictsIn(t, "csv", &buf)
 	if err := w.Write(Verdict{Ordinal: 41, Target: "late.test", Held: true}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -75,7 +86,7 @@ func TestVerdictCSV_WritesTheHeaderWhenNoAddressWasEverChecked(t *testing.T) {
 	// A job stopped before it reached anything has no verdicts. An empty file
 	// reads as a download that broke; a table with no rows reads as an answer.
 	var buf bytes.Buffer
-	if err := NewVerdictCSV(&buf).Close(); err != nil {
+	if err := verdictsIn(t, "csv", &buf).Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if !strings.HasPrefix(buf.String(), "ordinal,address,held") {
@@ -87,7 +98,7 @@ func TestVerdictJSONL_CarriesHeldAsSomethingAProgramCanBranchOn(t *testing.T) {
 	// The file exists to be read by another program. A verdict spelled as a word
 	// makes every reader guess which words mean no.
 	var buf bytes.Buffer
-	w := NewVerdictJSONL(&buf)
+	w := verdictsIn(t, "jsonl", &buf)
 	for _, v := range verdicts() {
 		if err := w.Write(v); err != nil {
 			t.Fatalf("Write: %v", err)
@@ -120,14 +131,14 @@ func TestVerdictJSONL_CarriesHeldAsSomethingAProgramCanBranchOn(t *testing.T) {
 	}
 }
 
-func TestNewVerdicts_WritesTheSameFormatsTheResultsOfAJobAreWrittenIn(t *testing.T) {
+func TestVerdicts_AreWrittenInTheSameFormatsTheResultsOfAJobAre(t *testing.T) {
 	// An operator picks a format, not a format and a kind of job. A format that
 	// works for one job and refuses for another is a menu that lies.
 	for _, format := range Formats() {
 		var buf bytes.Buffer
-		w, err := NewVerdicts(format, &buf, TabSeparator)
+		w, err := NewTable(&buf, Verdicts, DefaultLayout(format, Verdicts.Names()))
 		if err != nil {
-			t.Fatalf("NewVerdicts(%q): %v", format, err)
+			t.Fatalf("NewTable(%q): %v", format, err)
 		}
 		if err := w.Write(Verdict{Ordinal: 0, Target: "a.test", Held: true}); err != nil {
 			t.Fatalf("Write to %q: %v", format, err)
@@ -141,9 +152,9 @@ func TestNewVerdicts_WritesTheSameFormatsTheResultsOfAJobAreWrittenIn(t *testing
 	}
 }
 
-func TestNewVerdicts_RefusesAFormatItCannotWrite(t *testing.T) {
-	if _, err := NewVerdicts("xlsx", &bytes.Buffer{}, TabSeparator); !errors.Is(err, ErrUnknownFormat) {
-		t.Errorf("NewVerdicts(\"xlsx\") returned %v, want ErrUnknownFormat", err)
+func TestVerdicts_RefuseAFormatNothingWrites(t *testing.T) {
+	if _, err := NewTable(&bytes.Buffer{}, Verdicts, DefaultLayout("xlsx", Verdicts.Names())); !errors.Is(err, ErrUnknownFormat) {
+		t.Errorf("a table of verdicts in xlsx returned %v, want ErrUnknownFormat", err)
 	}
 }
 
@@ -152,9 +163,9 @@ func TestVerdictWriters_RefuseAnAddressThatArrivesAfterTheFileIsFinished(t *test
 	// caller believing an answer reached the operator when it did not.
 	for _, format := range Formats() {
 		var buf bytes.Buffer
-		w, err := NewVerdicts(format, &buf, TabSeparator)
+		w, err := NewTable(&buf, Verdicts, DefaultLayout(format, Verdicts.Names()))
 		if err != nil {
-			t.Fatalf("NewVerdicts(%q): %v", format, err)
+			t.Fatalf("NewTable(%q): %v", format, err)
 		}
 		if err := w.Close(); err != nil {
 			t.Fatalf("Close of %q: %v", format, err)
@@ -171,7 +182,7 @@ func TestVerdictWriters_RefuseAnAddressThatArrivesAfterTheFileIsFinished(t *test
 func TestVerdictCSV_SaysSoWhenTheFileCannotBeWritten(t *testing.T) {
 	// A disk that has run out has to reach the caller. An export that swallows it
 	// hands over a file that stops part way and looks finished.
-	w := NewVerdictCSV(brokenWriter{})
+	w := verdictsIn(t, "csv", brokenWriter{})
 	if err := w.Write(verdicts()[0]); err == nil {
 		if err := w.Close(); err == nil {
 			t.Error("writing to a full disk was reported as a file that finished")

@@ -3,10 +3,8 @@
 package export
 
 import (
-	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"unicode/utf8"
 )
@@ -49,29 +47,4 @@ func SeparatorOf(text string) (rune, error) {
 		return 0, fmt.Errorf("%w: %q is what a field is quoted with", ErrSeparator, text)
 	}
 	return sep, nil
-}
-
-// separated is a comma-separated writer that separates by something else.
-//
-// It is one function because four kinds of file are written this way — results,
-// verdicts, paid placements and suggested searches — and a separator set in
-// four places is a separator that will one day be set in three.
-func separated(w io.Writer, sep rune) *csv.Writer {
-	out := csv.NewWriter(w)
-	out.Comma = sep
-	return out
-}
-
-// NewText writes rows as text separated by the given character, carrying only
-// the columns named. Nil is every column.
-//
-// It is the comma-separated writer with another separator, quoting and all.
-// Written without quoting, a snippet holding the separator would shift every
-// column after it — which is the kind of wrong nobody notices until the numbers
-// have been used.
-func NewText(w io.Writer, cols []string, sep rune) Writer {
-	if cols == nil {
-		cols = everyColumn()
-	}
-	return &csvWriter{w: separated(w, sep), cols: cols}
 }

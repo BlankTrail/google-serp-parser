@@ -1345,3 +1345,29 @@ legend button {
 	margin: 0;
 	padding: 0;
 }
+
+/* The export tab's fields: a list read top to bottom as the file's columns are
+   read left to right, each with its two moves beside it. */
+.export-fields ol {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.export-fields li {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.2rem 0;
+}
+
+.export-fields li a {
+	text-decoration: none;
+}
+
+/* How the file begins, as it is: its own lines, scrolled inside the card rather
+   than widening the window. */
+#export-preview {
+	overflow-x: auto;
+	white-space: pre;
+}

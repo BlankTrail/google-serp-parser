@@ -334,7 +334,7 @@ func fill(t *testing.T, s *Server, jobID int64, ordinal, rows, snippet int) {
 func TestAttachmentName_CannotCarryAQuoteOrANewlineIntoTheHeader(t *testing.T) {
 	// A job name is typed by a person, and it lands in a header where a quote
 	// or a newline is not a character but a syntax.
-	got := attachmentName(store.JobSummary{Name: "ni\"ght\r\nly"}, "csv")
+	got := attachmentName(store.JobSummary{Name: "ni\"ght\r\nly"}, "csv", "")
 	if strings.ContainsAny(got, "\"\r\n") {
 		t.Errorf("attachment name %q still carries something the header cannot hold", got)
 	}
@@ -351,7 +351,7 @@ func TestAttachmentName_KeepsNothingAHeaderCannotHold(t *testing.T) {
 	// discussion of this header, and they are not the only ones: a semicolon
 	// starts the next parameter, a backslash escapes whatever follows it, and a
 	// control character is not text at all.
-	got := attachmentName(store.JobSummary{Name: "a;b\\c\td\x00e ф"}, "jsonl")
+	got := attachmentName(store.JobSummary{Name: "a;b\\c\td\x00e ф"}, "jsonl", "")
 	for _, bad := range []string{";", "\\", "\t", "\x00", "\""} {
 		if strings.Contains(got, bad) {
 			t.Errorf("attachment name %q carries %q", got, bad)
@@ -366,7 +366,7 @@ func TestAttachmentName_StaysShortEnoughForAHeaderWhateverItIsGiven(t *testing.T
 	// A job named with a pasted paragraph would otherwise put that paragraph in
 	// a header, and every proxy between here and the reader has a limit on how
 	// long one may be.
-	got := attachmentName(store.JobSummary{Name: strings.Repeat("nightly ", 200)}, "csv")
+	got := attachmentName(store.JobSummary{Name: strings.Repeat("nightly ", 200)}, "csv", "")
 	if len(got) > 120 {
 		t.Errorf("attachment name is %d bytes long", len(got))
 	}
@@ -375,7 +375,7 @@ func TestAttachmentName_StaysShortEnoughForAHeaderWhateverItIsGiven(t *testing.T
 func TestAttachmentName_NamesSomethingWhenTheJobNameSurvivesNothing(t *testing.T) {
 	// A name made entirely of what a header cannot hold must still save as a
 	// file, not as a bare extension.
-	got := attachmentName(store.JobSummary{Name: "\"\r\n\t"}, "csv")
+	got := attachmentName(store.JobSummary{Name: "\"\r\n\t"}, "csv", "")
 	if strings.HasPrefix(got, ".") || strings.HasPrefix(got, "-") {
 		t.Errorf("attachment name %q begins where its name should be", got)
 	}
@@ -741,5 +741,206 @@ func TestDownload_RefusesASeparatorItCannotWriteBeforeAnyBytesGoOut(t *testing.T
 	}
 	if rec.Header().Get("Content-Disposition") != "" {
 		t.Error("the refusal went out as a download, which a browser saves as a file")
+	}
+}
+
+func TestDownload_WritesTextAsItIsWithoutQuotes(t *testing.T) {
+	// txt is for pasting and reading by eye. A title holding a quote came back
+	// as "He said ""hi""" when txt was csv with another separator; now it comes
+	// back as the page had it.
+	s := testServer(t)
+	id, err := s.store.CreateJob(t.Context(), store.JobSpec{Name: "quoted", Pages: 1}, []string{"q"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: 0,
+		Pages: []google.SERP{{Origin: "https://www.google.com", Results: []google.Result{
+			{Title: `He said "hi"`, URL: "https://a.test/", Host: "a.test"},
+		}}}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	body := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=txt").Body.String()
+	if !strings.Contains(body, "\tHe said \"hi\"\t") {
+		t.Errorf("the title was not written as it is:\n%q", body)
+	}
+}
+
+func TestDownload_TakesTheResultsOfAnIndexJobToBeItsVerdicts(t *testing.T) {
+	// Every link written before the parts had names asked an index job for its
+	// results, and what it got was its verdicts. It still does.
+	s := testServer(t)
+	id := seedIndexJob(t, s, "old link", []string{"held.test/a"}, map[string]bool{"held.test/a": true})
+	rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=csv&part=results")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "held.test/a,true") {
+		t.Errorf("an index job's results came back %d:\n%s", rec.Code, rec.Body.String())
+	}
+}
+
+// exportOf is a download of job id with the query given.
+func exportOf(t *testing.T, s *Server, id int64, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	return get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&"+query)
+}
+
+func TestDownload_WritesOnlyTheColumnsAskedForInTheOrderAskedFor(t *testing.T) {
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 1, 1, 0)
+	rec := exportOf(t, s, id, "format=csv&cols=url,rank")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the download came back %d: %s", rec.Code, rec.Body.String())
+	}
+	want := "url,rank\nhttps://first.test/1,1\nhttps://second.test/2,2\n"
+	if rec.Body.String() != want {
+		t.Errorf("the file is %q, want %q", rec.Body.String(), want)
+	}
+	// A form sends a column a value, in the order its boxes stand.
+	if got := exportOf(t, s, id, "format=csv&cols=url&cols=rank").Body.String(); got != want {
+		t.Errorf("the columns sent one by one gave %q, want %q", got, want)
+	}
+}
+
+func TestDownload_WritesOneFieldAsABareListOfLines(t *testing.T) {
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 1, 1, 0)
+	got := exportOf(t, s, id, "format=txt&cols=url&header=0").Body.String()
+	if got != "https://first.test/1\nhttps://second.test/2\n" {
+		t.Errorf("the list is %q", got)
+	}
+}
+
+func TestDownload_EndsLinesTheWayItWasAskedTo(t *testing.T) {
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 1, 1, 0)
+	got := exportOf(t, s, id, "format=txt&cols=url&header=0&eol=crlf").Body.String()
+	if got != "https://first.test/1\r\nhttps://second.test/2\r\n" {
+		t.Errorf("the list is %q", got)
+	}
+}
+
+func TestDownload_DropsRepeatsWhenAskedTo(t *testing.T) {
+	// Two queries, each holding the same two sites: four rows, two domains.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 2, 2, 0)
+	got := exportOf(t, s, id, "format=txt&cols=host&header=0&unique=1").Body.String()
+	if got != "first.test\nsecond.test\n" {
+		t.Errorf("the domains are %q, want each once", got)
+	}
+}
+
+func TestDownload_MarksAFileForExcelWhenAskedTo(t *testing.T) {
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 1, 1, 0)
+	if got := exportOf(t, s, id, "format=csv&bom=1").Body.String(); !strings.HasPrefix(got, "\xef\xbb\xbfordinal,") {
+		t.Errorf("the file begins %q, want the mark and then the header", got[:min(len(got), 20)])
+	}
+	if got := exportOf(t, s, id, "format=csv").Body.String(); strings.HasPrefix(got, "\xef\xbb\xbf") {
+		t.Error("a file nobody asked to mark begins with the mark")
+	}
+}
+
+func TestDownload_RefusesAColumnTheJobNeverKeptBeforeAnyBytesGoOut(t *testing.T) {
+	// A column the job never kept would stand in the file empty, which reads as
+	// results that had none of it.
+	s := testServer(t)
+	id := withAside(t, s, store.FieldURL)
+	for _, query := range []string{
+		"format=csv&cols=snippet", // a column results have, and this job never kept
+		"format=csv&cols=nonsense",
+		"format=csv&cols=",
+		"format=csv&cols=url,url",
+		"format=csv&eol=cr",
+	} {
+		rec := exportOf(t, s, id, query)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s came back %d, want a refusal", query, rec.Code)
+		}
+		if rec.Header().Get("Content-Disposition") != "" {
+			t.Errorf("%s: the refusal went out as a download", query)
+		}
+	}
+	// And a refusal says what was wrong, because the export tab shows it where
+	// the file's first lines would stand: a line ending nobody writes is not a
+	// field nobody kept.
+	rec := exportOf(t, s, id, "format=csv&eol=cr")
+	if want := catalogue[LangEN]["exports.refused.eol"]; !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("a line ending nobody writes was refused with %q, want %q", rec.Body.String(), want)
+	}
+}
+
+func TestDownload_NamesTheFileAfterThePartItHolds(t *testing.T) {
+	// Results, ads and related searches of one job downloaded one after another
+	// would otherwise all be saved under one name, the second and third renamed
+	// by the browser into something nobody can tell apart.
+	s := testServer(t)
+	id := withAside(t, s, "")
+	for part, suffix := range map[string]string{"results": ".csv", "ads": "-ads.csv", "related": "-related.csv"} {
+		name := exportOf(t, s, id, "format=csv&part="+part).Header().Get("Content-Disposition")
+		if !strings.HasSuffix(name, suffix+`"`) {
+			t.Errorf("the %s are saved as %s, want a name ending %s", part, name, suffix)
+		}
+	}
+	if name := exportOf(t, s, id, "format=csv&part=results").Header().Get("Content-Disposition"); strings.Contains(name, "-results") {
+		t.Errorf("the results are saved as %s, want the plain name", name)
+	}
+}
+
+func TestPreview_ShowsTheFileAsItBeginsAndNoFurther(t *testing.T) {
+	// The first lines of the file exactly as it downloads, and the ten records
+	// a screen can show rather than the job.
+	s := testServer(t)
+	id := seedJob(t, s, "wide", 2, 1, 0)
+	fill(t, s, id, 1, 30, 10)
+
+	q := "?job=" + strconv.FormatInt(id, 10) + "&format=txt&cols=url,rank"
+	shown := get(t, s, previewAt+q).Body.String()
+	whole := get(t, s, "/export"+q).Body.String()
+	if !strings.HasPrefix(whole, shown) {
+		t.Errorf("the preview is not how the file begins:\n%q\n%q", shown, whole)
+	}
+	if lines := strings.Count(shown, "\n"); lines != 1+previewRecords {
+		t.Errorf("the preview has %d lines, want the header and %d records", lines, previewRecords)
+	}
+}
+
+func TestPreview_ShowsNoMarkForExcel(t *testing.T) {
+	// The mark is for a spreadsheet opening a file; on a screen it is a stray
+	// character in front of the first word.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 1, 1, 0)
+	got := get(t, s, previewAt+"?job="+strconv.FormatInt(id, 10)+"&format=csv&bom=1").Body.String()
+	if strings.HasPrefix(got, "\xef\xbb\xbf") {
+		t.Errorf("the preview begins with the mark: %q", got[:min(len(got), 10)])
+	}
+}
+
+func TestPreview_StopsLookingForDistinctRecordsAfterAScan(t *testing.T) {
+	// With repeats dropped, a job whose results all repeat would be read to its
+	// end for a preview of one line.
+	was := previewScan
+	previewScan = 5
+	t.Cleanup(func() { previewScan = was })
+
+	s := testServer(t)
+	id := seedJob(t, s, "same site", 3, 1, 0)
+	fill(t, s, id, 1, 6, 1) // six results of one site
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: 2,
+		Pages: []google.SERP{{Origin: "https://www.google.com",
+			Results: []google.Result{resultAt("late.test", 1)}}}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got := get(t, s, previewAt+"?job="+strconv.FormatInt(id, 10)+"&format=txt&cols=host&header=0&unique=1").Body.String()
+	// first.test and second.test, then wide.example three times: the scan of
+	// five ends there, and the site standing after the repeats is not reached.
+	if got != "first.test\nsecond.test\nwide.example\n" {
+		t.Errorf("the preview read on past its scan: %q", got)
+	}
+}
+
+func TestPreview_RefusesWhatTheDownloadRefuses(t *testing.T) {
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 1, 1, 0)
+	rec := get(t, s, previewAt+"?job="+strconv.FormatInt(id, 10)+"&format=csv&cols=")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("a preview of no column came back %d, want a refusal", rec.Code)
 	}
 }

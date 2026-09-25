@@ -800,10 +800,120 @@
 		showWalk();
 	}
 
+	// The export tab's builder. Everything it does the form does without it: the
+	// server draws the fields in the order asked for and the file's first lines
+	// under them, and a move is a link carrying the whole choice. What this adds
+	// is doing it in place — a field moved without a round trip, the first lines
+	// redrawn as the choice changes — and remembering, in this browser, what was
+	// chosen last for each part of a job.
+	function exportBuilder(root) {
+		var form = root.querySelector("#export-builder");
+		if (!form || form.getAttribute("data-built")) {
+			return;
+		}
+		form.setAttribute("data-built", "1");
+		var list = form.querySelector(".export-fields ol");
+		var order = form.querySelector("[name=order]");
+		var preview = document.getElementById("export-preview");
+		var part = function () {
+			var on = form.querySelector("[name=part]:checked");
+			return on ? on.value : "results";
+		};
+		var job = function () {
+			return form.querySelector("[name=job]").value;
+		};
+		var choice = function () {
+			var q = new URLSearchParams(new FormData(form));
+			q.delete("move");
+			return q;
+		};
+		var remember = function () {
+			// Storage refused — a private window, a browser that keeps nothing —
+			// is a builder that forgets, not one that stops working.
+			try {
+				window.localStorage.setItem("gserp.export." + part(), choice().toString());
+			} catch (e) {}
+		};
+		var timer = 0;
+		var redraw = function () {
+			window.clearTimeout(timer);
+			timer = window.setTimeout(function () {
+				var q = choice();
+				q.delete("order");
+				fetch("/export/preview?" + q.toString()).then(function (answer) {
+					return answer.text();
+				}).then(function (text) {
+					preview.textContent = text;
+				}).catch(function () {});
+			}, 250);
+		};
+		var renumber = function () {
+			var names = [];
+			var rows = list.querySelectorAll("li[data-field]");
+			for (var i = 0; i < rows.length; i++) {
+				names.push(rows[i].getAttribute("data-field"));
+			}
+			order.value = names.join(",");
+		};
+		list.addEventListener("click", function (event) {
+			var move = event.target.closest("a[data-move]");
+			if (!move) {
+				return;
+			}
+			event.preventDefault();
+			var row = move.closest("li");
+			if (move.getAttribute("data-move") === "up" && row.previousElementSibling) {
+				list.insertBefore(row, row.previousElementSibling);
+			} else if (move.getAttribute("data-move") === "down" && row.nextElementSibling) {
+				list.insertBefore(row.nextElementSibling, row);
+			}
+			renumber();
+			remember();
+			redraw();
+		});
+		form.addEventListener("change", function (event) {
+			// Another job or another part has other fields, and only the server
+			// knows which: that is a new screen, drawn by it.
+			if (event.target.name === "job" || event.target.name === "part") {
+				var q = new URLSearchParams();
+				q.set("job", job());
+				q.set("part", part());
+				show("/exports?" + q.toString(), true);
+				return;
+			}
+			remember();
+			redraw();
+		});
+		form.addEventListener("input", function (event) {
+			if (event.target.name === "sep") {
+				remember();
+				redraw();
+			}
+		});
+		form.addEventListener("submit", remember);
+		// A screen opened cold is given back what was chosen last for this part.
+		// A screen drawn from a choice says so in data-explicit, and is left as it
+		// is — which is also what keeps this from drawing again the screen it has
+		// just drawn.
+		if (!form.getAttribute("data-explicit")) {
+			var kept = null;
+			try {
+				kept = window.localStorage.getItem("gserp.export." + part());
+			} catch (e) {}
+			if (kept) {
+				var q = new URLSearchParams(kept);
+				q.set("job", job());
+				q.set("part", part());
+				show("/exports?" + q.toString(), false);
+			}
+		}
+	}
+
 	shape(document);
 	sourceFields(document);
 	hopFields(document);
 	resolverFields(document);
+	exportBuilder(document);
 
 	// A form that arrived with a swapped screen has to be shaped as well, or it
 	// is the one screen where this works only on a reload.
@@ -812,6 +922,7 @@
 		sourceFields(document);
 		hopFields(document);
 		resolverFields(document);
+		exportBuilder(document);
 	});
 
 	watch();

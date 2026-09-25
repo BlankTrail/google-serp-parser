@@ -223,6 +223,7 @@ func (s *Server) routes() {
 	// as it arrives and a form the server reads whole cannot be.
 	s.mux.HandleFunc("POST "+uploadAt, s.uploadList)
 	s.mux.HandleFunc("GET /job/{id}", s.job)
+	s.mux.HandleFunc("GET "+exportsAt, s.exports)
 	s.mux.HandleFunc("GET "+proxiesAt, s.proxies)
 	s.mux.HandleFunc("POST "+proxiesAt, s.saveProxies)
 	// Making one the default and removing one are presses of their own rather
@@ -237,6 +238,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+pickResolverAt, s.pickResolver)
 	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)
+	// How a file will begin, for the export tab to show before it is downloaded.
+	s.mux.HandleFunc("GET "+previewAt, s.preview)
 	// What the job page polls, and what its two buttons send. Both buttons are
 	// registered for post alone, so a browser prefetching a link, or anything
 	// else that walks one, is answered with a refusal rather than with somebody

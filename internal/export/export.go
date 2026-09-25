@@ -9,10 +9,8 @@ package export
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"slices"
-	"strconv"
 )
 
 // Row is one captured result, flat, because that is the shape both a
@@ -69,44 +67,24 @@ func Formats() []string { return []string{"csv", "jsonl", "txt"} }
 // rows or verdicts.
 func Writes(format string) bool { return slices.Contains(Formats(), format) }
 
-// New builds the writer for a named format, carrying every column.
+// New builds the writer of results for a named format, carrying every column
+// with a header, lines ending the Unix way and tabs between the columns of a
+// txt file. It is what a file written from the command line is.
 func New(format string, w io.Writer) (Writer, error) {
-	return NewWith(format, w, nil)
-}
-
-// NewWith builds the writer for a named format, carrying only the columns
-// named. Nil is every column.
-//
-// A column a job never kept is left out of the file rather than written empty.
-// An empty column reads as a result that had none of that, which is a different
-// thing from one nobody asked to keep — and on a job of ten million results it
-// is also several hundred megabytes of separators.
-func NewWith(format string, w io.Writer, cols []string) (Writer, error) {
-	return NewSeparated(format, w, cols, TabSeparator)
-}
-
-// NewSeparated is NewWith, with the separator a text file uses. It is ignored
-// by every other format: a comma-separated file is separated by commas and a
-// file of one object per line is separated by nothing.
-func NewSeparated(format string, w io.Writer, cols []string, sep rune) (Writer, error) {
-	switch format {
-	case "csv":
-		return newCSVWith(w, cols), nil
-	case "jsonl":
-		return newJSONLWith(w, cols), nil
-	case "txt":
-		return NewText(w, cols, sep), nil
-	default:
-		return nil, fmt.Errorf("%w: %q, want one of %v", ErrUnknownFormat, format, Formats())
+	// Taken apart rather than returned whole: a nil *Table in a Writer is an
+	// interface that is not nil, and a caller testing it would write to nothing.
+	t, err := NewTable(w, Results, DefaultLayout(format, Results.Names()))
+	if err != nil {
+		return nil, err
 	}
+	return t, nil
 }
 
-// The columns a file can carry, in the order it writes them.
+// The columns a file of results can carry, in the order it writes them when
+// nobody chose.
 //
 // The first four say which result this is — which query, which page of it, and
-// where it stood — and they are always written: a file of addresses with
-// nothing saying what was asked or in what order is a bag rather than a result
-// page. The rest are what the job was asked to keep.
+// where it stood. The rest are what the job was asked to keep.
 const (
 	ColOrdinal = "ordinal"
 	ColQuery   = "query"
@@ -120,43 +98,6 @@ const (
 	ColPath    = "display_path"
 )
 
-// everyColumn is what a file carries when nobody named the columns.
-func everyColumn() []string {
-	return []string{ColOrdinal, ColQuery, ColPage, ColRank,
-		ColTitle, ColURL, ColLink, ColHost, ColSnippet, ColPath}
-}
-
-// Columns is every column a file may carry, for a caller building the list.
-func Columns() []string { return everyColumn() }
-
-// valueOf is one column of one row, as text.
-//
-// A name this does not know answers with nothing rather than refusing: the list
-// of columns comes from a job written down some time ago, and a file missing a
-// column is a smaller file, while a refusal here is an export that will not run
-// at all.
-func valueOf(r Row, col string) string {
-	switch col {
-	case ColOrdinal:
-		return strconv.Itoa(r.Ordinal)
-	case ColQuery:
-		return r.Query
-	case ColPage:
-		return strconv.Itoa(r.Page)
-	case ColRank:
-		return strconv.Itoa(r.Rank)
-	case ColTitle:
-		return r.Title
-	case ColURL:
-		return r.URL
-	case ColLink:
-		return r.Link
-	case ColHost:
-		return r.Host
-	case ColSnippet:
-		return r.Snippet
-	case ColPath:
-		return r.DisplayPath
-	}
-	return ""
-}
+// Columns is every column a file of results may carry, in the order it writes
+// them when nobody chose.
+func Columns() []string { return Results.Names() }

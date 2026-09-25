@@ -258,7 +258,7 @@
      is read when the link is pressed, so a reader who typed a semicolon and
      pressed txt gets semicolons. It is a plain form so that a browser with no
      script sends it the same way, landing on the same address. */}}
-<form method="get" action="/export" class="export-form">
+<form method="get" action="/export" class="export-form fields">
 <input type="hidden" name="job" value="{{.Progress.ID}}">
 <div class="field">
 <label for="sep">{{.T "job.export.sep"}}</label>
@@ -272,6 +272,9 @@
 {{range .Formats}}<button type="submit" name="format" value="{{.}}">{{.}}</button>
 {{end}}</div>
 </form>
+{{/* The builder is a tab of its own; this is the way to it with this job
+     already chosen. */}}
+<p class="export"><a href="/exports?job={{.Progress.ID}}">{{.T "job.export.builder"}}</a></p>
 {{/* What the page carried besides its results, each in a file of its own: an ad
      has a placement and no rank, a suggestion is a phrase and nothing else, and
      folding either into the results would give every result columns that are

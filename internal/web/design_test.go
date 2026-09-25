@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -660,7 +661,7 @@ func TestStyles_LetEveryBoxNarrowWithTheWindow(t *testing.T) {
 var formPages = []string{
 	"assets/new.html", "assets/proxies.html",
 	"assets/settings.html", "assets/job.html",
-	"assets/history.html",
+	"assets/history.html", "assets/exports.html",
 }
 
 func TestForms_FoldTheirExplanationsRatherThanPrintingThemUnderEveryBox(t *testing.T) {
@@ -722,6 +723,46 @@ func TestForms_HaveOnePressThatWritesSomething(t *testing.T) {
 		opens := strings.LastIndex(body[:at], "<")
 		if tag := body[opens:at]; !strings.Contains(tag, "submit") {
 			t.Errorf("%s draws something that is not a submit as the press that acts: %s", name, tag)
+		}
+	}
+}
+
+// setApart is a form laid out as a column of rows with one gap between them.
+var setApart = regexp.MustCompile(`class="[^"]*\bfields\b[^"]*"`)
+
+func TestForms_SetTheirBoxesAndTheirPressesApartByOneGap(t *testing.T) {
+	// A form's blocks stand apart by the gap its rows are set out with, and the
+	// presses that end it stand off from the last of them. Two ways of losing
+	// that were shipped. A form laid out as plain blocks had its bordered groups
+	// touching one another and its save close under them; a form wrapped round
+	// the card that held its presses was reached by no rule for a form's
+	// presses, and the buttons stood flush against the box above them.
+	//
+	// Presses that are not a form's own ending — the stop and the resume, each a
+	// form of its own inside the row — are left out: their row follows a
+	// sentence or a table, which brings its own room.
+	for _, name := range formPages {
+		body := embeddedFiles(t)[name]
+		for at := 0; ; {
+			i := strings.Index(body[at:], `<div class="actions">`)
+			if i < 0 {
+				break
+			}
+			i += at
+			at = i + 1
+			open := strings.LastIndex(body[:i], "<form")
+			if open < 0 || strings.LastIndex(body[:i], "</form>") > open {
+				continue
+			}
+			tag := body[open : open+strings.Index(body[open:], ">")]
+			if !setApart.MatchString(tag) {
+				t.Errorf("%s ends a form whose rows are not set apart: %s>", name, tag)
+			}
+			between := body[open:i]
+			if strings.Count(between, "<section") > strings.Count(between, "</section>") ||
+				strings.Count(between, "<fieldset") > strings.Count(between, "</fieldset>") {
+				t.Errorf("%s puts the presses that end a form inside a box of it: %s>", name, tag)
+			}
 		}
 	}
 }
