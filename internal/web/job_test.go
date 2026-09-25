@@ -1448,3 +1448,45 @@ func TestJobPage_SaysAJobToldToStopIsStoppingAndOffersNoSecondStop(t *testing.T)
 		t.Error("a stopped job with queries left is not offered a resume")
 	}
 }
+
+func TestScript_HoldsTheDrawingAgainWhileAPressIsUnderWay(t *testing.T) {
+	// A button is pressed in two halves, and a screen drawn again between them
+	// puts a new button where the old one stood: the press is lost and nothing
+	// is sent. A running job's page is drawn every three seconds, and its stop
+	// was lost that way. The drawing again waits while a press is under way.
+	script := mustAsset(t, "static/app.js")
+
+	// A press begins on the screen and ends on the release, or when it is
+	// abandoned.
+	for event, want := range map[string]string{
+		`"pointerdown"`:                "pressing = true",
+		`"pointerup", "pointercancel"`: "pressing = false",
+	} {
+		_, handler, ok := strings.Cut(script, event)
+		if !ok {
+			t.Errorf("the script never listens for %s", event)
+			continue
+		}
+		handler, _, _ = strings.Cut(handler, "}, true);")
+		if !strings.Contains(handler, want) {
+			t.Errorf("on %s the script does not say %q", event, want)
+		}
+	}
+
+	// Asking again waits for the press to be over, as it waits for somebody
+	// typing.
+	if !strings.Contains(script, "editing() || pressing") {
+		t.Error("the screen is asked for again in the middle of a press")
+	}
+	// And a screen that arrives in the middle of a press is not put in: the
+	// check has to stand between the answer and the swap, or a press begun while
+	// the screen was on its way is lost as before.
+	_, arrived, ok := strings.Cut(script, "fetched(window.location.href).then(")
+	if !ok {
+		t.Fatal("the script never asks for the screen again")
+	}
+	arrived, _, _ = strings.Cut(arrived, "swap(html, true)")
+	if !strings.Contains(arrived, "if (pressing)") {
+		t.Error("a screen that arrives in the middle of a press is drawn over it")
+	}
+}

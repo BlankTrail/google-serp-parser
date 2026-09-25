@@ -158,6 +158,36 @@
 			edited = true;
 		}
 	});
+
+	// Whether a press is under way on the screen.
+	//
+	// A button is pressed in two halves, down and up, and the browser counts the
+	// press only when both land on the same button. A screen drawn again between
+	// the two has put a new button where the old one stood, and the press is lost
+	// without a sound: nothing is sent, and the reader presses again. A running
+	// job's page is drawn every three seconds, and its stop was lost that way
+	// often enough to be noticed. So a press holds the drawing again until it is
+	// over.
+	//
+	// It is let go of on the release itself. The browser counts the press, and
+	// sends its form, in the same turn as the release and before anything else can
+	// run, so nothing drawn after this can come between the two halves.
+	var pressing = false;
+
+	document.addEventListener("pointerdown", function (event) {
+		if (event.target && event.target.closest && event.target.closest("#" + screenAt)) {
+			pressing = true;
+		}
+	}, true);
+	["pointerup", "pointercancel"].forEach(function (kind) {
+		document.addEventListener(kind, function () {
+			pressing = false;
+		}, true);
+	});
+	// A press carried off the window may never be reported as over.
+	window.addEventListener("blur", function () {
+		pressing = false;
+	});
 	document.addEventListener("submit", function () {
 		edited = false;
 	});
@@ -211,14 +241,23 @@
 			if (document.hidden) {
 				return;
 			}
-			// Somebody is filling something in. Come back later rather than
-			// drawing over what they have typed.
-			if (editing()) {
+			// Somebody is filling something in, or pressing something. Come back
+			// later rather than drawing over what they have typed or are pressing.
+			if (editing() || pressing) {
 				later();
 				return;
 			}
 			fetched(window.location.href).then(function (html) {
-				if (mine === showing && swap(html, true)) {
+				if (mine !== showing) {
+					return;
+				}
+				// A press begun while the screen was on its way is let finish on
+				// the button it began on, and the screen is asked for again later.
+				if (pressing) {
+					later();
+					return;
+				}
+				if (swap(html, true)) {
 					watch();
 					settled();
 				}
