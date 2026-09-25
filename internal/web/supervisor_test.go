@@ -1603,3 +1603,37 @@ func TestSupervisor_SaysAJobToldToStopIsStoppingUntilItHasLetGo(t *testing.T) {
 		t.Error("a job that has let go is still stopping")
 	}
 }
+
+func TestCaught_KeepsEveryPageOfTheWindowForTheSpeed(t *testing.T) {
+	// The pages a speed is measured over were the last twenty to come back,
+	// which at nine hundred a minute is the last second and a half: the figure
+	// jumped from three hundred to thirteen hundred between two drawings of the
+	// same run. They are every page of the window the speed looks over.
+	var c caught
+	start := time.Date(2026, 9, 25, 18, 0, 0, 0, time.UTC)
+	for i := range 300 {
+		c.took(1, 1, start.Add(time.Duration(i)*400*time.Millisecond))
+	}
+	if _, pages := c.at(1); len(pages) != 300 {
+		t.Errorf("%d of the three hundred pages of the last two minutes are kept", len(pages))
+	}
+	// And none older than the window: they are no part of any speed.
+	c.took(1, 1, start.Add(8*time.Minute))
+	if _, pages := c.at(1); len(pages) != 1 {
+		t.Errorf("%d pages are kept, want only the one inside the window", len(pages))
+	}
+}
+
+func TestCaught_KeepsNoMoreMomentsThanItsBoundWhateverTheWindowHolds(t *testing.T) {
+	// The window is a span of time, and nothing about a span bounds how many
+	// pages can land in it. A figure is not worth a list that grows with the
+	// run, so the moments stop at a bound no run of this program comes near.
+	var c caught
+	start := time.Date(2026, 9, 25, 18, 0, 0, 0, time.UTC)
+	for i := range pagesKept + 5 {
+		c.took(1, 1, start.Add(time.Duration(i)*time.Millisecond))
+	}
+	if _, pages := c.at(1); len(pages) != pagesKept {
+		t.Errorf("%d moments are kept, want the bound of %d", len(pages), pagesKept)
+	}
+}

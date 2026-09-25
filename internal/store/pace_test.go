@@ -104,7 +104,7 @@ func TestPace_FollowsTheJobNowRatherThanAveragingTheWholeRun(t *testing.T) {
 	// a job that spent its first hour crawling it answers it wrongly for the rest
 	// of the day.
 	s := testStore(t)
-	queries := make([]string, PaceSample+10)
+	queries := make([]string, 30)
 	for i := range queries {
 		queries[i] = "q" + string(rune('a'+i%26))
 	}
@@ -119,7 +119,7 @@ func TestPace_FollowsTheJobNowRatherThanAveragingTheWholeRun(t *testing.T) {
 		settleAt(t, s, id, i, at)
 		at = at.Add(10 * time.Minute)
 	}
-	for i := range PaceSample {
+	for i := range 20 {
 		settleAt(t, s, id, 10+i, at)
 		at = at.Add(time.Second)
 	}
@@ -256,7 +256,7 @@ func TestPace_SaysNothingRatherThanAveragingAcrossAPause(t *testing.T) {
 	// hours — which is how a screen came to say nothing a minute for a run the
 	// history beside it showed answering ten.
 	s := testStore(t)
-	queries := make([]string, PaceSample)
+	queries := make([]string, 20)
 	for i := range queries {
 		queries[i] = "q" + string(rune('a'+i%26))
 	}
@@ -266,12 +266,12 @@ func TestPace_SaysNothingRatherThanAveragingAcrossAPause(t *testing.T) {
 	}
 
 	yesterday := time.Date(2026, 8, 18, 3, 0, 0, 0, time.UTC)
-	for i := range PaceSample - 1 {
+	for i := range 19 {
 		settleAt(t, s, id, i, yesterday.Add(time.Duration(i)*time.Second))
 	}
 	// And one just now, which is the whole of what the job has done since.
 	today := yesterday.Add(24 * time.Hour)
-	settleAt(t, s, id, PaceSample-1, today)
+	settleAt(t, s, id, 19, today)
 	asOf(s, today.Add(time.Second))
 
 	pace, err := s.Pace(context.Background(), id)
@@ -289,7 +289,7 @@ func TestPace_ReadsTheRunOfTheLastFewMinutesAndNotWhatCameBefore(t *testing.T) {
 	// quickly reads as quick, because what a screen is asked is what is
 	// happening — not what the run has averaged.
 	s := testStore(t)
-	queries := make([]string, PaceSample+10)
+	queries := make([]string, 30)
 	for i := range queries {
 		queries[i] = "q" + string(rune('a'+i%26))
 	}
@@ -322,5 +322,75 @@ func TestPace_ReadsTheRunOfTheLastFewMinutesAndNotWhatCameBefore(t *testing.T) {
 	if pace.PerMinute() < 10 {
 		t.Errorf("the speed reads %.1f a minute, and twelve settled in the last minute",
 			pace.PerMinute())
+	}
+}
+
+func TestPace_AveragesEveryQueryOfTheWindowRatherThanTheLastFew(t *testing.T) {
+	// The speed was measured over the last twenty settled queries, which on a
+	// run settling four a second is its last five seconds: it jumped with every
+	// burst and every lull, and a reader could not tell a run going steadily
+	// from one lurching. It is every query settled in the window.
+	s := testStore(t)
+	queries := make([]string, 44)
+	for i := range queries {
+		queries[i] = "q" + string(rune('a'+i%26))
+	}
+	id, err := s.CreateJob(context.Background(), JobSpec{Name: "steady", Pages: 1}, queries)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	start := time.Date(2026, 9, 25, 18, 0, 0, 0, time.UTC)
+	// Four minutes of one every ten seconds...
+	for i := range 24 {
+		settleAt(t, s, id, i, start.Add(time.Duration(i)*10*time.Second))
+	}
+	// ...then twenty in two seconds.
+	burst := start.Add(240 * time.Second)
+	for i := range 20 {
+		settleAt(t, s, id, 24+i, burst.Add(time.Duration(i)*100*time.Millisecond))
+	}
+	asOf(s, burst.Add(2*time.Second))
+
+	pace, err := s.Pace(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Pace: %v", err)
+	}
+	if pace.Settled != 43 {
+		t.Errorf("the speed is measured over %d queries, want the forty-three after the first in the window", pace.Settled)
+	}
+	// Forty-three over 241.9 seconds is ten and a half a minute. The burst alone
+	// reads six hundred.
+	if got := pace.PerMinute(); got < 9 || got > 13 {
+		t.Errorf("the speed reads %.1f a minute, want the window's ten and a half", got)
+	}
+}
+
+func TestPace_LooksBackFiveMinutes(t *testing.T) {
+	// Five minutes, as the user asked: long enough to smooth over a burst and a
+	// lull, short enough to be the run of the last few minutes rather than of
+	// the day.
+	s := testStore(t)
+	queries := make([]string, 11)
+	for i := range queries {
+		queries[i] = "q" + string(rune('a'+i))
+	}
+	id, err := s.CreateJob(context.Background(), JobSpec{Name: "a minute each", Pages: 1}, queries)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	start := time.Date(2026, 9, 25, 18, 0, 0, 0, time.UTC)
+	for i := range 11 {
+		settleAt(t, s, id, i, start.Add(time.Duration(i)*time.Minute))
+	}
+	asOf(s, start.Add(10*time.Minute+time.Second))
+
+	pace, err := s.Pace(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Pace: %v", err)
+	}
+	// Settled at six, seven, eight, nine and ten minutes: the window reaches
+	// back to five minutes and a second, which the query at five misses.
+	if pace.Over != 4*time.Minute || pace.Settled != 4 {
+		t.Errorf("the speed is measured over %d queries in %v, want four in four minutes", pace.Settled, pace.Over)
 	}
 }

@@ -299,7 +299,7 @@ func TestRunningView_SaysWhatIsLeftAtTheSpeedTheJobIsKeepingNow(t *testing.T) {
 		ID: 1, Name: "nightly", Total: 5, Done: 2, Pending: 3,
 		CreatedAt: time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC),
 	}
-	view := s.runningView(sum, store.Pace{Settled: 2, Over: 20 * time.Minute, Known: true})
+	view := s.runningView(sum, store.Pace{Settled: 2, Over: 20 * time.Minute, Known: true}, nil)
 
 	if view.Rest != spell(30*time.Minute) {
 		t.Errorf("the screen says %q is left at this speed, and %q is", view.Rest, spell(30*time.Minute))
@@ -318,13 +318,16 @@ func TestRunningView_SaysNothingRatherThanNoughtBeforeThereIsASpeed(t *testing.T
 	// the stop button.
 	s := &Server{now: time.Now}
 	sum := store.JobSummary{ID: 1, Total: 5, Pending: 5, CreatedAt: time.Now()}
-	view := s.runningView(sum, store.Pace{})
+	view := s.runningView(sum, store.Pace{}, nil)
 
 	if view.Speed != noFigure {
 		t.Errorf("a job with nothing measured yet reports a speed of %q", view.Speed)
 	}
 	if view.Rest != noFigure {
 		t.Errorf("a job with nothing measured yet reports %q left", view.Rest)
+	}
+	if view.PageSpeed != noFigure {
+		t.Errorf("a job with nothing measured yet reports %q pages a minute", view.PageSpeed)
 	}
 }
 
@@ -534,5 +537,27 @@ func TestState_CountsWhatCameBackRatherThanWhatDidNot(t *testing.T) {
 		if strings.Contains(body, l.T("state.failures")) {
 			t.Errorf("the %s screen still leads with the refusals:\n%s", l, body)
 		}
+	}
+}
+
+func TestStateScreen_ReadsPagesAMinuteTheWayTheJobPageDoes(t *testing.T) {
+	// The two screens a run is watched from gave two figures for its pages a
+	// minute: this one counted the pages of the queries settled lately, the
+	// job's page the pages as they came back. They are one figure, measured one
+	// way, over the same window.
+	s, v, eng := heldServer(t)
+	id := enqueue(t, v, "nightly", "a", "b", "c")
+	waitUntil(t, "the job is inside its engine", func() bool {
+		_, in := eng.ran(0)
+		return in
+	})
+	now := time.Now()
+	for i := range 3 {
+		s.sup.caught.took(id, 10, now.Add(time.Duration(i)*2*time.Second))
+	}
+	state := get(t, s, stateAt).Body.String()
+	job := get(t, s, jobPath(id)).Body.String()
+	if got, want := shown(t, state, "run-page-speed"), shown(t, job, "run-page-speed"); got != want || got != "30" {
+		t.Errorf("the state screen reads %q pages a minute and the job's page %q, want both 30", got, want)
 	}
 }

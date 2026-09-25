@@ -256,7 +256,10 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 	if err != nil {
 		return statePage{}, err
 	}
-	view.Running = s.runningView(sum, pace)
+	// Pages a minute as they came back, the way the job's page reads them, so
+	// the two screens a run is watched from give one figure for it.
+	_, landed := s.sup.InFlight(id)
+	view.Running = s.runningView(sum, pace, landed)
 	view.Running.Stopping = s.sup.Stopping(id)
 	answered, err := s.answeredOf(ctx, sum)
 	if err != nil {
@@ -272,7 +275,7 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 // All three are measured from what the job has actually done. Nothing here is
 // an estimate made before the run, and nothing here compares the job to one:
 // the figure that used to do that was read as a promise and was not one.
-func (s *Server) runningView(sum store.JobSummary, pace store.Pace) *runningView {
+func (s *Server) runningView(sum store.JobSummary, pace store.Pace, landed []time.Time) *runningView {
 	view := &runningView{
 		ID:        sum.ID,
 		Name:      sum.Name,
@@ -285,6 +288,7 @@ func (s *Server) runningView(sum store.JobSummary, pace store.Pace) *runningView
 		PageSpeed: noFigure,
 		Rest:      noFigure,
 	}
+	view.PageSpeed = pageSpeed(landed, pace)
 	if !pace.Known {
 		return view
 	}
@@ -293,7 +297,6 @@ func (s *Server) runningView(sum store.JobSummary, pace store.Pace) *runningView
 	// spent its first hour crawling, an average answers wrongly for the rest of
 	// the day, and both figures here are read by somebody asking about now.
 	view.Speed = perMinute(pace.PerMinute())
-	view.PageSpeed = perMinute(pace.PagesPerMinute())
 	if perMin := pace.PerMinute(); perMin > 0 && sum.Pending > 0 {
 		view.Rest = spell(time.Duration(float64(sum.Pending) / perMin * float64(time.Minute)))
 	}

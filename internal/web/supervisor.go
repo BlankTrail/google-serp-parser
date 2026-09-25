@@ -1182,13 +1182,18 @@ type caught struct {
 	mu      sync.Mutex
 	job     int64
 	results int
-	// pages are the moments the last few pages came back at, oldest first. They
-	// are what a speed is measured over while a run is between settled queries,
-	// and they are capped for the reason the history's own sample is: a figure
-	// measured over an hour is not what somebody watching a screen is asking
-	// about.
+	// pages are the moments the pages of the last PaceWindow came back at,
+	// oldest first: what the speed in pages is averaged over, every one of
+	// them. It used to be the last twenty, which at nine hundred pages a minute
+	// is the last second and a half, and the figure jumped between two drawings
+	// of one steady run.
 	pages []time.Time
 }
+
+// pagesKept bounds the moments kept whatever the window holds: a run of this
+// program has not come near two thousand pages a minute, and a figure is not
+// worth an unbounded list.
+const pagesKept = 20000
 
 // took records a page that came back, with what it carried.
 func (c *caught) took(job int64, results int, now time.Time) {
@@ -1199,9 +1204,14 @@ func (c *caught) took(job int64, results int, now time.Time) {
 	}
 	c.results += results
 	c.pages = append(c.pages, now)
-	if len(c.pages) > store.PaceSample {
-		c.pages = c.pages[len(c.pages)-store.PaceSample:]
+	drop := 0
+	for drop < len(c.pages) && now.Sub(c.pages[drop]) > store.PaceWindow {
+		drop++
 	}
+	if over := len(c.pages) - drop - pagesKept; over > 0 {
+		drop += over
+	}
+	c.pages = c.pages[drop:]
 }
 
 // written takes back what has just reached the history, so that a result is

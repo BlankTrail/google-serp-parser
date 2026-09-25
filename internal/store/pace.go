@@ -16,20 +16,18 @@ import (
 // reported nothing a minute for a run that was answering ten — which is what a
 // screen said while the history beside it said otherwise.
 //
-// Three minutes: long enough to hold several queries of a run of any size,
-// short enough that what it reports is what is happening rather than what was.
-// A run that has settled nothing inside it has no speed to report, and says so
-// rather than averaging across the gap.
-const PaceWindow = 3 * time.Minute
-
-// PaceSample is how many settled queries a speed is measured over.
+// It is also what the speed is averaged over, and every query settled inside
+// it counts. The speed used to be measured over the last twenty settled
+// queries, which on a run settling four a second is its last five seconds: it
+// jumped with every burst and every lull, from under two hundred to over
+// thirteen hundred pages a minute between two drawings of one steady run.
 //
-// Few enough that the figure follows a job that speeds up or slows down, and
-// enough that one slow query does not halve it. At the measured pace of this
-// program — a query every few seconds per thread — twenty covers roughly the
-// last minute of a small job and rather less of a wide one, which is the window
-// somebody watching a screen is asking about.
-const PaceSample = 20
+// Five minutes, as the user asked: long enough to smooth over the bursts a
+// hundred threads settle in and the lulls behind a slow check, short enough to
+// be the run of the last few minutes rather than of the day. A run that has
+// settled nothing inside it has no speed to report, and says so rather than
+// averaging across the gap.
+const PaceWindow = 5 * time.Minute
 
 // Pace is how fast a job is settling queries now.
 //
@@ -39,8 +37,8 @@ const PaceSample = 20
 // depended on how often somebody reloaded would be a different number for every
 // reader.
 //
-// Over is the span between the oldest and newest of the last PaceSample settled
-// queries that fall inside PaceWindow, and Settled is how many fell in it. A job
+// Over is the span between the oldest and newest of the queries settled inside
+// PaceWindow, and Settled is how many fell in it after the oldest. A job
 // that has settled fewer than two of them has no span to divide by, and says so
 // with Known false rather than with a nought that reads as "stopped".
 type Pace struct {
@@ -84,8 +82,7 @@ func (s *Store) Pace(ctx context.Context, jobID int64) (Pace, error) {
 		`SELECT q.settled_at, (SELECT count(*) FROM pages p WHERE p.query_id = q.id)
 		   FROM queries q
 		  WHERE q.job_id = ? AND q.settled_at <> ''
-		  ORDER BY q.settled_at DESC
-		  LIMIT ?`, jobID, PaceSample)
+		  ORDER BY q.settled_at DESC`, jobID)
 	if err != nil {
 		return Pace{}, fmt.Errorf("store: reading the pace of job %d: %w", jobID, err)
 	}
