@@ -237,6 +237,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+pickResolverAt, s.pickResolver)
 	s.mux.HandleFunc("GET "+historyAt, s.history)
 	s.mux.HandleFunc("GET /export", s.download)
+	// How a file will begin, for the export tab to show before it is downloaded.
+	s.mux.HandleFunc("GET "+previewAt, s.preview)
 	// What the job page polls, and what its two buttons send. Both buttons are
 	// registered for post alone, so a browser prefetching a link, or anything
 	// else that walks one, is answered with a refusal rather than with somebody

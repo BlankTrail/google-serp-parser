@@ -57,6 +57,26 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// previewAt is where the export tab asks how a file will begin.
+const previewAt = "/export/preview"
+
+// preview writes the beginning of a file as it would download: the header, if
+// one was asked for, and the first records. It is refused exactly as the
+// download would be, so a screen showing it shows the reason too.
+func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
+	ask, ok := s.askedExport(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	// The mark that tells a spreadsheet the file is UTF-8 is invisible on a
+	// screen, and in the way there.
+	ask.layout.BOM = false
+	if err := s.writePart(r.Context(), w, ask, true); err != nil {
+		s.log.Error("a preview stopped part way through", "job", ask.job.ID, "error", err)
+	}
+}
+
 // What a download says about how its file is written. Nothing said is the file
 // this program always wrote.
 const (

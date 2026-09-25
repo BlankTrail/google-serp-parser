@@ -883,3 +883,64 @@ func TestDownload_NamesTheFileAfterThePartItHolds(t *testing.T) {
 		t.Errorf("the results are saved as %s, want the plain name", name)
 	}
 }
+
+func TestPreview_ShowsTheFileAsItBeginsAndNoFurther(t *testing.T) {
+	// The first lines of the file exactly as it downloads, and the ten records
+	// a screen can show rather than the job.
+	s := testServer(t)
+	id := seedJob(t, s, "wide", 2, 1, 0)
+	fill(t, s, id, 1, 30, 10)
+
+	q := "?job=" + strconv.FormatInt(id, 10) + "&format=txt&cols=url,rank"
+	shown := get(t, s, previewAt+q).Body.String()
+	whole := get(t, s, "/export"+q).Body.String()
+	if !strings.HasPrefix(whole, shown) {
+		t.Errorf("the preview is not how the file begins:\n%q\n%q", shown, whole)
+	}
+	if lines := strings.Count(shown, "\n"); lines != 1+previewRecords {
+		t.Errorf("the preview has %d lines, want the header and %d records", lines, previewRecords)
+	}
+}
+
+func TestPreview_ShowsNoMarkForExcel(t *testing.T) {
+	// The mark is for a spreadsheet opening a file; on a screen it is a stray
+	// character in front of the first word.
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 1, 1, 0)
+	got := get(t, s, previewAt+"?job="+strconv.FormatInt(id, 10)+"&format=csv&bom=1").Body.String()
+	if strings.HasPrefix(got, "\xef\xbb\xbf") {
+		t.Errorf("the preview begins with the mark: %q", got[:min(len(got), 10)])
+	}
+}
+
+func TestPreview_StopsLookingForDistinctRecordsAfterAScan(t *testing.T) {
+	// With repeats dropped, a job whose results all repeat would be read to its
+	// end for a preview of one line.
+	was := previewScan
+	previewScan = 5
+	t.Cleanup(func() { previewScan = was })
+
+	s := testServer(t)
+	id := seedJob(t, s, "same site", 3, 1, 0)
+	fill(t, s, id, 1, 6, 1) // six results of one site
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: 2,
+		Pages: []google.SERP{{Origin: "https://www.google.com",
+			Results: []google.Result{resultAt("late.test", 1)}}}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	got := get(t, s, previewAt+"?job="+strconv.FormatInt(id, 10)+"&format=txt&cols=host&header=0&unique=1").Body.String()
+	// first.test and second.test, then wide.example three times: the scan of
+	// five ends there, and the site standing after the repeats is not reached.
+	if got != "first.test\nsecond.test\nwide.example\n" {
+		t.Errorf("the preview read on past its scan: %q", got)
+	}
+}
+
+func TestPreview_RefusesWhatTheDownloadRefuses(t *testing.T) {
+	s := testServer(t)
+	id := seedJob(t, s, "nightly", 1, 1, 0)
+	rec := get(t, s, previewAt+"?job="+strconv.FormatInt(id, 10)+"&format=csv&cols=")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("a preview of no column came back %d, want a refusal", rec.Code)
+	}
+}
