@@ -385,7 +385,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 			case Index, Position:
 			default:
 				hands := &crew{
-					r: r, a: attempt, j: j, thread: thread, pages: pages,
+					r: r, a: attempt, j: j, thread: thread, threads: threads, pages: pages,
 					queue: queue, starved: starved,
 					starve:  func() { starveOnce.Do(func() { close(starved) }) },
 					results: results,

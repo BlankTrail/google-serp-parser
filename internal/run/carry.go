@@ -57,12 +57,12 @@ func (c *crew) carry(ctx context.Context) {
 		// opened only where none of them is due.
 		var one *walk
 		c.r.Where.At(c.thread, DoingTake)
-		held, err := c.a.Keeper.TakeOneOf(ctx, leasePort{lease}, c.a.Want, c.walks.carriers())
+		held, err := c.a.Keeper.TakeOneOf(ctx, leasePort{lease}, c.want(drained), c.walks.carriers())
 		if errors.Is(err, sessions.ErrNothingDue) {
 			one = c.opening(ctx, &drained)
 			switch {
 			case one != nil:
-				held, err = c.a.Keeper.Take(ctx, leasePort{lease}, c.a.Want)
+				held, err = c.a.Keeper.Take(ctx, leasePort{lease}, c.want(drained))
 			case drained:
 				// The end of the job: nothing left to open and nothing due. A
 				// session that has answered waits for its own address to come
@@ -71,7 +71,7 @@ func (c *crew) carry(ctx context.Context) {
 				// waited out a sixty-minute ban with every thread idle. Here,
 				// and only here, the user chose the exception: the session
 				// moves to an address that is free and pays the one check.
-				held, err = c.a.Keeper.TakeStranded(ctx, leasePort{lease}, c.a.Want, c.walks.carriers())
+				held, err = c.a.Keeper.TakeStranded(ctx, leasePort{lease}, c.want(drained), c.walks.carriers())
 			}
 			if one == nil && errors.Is(err, sessions.ErrNothingDue) {
 				lease.Release()
@@ -128,6 +128,26 @@ func (c *crew) carry(ctx context.Context) {
 		c.idle = 0
 		c.page(ctx, lease, held, one)
 	}
+}
+
+// want is what this thread asks the keeper for: the job's own rest between two
+// requests on one session, except at the end.
+//
+// Once nothing is left to open and fewer queries are in flight than the run has
+// threads, the sessions carrying them are asked again without resting. It is
+// the user's rule, so that the last pages of a job are taken as fast as their
+// sessions answer rather than a rest apart while threads stand idle. Measured on
+// job 19 of 2026-09-26: the last hundred queries took eight minutes, and the
+// very last one waited out rests of 48 and 58 seconds between its last pages
+// with every other thread idle. The rest is what keeps a session from being
+// asked on a machine's rhythm through the hour of a job; for the last few pages
+// of the last few queries, finishing is worth more.
+func (c *crew) want(drained bool) sessions.Want {
+	w := c.a.Want
+	if drained && c.walks.open() < c.threads {
+		w.Pause, w.UpTo = 0, 0
+	}
+	return w
 }
 
 // idleAtMost is the longest a thread with nothing to do waits before looking

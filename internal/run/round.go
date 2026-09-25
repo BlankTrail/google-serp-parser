@@ -66,10 +66,13 @@ type flight struct {
 // dozen parameters because every field is the job's or the run's and none of
 // them changes while the thread runs.
 type crew struct {
-	r       *Runner
-	a       *Attempt
-	j       Job
-	thread  int
+	r      *Runner
+	a      *Attempt
+	j      Job
+	thread int
+	// threads is how many threads the run has, which is what "fewer queries
+	// left than threads" is counted against at the end of a job; see want.
+	threads int
 	pages   int
 	queue   <-chan int
 	starved chan struct{}

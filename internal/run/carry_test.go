@@ -28,6 +28,9 @@ import (
 type deepOrigin struct {
 	*httptest.Server
 	depth int // how many pages a query has; past it a page offers no next one
+	// depthOf, when set, is how many pages the query asked has, instead of
+	// depth, so one walk can end while another goes on.
+	depthOf func(q string) int
 	// refuse makes every page from here on Google refusing the session itself.
 	refuse atomic.Bool
 	// then, when set, runs after each page is written, with the number of pages
@@ -100,7 +103,11 @@ func newDeepOrigin(t *testing.T, depth int) *deepOrigin {
 			}
 		}
 		body := serpBody("example.com")
-		if page < o.depth {
+		depth := o.depth
+		if o.depthOf != nil {
+			depth = o.depthOf(r.URL.Query().Get("q"))
+		}
+		if page < depth {
 			// The address of the next page, with a tag no address this program
 			// builds could carry.
 			next := fmt.Sprintf("/search?q=%s&amp;ei=E%d&amp;start=%d&amp;sa=N&amp;page=%d",
@@ -1112,5 +1119,73 @@ func TestRunner_MovesAWalkOnBeforeGivingItsSessionBackAfterAPage(t *testing.T) {
 	defer mu.Unlock()
 	for _, b := range behind {
 		t.Error(b)
+	}
+}
+
+func TestRunner_TakesTheLastPagesWithoutTheRestOnceFewerQueriesThanThreadsAreLeft(t *testing.T) {
+	// The user's rule for the end of a job: with nothing left to open and fewer
+	// queries in flight than threads, the sessions carrying them are asked
+	// again without resting. Two threads, a query of one page and one of four:
+	// once the short one is done, the long one is all that is left, and its
+	// last three pages come as fast as its session answers rather than two
+	// seconds apart.
+	const pause = 2 * time.Second
+	o := newDeepOrigin(t, 4)
+	o.depthOf = func(q string) int {
+		if q == "short" {
+			return 1
+		}
+		return 4
+	}
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	r := &Runner{Pool: f.Pool, Threads: 2, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop, Pause: pause}}
+
+	began := time.Now()
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("short"), usQuery("long")}, Pages: 4})
+	took := time.Since(began)
+	if got := rep.Results[1]; got.Err != nil || len(got.Pages) != 4 {
+		t.Fatalf("the long walk took %d pages and ended with %v, want four and no error", len(got.Pages), got.Err)
+	}
+	if took >= pause {
+		t.Errorf("the last query's four pages took %v, want them without the %v rest between them", took, pause)
+	}
+}
+
+func TestRunner_KeepsTheRestWhileAsManyQueriesAsThreadsAreInFlight(t *testing.T) {
+	// Until then the rest is the job's. Two queries on two threads are not the
+	// tail: each session rests between its two pages.
+	const pause = 400 * time.Millisecond
+	o := newDeepOrigin(t, 3)
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	r := &Runner{Pool: f.Pool, Threads: 2, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop, Pause: pause}}
+
+	began := time.Now()
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("one"), usQuery("two")}, Pages: 2})
+	took := time.Since(began)
+	for i, got := range rep.Results {
+		if got.Err != nil || len(got.Pages) != 2 {
+			t.Fatalf("query %d took %d pages and ended with %v, want two and no error", i, len(got.Pages), got.Err)
+		}
+	}
+	if took < pause {
+		t.Errorf("two queries of two pages on two threads took %v, want at least the %v rest between a session's pages",
+			took, pause)
+	}
+}
+
+func TestCrew_AsksForTheJobsRestUntilTheQueueIsDrained(t *testing.T) {
+	// Fewer queries in flight than threads is also where a job starts, before
+	// every thread has opened one. Only a drained queue makes it the end.
+	c := &crew{a: &Attempt{Want: sessions.Want{Pause: 30 * time.Second, UpTo: time.Minute}},
+		threads: 4, walks: newWalks()}
+	c.walks.begin(0, usQuery("one"), time.Now())
+
+	if got := c.want(false); got.Pause != 30*time.Second || got.UpTo != time.Minute {
+		t.Errorf("before the queue drained a session is asked with %v–%v, want the job's 30s–1m0s", got.Pause, got.UpTo)
+	}
+	if got := c.want(true); got.Pause != 0 || got.UpTo != 0 {
+		t.Errorf("at the end a session is asked with %v–%v, want no rest", got.Pause, got.UpTo)
 	}
 }
