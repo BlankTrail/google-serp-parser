@@ -7,6 +7,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,16 @@ func sample() []Row {
 	}
 }
 
+// mustNew is New for a format the test knows is written.
+func mustNew(t *testing.T, format string, w io.Writer) Writer {
+	t.Helper()
+	out, err := New(format, w)
+	if err != nil {
+		t.Fatalf("New(%q): %v", format, err)
+	}
+	return out
+}
+
 // brokenWriter stands in for a disk that has run out.
 type brokenWriter struct{}
 
@@ -32,7 +43,7 @@ func TestCSV_QuotesAValueThatWouldOtherwiseBreakTheColumns(t *testing.T) {
 	// A snippet with a comma, a quote or a newline is ordinary. Writing it raw
 	// shifts every column after it, and the file still opens — wrongly.
 	var buf bytes.Buffer
-	w := NewCSV(&buf)
+	w := mustNew(t, "csv", &buf)
 	for _, r := range sample() {
 		if err := w.Write(r); err != nil {
 			t.Fatalf("Write: %v", err)
@@ -67,7 +78,7 @@ func TestCSV_WritesTheHeaderEvenWhenThereAreNoRows(t *testing.T) {
 	// An empty export that is an empty file looks like a failed export. A
 	// header says the run happened and found nothing.
 	var buf bytes.Buffer
-	w := NewCSV(&buf)
+	w := mustNew(t, "csv", &buf)
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -80,7 +91,7 @@ func TestJSONL_WritesOneSelfContainedObjectPerLine(t *testing.T) {
 	// One object per line is what lets a reader stream the file and what keeps
 	// a truncated file mostly readable.
 	var buf bytes.Buffer
-	w := NewJSONL(&buf)
+	w := mustNew(t, "jsonl", &buf)
 	for _, r := range sample() {
 		if err := w.Write(r); err != nil {
 			t.Fatalf("Write: %v", err)
@@ -108,7 +119,7 @@ func TestJSONL_LeavesAnAddressLookingLikeTheAddressItIs(t *testing.T) {
 	// the bytes on the line say whether the file is one a person can read and
 	// grep.
 	var buf bytes.Buffer
-	w := NewJSONL(&buf)
+	w := mustNew(t, "jsonl", &buf)
 	if err := w.Write(sample()[1]); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -188,7 +199,7 @@ func TestWrite_AfterCloseIsRefusedRatherThanAppendedToAFinishedFile(t *testing.T
 func TestCSV_KeepsSayingAFileCouldNotBeFinished(t *testing.T) {
 	// A caller that checks only its deferred Close, after an explicit one it
 	// ignored, would otherwise be told a lost file was written.
-	w := NewCSV(brokenWriter{})
+	w := mustNew(t, "csv", brokenWriter{})
 	if err := w.Close(); err == nil {
 		t.Fatalf("the first Close reported success on a file that could not be written")
 	}

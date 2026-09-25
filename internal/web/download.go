@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -75,18 +76,14 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	// are offered only by a job that kept them. A part the job never captured is
 	// refused rather than handed over empty — and it is refused here, before a
 	// byte of the answer has gone out, like every other refusal on this route.
-	part := r.URL.Query().Get(partField)
-	switch part {
-	case partAds, partRelated:
-		if !job.Fields.Keeps(fieldOfPart(part)) {
-			http.NotFound(w, r)
-			return
-		}
-	case "", partResults:
-	default:
+	part, ok := partOf(job, r.URL.Query().Get(partField))
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
+	layout := export.DefaultLayout(format, fieldsOf(job, part))
+	layout.Sep = sep
+	ask := exportAsk{job: job, part: part, layout: layout}
 
 	kind, named := exportTypes[format]
 	if !named {
@@ -95,65 +92,142 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", kind)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+attachmentName(job, format)+`"`)
 
-	// What a job was asked settles what its file answers. An index job is run to
-	// learn which addresses are held and which are not, and its results hold only
-	// the first half: walking them would leave every address Google does not hold
-	// out of the file altogether, indistinguishable from one that was never in
-	// the list — and the file would look complete either way.
-	//
-	// The writers are built here rather than above because which one to build is
-	// not known until the job has been read, and neither writes anything until it
-	// is given something. The format was settled before any of it.
-	if err := s.writeExport(r.Context(), w, format, part, sep, job); err != nil {
+	if err := s.writePart(r.Context(), w, ask, false); err != nil {
 		// The header is out and part of the file with it, so there is nothing
 		// left to tell the reader. The log is where this has to be visible.
 		s.log.Error("an export stopped part way through", "job", job.ID, "format", format, "error", err)
 	}
 }
 
-// writeExport writes the file a job's kind calls for.
-func (s *Server) writeExport(ctx context.Context, w io.Writer, format, part string,
-	sep rune, job store.JobSummary) error {
-	switch part {
-	case partAds:
-		return s.streamAds(ctx, w, format, sep, job.ID)
-	case partRelated:
-		return s.streamSuggestions(ctx, w, format, sep, job.ID)
-	}
-	if job.Kind == store.KindIndex {
-		out, err := export.NewVerdicts(format, w, sep)
-		if err != nil {
-			return err
-		}
-		return s.streamVerdicts(ctx, out, job.ID)
-	}
-	return s.stream(ctx, w, format, sep, job)
+// exportAsk is one file asked for: of which job, which part of it, and how it
+// is written.
+type exportAsk struct {
+	job    store.JobSummary
+	part   string
+	layout export.Layout
 }
 
-// stream hands every row of a job to the file being written, and stops at
-// the first row the file will not take.
+// partsOf is what a job can be exported as, the first being what a download
+// naming no part gets.
 //
-// The refusal is passed back rather than swallowed, and that is what ends the
-// walk: a reader who closed the tab leaves every write failing, and an export
-// that reads on regardless spends the whole job on a socket nobody is holding.
-func (s *Server) stream(ctx context.Context, w io.Writer, format string, sep rune, job store.JobSummary) error {
-	// Only the columns this job kept. A column it never kept would stand in the
-	// file empty, which reads as a result that had none of that rather than as
-	// one nobody asked to keep — and on a job of ten million results it is also
-	// several hundred megabytes of separators.
-	out, err := export.NewSeparated(format, w, columnsOf(job.Fields), sep)
+// What a job was asked settles what its file answers. An index job is run to
+// learn which addresses are held and which are not, and its results hold only
+// the first half: walking them would leave every address Google does not hold
+// out of the file altogether, indistinguishable from one that was never in the
+// list — so its one part is its verdicts. A parse job has its results and
+// whatever else of the page it kept.
+func partsOf(job store.JobSummary) []string {
+	if job.Kind == store.KindIndex {
+		return []string{partVerdicts}
+	}
+	parts := []string{partResults}
+	if job.Kind == store.KindParse && job.Fields.Keeps(store.FieldAds) {
+		parts = append(parts, partAds)
+	}
+	if job.Kind == store.KindParse && job.Fields.Keeps(store.FieldRelated) {
+		parts = append(parts, partRelated)
+	}
+	return parts
+}
+
+// partOf reads the part a download named. Nothing named is the first part, and
+// the results of an index job are its verdicts — which is what every link to
+// such a job has always meant.
+func partOf(job store.JobSummary, asked string) (string, bool) {
+	parts := partsOf(job)
+	if asked == "" || (asked == partResults && job.Kind == store.KindIndex) {
+		return parts[0], true
+	}
+	return asked, slices.Contains(parts, asked)
+}
+
+// fieldsOf is every column the part of this job can be written with, in the
+// order a file carries them when nobody chose. The results carry only what the
+// job kept: a column it never kept would stand in the file empty, which reads as
+// a result that had none of that rather than as one nobody asked to keep — and
+// on a job of ten million results it is also several hundred megabytes of
+// separators.
+func fieldsOf(job store.JobSummary, part string) []string {
+	switch part {
+	case partAds:
+		return export.Ads.Names()
+	case partRelated:
+		return export.Suggestions.Names()
+	case partVerdicts:
+		return export.Verdicts.Names()
+	}
+	return columnsOf(job.Fields)
+}
+
+// writePart writes one part of a job as the layout says. A preview stops at the
+// first records a screen shows.
+func (s *Server) writePart(ctx context.Context, w io.Writer, ask exportAsk, preview bool) error {
+	id := ask.job.ID
+	switch ask.part {
+	case partAds:
+		return feed(w, export.Ads, ask.layout, preview, func(fn func(export.Ad) error) error {
+			return s.store.Ads(ctx, id, func(a store.Ad) error {
+				return fn(export.Ad{
+					Ordinal: a.Ordinal, Query: a.Query, Page: a.Page,
+					Position: a.Position, Placement: a.Placement,
+					Title: a.Title, Host: a.Host, URL: a.URL, Snippet: a.Snippet,
+				})
+			})
+		})
+	case partRelated:
+		return feed(w, export.Suggestions, ask.layout, preview, func(fn func(export.Suggestion) error) error {
+			return s.store.Suggestions(ctx, id, func(g store.Suggestion) error {
+				return fn(export.Suggestion{
+					Ordinal: g.Ordinal, Query: g.Query, Page: g.Page,
+					Position: g.Position, Text: g.Text,
+				})
+			})
+		})
+	case partVerdicts:
+		// What it leaves out is as deliberate as what it writes: an address still
+		// waiting, or one whose request was refused, carries no verdict, and
+		// store.Verdicts hands over neither. Writing those as not held would
+		// report a check that never happened.
+		return feed(w, export.Verdicts, ask.layout, preview, func(fn func(export.Verdict) error) error {
+			return s.store.Verdicts(ctx, id, func(v store.Verdict) error {
+				return fn(export.Verdict{Ordinal: v.Ordinal, Target: v.Target, Held: v.Held})
+			})
+		})
+	}
+	return feed(w, export.Results, ask.layout, preview, func(fn func(export.Row) error) error {
+		return s.walkRows(ctx, id, fn)
+	})
+}
+
+// feed walks one part of a job into a file written as the layout says.
+//
+// The refusal of a write is passed back rather than swallowed, and that is what
+// ends the walk: a reader who closed the tab leaves every write failing, and an
+// export that reads on regardless spends the whole job on a socket nobody is
+// holding.
+func feed[T any](w io.Writer, c export.Catalog[T], l export.Layout, preview bool,
+	walk func(func(T) error) error) error {
+	out, err := export.NewTable(w, c, l)
 	if err != nil {
 		return err
 	}
-	return s.streamTo(ctx, out, job.ID)
+	take := out.Write
+	if preview {
+		take = firstOf(out)
+	}
+	if err := walk(take); err != nil && !errors.Is(err, errPreviewFull) {
+		return err
+	}
+	// Close is what writes the header of a file that found no records, so an
+	// export of a job that captured nothing is an empty table rather than an
+	// empty file that reads as a failure.
+	return out.Close()
 }
 
-// streamTo is the walk itself, taking the file to write into. It is separate so
-// a test can hand one that refuses a row part way, which is the only way to ask
-// what an export does when the reader has walked away.
-func (s *Server) streamTo(ctx context.Context, out export.Writer, jobID int64) error {
-	err := s.store.Rows(ctx, jobID, func(row store.Row) error {
-		return out.Write(export.Row{
+// walkRows hands every result of a job to fn, in the order the job had.
+func (s *Server) walkRows(ctx context.Context, jobID int64, fn func(export.Row) error) error {
+	return s.store.Rows(ctx, jobID, func(row store.Row) error {
+		return fn(export.Row{
 			Ordinal:     row.Ordinal,
 			Query:       row.Query,
 			Page:        row.Page,
@@ -166,35 +240,43 @@ func (s *Server) streamTo(ctx context.Context, out export.Writer, jobID int64) e
 			DisplayPath: row.DisplayPath,
 		})
 	})
-	if err != nil {
+}
+
+// streamTo is the walk of the results into a file the caller built. It is
+// separate so a test can hand one that refuses a row part way, which is the only
+// way to ask what an export does when the reader has walked away.
+func (s *Server) streamTo(ctx context.Context, out export.Writer, jobID int64) error {
+	if err := s.walkRows(ctx, jobID, out.Write); err != nil {
 		return err
 	}
-	// Close is what writes the header of a file that found no rows, so an export
-	// of a job that captured nothing is an empty table rather than an empty file
-	// that reads as a failure.
 	return out.Close()
 }
 
-// streamVerdicts hands one line per checked address to the file being written.
-//
-// It streams for the same reason stream does: a list of addresses is as
-// long as somebody's file. What it leaves out is as deliberate as what it
-// writes — an address still waiting, or one whose request was refused, carries
-// no verdict, and store.Verdicts hands over neither. Writing those as not held
-// would report a check that never happened, which is the one answer this whole
-// check exists to avoid giving.
-func (s *Server) streamVerdicts(ctx context.Context, out export.VerdictWriter, jobID int64) error {
-	err := s.store.Verdicts(ctx, jobID, func(v store.Verdict) error {
-		return out.Write(export.Verdict{
-			Ordinal: v.Ordinal,
-			Target:  v.Target,
-			Held:    v.Held,
-		})
-	})
-	if err != nil {
-		return err
+// errPreviewFull ends the walk of a preview once it has what it shows.
+var errPreviewFull = errors.New("web: the preview has what it shows")
+
+// previewRecords is how many records a preview shows.
+const previewRecords = 10
+
+// previewScan is how many records a preview reads looking for them. With
+// repeats dropped, a job whose every result repeats the first would otherwise
+// be read to its end to show one line. A variable so a test can make the scan
+// short.
+var previewScan = 10000
+
+// firstOf is a table's Write that stops the walk once the preview is full.
+func firstOf[T any](out *export.Table[T]) func(T) error {
+	read := 0
+	return func(rec T) error {
+		read++
+		if err := out.Write(rec); err != nil {
+			return err
+		}
+		if out.Written() >= previewRecords || read >= previewScan {
+			return errPreviewFull
+		}
+		return nil
 	}
-	return out.Close()
 }
 
 // attachmentName is what the browser saves the export as.
@@ -305,55 +387,12 @@ const (
 	partResults = "results"
 	partAds     = "ads"
 	partRelated = "related"
+	// partVerdicts is an index job's only part. Its links have always named no
+	// part, or the results, and they go on meaning this.
+	partVerdicts = "verdicts"
 )
 
 // separatorField is what a text file separates its columns with. Nothing said
 // is a tab, which is what a column of addresses is pasted into a spreadsheet
 // with, and every other format ignores it.
 const separatorField = "sep"
-
-// partField2field is the part of a job a download names, as the name the job's
-// own choice of what to keep uses.
-func fieldOfPart(part string) string {
-	if part == partAds {
-		return store.FieldAds
-	}
-	return store.FieldRelated
-}
-
-// streamAds writes every paid placement the job captured.
-func (s *Server) streamAds(ctx context.Context, w io.Writer, format string, sep rune, jobID int64) error {
-	out, err := export.NewAds(format, w, sep)
-	if err != nil {
-		return err
-	}
-	err = s.store.Ads(ctx, jobID, func(a store.Ad) error {
-		return out.Write(export.Ad{
-			Ordinal: a.Ordinal, Query: a.Query, Page: a.Page,
-			Position: a.Position, Placement: a.Placement,
-			Title: a.Title, Host: a.Host, URL: a.URL, Snippet: a.Snippet,
-		})
-	})
-	if err != nil {
-		return err
-	}
-	return out.Close()
-}
-
-// streamSuggestions writes every search the pages offered beside their results.
-func (s *Server) streamSuggestions(ctx context.Context, w io.Writer, format string, sep rune, jobID int64) error {
-	out, err := export.NewSuggestions(format, w, sep)
-	if err != nil {
-		return err
-	}
-	err = s.store.Suggestions(ctx, jobID, func(g store.Suggestion) error {
-		return out.Write(export.Suggestion{
-			Ordinal: g.Ordinal, Query: g.Query, Page: g.Page,
-			Position: g.Position, Text: g.Text,
-		})
-	})
-	if err != nil {
-		return err
-	}
-	return out.Close()
-}

@@ -743,3 +743,35 @@ func TestDownload_RefusesASeparatorItCannotWriteBeforeAnyBytesGoOut(t *testing.T
 		t.Error("the refusal went out as a download, which a browser saves as a file")
 	}
 }
+
+func TestDownload_WritesTextAsItIsWithoutQuotes(t *testing.T) {
+	// txt is for pasting and reading by eye. A title holding a quote came back
+	// as "He said ""hi""" when txt was csv with another separator; now it comes
+	// back as the page had it.
+	s := testServer(t)
+	id, err := s.store.CreateJob(t.Context(), store.JobSpec{Name: "quoted", Pages: 1}, []string{"q"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: 0,
+		Pages: []google.SERP{{Origin: "https://www.google.com", Results: []google.Result{
+			{Title: `He said "hi"`, URL: "https://a.test/", Host: "a.test"},
+		}}}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	body := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=txt").Body.String()
+	if !strings.Contains(body, "\tHe said \"hi\"\t") {
+		t.Errorf("the title was not written as it is:\n%q", body)
+	}
+}
+
+func TestDownload_TakesTheResultsOfAnIndexJobToBeItsVerdicts(t *testing.T) {
+	// Every link written before the parts had names asked an index job for its
+	// results, and what it got was its verdicts. It still does.
+	s := testServer(t)
+	id := seedIndexJob(t, s, "old link", []string{"held.test/a"}, map[string]bool{"held.test/a": true})
+	rec := get(t, s, "/export?job="+strconv.FormatInt(id, 10)+"&format=csv&part=results")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "held.test/a,true") {
+		t.Errorf("an index job's results came back %d:\n%s", rec.Code, rec.Body.String())
+	}
+}
