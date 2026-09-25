@@ -1200,7 +1200,7 @@ func TestJobPage_ShowsGooglesChecksAndWhatTheSolverHasInHand(t *testing.T) {
 	// service's, because the solver processes are licensed to the machine.
 	s, _, id := runningWith(t, poolFacts{
 		Queue:  blanktrail.SolverQueue{Running: 3, Queued: 4},
-		Checks: run.Rhythm{Met: 6, Asked: 84, AskedMet: 6, Between: 13, Known: true},
+		Checks: run.Rhythm{Met: 6, Intervals: 6, Between: 13, Known: true},
 	})
 
 	body := get(t, s, jobPath(id)).Body.String()
@@ -1212,7 +1212,7 @@ func TestJobPage_ShowsGooglesChecksAndWhatTheSolverHasInHand(t *testing.T) {
 		}
 	}
 	// And a run that has met none is not given a figure worked out from nothing.
-	s2, _, other := runningWith(t, poolFacts{Checks: run.Rhythm{Met: 1, Asked: 4}})
+	s2, _, other := runningWith(t, poolFacts{Checks: run.Rhythm{Met: 1}})
 	if got := shown(t, get(t, s2, jobPath(other)).Body.String(), "checks-between"); got != noFigure {
 		t.Errorf("a run that has met no check reports %q requests between them, want the mark", got)
 	}
@@ -1222,7 +1222,7 @@ func TestJobPage_AdvisesALongerRestOnlyWhereTheRestIsWhatLimitsTheRun(t *testing
 	// The advice is the point of the count: on a run whose sessions are all the
 	// sessions it can use, checks coming every few requests are those sessions
 	// asked again before they have rested, and only a longer rest will mend it.
-	crowded := run.Rhythm{Met: 9, Asked: 27, AskedMet: 9, Between: 2, Known: true, Crowded: true}
+	crowded := run.Rhythm{Met: 9, Intervals: 9, Between: 2, Known: true, Crowded: true}
 	s, _, id := runningWith(t, poolFacts{Checks: crowded, Ramp: run.Ramping{AtSpeed: true}})
 	body := get(t, s, jobPath(id)).Body.String()
 	if !strings.Contains(body, `id="checks-crowded"`) {
@@ -1251,7 +1251,7 @@ func TestJobPage_AdvisesALongerRestOnlyWhereTheRestIsWhatLimitsTheRun(t *testing
 
 	// And a run meeting them seldom is left alone whatever else is true of it.
 	easy, _, fourth := runningWith(t, poolFacts{
-		Checks: run.Rhythm{Met: 9, Asked: 909, AskedMet: 9, Between: 100, Known: true},
+		Checks: run.Rhythm{Met: 9, Intervals: 9, Between: 100, Known: true},
 		Ramp:   run.Ramping{AtSpeed: true},
 	})
 	if body := get(t, easy, jobPath(fourth)).Body.String(); strings.Contains(body, `id="checks-crowded"`) {

@@ -29,7 +29,7 @@ const challengeEnough = 5
 const challengeSettling = 10 * time.Minute
 
 // Challenges is the rhythm of Google's checks through one run: how many
-// requests were answered between one check and the next.
+// requests a session carries between one check and its next.
 //
 // What it is for is the one question a screen cannot otherwise answer: whether
 // the sessions are being asked oftener than they can carry. A run that meets a
@@ -60,11 +60,19 @@ type Challenges struct {
 	// be let in included: it is a check somebody waited for, and the screen
 	// reports it as one.
 	met int
-	// asked is how many answers came back on sessions Google had already
-	// admitted, and askedMet how many of those met a check anyway. The rhythm is
-	// worked out from these two alone — see Held.Admitted.
-	asked    int
-	askedMet int
+	// sessions is where each session stands in its own count: whether it has
+	// met a check in this run, and how many requests it has carried since.
+	sessions map[int64]*stretch
+	// intervals is how many stretches between two checks of one session this
+	// run has seen end, and carried how many requests they held between them.
+	intervals int
+	carried   int
+}
+
+// stretch is one session's count since its last check in this run.
+type stretch struct {
+	checked bool
+	since   int
 }
 
 // NewChallenges starts counting for a run beginning now.
@@ -72,14 +80,23 @@ func NewChallenges() *Challenges {
 	return &Challenges{now: time.Now, began: time.Now()}
 }
 
-// Answer takes one answer from Google: whether Google had answered this session
-// before, and the clearance it held before the request and holds now.
+// Answer takes one answer from Google: which session it was, whether Google had
+// answered this session at this address before, and the clearance it held
+// before the request and holds now.
 //
 // A clearance that is new, or one that has changed, is a check just passed.
 // Nothing else counts: a session that carried the same clearance through the
 // request answered without meeting one, and one that has never had a clearance
 // has never met one at all.
-func (c *Challenges) Answer(admitted bool, before, after string) {
+//
+// The figure is counted per session, because that is what it is about: how
+// many requests one session carries between two of its own checks. Counted as
+// every session's requests over every session's checks, it read the same only
+// once a run had gone on long enough — a run opening on sessions that rested
+// between jobs meets a check on nearly every one of them at once, for the rest
+// rather than for the pace, and the figure started a run at a fraction of what
+// any session was carrying.
+func (c *Challenges) Answer(session int64, admitted bool, before, after string) {
 	if c == nil {
 		return
 	}
@@ -89,14 +106,34 @@ func (c *Challenges) Answer(admitted bool, before, after string) {
 	if passed {
 		c.met++
 	}
-	if !admitted {
-		// The session's first answer. Whatever it cost, it is the price of being
-		// let in rather than a reading of the pace.
-		return
+	if c.sessions == nil {
+		c.sessions = make(map[int64]*stretch)
 	}
-	c.asked++
-	if passed {
-		c.askedMet++
+	st := c.sessions[session]
+	if st == nil {
+		st = &stretch{}
+		c.sessions[session] = st
+	}
+	switch {
+	case !admitted:
+		// The session's first answer where it stands: a fresh one being let in,
+		// or one moved to another address and a stranger there. Whatever it
+		// cost is the price of being let in, and the stretch it cut short
+		// ends nowhere — the count starts again from here.
+		st.checked, st.since = passed, 0
+	case passed:
+		// A check on a session Google already knows. It ends a stretch only if
+		// the session met one before in this run: the first is a session
+		// looked at again after resting between jobs, and the requests counted
+		// up to it belong to a stretch that began before the run. They are
+		// dropped here, with the count started again.
+		if st.checked {
+			c.intervals++
+			c.carried += st.since
+		}
+		st.checked, st.since = true, 0
+	default:
+		st.since++
 	}
 }
 
@@ -105,18 +142,12 @@ type Rhythm struct {
 	// Met is how many checks this run has paid for, the one a fresh session pays
 	// to be let in included.
 	Met int
-	// Asked is how many requests went out on sessions Google had already
-	// admitted, and AskedMet how many of those met a check.
-	Asked    int
-	AskedMet int
-	// Between is how many requests the run gets for each check it meets on a
-	// session already admitted, and Known says whether enough has happened to
-	// work it out from.
-	//
-	// It is the whole run's requests over the whole run's checks rather than the
-	// average of each session's own figure: a session that answered twice
-	// weighs twice, not as much as one that answered a hundred times, and it is
-	// the busy sessions that say what the pace is costing.
+	// Intervals is how many stretches between two checks of one session have
+	// ended in this run.
+	Intervals int
+	// Between is how many requests a session carries between one check and its
+	// next, as the mean of those stretches, and Known says whether one has ended
+	// yet to work it out from.
 	Between float64
 	Known   bool
 	// Crowded says the checks are coming oftener than a run should meet them,
@@ -131,13 +162,13 @@ func (c *Challenges) Rhythm() Rhythm {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := Rhythm{Met: c.met, Asked: c.asked, AskedMet: c.askedMet}
-	if c.askedMet == 0 {
+	out := Rhythm{Met: c.met, Intervals: c.intervals}
+	if c.intervals == 0 {
 		return out
 	}
-	out.Between = float64(c.asked-c.askedMet) / float64(c.askedMet)
+	out.Between = float64(c.carried) / float64(c.intervals)
 	out.Known = true
-	out.Crowded = c.settled() && c.askedMet >= challengeEnough && out.Between < challengeCrowded
+	out.Crowded = c.settled() && c.intervals >= challengeEnough && out.Between < challengeCrowded
 	return out
 }
 

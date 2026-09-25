@@ -286,7 +286,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 		// The move may also have happened inside this request: the address it
 		// set out through carried nothing and it was sent to another. What
 		// answered is a session Google has not seen at that address either.
-		c.r.Challenges.Answer(known && !moved, held0, held.Clearance())
+		c.r.Challenges.Answer(held.ID, known && !moved, held0, held.Clearance())
 		_ = held.Answered(ctx, port)
 		c.took(ctx, one, held.ID, serp)
 	case judged && moved:

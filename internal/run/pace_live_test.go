@@ -389,8 +389,8 @@ func TestLivePace_SaysWhereAThreadOfARunSpendsItsTime(t *testing.T) {
 	logf(t, "MEASUREMENT attempts inside them: %s", attempts.reading())
 	logf(t, "MEASUREMENT refusals Google judged: %s", refusals.tally())
 	rhythm := counting.Rhythm()
-	logf(t, "MEASUREMENT checks met %d, requests between them %.1f (over %d counted)",
-		rhythm.Met, rhythm.Between, rhythm.Asked)
+	logf(t, "MEASUREMENT checks met %d, requests between two checks of a session %.1f (over %d stretches)",
+		rhythm.Met, rhythm.Between, rhythm.Intervals)
 	if solverErr == nil {
 		if after, err := solverStats(ctx); err == nil {
 			logf(t, "MEASUREMENT the solver, for this run: %s", after.since(solvedBefore))

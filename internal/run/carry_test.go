@@ -445,11 +445,12 @@ func TestRunner_CountsACheckWhereGoogleHandsTheSessionAFreshClearance(t *testing
 		}
 	}
 
-	// Two checks paid for, and only the second of them counts towards the
-	// rhythm: the first was the price of being let in.
+	// Two checks paid for, and the stretch between them is what the rhythm is
+	// made of: the first was the price of being let in and opened the count, the
+	// second ended it one request later.
 	got := counting.Rhythm()
-	if got.Met != 2 || got.Asked != 2 || got.AskedMet != 1 {
-		t.Errorf("the run reads %+v, want two checks of which one was on an admitted session", got)
+	if got.Met != 2 || got.Intervals != 1 {
+		t.Errorf("the run reads %+v, want two checks and the one stretch between them", got)
 	}
 	if !got.Known || got.Between != 1 {
 		t.Errorf("the run reads %v requests a check, want one", got.Between)
@@ -500,7 +501,7 @@ func TestRunner_CountsNoCheckAgainstThePaceWhenTheSessionCameFromSomewhereNew(t 
 	if got.Met != 2 {
 		t.Errorf("%d checks were reported, want the two that were paid for: %+v", got.Met, got)
 	}
-	if got.Asked != 0 || got.Known {
+	if got.Intervals != 0 || got.Known {
 		t.Errorf("the rhythm reads %+v, want nothing counted towards the pace", got)
 	}
 }
@@ -540,10 +541,11 @@ func TestRunner_CountsNoCheckAgainstThePaceWhereTheSessionWasMovedBetweenRequest
 	if got.Met != 2 {
 		t.Errorf("%d checks were reported, want the two that were paid for: %+v", got.Met, got)
 	}
-	// And one request counted towards the pace: the fourth, asked by a session
-	// Google had already answered from the address it was asking from.
-	if got.Asked != 1 || got.AskedMet != 0 {
-		t.Errorf("the rhythm reads %+v, want the one request that says anything about the pace", got)
+	// And no stretch ended: the check at the new address started the session's
+	// count again rather than closing the one the move cut short, and the fourth
+	// request is the first of the new stretch.
+	if got.Intervals != 0 || got.Known {
+		t.Errorf("the rhythm reads %+v, want the move to have ended no stretch", got)
 	}
 }
 
