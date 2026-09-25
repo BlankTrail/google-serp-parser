@@ -258,7 +258,7 @@
      is read when the link is pressed, so a reader who typed a semicolon and
      pressed txt gets semicolons. It is a plain form so that a browser with no
      script sends it the same way, landing on the same address. */}}
-<form method="get" action="/export" class="export-form">
+<form method="get" action="/export" class="export-form fields">
 <input type="hidden" name="job" value="{{.Progress.ID}}">
 <div class="field">
 <label for="sep">{{.T "job.export.sep"}}</label>

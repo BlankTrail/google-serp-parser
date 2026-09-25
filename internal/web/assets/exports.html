@@ -9,8 +9,7 @@
      than buttons: each carries the whole choice with it, so a field moved loses
      nothing chosen, and a press of Enter in the separator's box shows the file
      rather than moving the first field. */}}
-<form id="export-builder" method="get" action="/exports"{{if .Explicit}} data-explicit="1"{{end}}>
-<section class="card">
+<form id="export-builder" class="card fields" method="get" action="/exports"{{if .Explicit}} data-explicit="1"{{end}}>
 <div class="field">
 <label for="export-job">{{.T "exports.job"}}</label>
 <select id="export-job" name="job">
@@ -64,7 +63,6 @@
 <button type="submit">{{.T "exports.show"}}</button>
 <button type="submit" class="primary" formaction="/export">{{.T "exports.download"}}</button>
 </div>
-</section>
 </form>
 <section class="card">
 <h2>{{.T "exports.preview"}}</h2>
