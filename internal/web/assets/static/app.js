@@ -54,7 +54,7 @@
 	// server marked the tab in it, and the switcher in it offers this same address
 	// in the other language. Working either of those out here would be a decision
 	// made a second time, in the one place nothing can test it.
-	function swap(html) {
+	function swap(html, keepFolds) {
 		var arrived = new DOMParser().parseFromString(html, "text/html");
 		var screen = part(arrived, screenAt);
 		var header = part(arrived, headerAt);
@@ -62,6 +62,20 @@
 		var lit = part(document, headerAt);
 		if (!screen || !header || !here || !lit) {
 			return false;
+		}
+		// The same screen drawn again keeps every fold with a name as the reader
+		// left it. A running job's page is drawn again every few seconds, and a
+		// fold opened to read would otherwise snap shut under the reader at the
+		// next drawing. A screen arrived at by a press is drawn as the server
+		// drew it.
+		if (keepFolds) {
+			var folds = here.querySelectorAll("details[id]");
+			for (var i = 0; i < folds.length; i++) {
+				var again = screen.querySelector("#" + CSS.escape(folds[i].id));
+				if (again && again.tagName === "DETAILS") {
+					again.open = folds[i].open;
+				}
+			}
 		}
 		here.replaceWith(screen);
 		lit.replaceWith(header);
@@ -204,7 +218,7 @@
 				return;
 			}
 			fetched(window.location.href).then(function (html) {
-				if (mine === showing && swap(html)) {
+				if (mine === showing && swap(html, true)) {
 					watch();
 					settled();
 				}

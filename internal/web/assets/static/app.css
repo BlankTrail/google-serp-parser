@@ -1371,3 +1371,22 @@ legend button {
 	overflow-x: auto;
 	white-space: pre;
 }
+
+/* A job's controls stand on the left of their line and the way to its export
+   at the right end of it. */
+#controls .export-link {
+	margin-left: auto;
+}
+
+/* A card folded to its heading: the heading is what opens it. */
+.fold > summary {
+	cursor: pointer;
+}
+
+.fold > summary h2 {
+	display: inline;
+}
+
+.fold[open] > summary {
+	margin-bottom: 0.75rem;
+}

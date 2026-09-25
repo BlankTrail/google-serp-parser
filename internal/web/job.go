@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blanktrail/google-serp-parser/internal/export"
 	"github.com/blanktrail/google-serp-parser/internal/run"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
@@ -105,12 +104,6 @@ type jobSetup struct {
 	// in. A far end at or below the near one is a job naming one end only.
 	Pause    int
 	RestUpTo int
-	// KeptAds and KeptRelated say whether this job captured what the page
-	// carried besides its results. The extra downloads are offered only where
-	// there is something to download: a link to an empty file reads as a page
-	// that carried no advertising, which is a different thing.
-	KeptAds     bool
-	KeptRelated bool
 }
 
 // jobPool is what the identities a job is running on are doing this moment.
@@ -128,11 +121,11 @@ type jobPool struct {
 	// out of the rotation after a failure.
 	Addresses int
 	Resting   int
-	// Ports is how many are open, Warm how many have already answered — a warm
-	// one costs seconds where a cold one costs minutes — and Quarantined how
-	// many were set aside for failing too often.
+	// Ports is how many are open and Quarantined how many were set aside for
+	// failing too often. How many were warm is not drawn: a run on sessions puts
+	// another session on a port for every page, and the count read nought on
+	// every job.
 	Ports       int
-	Warm        int
 	Quarantined int
 	// Sessions is how many sessions the program holds of this job's kind, Working
 	// how many are in a thread's hands this instant, and Asleep how many of the
@@ -248,7 +241,6 @@ type jobPage struct {
 	// reads. What this answers is "is it moving, and where" — for which any one
 	// of them is the whole answer.
 	Asking    string
-	Formats   []string
 	CanStop   bool
 	CanResume bool
 	// CanRetry offers the failed queries back. It stands apart from CanResume
@@ -329,23 +321,21 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "job.html", jobPage{
 		page: frame,
 		Job: jobSetup{
-			Name:        sum.Name,
-			Started:     sum.CreatedAt,
-			Kind:        kind,
-			Target:      sum.Target,
-			Filter:      filter,
-			Pages:       sum.Pages,
-			Country:     sum.Country,
-			Language:    sum.Language,
-			Device:      device,
-			Identity:    identityOf(sum.Browser, sum.OS, sum.Release),
-			Profiles:    profilesOffered(s.profilesFor(r), sum.ProfileID),
-			Threads:     sum.Threads,
-			Tries:       sum.Tries,
-			Pause:       int(sum.Cooldown / time.Second),
-			RestUpTo:    int(sum.RestUpTo / time.Second),
-			KeptAds:     sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldAds),
-			KeptRelated: sum.Kind == store.KindParse && sum.Fields.Keeps(store.FieldRelated),
+			Name:     sum.Name,
+			Started:  sum.CreatedAt,
+			Kind:     kind,
+			Target:   sum.Target,
+			Filter:   filter,
+			Pages:    sum.Pages,
+			Country:  sum.Country,
+			Language: sum.Language,
+			Device:   device,
+			Identity: identityOf(sum.Browser, sum.OS, sum.Release),
+			Profiles: profilesOffered(s.profilesFor(r), sum.ProfileID),
+			Threads:  sum.Threads,
+			Tries:    sum.Tries,
+			Pause:    int(sum.Cooldown / time.Second),
+			RestUpTo: int(sum.RestUpTo / time.Second),
 		},
 		Progress:   at,
 		State:      stateOf(at, sum.PlanReady),
@@ -366,7 +356,6 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		Pool:      s.poolOf(sum.ID),
 		Speed:     perMinute(pace.PerMinute()),
 		PageSpeed: pageSpeed(landed, pace),
-		Formats:   export.Formats(),
 		// Neither button is offered by a server started to read a history: it has
 		// nothing to press them against, and a button that cannot work is one
 		// somebody presses until they conclude the job cannot be stopped at all.
@@ -397,7 +386,7 @@ func (s *Server) poolOf(job int64) *jobPool {
 	facts := s.sup.pool()
 	out := &jobPool{
 		Addresses: facts.Addresses, Resting: facts.Banned,
-		Ports: facts.Stats.Ports, Warm: facts.Stats.Warm, Quarantined: facts.Stats.Quarantined,
+		Ports: facts.Stats.Ports, Quarantined: facts.Stats.Quarantined,
 		Sessions: facts.Sessions, Working: facts.SessionsHeld, Asleep: facts.SessionsResting,
 		Made: facts.Ramp.Made, Ramp: rampWord(facts.Ramp),
 		Met: facts.Checks.Met, Solving: facts.Queue.Running, Queued: facts.Queue.Queued,

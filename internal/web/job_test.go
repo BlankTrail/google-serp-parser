@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
-	"github.com/blanktrail/google-serp-parser/internal/export"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
 	"github.com/blanktrail/google-serp-parser/internal/store"
@@ -375,23 +374,6 @@ func TestJobPage_SaysSoWhenNothingHasBeenCapturedYet(t *testing.T) {
 	}
 	if !strings.Contains(body, LangEN.T("job.results.none")) {
 		t.Errorf("the page does not say that nothing has been captured:\n%s", body)
-	}
-}
-
-func TestJobPage_OffersTheJobInEveryFormatTheExportWrites(t *testing.T) {
-	// The whole of a job leaves through these links, and a page that offers only
-	// what somebody remembered to type is a format nobody can reach.
-	s := testServer(t)
-	id := seedJob(t, s, "nightly", 2, 2, 0)
-
-	body := get(t, s, jobPath(id)).Body.String()
-	for _, format := range export.Formats() {
-		// The two halves are looked for apart because the ampersand joining them
-		// in a link is written as an entity, and a search for the raw query
-		// string would fail on a link that is perfectly correct.
-		if !strings.Contains(body, "/export?job="+strconv.FormatInt(id, 10)) || !strings.Contains(body, "format="+format) {
-			t.Errorf("the page does not offer the job as %s:\n%s", format, body)
-		}
 	}
 }
 
@@ -1182,7 +1164,7 @@ func TestJobPage_ShowsWhatTheIdentitiesUnderTheRunningJobAreDoing(t *testing.T) 
 	body := get(t, s, jobPath(id)).Body.String()
 	for id, want := range map[string]string{
 		"addresses": "15000", "banned": "40",
-		"ports": "50", "warm": "7", "quarantined": "2",
+		"ports": "50", "quarantined": "2",
 		"sessions": "37", "sessions-asleep": "20",
 	} {
 		if got := shown(t, body, id); got != want {
@@ -1327,5 +1309,89 @@ func TestJobPage_DrawsNoIdentitiesForAJobThatIsNotTheOneRunning(t *testing.T) {
 	waitUntil(t, "the job is over", func() bool { _, ok := v.Running(); return !ok })
 	if body := get(t, s, jobPath(running)).Body.String(); strings.Contains(body, `id="pool"`) {
 		t.Error("a job that has finished still shows a pool that was taken down with it")
+	}
+}
+
+// between is the part of a page after the first from and before the next to
+// after it, and says whether both were found.
+func between(body, from, to string) (string, bool) {
+	_, rest, ok := strings.Cut(body, from)
+	if !ok {
+		return "", false
+	}
+	part, _, ok := strings.Cut(rest, to)
+	return part, ok
+}
+
+func TestJobPage_PutsItsControlsAndItsExportRightUnderTheSummary(t *testing.T) {
+	// A running job draws its readings between the summary and whatever came
+	// after them, and the stop used to come after them — off the bottom of the
+	// screen while the run was the thing being watched. The presses that act on
+	// the run stand right under its summary, on the left, and the way to take
+	// its findings away stands on the same line, on the right.
+	s, _, id := runningWith(t, poolFacts{Addresses: 15000})
+	body := get(t, s, jobPath(id)).Body.String()
+	row, ok := between(body, `id="progress"`, `id="pool"`)
+	if !ok {
+		t.Fatalf("the page has no summary followed by the pool's reading:\n%s", body)
+	}
+	if !strings.Contains(row, `action="/api/stop"`) {
+		t.Error("the stop is not right under the summary of a running job")
+	}
+	if !strings.Contains(row, `href="`+exportsAt+`?job=`+strconv.FormatInt(id, 10)+`"`) {
+		t.Error("the way to the export is not beside the controls under the summary")
+	}
+
+	// A job nothing can be pressed on still has its findings to take away.
+	idle := testServer(t)
+	done := seedJob(t, idle, "finished", 1, 1, 0)
+	under, ok := between(get(t, idle, jobPath(done)).Body.String(), `id="progress"`, `<section`)
+	if !ok || !strings.Contains(under, `href="`+exportsAt+`?job=`+strconv.FormatInt(done, 10)+`"`) {
+		t.Errorf("a finished job does not offer its export right under the summary:\n%s", under)
+	}
+}
+
+func TestJobPage_LeavesOutTheWarmPortsASessionRunNeverHas(t *testing.T) {
+	// A port was warm when it had answered under the identity it kept. A run on
+	// sessions puts a different session on a port for every page, so the count
+	// read nought on every job and was a figure asking to be explained.
+	s, _, id := runningWith(t, poolFacts{Stats: blanktrail.Stats{Ports: 50, Warm: 7}})
+	if body := get(t, s, jobPath(id)).Body.String(); strings.Contains(body, `id="warm"`) {
+		t.Error("the page still counts the warm ports")
+	}
+}
+
+func TestJobPage_FoldsTheThreadsByStageAwayUntilAsked(t *testing.T) {
+	// The table is for somebody looking into a slow run, and on every other visit
+	// it is a table to scroll past. It is folded, and opened by a press.
+	s, _, id := runningWith(t, poolFacts{Standing: run.Census{
+		Standing: []run.Standing{{Doing: run.DoingAsk, Threads: 3}}, Threads: 3,
+	}})
+	body := get(t, s, jobPath(id)).Body.String()
+	fold, ok := between(body, `<details id="standing-fold"`, `</details>`)
+	if !ok {
+		t.Fatalf("the threads by stage are not folded:\n%s", body)
+	}
+	if tag, _, _ := strings.Cut(fold, ">"); strings.Contains(tag, "open") {
+		t.Errorf("the fold is drawn open: <details id=\"standing-fold\"%s>", tag)
+	}
+	if !strings.Contains(fold, `class="rows"`) {
+		t.Error("the table of threads stands outside its fold")
+	}
+}
+
+func TestScript_KeepsAFoldAsTheReaderLeftItWhenTheScreenIsDrawnAgain(t *testing.T) {
+	// A running job's page is drawn again every few seconds. A fold the reader
+	// opened would snap shut under them at the next drawing, so the drawing again
+	// of the same screen keeps every fold with a name as it was — and only that:
+	// a screen arrived at by a press is drawn as the server drew it.
+	script := mustAsset(t, "static/app.js")
+	for _, part := range []string{`swap(html, true)`, `details[id]`, `if (keepFolds)`} {
+		if !strings.Contains(script, part) {
+			t.Errorf("the script never names %q", part)
+		}
+	}
+	if strings.Count(script, "swap(html, true)") != 1 {
+		t.Error("folds are kept on more than the drawing again of the same screen")
 	}
 }

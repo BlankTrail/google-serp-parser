@@ -49,6 +49,38 @@
 {{end}}
 </section>
 
+{{/* The presses that act on the run, right under its summary and on the
+     left, and the way to take its findings away on the same line, on the
+     right. They used to come after the readings of a running job, which put
+     the stop off the bottom of the screen while the run was the thing being
+     watched.
+
+     Each button is a form that sends itself, by post. Nothing here needs a
+     script, and a stop behind a link is a stop anything walking the pages can
+     carry out on somebody else's run. The export is a link: it leaves for a tab
+     of its own and changes nothing. */}}
+<div class="actions" id="controls">
+{{if .CanStop}}
+<form method="post" action="/api/stop">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<button type="submit">{{.T "job.stop"}}</button>
+</form>
+{{end}}
+{{if .CanResume}}
+<form method="post" action="/api/resume">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<button type="submit">{{.T "job.resume"}}</button>
+</form>
+{{end}}
+{{if .CanRetry}}
+<form method="post" action="/api/retry">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<button type="submit">{{.T "job.retry"}}</button>
+</form>
+{{end}}
+<a class="press export-link" href="/exports?job={{.Progress.ID}}">{{.T "job.export"}}</a>
+</div>
+
 {{/* What the identities under this job are doing. It is drawn only while the
      job is running: the pool is raised for one job and taken down when that job
      lets go, so there is nothing to read afterwards — and what there is belongs
@@ -64,7 +96,6 @@
 <div class="metric"><dt class="label">{{$.T "proxies.addresses"}}</dt><dd class="figure" id="addresses">{{.Addresses}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "proxies.resting"}}</dt><dd class="figure" id="banned">{{.Resting}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "proxies.ports"}}</dt><dd class="figure" id="ports">{{.Ports}}</dd></div>
-<div class="metric"><dt class="label">{{$.T "proxies.warm"}}</dt><dd class="figure" id="warm">{{.Warm}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "proxies.quarantined"}}</dt><dd class="figure" id="quarantined">{{.Quarantined}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "job.sessions"}}</dt><dd class="figure" id="sessions">{{.Sessions}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "job.sessions.working"}}</dt><dd class="figure" id="sessions-working">{{.Working}}</dd></div>
@@ -119,7 +150,11 @@
      go and look at. The longest column is what tells a place threads pass
      through quickly from one they are stuck in. */}}
 {{if .Standing}}<section class="card" id="standing">
-<h2>{{$.T "job.standing"}}</h2>
+{{/* Folded: it is for somebody looking into a slow run, and on every other
+     visit a table to scroll past. The fold has a name, so the drawing again of
+     this screen every few seconds leaves it as the reader left it. */}}
+<details id="standing-fold" class="fold">
+<summary><h2>{{$.T "job.standing"}}</h2></summary>
 <table class="rows">
 <thead><tr>
 <th>{{$.T "job.standing.where"}}</th>
@@ -142,33 +177,8 @@
 <li>{{$.T "job.standing.why"}}</li>
 </ul>
 </details>
+</details>
 </section>{{end}}
-{{end}}
-
-{{/* Each button is a form that sends itself, by post. Nothing here needs a
-     script, and a stop behind a link is a stop anything walking the pages can
-     carry out on somebody else's run. */}}
-{{if or .CanStop .CanResume .CanRetry}}
-<div class="actions">
-{{if .CanStop}}
-<form method="post" action="/api/stop">
-<input type="hidden" name="job" value="{{.Progress.ID}}">
-<button type="submit">{{.T "job.stop"}}</button>
-</form>
-{{end}}
-{{if .CanResume}}
-<form method="post" action="/api/resume">
-<input type="hidden" name="job" value="{{.Progress.ID}}">
-<button type="submit">{{.T "job.resume"}}</button>
-</form>
-{{end}}
-{{if .CanRetry}}
-<form method="post" action="/api/retry">
-<input type="hidden" name="job" value="{{.Progress.ID}}">
-<button type="submit">{{.T "job.retry"}}</button>
-</form>
-{{end}}
-</div>
 {{end}}
 
 <section class="settings card">
@@ -250,41 +260,6 @@
 </fieldset>
 <div class="actions"><button type="submit" class="primary">{{.T "job.reshape"}}</button></div>
 </form>
-</section>
-
-<section class="card">
-<h2>{{.T "job.export"}}</h2>
-{{/* The separator travels with the link because a download is a link: the box
-     is read when the link is pressed, so a reader who typed a semicolon and
-     pressed txt gets semicolons. It is a plain form so that a browser with no
-     script sends it the same way, landing on the same address. */}}
-<form method="get" action="/export" class="export-form fields">
-<input type="hidden" name="job" value="{{.Progress.ID}}">
-<div class="field">
-<label for="sep">{{.T "job.export.sep"}}</label>
-<input id="sep" name="sep" class="narrow" size="4" maxlength="1" value="" placeholder="TAB">
-</div>
-<details class="help">
-<summary>{{.T "help.what"}}</summary>
-<p class="empty">{{.T "job.export.sep.why"}}</p>
-</details>
-<div class="actions">
-{{range .Formats}}<button type="submit" name="format" value="{{.}}">{{.}}</button>
-{{end}}</div>
-</form>
-{{/* The builder is a tab of its own; this is the way to it with this job
-     already chosen. */}}
-<p class="export"><a href="/exports?job={{.Progress.ID}}">{{.T "job.export.builder"}}</a></p>
-{{/* What the page carried besides its results, each in a file of its own: an ad
-     has a placement and no rank, a suggestion is a phrase and nothing else, and
-     folding either into the results would give every result columns that are
-     always empty. Offered only where the job kept them. */}}
-{{if .Job.KeptAds}}<p class="export">{{.T "job.export.ads"}}:
-{{range .Formats}}<a href="/export?job={{$.Progress.ID}}&format={{.}}&part=ads">{{.}}</a>
-{{end}}</p>{{end}}
-{{if .Job.KeptRelated}}<p class="export">{{.T "job.export.related"}}:
-{{range .Formats}}<a href="/export?job={{$.Progress.ID}}&format={{.}}&part=related">{{.}}</a>
-{{end}}</p>{{end}}
 </section>
 
 {{/* What an index job established, one line per address. The answer is the word
