@@ -713,15 +713,7 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	//
 	// There is no cooldown worth keeping on them either: nothing is carried
 	// between two lookups, so there is no session for a rest to protect.
-	plain := cfg
-	// A lookup carries nothing between two requests, so it has no session to be
-	// put on: these ports are identities of their own, as they always were.
-	plain.Sessions, plain.Choose = false, nil
-	plain.WholeList = false
-	plain.Spec.JSSolver = false
-	plain.Spec.KeepSessions = false
-	plain.Specs = nil
-	plain.Cooldown = time.Millisecond
+	plain := lookupPortsOf(cfg)
 	most := min(threads*ports, lookupPortsAtMost)
 	if most < 1 {
 		most = 1
@@ -733,6 +725,28 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 				one.Threads, one.PortsPerThread = n, 1
 				return blanktrail.NewPool(ctx, one)
 			})}, nil
+}
+
+// lookupPortsOf is what the ports the hidden addresses are read through are
+// made of, given what the searching ones are made of.
+//
+// A lookup carries nothing between two requests, so it has no session to be put
+// on: these ports are identities of their own, as they always were, with no
+// solver and no cookie jar. And no rest of any kind — the user's rule for them:
+// no pause between two uses, the free port used last rather than the one rested
+// longest (a port asked rarely pays its whole road to Google again), and a new
+// address and fingerprint after a failure and every so often, which the run
+// does (see the run package's lanes).
+func lookupPortsOf(cfg blanktrail.PoolConfig) blanktrail.PoolConfig {
+	plain := cfg
+	plain.Sessions, plain.Choose = false, nil
+	plain.WholeList = false
+	plain.Spec.JSSolver = false
+	plain.Spec.KeepSessions = false
+	plain.Specs = nil
+	plain.Cooldown = time.Millisecond
+	plain.Warmest = true
+	return plain
 }
 
 // lookupPortsAtMost is the most ports a job's lookups may widen to, whatever

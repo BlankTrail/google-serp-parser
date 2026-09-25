@@ -21,65 +21,81 @@ func widened(n *atomic.Int64) func(context.Context) {
 	return func(context.Context) { n.Add(1) }
 }
 
-func TestLanes_TakeAPortOfTheirOwnWhileOneStandsFree(t *testing.T) {
-	// What Google sees of one exit is as little as the set allows: every port
-	// the set holds carries a lookup before any carries two.
+func TestLanes_FillAWarmPortBeforeTakingAnother(t *testing.T) {
+	// A port in use is a port whose road to Google is open. Spread over every
+	// port instead, the lookups at the end of a job came to a lookup or two a
+	// minute a port and every one paid the whole road again: 2.7 s where half
+	// a second had done. So a lookup joins a port in use while it has room,
+	// and only the eleventh takes another — with ports standing free, the set
+	// is never asked to widen.
 	d := newDestination(t)
 	f := poolFacing(t, d.addr(), 4)
 	ls := &lanes{}
 	var asked atomic.Int64
 
-	ports := map[int]bool{}
-	for i := 0; i < 4; i++ {
+	on := map[int]int{}
+	for i := 0; i < 11; i++ {
 		l, err := ls.take(t.Context(), f.Pool, widened(&asked))
 		if err != nil {
 			t.Fatalf("take %d: %v", i+1, err)
 		}
-		defer l.leave()
-		ports[l.lease.Port()] = true
+		defer l.leave(t.Context())
+		on[l.lease.Port()]++
 	}
-	if len(ports) != 4 {
-		t.Errorf("four lookups went out through %d ports with four standing free, want one each", len(ports))
+	if len(on) != 2 {
+		t.Fatalf("eleven lookups went out through %d ports, want ten on one and the eleventh on another: %v", len(on), on)
+	}
+	for port, n := range on {
+		if n != 10 && n != 1 {
+			t.Errorf("port %d carries %d lookups, want ten on one and one on the other: %v", port, n, on)
+		}
 	}
 	if asked.Load() != 0 {
-		t.Errorf("the set was asked to widen %d times while a port stood free, want never", asked.Load())
+		t.Errorf("the set was asked to widen %d times with ports standing free, want never", asked.Load())
 	}
 }
 
-func TestLanes_ShareTheLeastCrowdedPortOnceNoneIsFree(t *testing.T) {
-	// With every port carrying a lookup, the next one joins the port carrying
-	// fewest — so two ports and four lookups is two and two, not three and one
-	// — and each time one has to join, the set is asked to widen.
+func TestLanes_JoinTheLeastCrowdedPortInUse(t *testing.T) {
+	// Among the ports in use, the one carrying fewest: seven on one and one on
+	// the other, the next lookup goes to the one.
 	d := newDestination(t)
 	f := poolFacing(t, d.addr(), 2)
 	ls := &lanes{}
 	var asked atomic.Int64
 
-	on := map[int]int{}
-	for i := 0; i < 4; i++ {
+	var first []*lane
+	for i := 0; i < 10; i++ {
 		l, err := ls.take(t.Context(), f.Pool, widened(&asked))
 		if err != nil {
 			t.Fatalf("take %d: %v", i+1, err)
 		}
-		defer l.leave()
-		on[l.lease.Port()]++
+		first = append(first, l)
 	}
-	if len(on) != 2 {
-		t.Fatalf("four lookups went out through %d ports, want the two", len(on))
+	second, err := ls.take(t.Context(), f.Pool, widened(&asked))
+	if err != nil {
+		t.Fatalf("take 11: %v", err)
 	}
-	for port, n := range on {
-		if n != 2 {
-			t.Errorf("port %d carries %d lookups, want two on each: %v", port, n, on)
-		}
+	for _, l := range first[:3] {
+		l.leave(t.Context())
 	}
-	if asked.Load() != 2 {
-		t.Errorf("the set was asked to widen %d times, want once for each lookup that had to share", asked.Load())
+	next, err := ls.take(t.Context(), f.Pool, widened(&asked))
+	if err != nil {
+		t.Fatalf("take 12: %v", err)
+	}
+	if next != second {
+		t.Error("the lookup joined the port carrying seven rather than the one carrying one")
+	}
+	next.leave(t.Context())
+	second.leave(t.Context())
+	for _, l := range first[3:] {
+		l.leave(t.Context())
 	}
 }
 
 func TestLanes_PutNoMoreThanTenOnOnePort(t *testing.T) {
-	// Ten is the user's number. The eleventh waits, and takes the first place
-	// that comes free rather than waiting for the whole port.
+	// Ten is the user's number. The eleventh waits — asking the set to widen —
+	// and takes the first place that comes free rather than waiting for the
+	// whole port.
 	d := newDestination(t)
 	f := poolFacing(t, d.addr(), 1)
 	ls := &lanes{}
@@ -113,8 +129,11 @@ func TestLanes_PutNoMoreThanTenOnOnePort(t *testing.T) {
 		t.Fatalf("an eleventh lookup went out on a port carrying ten (err %v)", got.err)
 	case <-time.After(3 * lookupsLookAgain):
 	}
+	if asked.Load() == 0 {
+		t.Error("a lookup found every port full and the set was not asked to widen")
+	}
 
-	held[0].leave()
+	held[0].leave(t.Context())
 	select {
 	case got := <-eleventh:
 		if got.err != nil {
@@ -123,19 +142,21 @@ func TestLanes_PutNoMoreThanTenOnOnePort(t *testing.T) {
 		if got.l != held[0] {
 			t.Error("the eleventh lookup took another lane rather than the place that came free")
 		}
-		got.l.leave()
+		got.l.leave(t.Context())
 	case <-time.After(2 * time.Second):
 		t.Fatal("the eleventh lookup went on waiting after a place came free")
 	}
 	for _, l := range held[1:] {
-		l.leave()
+		l.leave(t.Context())
 	}
 }
 
-func TestLanes_TakeNoMoreLookupsOnAPortOneCameBackEmptyFrom(t *testing.T) {
+func TestLanes_RenewAPortOneCameBackEmptyFromOnceItsLookupsAreDone(t *testing.T) {
 	// Whatever the one lookup said about the address holds for the next one
 	// too. The address is blamed as a lookup on a port of its own blamed it,
-	// and nothing more joins the lane until the port has been given back.
+	// nothing more joins the lane, and once the lookups on it are done the
+	// port gets another address and another fingerprint before it is given
+	// back — the user's rule, in place of any rest.
 	d := newDestination(t)
 	f := poolFacing(t, d.addr(), 1)
 	ls := &lanes{}
@@ -157,19 +178,25 @@ func TestLanes_TakeNoMoreLookupsOnAPortOneCameBackEmptyFrom(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 4*lookupsLookAgain)
 	defer cancel()
 	if l, err := ls.take(ctx, f.Pool, widened(&asked)); err == nil {
-		l.leave()
+		l.leave(t.Context())
 		t.Fatal("a lookup joined the lane another had just come back empty from")
 	} else if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the third lookup: %v, want it to wait", err)
 	}
 
-	first.leave()
-	second.leave()
+	first.leave(t.Context())
+	if got := f.Pool.Stats().ProfileRotations; got != 0 {
+		t.Errorf("the port was given a new fingerprint with a lookup still on it (%d)", got)
+	}
+	second.leave(t.Context())
+	if st := f.Pool.Stats(); st.ProfileRotations != 1 {
+		t.Errorf("the port was given %d new fingerprints once its lookups were done, want one", st.ProfileRotations)
+	}
 	third, err := ls.take(t.Context(), f.Pool, widened(&asked))
 	if err != nil {
 		t.Fatalf("take once the port was given back: %v", err)
 	}
-	defer third.leave()
+	defer third.leave(t.Context())
 	if third == first {
 		t.Error("the port came back as the lane that was shut")
 	}
@@ -189,13 +216,100 @@ func TestLanes_GiveThePortBackWhenTheLastLookupLeaves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("take: %v", err)
 	}
-	a.leave()
+	a.leave(t.Context())
 	if got := f.Pool.InUse(); got != 1 {
 		t.Errorf("%d ports in use with one lookup still on the port, want it held", got)
 	}
-	b.leave()
+	b.leave(t.Context())
 	if got := f.Pool.InUse(); got != 0 {
 		t.Errorf("%d ports in use once the last lookup left, want it given back", got)
+	}
+	// And given back as it was: nothing failed and nothing is due.
+	if got := f.Pool.Stats().ProfileRotations; got != 0 {
+		t.Errorf("a port nothing failed on was given %d new fingerprints, want none", got)
+	}
+}
+
+func TestLanes_RenewAPortAfterFiveHundredLookups(t *testing.T) {
+	// Every so often by the number of lookups, the user's rule. Counted by the
+	// port across every lane it has been, and started again once it is renewed.
+	d := newDestination(t)
+	f := poolFacing(t, d.addr(), 1)
+	ls := &lanes{}
+	var asked atomic.Int64
+
+	one := func() *lane {
+		t.Helper()
+		l, err := ls.take(t.Context(), f.Pool, widened(&asked))
+		if err != nil {
+			t.Fatalf("take: %v", err)
+		}
+		return l
+	}
+	// Ten at a time for most of them, so the lookups that join a port count as
+	// well as the ones that take it.
+	for round := 0; round < 49; round++ {
+		var ten []*lane
+		for i := 0; i < 10; i++ {
+			ten = append(ten, one())
+		}
+		for _, l := range ten {
+			l.leave(t.Context())
+		}
+	}
+	for i := 0; i < 9; i++ {
+		one().leave(t.Context())
+	}
+	if got := f.Pool.Stats().ProfileRotations; got != 0 {
+		t.Fatalf("the port was renewed %d times in 499 lookups, want not before five hundred", got)
+	}
+	last := one()
+	// The five hundredth is on the port: nothing more joins it.
+	ctx, cancel := context.WithTimeout(t.Context(), 3*lookupsLookAgain)
+	defer cancel()
+	if l, err := ls.take(ctx, f.Pool, widened(&asked)); err == nil {
+		l.leave(t.Context())
+		t.Fatal("a lookup joined a port that is to be renewed")
+	}
+	last.leave(t.Context())
+	if got := f.Pool.Stats().ProfileRotations; got != 1 {
+		t.Errorf("the port was given %d new fingerprints after five hundred lookups, want one", got)
+	}
+	one().leave(t.Context())
+	if got := f.Pool.Stats().ProfileRotations; got != 1 {
+		t.Errorf("the count did not start again after the renewal: %d fingerprints", got)
+	}
+}
+
+func TestLanes_RenewAPortThatHasStoodFiveMinutes(t *testing.T) {
+	// And every so often by time: a port on a quiet run is not left on one
+	// address for the length of it.
+	d := newDestination(t)
+	f := poolFacing(t, d.addr(), 1)
+	at := time.Unix(1000, 0)
+	ls := &lanes{now: func() time.Time { return at }}
+	var asked atomic.Int64
+
+	l, err := ls.take(t.Context(), f.Pool, widened(&asked))
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	l.leave(t.Context())
+	at = at.Add(4 * time.Minute)
+	if l, err = ls.take(t.Context(), f.Pool, widened(&asked)); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	l.leave(t.Context())
+	if got := f.Pool.Stats().ProfileRotations; got != 0 {
+		t.Fatalf("the port was renewed %d times after four minutes, want not before five", got)
+	}
+	at = at.Add(time.Minute)
+	if l, err = ls.take(t.Context(), f.Pool, widened(&asked)); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	l.leave(t.Context())
+	if got := f.Pool.Stats().ProfileRotations; got != 1 {
+		t.Errorf("the port was given %d new fingerprints after five minutes on its address, want one", got)
 	}
 }
 

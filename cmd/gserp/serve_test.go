@@ -1454,6 +1454,28 @@ func TestDial_LetsTheLookupsWidenToAPortAThreadButNoFurtherThanAHundred(t *testi
 	}
 }
 
+func TestLookupPorts_NeverRestAndAreHandedOutWarmestFirst(t *testing.T) {
+	// The user's rule for the ports the hidden addresses are read through: no
+	// rest of any kind. A port asked rarely pays its whole road to Google again,
+	// so the free one used last is handed out rather than the one rested
+	// longest; and nothing is carried between two lookups, so there is no
+	// session, no solver and no cookie jar on them.
+	searching := blanktrail.PoolConfig{Sessions: true, Cooldown: 30 * time.Second, WholeList: true,
+		Spec: blanktrail.DefaultPortSpec()}
+	searching.Spec.KeepSessions = true
+	got := lookupPortsOf(searching)
+	if !got.Warmest {
+		t.Error("the lookup ports hand out the port rested longest, want the one used last")
+	}
+	if got.Cooldown > time.Millisecond {
+		t.Errorf("a lookup port pauses %v between two uses, want none to speak of", got.Cooldown)
+	}
+	if got.Sessions || got.WholeList || got.Spec.JSSolver || got.Spec.KeepSessions {
+		t.Errorf("a lookup port carries sessions=%v wholeList=%v solver=%v jar=%v, want none of them",
+			got.Sessions, got.WholeList, got.Spec.JSSolver, got.Spec.KeepSessions)
+	}
+}
+
 func TestDial_OpensNoAddressPortsForAJobThatKeepsNone(t *testing.T) {
 	// Ports are the scarce thing. A job with nothing to look up would hold a
 	// second set of them idle for the length of the run.

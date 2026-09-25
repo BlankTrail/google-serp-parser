@@ -186,7 +186,7 @@ func (r *Runner) readAddress(ctx context.Context, pool *blanktrail.Pool, res *Qu
 			// this layer can see it, because the request succeeded.
 			held.refuse(ctx)
 		}
-		held.leave()
+		held.leave(ctx)
 	}
 	return total, nil
 }
@@ -233,23 +233,92 @@ func (r *Runner) lookupLanes() *lanes {
 // without them, 821 pages a minute against 1054, and the captchas a thousand
 // pages cost were the same in both.
 //
-// Ten is the user's number. The service holds no limit of its own on how many
-// connections a port carries unless a port is opened with one, and a request in
-// flight survives the port being moved to another address.
+// Ten is the user's number, checked on the live list before it was taken: five
+// ports reading 1, 2, 5 and 10 links at once read 75, 164, 421 and 901 a minute
+// a port, the median lookup 332, 439, 407 and 489 ms, and not one answer of all
+// 800 was Google refusing — no /sorry, no 429 (2026-09-26). The service holds
+// no limit of its own on how many connections a port carries unless a port is
+// opened with one, and a request in flight survives the port being moved to
+// another address.
 const lookupsAtOnce = 10
+
+// renewAfterLookups and renewAfterTime are how often a lookup port is moved to
+// another address and given another fingerprint when nothing has failed on it:
+// the user's rule for these ports, in place of any rest — after a failure, and
+// periodically by the number of lookups or by time.
+//
+// Five hundred is about a minute of a busy port's work at the pace of the runs
+// measured here, and five minutes bounds a port on a quiet one. Neither is a
+// limit Google was seen to have — no lookup through the lookup ports was ever
+// refused, at up to 901 a minute a port — so they are where to start and what
+// to change when a measurement says otherwise.
+const (
+	renewAfterLookups = 500
+	renewAfterTime    = 5 * time.Minute
+)
 
 // lanes shares the ports the hidden addresses are read through.
 //
-// A lookup takes a port of its own while one stands free, so the lookups spread
-// over every address the set holds before any address carries two at once: what
-// Google sees of one exit is as little as the set allows. Only when every port
-// is carrying lookups does one join another, on the least crowded port with
-// room — and a port one lookup came back empty from takes no more until it has
-// been given back, since whatever that said about its address holds for the
-// next lookup too.
+// A lookup joins a port already carrying lookups, the least crowded one with
+// room, and takes another port only when every one in use is full: a port in
+// use is a port whose road to Google is open. Spread over every port the set
+// held instead, the lookups at the end of job 19 of 2026-09-26 came to a lookup
+// or two a minute a port, every one of them paid the whole road again, and
+// each took 2.7 s where it had taken half a second.
+//
+// Nothing rests. A port one lookup came back empty from takes no more, and once
+// the lookups on it are done it is moved to another address and given another
+// fingerprint before it is given back — and so is a port that has carried
+// renewAfterLookups lookups or stood on its address for renewAfterTime.
 type lanes struct {
 	mu   sync.Mutex
 	open []*lane
+	// used is each port's lookups and when its address and fingerprint were
+	// last changed, across the lanes it has been, keyed by pool and port.
+	used map[portOf]*portUse
+	// now is a clock seam for tests; nil is the wall clock.
+	now func() time.Time
+}
+
+// portOf names one port of one pool.
+type portOf struct {
+	pool *blanktrail.Pool
+	num  int
+}
+
+// portUse is what a port has carried since it was last renewed.
+type portUse struct {
+	lookups int
+	since   time.Time
+}
+
+func (ls *lanes) clock() time.Time {
+	if ls.now != nil {
+		return ls.now()
+	}
+	return time.Now()
+}
+
+// dueLocked says whether a port has carried enough, or stood long enough, to be
+// renewed. The register's lock is held.
+func (ls *lanes) dueLocked(l *lane) bool {
+	u := ls.used[portOf{l.pool, l.lease.Port()}]
+	return u != nil && (u.lookups >= renewAfterLookups || ls.clock().Sub(u.since) >= renewAfterTime)
+}
+
+// countLocked counts one more lookup on the lane's port. The register's lock is
+// held.
+func (ls *lanes) countLocked(l *lane) {
+	if ls.used == nil {
+		ls.used = map[portOf]*portUse{}
+	}
+	key := portOf{l.pool, l.lease.Port()}
+	u := ls.used[key]
+	if u == nil {
+		u = &portUse{since: ls.clock()}
+		ls.used[key] = u
+	}
+	u.lookups++
 }
 
 // lane is one port and the lookups on it.
@@ -270,6 +339,9 @@ type lane struct {
 // take is a place on a port for one lookup.
 func (ls *lanes) take(ctx context.Context, pool *blanktrail.Pool, widen func(context.Context)) (*lane, error) {
 	for {
+		if l := ls.join(pool); l != nil {
+			return l, nil
+		}
 		lease, err := pool.TryAcquire(ctx)
 		if err == nil {
 			return ls.opened(pool, lease), nil
@@ -277,15 +349,12 @@ func (ls *lanes) take(ctx context.Context, pool *blanktrail.Pool, widen func(con
 		if !errors.Is(err, blanktrail.ErrPoolExhausted) {
 			return nil, err
 		}
-		if l := ls.join(pool); l != nil {
-			widen(ctx)
-			return l, nil
-		}
-		// Every port is carrying all it may. The lookup queues for one — which
-		// is also what tells the set it is too narrow — but only for a moment
-		// before it looks again: a place on a shared port comes free long
-		// before the whole port does, and a lookup that waited for the port
-		// could wait for as long as others kept joining it.
+		// Every port is carrying all it may: the set is too narrow. The lookup
+		// queues for a port — but only for a moment before it looks again: a
+		// place on a shared port comes free long before the whole port does,
+		// and a lookup that waited for the port could wait for as long as
+		// others kept joining it.
+		widen(ctx)
 		wait, cancel := context.WithTimeout(ctx, lookupsLookAgain)
 		lease, err = pool.Acquire(wait)
 		cancel()
@@ -310,17 +379,19 @@ func (ls *lanes) opened(pool *blanktrail.Pool, lease *blanktrail.Lease) *lane {
 	l := &lane{from: ls, pool: pool, lease: lease, users: 1}
 	ls.mu.Lock()
 	ls.open = append(ls.open, l)
+	ls.countLocked(l)
 	ls.mu.Unlock()
 	return l
 }
 
-// join puts one more lookup on the least crowded port of the pool with room.
+// join puts one more lookup on the least crowded port of the pool with room,
+// leaving alone a port that is to be renewed once its lookups are done.
 func (ls *lanes) join(pool *blanktrail.Pool) *lane {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	var best *lane
 	for _, l := range ls.open {
-		if l.pool != pool || l.shut || l.users >= lookupsAtOnce {
+		if l.pool != pool || l.shut || l.users >= lookupsAtOnce || ls.dueLocked(l) {
 			continue
 		}
 		if best == nil || l.users < best.users {
@@ -329,6 +400,7 @@ func (ls *lanes) join(pool *blanktrail.Pool) *lane {
 	}
 	if best != nil {
 		best.users++
+		ls.countLocked(best)
 	}
 	return best
 }
@@ -348,8 +420,9 @@ func (l *lane) refuse(ctx context.Context) {
 }
 
 // leave ends one lookup's place on the lane. The last one out gives the port
-// back.
-func (l *lane) leave() {
+// back — renewed first, where one of its lookups came back empty or it has
+// carried or stood enough.
+func (l *lane) leave(ctx context.Context) {
 	ls := l.from
 	if ls == nil {
 		l.lease.Release()
@@ -358,13 +431,23 @@ func (l *lane) leave() {
 	ls.mu.Lock()
 	l.users--
 	last := l.users == 0
+	renew := false
 	if last {
 		ls.open = slices.DeleteFunc(ls.open, func(o *lane) bool { return o == l })
+		if renew = l.shut || ls.dueLocked(l); renew {
+			ls.used[portOf{l.pool, l.lease.Port()}] = &portUse{since: ls.clock()}
+		}
 	}
 	ls.mu.Unlock()
-	if last {
-		l.lease.Release()
+	if !last {
+		return
 	}
+	if renew {
+		// A port that could not be moved stays where it is: the pool marks
+		// what it could not do, and the next failure asks again.
+		_ = l.lease.Renew(ctx)
+	}
+	l.lease.Release()
 }
 
 // addresses is the pool the lookups go through.

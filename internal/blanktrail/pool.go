@@ -310,6 +310,21 @@ type PoolConfig struct {
 	// coming from a handful of them is what this is for.
 	WholeList bool
 
+	// Warmest hands out the free port used most recently rather than the one
+	// that has rested longest.
+	//
+	// It is for ports nothing is carried on between two requests — the ones the
+	// hidden addresses are read through — where resting is worth nothing and
+	// being warm is worth most of the request. The service keeps a port's road
+	// to Google open for a while after a request and no longer, and a port asked
+	// rarely pays the whole road again every time: at the end of job 19 of
+	// 2026-09-26, with a hundred lookup ports and a lookup or two a minute on
+	// each, every lookup took 2.7 s where the same lookups had taken half a
+	// second while the ports were busy — 2.4 s of it the handshake. The user's
+	// rule for these ports: no rest of any kind, a new address and a new
+	// fingerprint after a failure and every so often, and nothing else.
+	Warmest bool
+
 	// MaxPorts is the most ports the service may hold open at once, counting
 	// every port on it and not only this pool's. Zero means defaultMaxPorts.
 	//
@@ -1821,6 +1836,12 @@ func (p *Pool) take(specName string) (*poolPort, time.Duration, error) {
 			continue
 		}
 		if elapsed := now.Sub(last); elapsed >= p.cool {
+			if p.cfg.Warmest {
+				if best == nil || last.After(bestUsed) {
+					best, bestUsed = pt, last
+				}
+				continue
+			}
 			// An identity that has answered, if one is free; otherwise the one
 			// that has rested longest.
 			//
@@ -2094,6 +2115,23 @@ func (l *Lease) Release() {
 	l.pool.mu.Lock()
 	l.pool.stats.Requests++
 	l.pool.mu.Unlock()
+}
+
+// Renew moves the port to another address and gives it another fingerprint,
+// now, whatever it has met.
+//
+// It is what a port the hidden addresses are read through gets after a lookup
+// failed on it and every so often besides — the user's rule for those ports,
+// in place of any rest. A new fingerprint closes every connection the port
+// holds, so it is for a port nothing is in flight on.
+func (l *Lease) Renew(ctx context.Context) error {
+	if l.released {
+		return nil
+	}
+	if err := l.pool.rotateEgress(ctx, l.pt.num); err != nil {
+		return err
+	}
+	return l.pool.rotateProfile(ctx, l.pt.num)
 }
 
 // Reject tells the pool that this port produced an answer the caller cannot
