@@ -11,17 +11,25 @@ import (
 )
 
 // DefaultRest and DefaultRestUpTo are the span a session rests when nobody has
-// said otherwise: a minute to two, as the operator set it.
+// said otherwise: thirty seconds to a minute, as the operator set it.
 //
 // They live here rather than at each of the doors a job comes in by, because a
 // job set up in the browser and the same job from the command line have to cost
-// the same. What the number is about is a session, which is what this package
-// holds: a session is a person reading results, and a minute to two between two
-// of their pages is what one looks like. Nothing is bought by hurrying it —
-// the thread does not wait through the rest, it works another session.
+// the same.
+//
+// The span was a minute to two, and was chosen again by measurement: one list
+// of 8514 queries run three times at a hundred threads on the wingate list, at
+// a minute to two, thirty seconds to a minute and fifteen to thirty. Past the
+// start, the middle one was the fastest and the cheapest for the challenge
+// solver — 790 result pages a minute at 27 captchas a thousand pages, against
+// 726 at 45 and 717 at 49. Google looks again at a session about every half an
+// hour or so whatever it is asked, so the longer rest paid for the twice as
+// many sessions it kept in turn; the shorter one was asked again often enough
+// that Google looked at each session more often, and made the solver finish
+// two in three of those in a browser rather than one in four.
 const (
-	DefaultRest     = time.Minute
-	DefaultRestUpTo = 2 * time.Minute
+	DefaultRest     = 30 * time.Second
+	DefaultRestUpTo = time.Minute
 )
 
 // Want is what a caller asks a session to be.

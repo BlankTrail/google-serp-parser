@@ -829,17 +829,18 @@ func TestNewForm_AsksForTheDesktopPageUnlessSomebodySaysOtherwise(t *testing.T) 
 }
 
 func TestNewJob_OffersTheRestTheOperatorSet(t *testing.T) {
-	// A minute to two between two requests on one session, as the operator set
-	// it: a session is a person reading results, and that is what one looks
-	// like. The waiting costs nothing now — the thread works another session
-	// through it — so the number that used to buy speed buys nothing back.
+	// Thirty seconds to a minute between two requests on one session, as the
+	// operator set it after measuring three rests on one list: it was the
+	// fastest of the three and cost the challenge solver the least — 790 pages
+	// a minute at 27 captchas a thousand pages, against 726 at 45 for a minute
+	// to two and 717 at 49 for fifteen to thirty seconds.
 	//
 	// A default nobody meets is a default that does not matter, so this checks
 	// the page a reader actually opens rather than the struct behind it.
 	page := get(t, testServer(t), "/new").Body.String()
 	for _, want := range []string{
-		`id="cooldown" name="cooldown" type="number" min="0" value="60"`,
-		`id="restupto" name="restupto" type="number" min="0" value="120"`,
+		`id="cooldown" name="cooldown" type="number" min="0" value="30"`,
+		`id="restupto" name="restupto" type="number" min="0" value="60"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the new-job form does not offer %s", want)
