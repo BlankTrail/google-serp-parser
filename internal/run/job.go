@@ -253,6 +253,10 @@ type Runner struct {
 	// ports are the identities has nothing to keep and carries the refusal to
 	// the next port as it always did.
 	ShellTries int
+	// carrying is the register of queries the sessions of the run in hand are
+	// carrying, kept here so what is under a session can be asked of the run
+	// from outside it.
+	carrying *walks
 }
 
 // Run works through a job and reports what came of every query.
@@ -350,6 +354,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	// by whichever thread holds its session, so neither belongs to a thread
 	// any more.
 	carrying := newWalks()
+	r.carrying = carrying
 	var filing sync.Mutex
 
 	queue := make(chan int)

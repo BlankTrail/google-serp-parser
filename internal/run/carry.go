@@ -307,6 +307,12 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 
 	c.r.Where.At(c.thread, DoingGiveBack)
 	_, judged := google.ClassOf(err)
+	// The walk first, and the session after. The other way round, a session
+	// given back after a shell was handed to another thread in the moment
+	// between, with its walk still under it, and both threads ended the query:
+	// three times on the speed test, the second writing of the same page failing
+	// on the history's unique key. Two passes rather than one, so no case can
+	// have the order the other way.
 	switch {
 	case ctx.Err() != nil:
 		// The run is ending. A page that came back is kept all the same — it
@@ -316,36 +322,40 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 		if err == nil {
 			c.keep(one.at, serp)
 		}
-		held.PutBack()
 	case err == nil:
-		// Written down and given back: its rest starts here, and the keeper
-		// will not hand it out again before the rest is over.
 		// The move may also have happened inside this request: the address it
 		// set out through carried nothing and it was sent to another. What
 		// answered is a session Google has not seen at that address either.
 		c.r.Challenges.Answer(held.ID, known && !moved, held0, held.Clearance())
-		_ = held.Answered(ctx, port)
 		c.took(ctx, one, held.ID, serp)
-	case judged && moved:
-		// It did not revive. Google answered from the new address with a
-		// refusal, and the pages this session was keeping are addressed to an
-		// exit it no longer has: there is nothing left for it to carry.
-		//
-		// What becomes of the query is the same question as after any refusal:
-		// with pages in hand it is a finished collection, and with none it has
-		// not started and waits for another session. A query settled as
-		// collected with nothing collected would be written down as done and
-		// never asked again.
-		_ = held.GiveUp(ctx)
-		c.stopped(ctx, one, held.ID, err, true)
 	case judged:
-		letGoAfter(ctx, held, lease, err)
+		// With pages in hand it is a finished collection, and with none it has
+		// not started and waits for another session — after a session that did
+		// not revive as after any other refusal. A query settled as collected
+		// with nothing collected would be written down as done and never asked
+		// again.
 		c.stopped(ctx, one, held.ID, err, true)
 	default:
 		// The road, and the tries for it are spent or there was nowhere to move
 		// to. Nothing is held against the session.
-		held.PutBack()
 		c.stopped(ctx, one, held.ID, err, false)
+	}
+	switch {
+	case ctx.Err() != nil:
+		held.PutBack()
+	case err == nil:
+		// Written down and given back: its rest starts here, and the keeper
+		// will not hand it out again before the rest is over.
+		_ = held.Answered(ctx, port)
+	case judged && moved:
+		// It did not revive. Google answered from the new address with a
+		// refusal, and the pages this session was keeping are addressed to an
+		// exit it no longer has: there is nothing left for it to carry.
+		_ = held.GiveUp(ctx)
+	case judged:
+		letGoAfter(ctx, held, lease, err)
+	default:
+		held.PutBack()
 	}
 }
 

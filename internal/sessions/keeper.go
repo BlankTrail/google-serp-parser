@@ -856,9 +856,15 @@ func (k *Keeper) elsewhere(ctx context.Context, h *Held) error {
 		k.mu.Unlock()
 		return ErrNotHeld
 	}
-	h.done, s.held = true, false
+	// The handle is spent at once, and the session stays in hand until its
+	// record says where it stands. Let go first, it was free while the line
+	// was being written, with the moment it was last used from before and the
+	// address it was leaving — and another thread took it and carried on the
+	// query this one was ending.
+	h.done = true
 	exit := s.record.Exit
 	k.mu.Unlock()
+	defer k.release(s)
 	if onGateway(exit) {
 		return nil
 	}
@@ -890,8 +896,11 @@ func (k *Keeper) failed(ctx context.Context, h *Held) (bool, error) {
 		k.mu.Unlock()
 		return false, ErrNotHeld
 	}
-	h.done, s.held = true, false
+	// Spent at once and let go once its record says so, for the reason
+	// elsewhere gives.
+	h.done = true
 	k.mu.Unlock()
+	defer k.release(s)
 
 	now := k.now()
 	dropped, err := k.history.SessionFailed(ctx, h.ID, now)

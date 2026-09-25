@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // port stands for a leased port of the proxy service: it goes out where it was
@@ -1340,5 +1342,71 @@ func TestKeeper_CountsNoSessionThatNeverAnsweredAsStranded(t *testing.T) {
 	p.resting["a"] = true
 	if got, err := k.TakeStranded(ctx, p, desktop, []int64{s.ID}); !errors.Is(err, ErrNothingDue) {
 		t.Errorf("a session that never answered was taken as stranded: %v (%v)", got, err)
+	}
+}
+
+// peeking is a history that calls during with the session's id each time the
+// keeper writes down how a session it is giving back ended, before the line
+// is written: a test's way of standing in the moment between the two.
+type peeking struct {
+	History
+	during func(id int64)
+}
+
+func (p peeking) SessionAnswered(ctx context.Context, id int64, a store.Answer, at time.Time) error {
+	p.during(id)
+	return p.History.SessionAnswered(ctx, id, a, at)
+}
+
+func (p peeking) SessionFailed(ctx context.Context, id int64, at time.Time) (bool, error) {
+	p.during(id)
+	return p.History.SessionFailed(ctx, id, at)
+}
+
+func TestKeeper_HandsASessionOutAgainOnlyOnceWhatBecameOfItIsWrittenDown(t *testing.T) {
+	// A session sent elsewhere after a shell, or put down after a refusal, was
+	// let go before its record said so: in the moment the line was being written
+	// it was free, with the time it was last used from before and the address it
+	// was leaving, and another thread could take it — and did, carrying on a
+	// query the first thread was in the middle of ending. It is let go once its
+	// record is what the history is being told.
+	for _, c := range []struct {
+		name string
+		end  func(ctx context.Context, h *Held) error
+	}{
+		{"sent elsewhere", func(ctx context.Context, h *Held) error { return h.Elsewhere(ctx) }},
+		{"put down after a refusal", func(ctx context.Context, h *Held) error { _, err := h.Failed(ctx); return err }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clock := startClock()
+			var k *Keeper
+			var taken []int64
+			var ending int64
+			h := peeking{History: NewMemory(), during: func(id int64) {
+				if id != ending {
+					return
+				}
+				// Another thread asking for a session this instant.
+				if got, err := k.Take(context.Background(), listPort(7, "b", "b"), desktop); err == nil {
+					taken = append(taken, got.ID)
+					got.PutBack()
+				}
+			}}
+			k = keeperAt(h, clock)
+			ctx := context.Background()
+			s := answeredOn(t, k, "a", "a", "b")
+			clock.pass(time.Minute)
+			again, err := k.Take(ctx, listPort(1, "a", "a", "b"), desktop)
+			if err != nil || again.ID != s.ID {
+				t.Fatalf("got %v (%v), want session %d back", again, err, s.ID)
+			}
+			ending = s.ID
+			if err := c.end(ctx, again); err != nil {
+				t.Fatalf("ending: %v", err)
+			}
+			if slices.Contains(taken, s.ID) {
+				t.Errorf("session %d was handed out while what became of it was being written down", s.ID)
+			}
+		})
 	}
 }

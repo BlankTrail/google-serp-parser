@@ -18,6 +18,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/sessions"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // deepOrigin stands in for Google on a query that has more pages than one. Each
@@ -1007,5 +1008,109 @@ func TestCrew_WaitsNoLongerThanASecondWithNothingToDo(t *testing.T) {
 		time.Second, time.Second, time.Second}
 	if !slices.Equal(got, want) {
 		t.Errorf("the waits ran %v, want %v", got, want)
+	}
+}
+
+// givingBack is a history that calls during with the session's id each time the
+// keeper writes down a session being given back, before the line is written.
+type givingBack struct {
+	sessions.History
+	during func(id int64)
+}
+
+func (w givingBack) SessionAnswered(ctx context.Context, id int64, a store.Answer, at time.Time) error {
+	w.during(id)
+	return w.History.SessionAnswered(ctx, id, a, at)
+}
+
+func (w givingBack) SessionFailed(ctx context.Context, id int64, at time.Time) (bool, error) {
+	w.during(id)
+	return w.History.SessionFailed(ctx, id, at)
+}
+
+func TestRunner_TakesAWalkOffItsSessionBeforeGivingTheSessionBack(t *testing.T) {
+	// A thread that met a shell or a refusal gave the session back first and
+	// took the walk off it after. In between, another thread was handed the
+	// same session, found the walk still under it, and carried it on: on the
+	// speed test three queries were ended by two threads each, and the second
+	// writing of the same page failed on the history's unique key. The walk
+	// comes off first.
+	for _, c := range []struct {
+		name  string
+		serve func(o *deepOrigin, met *atomic.Bool)
+	}{
+		{"after a shell", func(o *deepOrigin, met *atomic.Bool) {
+			o.shells = func(n int) bool { met.Store(n >= 2); return n >= 2 }
+		}},
+		{"after a refusal", func(o *deepOrigin, met *atomic.Bool) {
+			o.walls = func(n int) bool { met.Store(n >= 2); return n >= 2 }
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := newDeepOrigin(t, 5)
+			// Set once the shell or the refusal has been served: the session
+			// given back after that is the one whose walk must be off it. The
+			// one given back after the first page carries its walk on, as it
+			// should.
+			var met atomic.Bool
+			c.serve(o, &met)
+			f := poolFacing(t, o.addr(), 1, inSessions)
+			var r *Runner
+			var mu sync.Mutex
+			var still []int64
+			h := givingBack{History: sessions.NewMemory(), during: func(id int64) {
+				if !met.Load() {
+					return
+				}
+				if _, carried := r.carrying.of(id); carried {
+					mu.Lock()
+					still = append(still, id)
+					mu.Unlock()
+				}
+			}}
+			r = &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(h),
+				Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+			r.Run(context.Background(), Job{Queries: []google.Query{usQuery("one")}, Pages: 3, Tries: 1})
+			mu.Lock()
+			defer mu.Unlock()
+			if len(still) != 0 {
+				t.Errorf("session %v was given back while still carrying its walk", still)
+			}
+		})
+	}
+}
+
+func TestRunner_MovesAWalkOnBeforeGivingItsSessionBackAfterAPage(t *testing.T) {
+	// The same order after a page that came back: the walk is moved on to the
+	// next page — or ended — before the session is given back. The other way
+	// round, a session rested for no time at all was handed to another thread
+	// with its walk still pointing at the page just taken, and asked for it
+	// again.
+	o := newDeepOrigin(t, 5)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	var r *Runner
+	var mu sync.Mutex
+	answered := map[int64]int{}
+	var behind []string
+	h := givingBack{History: sessions.NewMemory(), during: func(id int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		answered[id]++
+		one, carried := r.carrying.of(id)
+		if carried && one.page != answered[id] {
+			behind = append(behind, fmt.Sprintf("session %d given back after page %d with its walk at %d",
+				id, answered[id], one.page))
+		}
+	}}
+	r = &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(h),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("one")}, Pages: 3})
+	if got := rep.Results[0]; got.Err != nil || len(got.Pages) != 3 {
+		t.Fatalf("the walk took %d pages and ended with %v, want three", len(got.Pages), got.Err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, b := range behind {
+		t.Error(b)
 	}
 }
