@@ -103,6 +103,54 @@ func isGoogleHost(host string) bool {
 	return false
 }
 
+// untranslated is the page a redirect through Google's translator leads to,
+// and whether the redirect was one.
+//
+// Google offers some results in the reader's language by linking them through
+// its translator, and the redirector answers such a link with a redirect onto
+// the translator. That stays on Google, and it was taken for the wall: the
+// lookup was carried to thirty identities in turn, each of them blamed for it,
+// and the result was written with no address. Every result a job of 8514
+// queries left without an address was one of these — 44 in job 14 of
+// 2026-09-25, 36 in job 16 — about thirteen hundred lookups a job spent on
+// asking the same question thirty times. The page is named inside the redirect.
+//
+// Two forms carry it. translate.google.com names the page in its u parameter.
+// The translator's own domain names it by its host: the page's host is the
+// subdomain of translate.goog with its dots written as dashes and its own
+// dashes doubled, its path is the page's, and the translator's settings ride
+// along as _x_tr_ parameters.
+func untranslated(u *url.URL) (string, bool) {
+	host := strings.ToLower(u.Hostname())
+	switch {
+	case isGoogleHost(host) && strings.HasPrefix(host, "translate."):
+		page, err := url.Parse(u.Query().Get("u"))
+		if err != nil || (page.Scheme != "http" && page.Scheme != "https") || page.Host == "" || isGoogleHost(page.Hostname()) {
+			return "", false
+		}
+		return page.String(), true
+	case strings.HasSuffix(host, ".translate.goog"):
+		parts := strings.Split(strings.TrimSuffix(host, ".translate.goog"), "--")
+		for i, part := range parts {
+			parts[i] = strings.ReplaceAll(part, "-", ".")
+		}
+		original := strings.Join(parts, "-")
+		if original == "" || isGoogleHost(original) {
+			return "", false
+		}
+		q := u.Query()
+		for name := range q {
+			if strings.HasPrefix(name, "_x_tr_") {
+				q.Del(name)
+			}
+		}
+		page := url.URL{Scheme: "https", Host: original, Path: u.Path, RawPath: u.RawPath,
+			RawQuery: q.Encode(), Fragment: u.Fragment}
+		return page.String(), true
+	}
+	return "", false
+}
+
 // Resolver turns an encrypted result link into the address it points at.
 //
 // It costs one request per link, and that is the whole cost: the redirect is
@@ -161,7 +209,12 @@ func (r *Resolver) Resolve(ctx context.Context, link string) (string, error) {
 	if err != nil || u.Host == "" {
 		return "", fmt.Errorf("google: resolve returned an unusable Location %q", loc)
 	}
-	if isGoogleHost(u.Hostname()) {
+	if page, ok := untranslated(u); ok {
+		return page, nil
+	}
+	// The translator's own domain is Google's too: a page on it that names no
+	// page off Google is Google's page, not the result's address.
+	if isGoogleHost(u.Hostname()) || strings.HasSuffix(strings.ToLower(u.Hostname()), ".translate.goog") {
 		// Only the host is quoted. A challenge address carries the query it
 		// refused inside it, and an error goes to logs and screens.
 		return "", fmt.Errorf("%w: %s", ErrRedirectedIntoGoogle, u.Hostname())

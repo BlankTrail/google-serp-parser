@@ -147,6 +147,72 @@ func TestResolver_HonoursContextCancellation(t *testing.T) {
 	}
 }
 
+// redirectingTo answers every request with a redirect to loc.
+func redirectingTo(t *testing.T, loc string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", loc)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestResolver_ReadsThePageAResultWasTranslatedFrom(t *testing.T) {
+	// Some results are linked through Google's translator, and the redirect
+	// onto it stays on Google. Taken for the wall, it was carried to thirty
+	// identities, each blamed, and the result was written with no address —
+	// every one of the 44 a job of 8514 queries left without one. The page is
+	// named inside the redirect, and it is the address.
+	for _, c := range []struct{ loc, want string }{
+		{"https://translate.google.com/translate?hl=ru&sl=en&tl=ru&u=https://en.wikipedia.org/wiki/Air_conditioning%3Fx%3D1&prev=search",
+			"https://en.wikipedia.org/wiki/Air_conditioning?x=1"},
+		{"https://translate.google.com/website?sl=en&tl=ru&hl=ru&u=https%3A%2F%2Fwww.example.com%2Fa%2Fb",
+			"https://www.example.com/a/b"},
+		{"https://en-m-wikipedia-org.translate.goog/wiki/Air_conditioning?_x_tr_sl=en&_x_tr_tl=ru&_x_tr_hl=ru&_x_tr_pto=sc",
+			"https://en.m.wikipedia.org/wiki/Air_conditioning"},
+		// A dash of the page's own host is doubled on the translator's domain.
+		{"https://my--site-co-uk.translate.goog/a?b=1&_x_tr_sl=en&_x_tr_tl=ru",
+			"https://my-site.co.uk/a?b=1"},
+		{"https://xn----7sbbhq6aeq1a-xn----p1ai.translate.goog/?_x_tr_sl=ru",
+			"https://xn--7sbbhq6aeq1a.xn--p1ai/"},
+	} {
+		srv := redirectingTo(t, c.loc)
+		got, err := (&Resolver{Client: srv.Client()}).Resolve(context.Background(), srv.URL+"/goto?url=x")
+		if err != nil {
+			t.Errorf("Location %q: %v", c.loc, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("Location %q resolved to %q, want %q", c.loc, got, c.want)
+		}
+	}
+}
+
+func TestResolver_RefusesATranslatorRedirectThatNamesNoPage(t *testing.T) {
+	// Only a page named in the redirect is an address. The translator with no
+	// page in it, or with Google's own, is still Google; and a u parameter on
+	// any other Google page — a consent wall carries whatever it was given — is
+	// not the translator naming a page.
+	for _, loc := range []string{
+		"https://translate.google.com/translate?hl=ru&sl=en",
+		"https://translate.google.com/translate?u=https://www.google.com/search%3Fq%3Dx",
+		"https://translate.google.com/translate?u=/wiki/relative",
+		"https://translate.google.com/translate?u=ftp://files.example.com/a",
+		"https://consent.google.com/m?continue=https://www.google.com/search&u=https://example.com/",
+		"https://www-google-com.translate.goog/search?q=x&_x_tr_sl=en",
+	} {
+		srv := redirectingTo(t, loc)
+		got, err := (&Resolver{Client: srv.Client()}).Resolve(context.Background(), srv.URL+"/goto?url=x")
+		if !errors.Is(err, ErrRedirectedIntoGoogle) {
+			t.Errorf("Location %q resolved to %q with err=%v, want ErrRedirectedIntoGoogle", loc, got, err)
+		}
+		if got != "" {
+			t.Errorf("Location %q resolved to %q, want no address", loc, got)
+		}
+	}
+}
+
 func TestResolver_RefusesAnAddressThatIsGooglesOwn(t *testing.T) {
 	// Measured on a live run: a result was written with
 	// http://www.google.ru/goto?url=… as its address. The redirector had

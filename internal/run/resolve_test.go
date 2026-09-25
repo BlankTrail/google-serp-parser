@@ -841,3 +841,41 @@ func TestRunner_ReadsTheAddressesThroughTheRunsOwnIdentitiesWhenThereAreNoOthers
 		t.Error("nothing went out through the run's own identities")
 	}
 }
+
+func TestRunner_TakesTheAddressOutOfGooglesTranslatorRatherThanBlamingThePort(t *testing.T) {
+	// A result linked through Google's translator is answered with a redirect
+	// onto the translator, and that stays on Google. Taken for the wall, it was
+	// carried to thirty identities, each of them blamed, and the result went
+	// without an address — every one of the 44 a job of 8514 queries left
+	// without one. The page is named inside the redirect.
+	d := &destination{}
+	d.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		d.asked.Add(1)
+		w.Header().Set("Location", "https://translate.google.com/translate?hl=ru&sl=en&tl=ru&u=https://en.wikipedia.org/wiki"+r.URL.Path+"&prev=search")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(d.Close)
+	f := poolFacing(t, d.addr(), 2)
+
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages: []google.SERP{{
+			Origin:  d.URL,
+			Results: []google.Result{unread("/goto/one", "en.wikipedia.org")},
+		}},
+	}}}
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	got := r.ResolveLinks(context.Background(), &rep, 1)
+	if got.Resolved != 1 {
+		t.Fatalf("resolved %d of 1: %v", got.Resolved, got.Errs)
+	}
+	if addr := rep.Results[0].Pages[0].Results[0].URL; addr != "https://en.wikipedia.org/wiki/goto/one" {
+		t.Errorf("the result was written with %q, want the page the translator was asked for", addr)
+	}
+	if n := d.asked.Load(); n != 1 {
+		t.Errorf("the link was asked %d times, want once", n)
+	}
+	if st := f.Pool.Stats(); st.Rejections != 0 {
+		t.Errorf("%d identities were blamed for a redirect that named the page, want none", st.Rejections)
+	}
+}
