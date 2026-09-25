@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -861,5 +862,150 @@ func TestRunner_StillRecordsAPhraseGoogleItselfRefused(t *testing.T) {
 	}
 	if rep.Failed != 1 {
 		t.Errorf("the report says %d failed, want the one Google itself refused: %+v", rep.Failed, rep.Results[0])
+	}
+}
+
+func TestRunner_MovesASessionWaitingOnItsAddressOnlyOnceThereIsNothingElseToDo(t *testing.T) {
+	// A session that has answered waits for its own address to come back from a
+	// rest rather than moving. At the end of the speed test that left the last
+	// queries waiting out a sixty-minute ban with a hundred threads idle. The
+	// user chose the exception: once nothing is left to open and nothing is due,
+	// the session moves to an address that is free and pays the one check there.
+	// While anything else is left to do, it waits.
+	ups, bad := blanktrail.Parse("192.0.2.1:1080\n192.0.2.2:1080\n192.0.2.3:1080\n192.0.2.4:1080", "socks5")
+	if len(bad) > 0 {
+		t.Fatalf("Parse rejected %v", bad)
+	}
+	rot := blanktrail.NewStaticRotor(ups)
+	own := func(c *blanktrail.PoolConfig) {
+		c.Channels = []blanktrail.Channel{blanktrail.NewListChannel("list", rot)}
+	}
+	o := newDeepOrigin(t, 3)
+	f := poolFacing(t, o.addr(), 1, inSessions, own)
+	port := f.onePort(t)
+	var benched string
+	put := 0
+	o.clears = func(n int) string {
+		if n != 1 {
+			return ""
+		}
+		// The address the first query's first page is coming back through is put
+		// to rest before that page is in hand, so no thread can ask through it
+		// again first.
+		benched = f.Fake.UpstreamOf(port)
+		for _, u := range ups {
+			if u.Key() == benched {
+				rot.MarkDead(u)
+				put++
+			}
+		}
+		return ""
+	}
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rep := r.Run(ctx, Job{
+		Queries: []google.Query{usQuery("one"), usQuery("two"), usQuery("three")}, Pages: 2})
+	if put != 1 {
+		t.Fatalf("the address %q the first page came through was not found in the list to put to rest", benched)
+	}
+	for i, got := range rep.Results {
+		if got.Err != nil || len(got.Pages) != 2 {
+			t.Fatalf("query %d took %d pages and ended with %v, want two and no error — "+
+				"a session left waiting out its address's rest", i, len(got.Pages), got.Err)
+		}
+	}
+	asked := o.seen()
+	if len(asked) != 6 {
+		t.Fatalf("the origin was asked %d times, want six: %q", len(asked), asked)
+	}
+	// The first query's second page is the last thing asked: the other two
+	// queries were opened and walked while its session waited for its address.
+	if !strings.Contains(asked[5], "one") {
+		t.Errorf("the asks ran %q, want the first query's second page last", asked)
+	}
+	// And it went out through another address.
+	stood := f.stoodOn(port)
+	if len(stood) == 0 || stood[len(stood)-1] == benched {
+		t.Errorf("the port stood on %q, want the last page through an address other than %q", stood, benched)
+	}
+}
+
+func TestRunner_WaitsLongerEachTimeItFindsNothingDue(t *testing.T) {
+	// A thread with nothing due looked again every 25 ms and took a port each
+	// time it looked: at the end of the speed test a hundred idle threads took
+	// 3.6 million ports for 292 thousand requests, up to 232 thousand a minute
+	// with nothing asked at all. A thread that finds nothing due waits twice as
+	// long as the last time, up to a second, and starts again from the shortest
+	// once it has something to carry.
+	const pause = 300 * time.Millisecond
+	var mu sync.Mutex
+	var idle []time.Duration
+	recording := func(c *blanktrail.PoolConfig) {
+		c.Sleep = func(ctx context.Context, d time.Duration) error {
+			if d >= waitingForAnIdentity {
+				mu.Lock()
+				idle = append(idle, d)
+				mu.Unlock()
+			}
+			select {
+			case <-time.After(d):
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	o := newDeepOrigin(t, 4)
+	f := poolFacing(t, o.addr(), 1, inSessions, recording)
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop, Pause: pause}}
+	rep := r.Run(context.Background(), Job{Queries: []google.Query{usQuery("one")}, Pages: 3})
+	if got := rep.Results[0]; got.Err != nil || len(got.Pages) != 3 {
+		t.Fatalf("the walk took %d pages and ended with %v, want three", len(got.Pages), got.Err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Two rests, and through each the waits double from the shortest.
+	restarts := 0
+	for i, d := range idle {
+		if d > time.Second {
+			t.Errorf("a wait of %v, longer than the second a thread waits at most", d)
+		}
+		if i == 0 || d == waitingForAnIdentity {
+			if d != waitingForAnIdentity {
+				t.Errorf("the first wait was %v, want %v", d, waitingForAnIdentity)
+			}
+			restarts++
+			continue
+		}
+		if want := min(2*idle[i-1], time.Second); d != want {
+			t.Errorf("wait %d was %v after %v, want %v: %v", i, d, idle[i-1], want, idle)
+		}
+	}
+	if restarts != 2 {
+		t.Errorf("the waits started from the shortest %d times over two rests, want twice: %v", restarts, idle)
+	}
+	if len(idle) > 12 {
+		t.Errorf("two rests of %v cost %d looks, want a handful: %v", pause, len(idle), idle)
+	}
+}
+
+func TestCrew_WaitsNoLongerThanASecondWithNothingToDo(t *testing.T) {
+	// Doubling without end would leave a thread asleep through the minute a
+	// session comes due in. A second is the most it waits.
+	var c crew
+	var got []time.Duration
+	for range 9 {
+		got = append(got, c.nextIdle())
+	}
+	want := []time.Duration{25 * time.Millisecond, 50 * time.Millisecond, 100 * time.Millisecond,
+		200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond,
+		time.Second, time.Second, time.Second}
+	if !slices.Equal(got, want) {
+		t.Errorf("the waits ran %v, want %v", got, want)
 	}
 }

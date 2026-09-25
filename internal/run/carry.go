@@ -60,7 +60,20 @@ func (c *crew) carry(ctx context.Context) {
 		held, err := c.a.Keeper.TakeOneOf(ctx, leasePort{lease}, c.a.Want, c.walks.carriers())
 		if errors.Is(err, sessions.ErrNothingDue) {
 			one = c.opening(ctx, &drained)
-			if one == nil {
+			switch {
+			case one != nil:
+				held, err = c.a.Keeper.Take(ctx, leasePort{lease}, c.a.Want)
+			case drained:
+				// The end of the job: nothing left to open and nothing due. A
+				// session that has answered waits for its own address to come
+				// back from a rest, and a query whose pages are in hand waits
+				// with it — at the end of the speed test, the last of them
+				// waited out a sixty-minute ban with every thread idle. Here,
+				// and only here, the user chose the exception: the session
+				// moves to an address that is free and pays the one check.
+				held, err = c.a.Keeper.TakeStranded(ctx, leasePort{lease}, c.a.Want, c.walks.carriers())
+			}
+			if one == nil && errors.Is(err, sessions.ErrNothingDue) {
 				lease.Release()
 				if c.over(drained) {
 					return
@@ -68,12 +81,11 @@ func (c *crew) carry(ctx context.Context) {
 				// Queries are still being carried by sessions that are resting.
 				// Their pages are what is left of this job.
 				c.r.Where.At(c.thread, DoingIdle)
-				if err := c.r.Pool.Sleep(ctx, waitingForAnIdentity); err != nil {
+				if err := c.r.Pool.Sleep(ctx, c.nextIdle()); err != nil {
 					return
 				}
 				continue
 			}
-			held, err = c.a.Keeper.Take(ctx, leasePort{lease}, c.a.Want)
 		}
 		if err != nil {
 			if one != nil {
@@ -113,8 +125,33 @@ func (c *crew) carry(ctx context.Context) {
 			lease.Release()
 			continue
 		}
+		c.idle = 0
 		c.page(ctx, lease, held, one)
 	}
+}
+
+// idleAtMost is the longest a thread with nothing to do waits before looking
+// again. A second is nothing beside the minute and more a session rests between
+// two pages, and it is a hundred looks a second from a hundred idle threads
+// rather than four thousand.
+const idleAtMost = time.Second
+
+// nextIdle is how long this thread waits before it looks again for something to
+// do: the shortest wait the first time it finds nothing, twice the last one each
+// time after, and never more than idleAtMost.
+//
+// Each look takes a port and asks the keeper, and the wait was the shortest
+// every time: at the end of the speed test a hundred idle threads took 3.6
+// million ports for 292 thousand requests, up to 232 thousand a minute with
+// nothing asked at all. A thread starts again from the shortest once it has
+// something to carry.
+func (c *crew) nextIdle() time.Duration {
+	if c.idle == 0 {
+		c.idle = waitingForAnIdentity
+	} else {
+		c.idle = min(2*c.idle, idleAtMost)
+	}
+	return c.idle
 }
 
 // opening is a query for a thread that has nothing due to carry on with: one

@@ -164,7 +164,7 @@ func (k *Keeper) Take(ctx context.Context, p Port, w Want) (*Held, error) {
 		return nil, err
 	}
 	if s := k.pick(p, w, nil); s != nil {
-		return k.put(ctx, p, s)
+		return k.put(ctx, p, s, false)
 	}
 	return k.fresh(ctx, p, w)
 }
@@ -192,7 +192,63 @@ func (k *Keeper) TakeOneOf(ctx context.Context, p Port, w Want, only []int64) (*
 	if s == nil {
 		return nil, ErrNothingDue
 	}
-	return k.put(ctx, p, s)
+	return k.put(ctx, p, s, false)
+}
+
+// TakeStranded hands the caller one of the given sessions that is stranded —
+// it has answered, has served its own rest, and is waiting for nothing but its
+// own address to come back from a rest — and puts it on the port at an address
+// that is free.
+//
+// A session that has answered waits for its own address rather than moving: it
+// holds a clearance there, and taken elsewhere it pays a check. This is the one
+// exception, and the user chose it. At the end of a job, with nothing left to
+// open and nothing due, the last queries of the speed test waited for their
+// sessions' addresses to come off a ban — an hour on the profile it ran on —
+// where the check a move costs is under a minute. The caller asks for this only
+// then; while there is anything else to do, a session waits.
+func (k *Keeper) TakeStranded(ctx context.Context, p Port, w Want, only []int64) (*Held, error) {
+	if err := k.load(ctx, w.Device); err != nil {
+		return nil, err
+	}
+	if err := k.sweep(ctx); err != nil {
+		return nil, err
+	}
+	among := make(map[int64]bool, len(only))
+	for _, id := range only {
+		among[id] = true
+	}
+	s := k.stranded(p, w, among)
+	if s == nil {
+		return nil, ErrNothingDue
+	}
+	return k.put(ctx, p, s, true)
+}
+
+// stranded takes, among only, the session that has waited longest for its own
+// resting address and would otherwise be due, and marks it held.
+func (k *Keeper) stranded(p Port, w Want, only map[int64]bool) *kept {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	now := k.now()
+	var best *kept
+	for _, s := range k.known {
+		r := s.record
+		if !only[r.ID] || s.held || !hasAnswered(r) || r.Device != w.Device ||
+			!w.matches(r.Browser, r.OS, r.Release) || !s.rested(w, now) || now.Sub(r.UsedAt) > KeptFor {
+			continue
+		}
+		if a, ok := addressOf(r.Exit); !ok || !p.Rests(a) {
+			continue
+		}
+		if best == nil || r.UsedAt.Before(best.record.UsedAt) {
+			best = s
+		}
+	}
+	if best != nil {
+		best.held = true
+	}
+	return best
 }
 
 // TakeColdest hands the caller the session unused longest, provided it has been
@@ -208,7 +264,7 @@ func (k *Keeper) TakeColdest(ctx context.Context, p Port, w Want, idle time.Dura
 	if s == nil {
 		return nil, ErrNothingDue
 	}
-	return k.put(ctx, p, s)
+	return k.put(ctx, p, s, false)
 }
 
 // fitsPort says whether a session may go on this port: a gateway's session only
@@ -318,7 +374,10 @@ func (k *Keeper) busyLocked() map[string]int {
 // put puts a held session on the port: fingerprint, address, tickets. A session
 // that does not go on is put back for another caller rather than given up —
 // a port that will not take it is the port's trouble, not the session's.
-func (k *Keeper) put(ctx context.Context, p Port, s *kept) (*Held, error) {
+//
+// away moves a session that has answered off its own address when that address
+// is resting, which only TakeStranded asks for.
+func (k *Keeper) put(ctx context.Context, p Port, s *kept, away bool) (*Held, error) {
 	if err := p.Wear(ctx, s.record.Profile); err != nil {
 		k.release(s)
 		return nil, fmt.Errorf("sessions: putting session %d's fingerprint on port %d: %w", s.record.ID, p.Number(), err)
@@ -332,8 +391,9 @@ func (k *Keeper) put(ctx context.Context, p Port, s *kept) (*Held, error) {
 		// whose address is resting goes wherever an address is free; one that
 		// has answered waited for its address instead (see fitsPort), and is
 		// moved off it only by a request it did not carry — paying a challenge
-		// where it lands, which is what changing exit costs.
-		if move := !ok || (!pinned && p.Rests(a)); move {
+		// where it lands, which is what changing exit costs — or at the end of
+		// a job, when TakeStranded asks for it.
+		if move := !ok || ((!pinned || away) && p.Rests(a)); move {
 			if a, ok = k.reserve(candidatesOf(p), p.Limit()); !ok {
 				k.release(s)
 				return nil, ErrNoAddress

@@ -89,6 +89,9 @@ type crew struct {
 	// settle is what a finished query goes through: its addresses read, its
 	// results written down, its stages reported.
 	settle func(ctx context.Context, at int, began time.Time)
+	// idle is how long this thread last waited with nothing to do, and nought
+	// once it has something to carry; see nextIdle.
+	idle time.Duration
 }
 
 // work takes queries off the queue and walks them until there are none left.

@@ -1262,3 +1262,83 @@ func TestKeeper_RestsASessionFromItsAnswerAndNotFromItsAsking(t *testing.T) {
 			again.ID, s.ID)
 	}
 }
+
+func TestKeeper_TakesAStrandedSessionOffItsRestingAddressWhenAskedTo(t *testing.T) {
+	// The one exception to a session that has answered waiting for its own
+	// address, which the user chose: the end of a job, with nothing else left to
+	// do. Asked for a stranded one, the keeper hands over a session that has
+	// served its rest and is waiting for nothing but its address, and puts it on
+	// an address that is free — a stranger there, as any session that moves is.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	s := answeredOn(t, k, "a", "a", "b")
+	c.pass(time.Minute)
+
+	p := listPort(1, "b", "a", "b")
+	p.resting["a"] = true
+	if got, err := k.TakeOneOf(ctx, p, desktop, []int64{s.ID}); !errors.Is(err, ErrNothingDue) {
+		t.Fatalf("TakeOneOf gave %v (%v), want the session left waiting for its address", got, err)
+	}
+	got, err := k.TakeStranded(ctx, p, desktop, []int64{s.ID})
+	if err != nil {
+		t.Fatalf("TakeStranded: %v", err)
+	}
+	if got.ID != s.ID || p.Exit() != "addr:b" {
+		t.Errorf("got session %d on %q, want %d taken to b", got.ID, p.Exit(), s.ID)
+	}
+	if !got.Moved() {
+		t.Error("the session taken off its address is not marked a stranger where it landed")
+	}
+}
+
+func TestKeeper_LeavesAloneASessionThatIsNotStranded(t *testing.T) {
+	// Only a session waiting for nothing but its address is stranded. One still
+	// serving its own rest is not, one whose address carries is due in the
+	// ordinary way, and one outside the sessions asked about is not the
+	// caller's to move.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	s := answeredOn(t, k, "a", "a", "b")
+
+	resting := listPort(1, "b", "a", "b")
+	resting.resting["a"] = true
+	if got, err := k.TakeStranded(ctx, resting, desktop, []int64{s.ID}); !errors.Is(err, ErrNothingDue) {
+		t.Errorf("a session still serving its rest was moved: %v (%v)", got, err)
+	}
+
+	c.pass(time.Minute)
+	carrying := listPort(2, "b", "a", "b")
+	if got, err := k.TakeStranded(ctx, carrying, desktop, []int64{s.ID}); !errors.Is(err, ErrNothingDue) {
+		t.Errorf("a session whose address carries was moved: %v (%v)", got, err)
+	}
+	other := listPort(3, "b", "a", "b")
+	other.resting["a"] = true
+	if got, err := k.TakeStranded(ctx, other, desktop, []int64{s.ID + 1}); !errors.Is(err, ErrNothingDue) {
+		t.Errorf("a session outside the ones asked about was moved: %v (%v)", got, err)
+	}
+}
+
+func TestKeeper_CountsNoSessionThatNeverAnsweredAsStranded(t *testing.T) {
+	// A session that has never answered holds no clearance anywhere and goes
+	// wherever an address is free in the ordinary way. Only a session kept off
+	// by the rule — one that has answered, waiting for its own address — is
+	// stranded.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	first := listPort(1, "a", "a", "b")
+	s, err := k.Take(ctx, first, desktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	s.PutBack()
+	c.pass(time.Minute)
+
+	p := listPort(2, "b", "a", "b")
+	p.resting["a"] = true
+	if got, err := k.TakeStranded(ctx, p, desktop, []int64{s.ID}); !errors.Is(err, ErrNothingDue) {
+		t.Errorf("a session that never answered was taken as stranded: %v (%v)", got, err)
+	}
+}
