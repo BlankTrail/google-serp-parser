@@ -156,3 +156,21 @@ func TestExports_SaysWhenItWasDrawnFromAChoice(t *testing.T) {
 		t.Error("a tab drawn from a choice does not say so")
 	}
 }
+
+func TestScript_BuildsTheExportInPlaceAndRemembersIt(t *testing.T) {
+	// No test here runs a line of the script — there is no runtime for it — so
+	// what is pinned is that the one file the pages load is the file that moves
+	// a field in place, asks for the preview, and remembers the choice, and that
+	// it does so on a screen swapped in as well as on one loaded cold.
+	script := mustAsset(t, "static/app.js")
+	// The attribute is looked for where it is read rather than by name: the name
+	// alone is also in the comment that explains it.
+	for _, part := range []string{"export-builder", previewAt, "localStorage", "gserp.export.", "data-move", `getAttribute("data-explicit")`} {
+		if !strings.Contains(script, part) {
+			t.Errorf("the script never names %q", part)
+		}
+	}
+	if strings.Count(script, "exportBuilder(document)") < 2 {
+		t.Error("the builder is not taken up on a screen swapped in as well as on one loaded")
+	}
+}
