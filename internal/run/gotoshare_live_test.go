@@ -29,6 +29,7 @@ package run
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +46,8 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
+
+	_ "modernc.org/sqlite" // the history is read, never written, through database/sql
 )
 
 // gotoSpec is a port as the default profile makes it, read from what the helper
@@ -72,6 +75,9 @@ func openGotoPool(ctx context.Context, t *testing.T, ports int, searching bool) 
 	t.Helper()
 	control, key, listURL := liveEnv(t)
 	ups := addressList(ctx, t, listURL)
+	if searching {
+		ups = provenOf(ctx, t, ups)
+	}
 	client, err := blanktrail.NewClient(control, key)
 	if err != nil {
 		fatalf(t, "control client: %v", err)
@@ -108,6 +114,54 @@ func openGotoPool(ctx context.Context, t *testing.T, ports int, searching bool) 
 	}
 	t.Cleanup(func() { _ = p.Close() })
 	return p
+}
+
+// provenOf narrows the list to the addresses the program's own sessions stood on
+// without a failure over the last hours, where the history says so.
+//
+// On a fresh pool most of the list is dead: the first run of these tests
+// reached one identity in twenty tries, every other one a connection the
+// address dropped. A job does not meet that, because its sessions stand on
+// addresses that answered, and a comparison of what different sessions are
+// shown wants sessions that get shown something. The history is only read.
+func provenOf(ctx context.Context, t *testing.T, ups []blanktrail.Upstream) []blanktrail.Upstream {
+	t.Helper()
+	path := envOr("GSERP_DB", "")
+	if path == "" || envInt("GSERP_GOTO_PROVEN", 1) == 0 {
+		return ups
+	}
+	db, err := sql.Open("sqlite", "file:"+strings.ReplaceAll(path, "\\", "/")+"?mode=ro")
+	if err != nil {
+		logf(t, "MEASUREMENT the history could not be read, so the whole list is used: %v", err)
+		return ups
+	}
+	defer func() { _ = db.Close() }()
+	rows, err := db.QueryContext(ctx, `SELECT exit FROM sessions WHERE failures = 0 AND exit LIKE 'addr:%'
+		AND used_at > ? ORDER BY used_at DESC`, time.Now().Add(-6*time.Hour).UTC().Format(time.RFC3339))
+	if err != nil {
+		logf(t, "MEASUREMENT the history could not be read, so the whole list is used: %v", err)
+		return ups
+	}
+	defer func() { _ = rows.Close() }()
+	proven := map[string]bool{}
+	for rows.Next() {
+		var exit string
+		if rows.Scan(&exit) == nil {
+			proven[strings.TrimPrefix(exit, "addr:")] = true
+		}
+	}
+	var out []blanktrail.Upstream
+	for _, u := range ups {
+		if proven[u.Key()] {
+			out = append(out, u)
+		}
+	}
+	if len(out) < 20 {
+		logf(t, "MEASUREMENT only %d of the list's addresses carried a session lately, so the whole list is used", len(out))
+		return ups
+	}
+	logf(t, "MEASUREMENT the searching ports stand on the %d addresses of the list the program's sessions stood on lately", len(out))
+	return out
 }
 
 // captureOn asks one identity for the first page of a phrase.
@@ -308,7 +362,7 @@ func TestLiveGoto_TheSameAddressComesBackAsTheSameLink(t *testing.T) {
 	}()
 	exits := map[string]bool{}
 	var skipped []*blanktrail.Lease
-	for tries := 0; len(held) < identities && tries < 4*identities; tries++ {
+	for tries := 0; len(held) < identities && tries < 8*identities; tries++ {
 		lease, err := search.Acquire(ctx)
 		if err != nil {
 			fatalf(t, "acquiring an identity: %v", err)
@@ -322,7 +376,10 @@ func TestLiveGoto_TheSameAddressComesBackAsTheSameLink(t *testing.T) {
 		serp, took, err := captureOn(ctx, lease, q)
 		if err != nil {
 			logf(t, "MEASUREMENT a capture did not get through in %v: %v", took.Round(time.Millisecond), err)
-			_ = lease.Reject(ctx)
+			// Off this address at once rather than after the three failures a
+			// pool waits for: every try spent on a dead address is one fewer
+			// for the identities the comparison wants.
+			_ = search.RotateEgressFor(ctx, lease.Port())
 			lease.Release()
 			continue
 		}
@@ -379,7 +436,7 @@ func TestLiveGoto_TheSameAddressComesBackAsTheSameLink(t *testing.T) {
 		if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
 			fatalf(t, "writing the keptLink links: %v", err)
 		}
-		logf(t, "MEASUREMENT the links and their addresses are keptLink for the lifetime check")
+		logf(t, "MEASUREMENT the links and their addresses are kept for the lifetime check")
 	}
 
 	// Each capture as address → link.
