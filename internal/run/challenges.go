@@ -67,6 +67,9 @@ type Challenges struct {
 	// run has seen end, and carried how many requests they held between them.
 	intervals int
 	carried   int
+	// answered is every answer the run has had from Google, which is what the
+	// checks are counted against for the screen: see Rhythm.PerThousand.
+	answered int
 }
 
 // stretch is one session's count since its last check in this run.
@@ -103,6 +106,7 @@ func (c *Challenges) Answer(session int64, admitted bool, before, after string) 
 	passed := after != "" && after != before
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.answered++
 	if passed {
 		c.met++
 	}
@@ -150,6 +154,18 @@ type Rhythm struct {
 	// yet to work it out from.
 	Between float64
 	Known   bool
+	// Answered is every answer this run has had from Google, and PerThousand is
+	// the checks it met for each thousand of them — what the screen shows.
+	//
+	// The figure it replaced, Between, averages only the stretches that have
+	// ended, so early in a run it sees the short ones alone and climbs as the
+	// run goes on: 1.0, 4.0, 5.6, 6.8, 9.7, 10.7 at five-minute marks on job 20
+	// of 2026-09-26. On the three-hundred-thread run after it, which made 836
+	// fresh sessions, it read 2.7 against 5.6 at the same minute while the
+	// checks a thousand pages cost were the same on both, 42 against 40. The
+	// user asked for the honest one; this is right from the first minute.
+	Answered    int
+	PerThousand float64
 	// Crowded says the checks are coming oftener than a run should meet them,
 	// which is the sessions being asked oftener than their rest allows.
 	Crowded bool
@@ -162,7 +178,10 @@ func (c *Challenges) Rhythm() Rhythm {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := Rhythm{Met: c.met, Intervals: c.intervals}
+	out := Rhythm{Met: c.met, Intervals: c.intervals, Answered: c.answered}
+	if c.answered > 0 {
+		out.PerThousand = 1000 * float64(c.met) / float64(c.answered)
+	}
 	if c.intervals == 0 {
 		return out
 	}

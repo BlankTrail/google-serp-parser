@@ -32,6 +32,10 @@ func TestChallenges_ReadANewClearanceAsACheckPaidFor(t *testing.T) {
 	if !got.Known || got.Between != 1 {
 		t.Errorf("the session carried %v requests between its checks (known=%v), want one", got.Between, got.Known)
 	}
+	// And the figure the screen shows: two checks in four answers.
+	if got.Answered != 4 || got.PerThousand != 500 {
+		t.Errorf("read %d answers and %v checks a thousand, want 4 and 500", got.Answered, got.PerThousand)
+	}
 }
 
 func TestChallenges_CountWhatOneSessionCarriesBetweenItsOwnTwoChecks(t *testing.T) {

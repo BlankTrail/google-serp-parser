@@ -1200,21 +1200,22 @@ func TestJobPage_ShowsGooglesChecksAndWhatTheSolverHasInHand(t *testing.T) {
 	// service's, because the solver processes are licensed to the machine.
 	s, _, id := runningWith(t, poolFacts{
 		Queue:  blanktrail.SolverQueue{Running: 3, Queued: 4},
-		Checks: run.Rhythm{Met: 6, Intervals: 6, Between: 13, Known: true},
+		Checks: run.Rhythm{Met: 6, Intervals: 6, Between: 13, Known: true, Answered: 400, PerThousand: 15},
 	})
 
 	body := get(t, s, jobPath(id)).Body.String()
 	for id, want := range map[string]string{
-		"checks-met": "6", "checks-solving": "3", "checks-queued": "4", "checks-between": "13.0",
+		"checks-met": "6", "checks-solving": "3", "checks-queued": "4", "checks-perthousand": "15.0",
 	} {
 		if got := shown(t, body, id); got != want {
 			t.Errorf("the job's page says %s is %q, want %q", id, got, want)
 		}
 	}
-	// And a run that has met none is not given a figure worked out from nothing.
+	// And a run that has had no answer yet is not given a figure worked out
+	// from nothing.
 	s2, _, other := runningWith(t, poolFacts{Checks: run.Rhythm{Met: 1}})
-	if got := shown(t, get(t, s2, jobPath(other)).Body.String(), "checks-between"); got != noFigure {
-		t.Errorf("a run that has met no check reports %q requests between them, want the mark", got)
+	if got := shown(t, get(t, s2, jobPath(other)).Body.String(), "checks-perthousand"); got != noFigure {
+		t.Errorf("a run with no answer yet reports %q checks a thousand pages, want the mark", got)
 	}
 }
 

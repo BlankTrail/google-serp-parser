@@ -150,9 +150,11 @@ type jobPool struct {
 	// and what a job waits behind is everything else asking of them.
 	Solving int
 	Queued  int
-	// Between is how many requests this run gets for each check it meets, or
-	// the mark where nothing has been met yet to work it out from.
-	Between string
+	// PerThousand is the checks this run has met for each thousand answers it
+	// has had from Google, or the mark before it has had any. See
+	// run.Rhythm.PerThousand for why it is this and not the requests between
+	// two checks.
+	PerThousand string
 	// Crowded says the checks come oftener than a run should meet them, which
 	// is the sessions being asked oftener than their rest allows. The page says
 	// what to do about it.
@@ -406,7 +408,7 @@ func (s *Server) poolOf(job int64) *jobPool {
 		Sessions: facts.Sessions, Working: facts.SessionsHeld, Asleep: facts.SessionsResting,
 		Made: facts.Ramp.Made, Ramp: rampWord(facts.Ramp),
 		Met: facts.Checks.Met, Solving: facts.Queue.Running, Queued: facts.Queue.Queued,
-		Between: noFigure,
+		PerThousand: noFigure,
 		// The advice about the rest is for a run whose rest is what limits it. A
 		// run still taking on sessions is limited by how many it has, and one
 		// short of addresses by the list; in both, the checks are being paid by
@@ -415,8 +417,8 @@ func (s *Server) poolOf(job int64) *jobPool {
 		// make more of those.
 		Crowded: facts.Checks.Crowded && facts.Ramp.AtSpeed,
 	}
-	if facts.Checks.Known {
-		out.Between = strconv.FormatFloat(facts.Checks.Between, 'f', 1, 64)
+	if facts.Checks.Answered > 0 {
+		out.PerThousand = strconv.FormatFloat(facts.Checks.PerThousand, 'f', 1, 64)
 	}
 	for _, one := range facts.Standing.Standing {
 		out.Standing = append(out.Standing, jobStanding{
