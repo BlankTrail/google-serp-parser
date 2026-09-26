@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
@@ -261,6 +262,12 @@ type Runner struct {
 	// portFor.
 	lanes     *lanes
 	lanesOnce sync.Once
+	// handedOut says every query of the run in hand has gone to a thread, and
+	// settling is how many finished queries are having their addresses read
+	// right now; together they are what spreads the end of a job's lookups
+	// over the ports that would otherwise stand idle — see lookupWorkers.
+	handedOut atomic.Bool
+	settling  atomic.Int64
 }
 
 // Run works through a job and reports what came of every query.
@@ -359,6 +366,8 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	// any more.
 	carrying := newWalks()
 	r.carrying = carrying
+	// A runner may carry one job after another; the last one's end is not this one's.
+	r.handedOut.Store(false)
 	var filing sync.Mutex
 
 	queue := make(chan int)
@@ -483,6 +492,7 @@ sending:
 		}
 	}
 	close(queue)
+	r.handedOut.Store(true)
 	wg.Wait()
 
 	// What the walks still in hand had collected. A run that stops — a job

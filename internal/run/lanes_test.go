@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -389,5 +391,101 @@ func TestRunner_ReadsNoTwoLinksAtOnceThroughASearchingPort(t *testing.T) {
 	}
 	if got := c.most.Load(); got != 1 {
 		t.Errorf("the searching port read %d links at once, want one at a time", got)
+	}
+}
+
+func TestRunner_ReadsTheLastQueriesLinksWithAllTheRoomThereIs(t *testing.T) {
+	// Once every query has gone to a thread, what is still settling is the end
+	// of the job, and its links are read with all the room the lookup ports
+	// have rather than a few at a time: the user's rule for the tail.
+	for _, c := range []struct {
+		handedOut bool
+		most      func(int64) bool
+		want      string
+	}{
+		{false, func(n int64) bool { return n == 1 }, "one at a time, as it was asked"},
+		{true, func(n int64) bool { return n >= 6 }, "most of the eight at once"},
+	} {
+		d := newCrowded(t, 60*time.Millisecond)
+		searching := poolFacing(t, d.addr(), 1)
+		reading := poolFacing(t, d.addr(), 1)
+		rep := eightHidden(d.URL)
+		r := &Runner{Pool: searching.Pool, Threads: 1,
+			Addresses: func(context.Context) (*blanktrail.Pool, error) { return reading.Pool, nil }}
+		r.handedOut.Store(c.handedOut)
+		if got := r.ResolveLinks(t.Context(), &rep, 1); got.Resolved != 8 {
+			t.Fatalf("resolved %d of 8: %v", got.Resolved, got.Errs)
+		}
+		if got := d.most.Load(); !c.most(got) {
+			t.Errorf("with every query handed out %v, the eight links were read %d at once, want %s", c.handedOut, got, c.want)
+		}
+	}
+}
+
+func TestRunner_SharesTheLookupRoomAmongTheQueriesStillSettling(t *testing.T) {
+	r := &Runner{Addresses: func(context.Context) (*blanktrail.Pool, error) { return nil, nil }}
+	r.handedOut.Store(true)
+	for _, c := range []struct {
+		links    int
+		settling int64
+		want     int
+	}{
+		{90, 1, 90},   // one query left: all its links at once
+		{90, 50, 20},  // fifty left: a thousand shared evenly
+		{90, 2000, 4}, // never fewer than it was asked for
+		{3, 1, 4},     // nor more than it has links, past what it was asked
+	} {
+		if got := r.lookupWorkers(4, c.links, c.settling); got != c.want {
+			t.Errorf("%d links with %d queries settling: %d at once, want %d", c.links, c.settling, got, c.want)
+		}
+	}
+	// A run reading through its searching ports shares nothing: see portFor.
+	plain := &Runner{}
+	plain.handedOut.Store(true)
+	if got := plain.lookupWorkers(4, 90, 1); got != 4 {
+		t.Errorf("a run with no lookup ports of its own reads %d at once, want the 4 it was asked", got)
+	}
+}
+
+func TestRunner_SpreadsTheLookupsOfAJobsLastQueryOverTheRoom(t *testing.T) {
+	// The whole path: a job of one query has handed it out as soon as a thread
+	// takes it, so its page's eight hidden addresses are read together rather
+	// than four at a time.
+	var now, most atomic.Int64
+	o := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/goto"):
+			n := now.Add(1)
+			for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+			}
+			time.Sleep(60 * time.Millisecond)
+			now.Add(-1)
+			w.Header().Set("Location", "https://example.com"+r.URL.Path)
+			w.WriteHeader(http.StatusFound)
+		case strings.HasPrefix(r.URL.Path, "/search"):
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			body := `<!doctype html><html><body><div id="search">`
+			for i := 0; i < 8; i++ {
+				body += fmt.Sprintf(`<div data-snc="x"><a href="/goto/%d?url=CAESXAHuR6pN7OGc" data-ved="2"><h3>Title %d</h3></a>`+
+					`<cite>example%d.com</cite></div>`, i, i, i)
+			}
+			_, _ = io.WriteString(w, body+`</div></body></html>`)
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			_, _ = io.WriteString(w, `<!doctype html><html><body><div id="main"></div></body></html>`)
+		}
+	}))
+	t.Cleanup(o.Close)
+	searching := poolFacing(t, o.Listener.Addr().String(), 1)
+	reading := poolFacing(t, o.Listener.Addr().String(), 1)
+
+	r := &Runner{Pool: searching.Pool, Threads: 1,
+		Addresses: func(context.Context) (*blanktrail.Pool, error) { return reading.Pool, nil }}
+	rep := r.Run(t.Context(), Job{Queries: usQueries(1), Pages: 1, Addresses: true})
+	if rep.Done != 1 {
+		t.Fatalf("Done=%d, want 1 (failed %d)", rep.Done, rep.Failed)
+	}
+	if got := most.Load(); got < 6 {
+		t.Errorf("the last query's eight hidden addresses were read %d at once, want most of them together", got)
 	}
 }

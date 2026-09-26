@@ -84,6 +84,9 @@ func (r *Runner) resolveQuery(ctx context.Context, res *QueryResult, workers int
 	if workers < 1 {
 		workers = 1
 	}
+	settling := r.settling.Add(1)
+	defer r.settling.Add(-1)
+	workers = r.lookupWorkers(workers, len(todo), settling)
 
 	// Asked here and not per attempt: this is the first place that knows an
 	// address really has to be read, and one ask a query is what lets whoever
@@ -190,6 +193,27 @@ func (r *Runner) readAddress(ctx context.Context, pool *blanktrail.Pool, res *Qu
 	}
 	return total, nil
 }
+
+// lookupWorkers is how many of one query's addresses are read at once.
+//
+// resolveWorkers, until every query of the job has gone to a thread. After that
+// the queries still settling are the last of the job, and the ports the
+// lookups have — a hundred at most, ten lookups a port — stand mostly idle
+// while each of those queries reads its ninety links four at a time: on job 20
+// of 2026-09-26 the last minute and a half was exactly that, 20 to 48 seconds a
+// query. The user's rule for it: the rest of the lookups spread over all the
+// room there is, shared evenly among the queries still settling.
+func (r *Runner) lookupWorkers(workers, links int, settling int64) int {
+	if r.Addresses == nil || !r.handedOut.Load() || settling < 1 {
+		return workers
+	}
+	return max(workers, min(links, lookupRoom/int(settling)))
+}
+
+// lookupRoom is how many lookups the ports a job has for them carry at once at
+// the most: a hundred ports, the ceiling the command opens the set to, of
+// lookupsAtOnce each.
+const lookupRoom = 100 * lookupsAtOnce
 
 // portFor is a port to read one link through.
 //
