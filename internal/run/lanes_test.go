@@ -230,7 +230,7 @@ func TestLanes_GiveThePortBackWhenTheLastLookupLeaves(t *testing.T) {
 	}
 }
 
-func TestLanes_RenewAPortAfterFiveHundredLookups(t *testing.T) {
+func TestLanes_RenewAPortAfterThreeThousandLookups(t *testing.T) {
 	// Every so often by the number of lookups, the user's rule. Counted by the
 	// port across every lane it has been, and started again once it is renewed.
 	d := newDestination(t)
@@ -248,7 +248,7 @@ func TestLanes_RenewAPortAfterFiveHundredLookups(t *testing.T) {
 	}
 	// Ten at a time for most of them, so the lookups that join a port count as
 	// well as the ones that take it.
-	for round := 0; round < 49; round++ {
+	for round := 0; round < 299; round++ {
 		var ten []*lane
 		for i := 0; i < 10; i++ {
 			ten = append(ten, one())
@@ -261,10 +261,10 @@ func TestLanes_RenewAPortAfterFiveHundredLookups(t *testing.T) {
 		one().leave(t.Context())
 	}
 	if got := f.Pool.Stats().ProfileRotations; got != 0 {
-		t.Fatalf("the port was renewed %d times in 499 lookups, want not before five hundred", got)
+		t.Fatalf("the port was renewed %d times in 2999 lookups, want not before three thousand", got)
 	}
 	last := one()
-	// The five hundredth is on the port: nothing more joins it.
+	// The three thousandth is on the port: nothing more joins it.
 	ctx, cancel := context.WithTimeout(t.Context(), 3*lookupsLookAgain)
 	defer cancel()
 	if l, err := ls.take(ctx, f.Pool, widened(&asked)); err == nil {
@@ -273,7 +273,7 @@ func TestLanes_RenewAPortAfterFiveHundredLookups(t *testing.T) {
 	}
 	last.leave(t.Context())
 	if got := f.Pool.Stats().ProfileRotations; got != 1 {
-		t.Errorf("the port was given %d new fingerprints after five hundred lookups, want one", got)
+		t.Errorf("the port was given %d new fingerprints after three thousand lookups, want one", got)
 	}
 	one().leave(t.Context())
 	if got := f.Pool.Stats().ProfileRotations; got != 1 {
@@ -281,7 +281,7 @@ func TestLanes_RenewAPortAfterFiveHundredLookups(t *testing.T) {
 	}
 }
 
-func TestLanes_RenewAPortThatHasStoodFiveMinutes(t *testing.T) {
+func TestLanes_RenewAPortThatHasStoodTwentyMinutes(t *testing.T) {
 	// And every so often by time: a port on a quiet run is not left on one
 	// address for the length of it.
 	d := newDestination(t)
@@ -295,13 +295,13 @@ func TestLanes_RenewAPortThatHasStoodFiveMinutes(t *testing.T) {
 		t.Fatalf("take: %v", err)
 	}
 	l.leave(t.Context())
-	at = at.Add(4 * time.Minute)
+	at = at.Add(19 * time.Minute)
 	if l, err = ls.take(t.Context(), f.Pool, widened(&asked)); err != nil {
 		t.Fatalf("take: %v", err)
 	}
 	l.leave(t.Context())
 	if got := f.Pool.Stats().ProfileRotations; got != 0 {
-		t.Fatalf("the port was renewed %d times after four minutes, want not before five", got)
+		t.Fatalf("the port was renewed %d times after nineteen minutes, want not before twenty", got)
 	}
 	at = at.Add(time.Minute)
 	if l, err = ls.take(t.Context(), f.Pool, widened(&asked)); err != nil {
@@ -309,7 +309,7 @@ func TestLanes_RenewAPortThatHasStoodFiveMinutes(t *testing.T) {
 	}
 	l.leave(t.Context())
 	if got := f.Pool.Stats().ProfileRotations; got != 1 {
-		t.Errorf("the port was given %d new fingerprints after five minutes on its address, want one", got)
+		t.Errorf("the port was given %d new fingerprints after twenty minutes on its address, want one", got)
 	}
 }
 

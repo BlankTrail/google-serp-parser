@@ -247,14 +247,19 @@ const lookupsAtOnce = 10
 // the user's rule for these ports, in place of any rest — after a failure, and
 // periodically by the number of lookups or by time.
 //
-// Five hundred is about a minute of a busy port's work at the pace of the runs
-// measured here, and five minutes bounds a port on a quiet one. Neither is a
-// limit Google was seen to have — no lookup through the lookup ports was ever
-// refused, at up to 901 a minute a port — so they are where to start and what
-// to change when a measurement says otherwise.
+// It was five hundred lookups or five minutes, and on job 20 of 2026-09-26 that
+// was a new address about once a minute a port: most of the list carries
+// nothing, so a port moved that often kept landing on a dead address, and the
+// lookup ports met 1678 addresses that did not answer against 124 on the job
+// before — each a lookup lost for fifteen seconds. The user's call: the
+// address is still changed, so that it does not burn, but many times less
+// often. Three thousand is about six minutes of a busy port's work at that
+// pace, and twenty minutes bounds a port on a quiet run. Neither is a limit
+// Google was seen to have — no lookup through the lookup ports was ever
+// refused, at up to 901 a minute a port.
 const (
-	renewAfterLookups = 500
-	renewAfterTime    = 5 * time.Minute
+	renewAfterLookups = 3000
+	renewAfterTime    = 20 * time.Minute
 )
 
 // lanes shares the ports the hidden addresses are read through.
