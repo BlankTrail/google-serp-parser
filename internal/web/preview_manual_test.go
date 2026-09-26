@@ -95,7 +95,7 @@ func TestWritePreviews(t *testing.T) {
 
 	id, err := v.Enqueue(store.JobSpec{
 		Name: "ai photography", Pages: 10, Country: "us", Language: "en",
-		Threads: 100, Ports: 3, Tries: 50, Cooldown: 5 * time.Second,
+		Threads: 100, Ports: 1, Tries: 50, Cooldown: 30 * time.Second, RestUpTo: time.Minute,
 		UniqueBy: store.UniqueURL, ProfileID: list,
 	}, []string{"midjourney", "stable diffusion", "ai photography", "text to image"})
 	if err != nil {

@@ -9,9 +9,9 @@ interface, CSV/JSON exports, and a SerpApi-compatible HTTP API. Powered by
 **Русская версия: [README.ru.md](README.ru.md)**
 
 > ⚠️ **This program only works through [BlankTrail Proxy](https://blanktrail.com) with [Challenge Breaker](https://blanktrail.com/#features)** — a hard
-> requirement, not a recommendation. **The solver passes reCAPTCHA:** 721 of 821
-> challenges solved on a live run, 88 per cent, and the identity carries on
-> working afterwards. Everything else is set up in this program, not in that one.
+> requirement, not a recommendation. **The solver passes reCAPTCHA:** 1899 of 1936
+> challenges solved on a live run of 8514 queries, 98 per cent, and the session
+> carries on working afterwards. Everything else is set up in this program, not in that one.
 
 ![The status screen: a job in flight, what it has settled, the pool and the queue](assets/screenshots/status-en.png)
 
@@ -259,16 +259,15 @@ before you start it.
 | Pages per query | Depth of pagination. One page is the first ten results |
 | Result page | Desktop or mobile |
 | Dropping duplicates | Keep everything, one row per URL, or one per host |
-| Threads | How many phrases are taken at once |
-| Ports per thread | Identities opened per thread. Threads × ports is the size of the pool. One by default: a thread works its other walks through the pause it owes one identity, so a second buys no overlap, and every identity in play is one more the licensed challenge solver has to carry |
-| Use the whole proxy list | A port of its own for every address the list can spare, opened as the run asks for identities, until the list or the service runs out. Ports per thread means nothing while it is ticked |
+| Browser, system, version | The fingerprint the job's sessions wear. Nothing chosen spreads them over every browser and system the program knows, at the newest releases |
+| Proxy profile | Which set of exits the job goes out through |
+| Threads | How many phrases are taken at once. Past a hundred they start five a second rather than all at once |
 | Tries per phrase | How many identities one phrase may be carried to before it is called failed |
-| Pause on one identity, seconds | The gap before an identity is asked again. Five by default — an identity asked every two seconds answered a dozen requests before it was challenged, one asked every five around forty. Nought means nought |
+| Session rest, seconds — from, to | How long one session rests between two of its requests, drawn afresh each time between the two. **Thirty to sixty** by default: on the same 8514 queries it was both faster and cheaper in checks than sixty to a hundred and twenty or fifteen to thirty. The thread does not wait with it — it carries another session meanwhile |
 
-The line under the form says what pool the job will run on and what it will
-cost. Read it once before pressing anything: threads × ports is how many
-identities BlankTrail will be asked to open, and that number wants to fit both
-your address list and your Challenge Breaker process count.
+Threads decide how many sessions the run keeps in work at once; a session new to the run pays
+one check to Challenge Breaker, and the solver's processes are what your
+licence counts.
 
 ![The new job form: kind of job, depth, country, what to keep, and the pool it runs on](assets/screenshots/new-job-en.png)
 
@@ -277,20 +276,30 @@ your address list and your Challenge Breaker process count.
 ### 7. While it runs, and when it is done
 
 The **Status** screen follows the job: queries done and left, the current URL,
-queries and pages a minute, the pool behind it and how many threads are waiting
-for an identity. The job can be stopped on a button and carried on from where it
-stopped.
+queries and pages a minute — the average of the last five minutes — and the
+pool behind it.
 
-The first minutes are the slow ones. Every identity pays for one challenge the
-first time it is used, so a cold pool climbs for five to ten minutes and then
-settles — a run that starts slowly is not a run that is broken.
+A job's own page carries its controls under the summary: **Stop**, which is
+answered at once (the job reads *stopping* until it has let go of its
+sessions), carrying on from where it stopped, and the **export**. Beside the
+counts it keeps the **captchas** the job has cost over all its runs; below them
+the run's **proxy and session statistics** — sessions working and resting,
+Google's checks per thousand pages, what the solver has in hand, and where the
+threads are standing.
 
-When it is done, the job's own page holds the counts, the settings it ran with,
-and the results, with **CSV** and **JSON Lines** links beside them. A job that
-ended with failures can be told to try the failed phrases again rather than
+The first minutes are the slow ones. Every session that rested between jobs is
+checked again on its first request, so a run climbs for ten to twenty minutes
+and then settles — a run that starts slowly is not a run that is broken. At the
+end the last queries are finished without the rest, so a job does not linger on
+its tail.
+
+The **Export** tab lays the job's findings out field by field before they are
+downloaded: which parts, which columns in which order, separators and line
+ends, a byte-order mark for Excel — with a preview of how the file begins. A job
+that ended with failures can be told to try the failed phrases again rather than
 started over.
 
-![A job in flight: its counts, the settings it is running with, the export links and the newest results](assets/screenshots/job-en.png)
+![A job at a hundred threads: its counts, its sessions, captchas per thousand pages, the settings it runs with and the newest results](assets/screenshots/job-en.png)
 
 Prefer to build it yourself? See [Building from source](#-building-from-source).
 
@@ -298,6 +307,35 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 ---
 
 ## 📜 Recent changes
+
+### 0.3.0
+
+- **A run goes through the program's own sessions** — a Google identity kept
+  with its cookies, fingerprint, address and TLS tickets, written down after
+  every page. The pages of a query belong to the session that opened it, and a
+  session rests thirty seconds to a minute between two of its requests while the
+  thread carries another one.
+- **A job that keeps addresses runs at full speed.** Google hides a result's
+  address behind an encrypted `/goto` link on most of the list — nine to a
+  page. A port read for them carries ten at once now, warmest first and never
+  resting: **1105 pages a minute** at a hundred threads against 821, the same job
+  in 33 minutes against 48. Results linked through Google Translate are read out
+  of the translator's link.
+- **The end of a job does not linger**: the last queries are asked without the
+  rest and their addresses read with all the room there is — the last hundred
+  went from seven and a half minutes to one and a half.
+- **Big runs**: past a hundred threads they start five a second, and the brake
+  that slows a run while the solver is behind tightens and eases by steps.
+- **An export tab**: a job's file laid out field by field, with a preview.
+- **A first hop**: a list profile can reach its addresses through a SOCKS5 proxy
+  or a BlankTrail gateway, and its check takes the same road.
+- **VDNS and its resolver** are offered as BlankTrail's own interface offers
+  them, in the same order and words.
+- **BlankTrail 1.4.987**: its 525 *origin handshake failed* is read as the
+  handshake, not the address, and no address is blamed for the TLS defects the
+  service has mended.
+
+### Before
 
 - **A light interface, and a dark one by choice.** The interface is light, and
   the dark is a switch in the header — sun and moon, the knob on the side in use
@@ -460,6 +498,12 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 - Pagination to any depth; country and interface language per job.
 - Desktop and mobile result pages.
 - Jobs queue and run one at a time, on ports that stay open between them.
+- **Sessions of its own**: Google identities kept with their cookies, their
+  fingerprint and the address they go out through, rested between requests and
+  written down as they go. A query's pages are walked by the session that opened
+  it.
+- Hidden result addresses — Google's encrypted `/goto` links — read on ports of
+  their own, ten lookups to a port, while the search goes on.
 - A job stops on a button and **carries on from exactly where it stopped**.
 - Every result is written down as it lands, so a run that dies keeps everything
   it had established.
@@ -484,13 +528,9 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   making them has as many as its threads can keep busy: the speed on the screen
   is then the speed the job runs at rather than one it is still climbing to.
 - The same page reads Google's checks: how many this job has been made to pass,
-  how many the solver is working on, how many are waiting for it, and how many
-  requests the run gets between one check and the next. That last one is counted
-  on sessions Google has already answered from the address they are asking from
-  — a session being let in, or one arriving somewhere new, pays a check whatever
-  pace it is asked at. On a run that has stopped taking sessions on, checks
-  oftener than one in seven of those requests say the sessions are being asked
-  again before they have rested, which the page says.
+  how many the solver is working on, how many are waiting for it, and **how many
+  checks each thousand pages have cost** the run so far — right from its first
+  minute, the checks a fresh session pays to be let in included.
 - And it says **where its threads are standing**: every one of them is in
   exactly one of six places at each instant — waiting for a port, taking a
   session, held back by the brake, asking Google, giving the session back,
@@ -536,6 +576,11 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 - Formats accepted: `host:port`, `host:port:user:password`,
   `user:password:host:port`, `user:password@host:port`. A scheme in front
   (`socks5://`, `http://`) is optional; socks5 is assumed.
+- A **first hop** in front of every address of a list — a SOCKS5 proxy or a
+  BlankTrail gateway — for a list that can only be reached from somewhere in
+  particular.
+- **VDNS and the resolver** set per profile, offered as BlankTrail's own
+  interface offers them.
 - **VPN gateways held in BlankTrail** as a third source. The program asks the
   service what it holds and lays the configurations out by the subscription
   they arrived with; tick one, tick a whole subscription, or tick the lot. Each
@@ -550,9 +595,8 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 - **Threads per proxy**, one by default — and worth raising to two or three on a
   long address list, where the spare identities are asked less often and last
   longer. On a short list of gateways it is the other way: more identities
-  behind one exit is more for that exit to answer for.
-- **Threads per proxy**, one by default. A unique `ip:port` is one upstream and
-  so is one gateway, even where several ports sit on the same machine. Threads
+  behind one exit is more for that exit to answer for. A unique `ip:port` is one
+  upstream and so is one gateway, even where several ports sit on the same machine. Threads
   that find no free upstream wait their turn rather than doubling up on one,
   and the status screen says how many are waiting.
 - Failures counted apart, because the remedy differs — a dead address, a proxy
@@ -582,6 +626,9 @@ measured to it:
 ### Export and API
 
 - **CSV**, **JSON Lines**, **TXT** — results, ads and related queries.
+- An **export tab** that lays a job's file out field by field — parts, columns,
+  order, separators, line ends, a byte-order mark — with a preview. TXT writes a
+  single field one per line and nothing else.
 - Deduplication by URL or by host, or none.
 - HTTP API under `/api/v1/`: set a job going, watch it, stop it, resume it.
 - Streaming endpoints: a job's results and a site's history, one JSON object
@@ -624,11 +671,10 @@ measured to it:
 | Setting | What it is |
 |---|---|
 | Proxy profile | Which set of exits the job goes out through. Changeable afterwards on the job's own page |
-| Threads | Queries taken at once |
-| Ports per thread | Identities opened per thread. Threads × ports = pool size. One by default — see the settings table above for why |
-| Use the whole proxy list | A port of its own for every address the list can spare, until the list or the service runs out. Ports per thread means nothing while it is ticked |
+| Threads | Queries taken at once. Past a hundred they start five a second |
 | Tries per phrase | How many identities one phrase may be taken to |
-| Pause on one identity, seconds | Gap before an identity is asked again. Five by default: an identity asked every two seconds answered twelve requests before it was challenged, one asked every five around forty. **Nought means none** |
+| Session rest, seconds — from, to | How long one session rests between two of its requests. Thirty to sixty by default |
+| Browser, system, version | The fingerprint the job's sessions wear |
 | Pages per query | Depth of pagination |
 | Country, language | Two-letter codes, e.g. `de` |
 | Deduplication | Keep everything, one row per URL, or one per host |
@@ -847,28 +893,32 @@ project does, here and in a fork's own release workflow.
 
 ## 📈 Performance
 
-Measured on a live backconnect list of 15 000 addresses — ordinary datacentre
-proxies of middling quality, roughly one address in twelve answering at any
-moment — with 100 threads and 300 identities:
+Measured on a live list of 15 000 addresses — ordinary datacentre proxies of
+middling quality, about one in twelve answering at any moment — through
+BlankTrail 1.4.987, on 8514 queries up to ten pages deep with the result
+addresses kept:
 
-| | |
-|---|---|
-| Queries a minute, sustained | **500–800** |
-| Queries a minute, peak | **1 500** |
-| Queries answered | **99%** |
-| Attempts on the wire per query | 1.0 |
-| Failed attempts, warmed pool | 7% |
-| Time a thread spends waiting for an identity | 0 |
+| | 100 threads | 300 threads |
+|---|---|---|
+| Pages a minute, once the start has passed | **~1100** | **~1570** |
+| Pages a minute, the whole job | 890–950 | 1235 |
+| Whole job, 8514 queries | 33–49 min | 26 min |
+| Captchas per 1000 pages, the whole job | 30–38 | 38 |
+| Challenges solved | 98% | — |
+| Hidden addresses read, per page | ~9 | ~9 |
 
-That is the whole point of the arrangement: the list is not a good one, and it
-does not have to be. A dead address costs about two seconds and the next
-request goes through another; an identity that has answered keeps answering,
-and a challenge is paid for once rather than on every request.
+How long the whole job takes depends mostly on how deep Google lets the queries
+go: the same list came back at 3.7 pages a query on one run and 5.1 on another.
 
-A cold pool starts slow — every identity pays for its one challenge — and
-climbs for the first five to ten minutes. That is the shape to expect, not a
-fault. Beyond that, what these numbers depend on is your address list and your
-BlankTrail licence.
+The start is the slow part. Every session that rested between jobs is checked
+again on its first request, so a run climbs for ten to twenty minutes and then
+settles. The end is not: the last queries are finished without the rest.
+
+What limits it past three hundred threads was not this program. At five hundred
+the machine running BlankTrail had every core busy — about sixteen of them on
+the challenge solver — and five hundred threads were slower than three hundred.
+What these numbers depend on beyond that is your address list, your BlankTrail
+licence and the machine it runs on.
 
 ---
 
