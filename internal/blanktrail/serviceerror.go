@@ -20,6 +20,24 @@ import (
 // fifteen thousand lost over a thousand addresses to the bench in an hour.
 const serviceErrorHeader = "X-BlankTrail-Error"
 
+// upstreamDetailHeader is where the service says, in its own words, what it met
+// on the way to the address when it could not carry a request.
+const upstreamDetailHeader = "X-BlankTrail-Upstream-Detail"
+
+// ErrResumeDefect is the service's own TLS failing to resume a session with the
+// far end: its uTLS cannot reprocess a resumed session's key when the server
+// answers with a HelloRetryRequest, and it says so as an address it could not
+// reach. The address answered. On job 20 of 2026-09-26 this was 1263 of the
+// 2359 such answers the lookup ports got, every one of them blamed on an
+// address that was alive; the defect is in the service and is being mended
+// there. Until it is, the address keeps its standing, and the port's own TLS
+// state is what wants clearing: every attempt through it carries the same
+// ticket.
+var ErrResumeDefect = errors.New("blanktrail: the service could not resume its TLS session; the address is not to blame")
+
+// resumeDefectDetail is the service's words for it.
+const resumeDefectDetail = "reprocessing of PSK"
+
 // ErrUpstreamUnreachable is the service saying it could not reach the address
 // this port stands on. Nothing went out, so nothing about it is the session's
 // or the query's — what it is about is the address.
@@ -71,6 +89,8 @@ const (
 type ServiceError struct {
 	// Reason is the machine-readable word from the header.
 	Reason string
+	// Detail is what the service met on the way, where it said.
+	Detail string
 	// Status is what the answer came with, for a reader taking it apart.
 	Status int
 }
@@ -84,7 +104,9 @@ func (e *ServiceError) Error() string {
 func (e *ServiceError) Is(target error) bool {
 	switch target {
 	case ErrUpstreamUnreachable:
-		return e.Reason == unreachableReason
+		return e.Reason == unreachableReason && !e.resumeDefect()
+	case ErrResumeDefect:
+		return e.resumeDefect()
 	case ErrChainUnreachable:
 		return e.Reason == chainUnreachableReason
 	case ErrSolverWorking:
@@ -116,6 +138,12 @@ func (e *ServiceError) Is(target error) bool {
 // a phrase that did reach Google left as one that never had.
 func (e *ServiceError) ChallengeUnsolved() bool { return e.Reason == solverFailedReason }
 
+// resumeDefect says the answer is the service's TLS defect rather than the
+// address: see ErrResumeDefect.
+func (e *ServiceError) resumeDefect() bool {
+	return e.Reason == unreachableReason && strings.Contains(e.Detail, resumeDefectDetail)
+}
+
 func serviceRefusal(resp *http.Response) (*ServiceError, bool) {
 	if resp == nil {
 		return nil, false
@@ -124,5 +152,5 @@ func serviceRefusal(resp *http.Response) (*ServiceError, bool) {
 	if reason == "" {
 		return nil, false
 	}
-	return &ServiceError{Reason: reason, Status: resp.StatusCode}, true
+	return &ServiceError{Reason: reason, Detail: resp.Header.Get(upstreamDetailHeader), Status: resp.StatusCode}, true
 }

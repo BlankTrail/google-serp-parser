@@ -230,6 +230,15 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		if refusal, ours := serviceRefusal(resp); ours {
 			drainAndClose(resp)
 			switch {
+			case errors.Is(refusal, ErrResumeDefect):
+				// The service's own TLS could not resume its session with the far
+				// end. The address answered, so it keeps its standing and the port
+				// its address; and every attempt through this port carries the
+				// same ticket, so asking again here only meets it again. The
+				// caller takes it elsewhere.
+				t.rem.failed(FailureTransport)
+				return nil, refusal
+
 			case errors.Is(refusal, ErrUpstreamUnreachable):
 				// The address could not be reached. That is the address's, and
 				// it is answered the way a request that never arrived is: leave

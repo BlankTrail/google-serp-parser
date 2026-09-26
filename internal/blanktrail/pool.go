@@ -2134,6 +2134,26 @@ func (l *Lease) Renew(ctx context.Context) error {
 	return l.pool.rotateProfile(ctx, l.pt.num)
 }
 
+// Refresh puts the port on the address it already stands on, which is how the
+// service is told to drop what it holds for the port: its pooled connections
+// and its TLS tickets. It is the remedy for ErrResumeDefect, where the address
+// is alive and the ticket the port keeps is what fails. A port on a gateway is
+// left as it is: a gateway is not set this way.
+func (l *Lease) Refresh(ctx context.Context) error {
+	if l.released {
+		return nil
+	}
+	eg := l.pt.egress()
+	if eg.Upstream == "" {
+		return nil
+	}
+	if err := l.pool.cl.SetUpstream(ctx, l.pt.num, eg.Upstream); err != nil {
+		return err
+	}
+	l.pt.base.CloseIdleConnections()
+	return nil
+}
+
 // Reject tells the pool that this port produced an answer the caller cannot
 // use, even though the request carrying it succeeded.
 //

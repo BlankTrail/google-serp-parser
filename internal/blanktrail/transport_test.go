@@ -1007,3 +1007,47 @@ func TestLadder_TellsTheTraceWhatTheServiceCalledIt(t *testing.T) {
 		}
 	}
 }
+
+func TestLadder_LeavesTheAddressAloneWhenTheServicesOwnTLSCouldNotResume(t *testing.T) {
+	// The service says it could not reach the address, and says why: its own
+	// uTLS cannot resume a session when the server answers with a
+	// HelloRetryRequest. The address answered. On job 20 this was 1263 of the
+	// 2359 such answers the lookup ports got, every one of them blamed on a live
+	// address. And every attempt through the port carries the same ticket, so
+	// asking again here only meets it again.
+	h := http.Header{}
+	h.Set(serviceErrorHeader, "upstream_unreachable")
+	h.Set(upstreamDetailHeader, "tls: uTLS does not support reprocessing of PSK key triggered by HelloRetryRequest")
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(523, h, "the service could not carry this")}}
+	rem := &fakeRemedy{retries: 3, addresses: 5}
+	l := &ladder{rt: rt, port: 20104, rem: rem}
+
+	_, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if !errors.Is(err, ErrResumeDefect) {
+		t.Fatalf("RoundTrip returned %v, want the service's TLS defect", err)
+	}
+	if errors.Is(err, ErrUpstreamUnreachable) {
+		t.Error("the service's TLS defect was read as the address being unreachable")
+	}
+	if rem.markedDead != 0 || rem.rotations != 0 {
+		t.Errorf("the address was marked dead %d times and the port moved %d, want neither", rem.markedDead, rem.rotations)
+	}
+	if rt.calls != 1 {
+		t.Errorf("the request was put on the wire %d times through the same ticket, want once", rt.calls)
+	}
+
+	// Any other detail is still the address.
+	other := http.Header{}
+	other.Set(serviceErrorHeader, "upstream_unreachable")
+	other.Set(upstreamDetailHeader, "socks connect: i/o timeout")
+	rt2 := &fakeRT{steps: []func() (*http.Response, error){respond(523, other, ""), respond(200, nil, "the page")}}
+	rem2 := &fakeRemedy{retries: 3, addresses: 5}
+	resp, err := (&ladder{rt: rt2, port: 20105, rem: rem2}).RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp.Body.Close()
+	if rem2.markedDead != 1 {
+		t.Errorf("an address that timed out was marked dead %d times, want once", rem2.markedDead)
+	}
+}

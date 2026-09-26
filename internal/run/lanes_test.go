@@ -489,3 +489,85 @@ func TestRunner_SpreadsTheLookupsOfAJobsLastQueryOverTheRoom(t *testing.T) {
 		t.Errorf("the last query's eight hidden addresses were read %d at once, want most of them together", got)
 	}
 }
+
+func TestLanes_ClearAPortsTLSOnTheSameAddressWhenTheServiceCouldNotResume(t *testing.T) {
+	// The service's own TLS defect is not the address's: nothing is blamed and
+	// the port keeps its address. It takes no further lookup, since every
+	// attempt through it carries the same ticket, and once its lookups are
+	// done the service is told to drop what it holds for it.
+	d := newDestination(t)
+	f := poolFacing(t, d.addr(), 1)
+	ls := &lanes{}
+	var asked atomic.Int64
+
+	a, err := ls.take(t.Context(), f.Pool, widened(&asked))
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	b, err := ls.take(t.Context(), f.Pool, widened(&asked))
+	if err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	a.tlsFailed(t.Context())
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*lookupsLookAgain)
+	defer cancel()
+	if l, err := ls.take(ctx, f.Pool, widened(&asked)); err == nil {
+		l.leave(t.Context())
+		t.Fatal("a lookup joined a port whose TLS the service could not resume")
+	}
+	port := a.lease.Port()
+	before := f.Fake.UpstreamOf(port)
+	puts := func() int {
+		n := 0
+		for _, r := range f.Fake.Requests() {
+			if r.Method == "PUT" && strings.HasSuffix(r.Path, fmt.Sprintf("/%d/upstream", port)) {
+				n++
+			}
+		}
+		return n
+	}
+	was := puts()
+	a.leave(t.Context())
+	b.leave(t.Context())
+	if got := puts() - was; got != 1 {
+		t.Errorf("the service was told to drop what it holds %d times, want once", got)
+	}
+	if after := f.Fake.UpstreamOf(port); after != before {
+		t.Error("the port was moved off an address that answered")
+	}
+	if st := f.Pool.Stats(); st.Rejections != 0 || st.ProfileRotations != 0 {
+		t.Errorf("%d refusals and %d new fingerprints for the service's own defect, want none", st.Rejections, st.ProfileRotations)
+	}
+}
+
+func TestRunner_ReadsTheAddressElsewhereWithoutBlamingAnyoneForTheServicesTLS(t *testing.T) {
+	// The whole path: the first lookup meets the service's TLS defect, the
+	// link is read on the next attempt, and nobody is blamed for it.
+	var asked atomic.Int64
+	o := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if asked.Add(1) == 1 {
+			w.Header().Set("X-BlankTrail-Error", "upstream_unreachable")
+			w.Header().Set("X-BlankTrail-Upstream-Detail", "tls: uTLS does not support reprocessing of PSK key triggered by HelloRetryRequest")
+			w.WriteHeader(523)
+			return
+		}
+		w.Header().Set("Location", "https://example.com"+r.URL.Path)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(o.Close)
+	searching := poolFacing(t, o.Listener.Addr().String(), 1)
+	reading := poolFacing(t, o.Listener.Addr().String(), 2)
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages:     []google.SERP{{Origin: o.URL, Results: []google.Result{unread("/goto/one", "example.com")}}},
+	}}}
+	r := &Runner{Pool: searching.Pool, Threads: 1,
+		Addresses: func(context.Context) (*blanktrail.Pool, error) { return reading.Pool, nil }}
+	if got := r.ResolveLinks(t.Context(), &rep, 1); got.Resolved != 1 {
+		t.Fatalf("resolved %d of 1: %v", got.Resolved, got.Errs)
+	}
+	if st := reading.Pool.Stats(); st.Rejections != 0 || st.EgressRotations != 0 {
+		t.Errorf("%d refusals and %d address changes for the service's own defect, want none", st.Rejections, st.EgressRotations)
+	}
+}

@@ -115,3 +115,42 @@ func TestLease_RenewGivesThePortAnotherAddressAndAnotherFingerprint(t *testing.T
 			st.EgressRotations, st.ProfileRotations)
 	}
 }
+
+func TestLease_RefreshKeepsTheAddressAndTellsTheServiceToDropWhatItHolds(t *testing.T) {
+	// The remedy for the service's TLS defect: the address is alive, and what
+	// fails is the ticket the port keeps. Setting the port on the address it
+	// already stands on is how the service is told to drop its tickets and its
+	// pooled connections.
+	f := fakebt.New(t)
+	at := time.Unix(1000, 0)
+	p := threePortsAt(t, f, &at, true)
+
+	l, err := p.TryAcquire(t.Context())
+	if err != nil {
+		t.Fatalf("TryAcquire: %v", err)
+	}
+	defer l.Release()
+	before := f.UpstreamOf(l.Port())
+	puts := func() int {
+		n := 0
+		for _, r := range f.Requests() {
+			if r.Method == "PUT" && strings.HasSuffix(r.Path, "/"+strconv.Itoa(l.Port())+"/upstream") {
+				n++
+			}
+		}
+		return n
+	}
+	was := puts()
+	if err := l.Refresh(t.Context()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := puts() - was; got != 1 {
+		t.Errorf("the service was told %d times, want once", got)
+	}
+	if after := f.UpstreamOf(l.Port()); after != before {
+		t.Error("the port was moved to another address")
+	}
+	if st := p.Stats(); st.EgressRotations != 0 || st.ProfileRotations != 0 {
+		t.Errorf("the pool counts %d address changes and %d fingerprint changes, want none", st.EgressRotations, st.ProfileRotations)
+	}
+}

@@ -187,7 +187,12 @@ func (r *Runner) readAddress(ctx context.Context, pool *blanktrail.Pool, res *Qu
 			// stayed on Google is the same verdict from the other direction —
 			// this identity is being sent to a challenge — and nothing below
 			// this layer can see it, because the request succeeded.
-			held.refuse(ctx)
+			if slices.ContainsFunc(got.Errs, func(err error) bool { return errors.Is(err, blanktrail.ErrResumeDefect) }) {
+				// The service's TLS, not the address: see ErrResumeDefect.
+				held.tlsFailed(ctx)
+			} else {
+				held.refuse(ctx)
+			}
 		}
 		held.leave(ctx)
 	}
@@ -357,9 +362,13 @@ type lane struct {
 	from  *lanes
 	pool  *blanktrail.Pool
 	lease *blanktrail.Lease
-	// users and shut are the register's, read and written under its lock.
+	// users, shut and stale are the register's, read and written under its
+	// lock. Shut is a port a lookup came back empty from; stale is one whose
+	// TLS state the service could not resume with, and which wants it cleared
+	// rather than another address.
 	users int
 	shut  bool
+	stale bool
 	// blaming keeps two lookups from refusing the same address at once: a
 	// refusal may move the port, which is a call to the service.
 	blaming sync.Mutex
@@ -420,7 +429,7 @@ func (ls *lanes) join(pool *blanktrail.Pool) *lane {
 	defer ls.mu.Unlock()
 	var best *lane
 	for _, l := range ls.open {
-		if l.pool != pool || l.shut || l.users >= lookupsAtOnce || ls.dueLocked(l) {
+		if l.pool != pool || l.shut || l.stale || l.users >= lookupsAtOnce || ls.dueLocked(l) {
 			continue
 		}
 		if best == nil || l.users < best.users {
@@ -448,6 +457,19 @@ func (l *lane) refuse(ctx context.Context) {
 	l.blaming.Unlock()
 }
 
+// tlsFailed says the service's own TLS failed on this port: the address keeps its
+// standing, no further lookup joins the lane, and once the lookups on it are
+// done the port's TLS state is cleared on the same address.
+func (l *lane) tlsFailed(ctx context.Context) {
+	if l.from == nil {
+		_ = l.lease.Refresh(ctx)
+		return
+	}
+	l.from.mu.Lock()
+	l.stale = true
+	l.from.mu.Unlock()
+}
+
 // leave ends one lookup's place on the lane. The last one out gives the port
 // back — renewed first, where one of its lookups came back empty or it has
 // carried or stood enough.
@@ -460,21 +482,25 @@ func (l *lane) leave(ctx context.Context) {
 	ls.mu.Lock()
 	l.users--
 	last := l.users == 0
-	renew := false
+	renew, refresh := false, false
 	if last {
 		ls.open = slices.DeleteFunc(ls.open, func(o *lane) bool { return o == l })
 		if renew = l.shut || ls.dueLocked(l); renew {
 			ls.used[portOf{l.pool, l.lease.Port()}] = &portUse{since: ls.clock()}
 		}
+		refresh = !renew && l.stale
 	}
 	ls.mu.Unlock()
 	if !last {
 		return
 	}
-	if renew {
+	switch {
+	case renew:
 		// A port that could not be moved stays where it is: the pool marks
 		// what it could not do, and the next failure asks again.
 		_ = l.lease.Renew(ctx)
+	case refresh:
+		_ = l.lease.Refresh(ctx)
 	}
 	l.lease.Release()
 }
