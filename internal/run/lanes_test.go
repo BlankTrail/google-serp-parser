@@ -571,3 +571,36 @@ func TestRunner_ReadsTheAddressElsewhereWithoutBlamingAnyoneForTheServicesTLS(t 
 		t.Errorf("%d refusals and %d address changes for the service's own defect, want none", st.Rejections, st.EgressRotations)
 	}
 }
+
+func TestRunner_BlamesNoAddressForAHandshakeWithTheSiteThatFailed(t *testing.T) {
+	// BlankTrail 1.4.981's own answer for an address that carried the
+	// connection when the handshake with the site did not come together: the
+	// link is read on a later attempt, and nobody is blamed for it.
+	var asked atomic.Int64
+	o := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if asked.Add(1) <= 2 {
+			w.Header().Set("X-BlankTrail-Error", "origin_handshake_failed")
+			w.Header().Set("X-BlankTrail-Upstream-Detail", "remote error: tls: handshake failure")
+			w.WriteHeader(525)
+			_, _ = io.WriteString(w, "BLANKTRAIL_ORIGIN_HANDSHAKE_FAILED")
+			return
+		}
+		w.Header().Set("Location", "https://example.com"+r.URL.Path)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(o.Close)
+	searching := poolFacing(t, o.Listener.Addr().String(), 1)
+	reading := poolFacing(t, o.Listener.Addr().String(), 2)
+	rep := Report{Results: []QueryResult{{
+		Attempted: true,
+		Pages:     []google.SERP{{Origin: o.URL, Results: []google.Result{unread("/goto/one", "example.com")}}},
+	}}}
+	r := &Runner{Pool: searching.Pool, Threads: 1,
+		Addresses: func(context.Context) (*blanktrail.Pool, error) { return reading.Pool, nil }}
+	if got := r.ResolveLinks(t.Context(), &rep, 1); got.Resolved != 1 {
+		t.Fatalf("resolved %d of 1: %v", got.Resolved, got.Errs)
+	}
+	if st := reading.Pool.Stats(); st.Rejections != 0 || st.EgressRotations != 0 {
+		t.Errorf("%d refusals and %d address changes for a handshake with the site, want none", st.Rejections, st.EgressRotations)
+	}
+}

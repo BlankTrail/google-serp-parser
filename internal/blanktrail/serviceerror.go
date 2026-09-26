@@ -38,6 +38,17 @@ var ErrResumeDefect = errors.New("blanktrail: the service could not resume its T
 // resumeDefectDetail is the service's words for it.
 const resumeDefectDetail = "reprocessing of PSK"
 
+// ErrOriginHandshake is the service saying the address carried the connection
+// to the site and the TLS handshake with the site did not come together:
+// status 525, the reason origin_handshake_failed, from BlankTrail 1.4.981 on.
+// The address is alive and is not to blame, and asking again through the same
+// port is a handshake from the start — the service forgets its tickets for the
+// site after such a failure.
+var ErrOriginHandshake = errors.New("blanktrail: the handshake with the site failed; the address is not to blame")
+
+// originHandshakeReason is the service's word for it.
+const originHandshakeReason = "origin_handshake_failed"
+
 // ErrUpstreamUnreachable is the service saying it could not reach the address
 // this port stands on. Nothing went out, so nothing about it is the session's
 // or the query's — what it is about is the address.
@@ -107,6 +118,8 @@ func (e *ServiceError) Is(target error) bool {
 		return e.Reason == unreachableReason && !e.resumeDefect()
 	case ErrResumeDefect:
 		return e.resumeDefect()
+	case ErrOriginHandshake:
+		return e.Reason == originHandshakeReason
 	case ErrChainUnreachable:
 		return e.Reason == chainUnreachableReason
 	case ErrSolverWorking:

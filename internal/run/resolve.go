@@ -187,8 +187,11 @@ func (r *Runner) readAddress(ctx context.Context, pool *blanktrail.Pool, res *Qu
 			// stayed on Google is the same verdict from the other direction —
 			// this identity is being sent to a challenge — and nothing below
 			// this layer can see it, because the request succeeded.
-			if slices.ContainsFunc(got.Errs, func(err error) bool { return errors.Is(err, blanktrail.ErrResumeDefect) }) {
-				// The service's TLS, not the address: see ErrResumeDefect.
+			if slices.ContainsFunc(got.Errs, func(err error) bool {
+				return errors.Is(err, blanktrail.ErrResumeDefect) || errors.Is(err, blanktrail.ErrOriginHandshake)
+			}) {
+				// The TLS, not the address: see ErrResumeDefect and
+				// ErrOriginHandshake.
 				held.tlsFailed(ctx)
 			} else {
 				held.refuse(ctx)

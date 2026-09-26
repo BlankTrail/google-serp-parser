@@ -239,6 +239,19 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				t.rem.failed(FailureTransport)
 				return nil, refusal
 
+			case errors.Is(refusal, ErrOriginHandshake):
+				// The address carried the connection and the handshake with the
+				// site did not come together. Not the address's; and asked again
+				// through the same port it is a handshake from the start, since
+				// the service forgets its tickets for the site after such a
+				// failure. So once more here, at once, and then the caller's.
+				t.rem.failed(FailureTransport)
+				if attempt >= 1 || attempt >= retryBudget {
+					return nil, refusal
+				}
+				delay = 0
+				continue
+
 			case errors.Is(refusal, ErrUpstreamUnreachable):
 				// The address could not be reached. That is the address's, and
 				// it is answered the way a request that never arrived is: leave

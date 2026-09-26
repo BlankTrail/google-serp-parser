@@ -1051,3 +1051,42 @@ func TestLadder_LeavesTheAddressAloneWhenTheServicesOwnTLSCouldNotResume(t *test
 		t.Errorf("an address that timed out was marked dead %d times, want once", rem2.markedDead)
 	}
 }
+
+func TestLadder_AsksOnceMoreThroughTheSamePortWhenTheHandshakeWithTheSiteFailed(t *testing.T) {
+	// From BlankTrail 1.4.981 a handshake with the site that did not come
+	// together is its own answer, 525 origin_handshake_failed. The address
+	// carried the connection, so it is not blamed; and the service forgets
+	// its tickets for the site after such a failure, so the same port asked
+	// again is a handshake from the start.
+	failed := func() func() (*http.Response, error) {
+		h := http.Header{}
+		h.Set(serviceErrorHeader, "origin_handshake_failed")
+		h.Set(upstreamDetailHeader, "remote error: tls: handshake failure")
+		return respond(525, h, "BLANKTRAIL_ORIGIN_HANDSHAKE_FAILED")
+	}
+	rt := &fakeRT{steps: []func() (*http.Response, error){failed(), respond(200, nil, "the page")}}
+	rem := &fakeRemedy{retries: 3, addresses: 5}
+	resp, err := (&ladder{rt: rt, port: 20106, rem: rem}).RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp.Body.Close()
+	if rt.calls != 2 {
+		t.Errorf("the request went out %d times, want the one and once more", rt.calls)
+	}
+	if rem.markedDead != 0 || rem.rotations != 0 {
+		t.Errorf("the address was marked dead %d times and the port moved %d, want neither", rem.markedDead, rem.rotations)
+	}
+
+	// Failing twice, it is the caller's to take elsewhere — still not the
+	// address's.
+	rt2 := &fakeRT{steps: []func() (*http.Response, error){failed(), failed(), respond(200, nil, "")}}
+	rem2 := &fakeRemedy{retries: 3, addresses: 5}
+	_, err = (&ladder{rt: rt2, port: 20107, rem: rem2}).RoundTrip(newReq(t, http.MethodGet, ""))
+	if !errors.Is(err, ErrOriginHandshake) || errors.Is(err, ErrUpstreamUnreachable) {
+		t.Fatalf("RoundTrip returned %v, want the handshake's own answer", err)
+	}
+	if rt2.calls != 2 || rem2.markedDead != 0 || rem2.rotations != 0 {
+		t.Errorf("went out %d times, marked dead %d, moved %d; want twice and neither", rt2.calls, rem2.markedDead, rem2.rotations)
+	}
+}
