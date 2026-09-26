@@ -4,6 +4,7 @@ package blanktrail
 
 import (
 	"context"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -74,6 +75,9 @@ type Brake struct {
 	// sleep is the pause itself, a seam so a test does not sit through one.
 	sleep func(ctx context.Context, d time.Duration) error
 	now   func() time.Time
+	// rand draws where in its spread each request's pause falls; a seam so a
+	// test can pin it.
+	rand func() float64
 
 	mu     sync.Mutex
 	held   time.Duration
@@ -106,6 +110,9 @@ const (
 	// every thread of a run passes through here, and a run of a hundred threads
 	// would otherwise ask a hundred times a second.
 	brakeReadEvery = 2 * time.Second
+	// brakeStep is the most the pause changes on one reading: from nothing to
+	// the ceiling in about fifteen seconds, and back.
+	brakeStep = 4 * time.Second
 )
 
 // NewBrake returns a brake that reads the queue through ask.
@@ -119,6 +126,7 @@ func NewBrake(ask func(ctx context.Context) (SolverQueue, error)) *Brake {
 		every: brakeReadEvery,
 		sleep: sleepFor,
 		now:   time.Now,
+		rand:  rand.Float64,
 	}
 }
 
@@ -148,7 +156,9 @@ func (b *Brake) Hold(ctx context.Context) error {
 	if wait <= 0 {
 		return ctx.Err()
 	}
-	return b.sleep(ctx, wait)
+	// Each request's own share of the pause, from half of it to half again,
+	// so the threads held together do not all leave together.
+	return b.sleep(ctx, time.Duration(float64(wait)*(0.5+b.rand())))
 }
 
 // holdFor is how long the next request should wait, reading the queue again
@@ -173,9 +183,29 @@ func (b *Brake) holdFor(ctx context.Context) time.Duration {
 			return 0
 		}
 		b.queue = queue
-		b.held = brakeFor(queue.Queued)
+		b.held = stepToward(b.held, brakeFor(queue.Queued))
 	}
 	return b.held
+}
+
+// stepToward is the pause after one reading: toward what the queue asks for,
+// but by brakeStep at the most.
+//
+// The brake used to jump straight to what each reading asked for, and on the
+// first run of five hundred threads (2026-09-26) it swung: the queue climbed to
+// seventy, every thread was held the whole thirty seconds, the queue drained to
+// nothing, every thread left at once, and the queue climbed again — between
+// 120 and 380 threads of 500 held at any moment. The user asked for it
+// smoother: it now tightens and eases a step a reading, and each request draws
+// its own share of the pause.
+func stepToward(held, want time.Duration) time.Duration {
+	switch {
+	case want > held+brakeStep:
+		return held + brakeStep
+	case want < held-brakeStep:
+		return held - brakeStep
+	}
+	return want
 }
 
 // Queue is the last reading, for a screen that reports what the run is up

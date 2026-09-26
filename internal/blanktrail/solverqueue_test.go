@@ -43,8 +43,16 @@ func heldFor(t *testing.T, queued int) time.Duration {
 		waited = d
 		return nil
 	}
-	if err := b.Hold(context.Background()); err != nil {
-		t.Fatalf("Hold: %v", err)
+	// The middle of each request's spread, and readings enough for the pause
+	// to have stepped all the way to what the queue asks for.
+	b.rand = func() float64 { return 0.5 }
+	at := time.Unix(0, 0)
+	b.now = func() time.Time { return at }
+	for i := 0; i < 20; i++ {
+		at = at.Add(brakeReadEvery)
+		if err := b.Hold(context.Background()); err != nil {
+			t.Fatalf("Hold: %v", err)
+		}
 	}
 	return waited
 }
@@ -161,9 +169,15 @@ func TestBrake_LetsGoAsTheQueueDrains(t *testing.T) {
 	b.sleep = func(context.Context, time.Duration) error { return nil }
 	at := time.Unix(0, 0)
 	b.now = func() time.Time { return at }
+	for i := 0; i < 10; i++ {
+		at = at.Add(brakeReadEvery)
+		if err := b.Hold(context.Background()); err != nil {
+			t.Fatalf("Hold: %v", err)
+		}
+	}
 
 	var seen []time.Duration
-	for _, q := range []int{6, 4, 2, 1, 0} {
+	for _, q := range []int{6, 4, 2, 1, 0, 0} {
 		queued = q
 		at = at.Add(brakeReadEvery)
 		if err := b.Hold(context.Background()); err != nil {
@@ -182,5 +196,55 @@ func TestBrake_LetsGoAsTheQueueDrains(t *testing.T) {
 	}
 	if seen[0] == 0 {
 		t.Error("the brake held nothing on a queue of six")
+	}
+}
+
+func TestBrake_TightensAndEasesAStepAReadingRatherThanAtOnce(t *testing.T) {
+	// Jumping straight to what each reading asked for, the brake swung on five
+	// hundred threads: every thread held thirty seconds, the queue drained to
+	// nothing, every thread left at once, and the queue climbed again.
+	queued := 100
+	b := NewBrake(func(context.Context) (SolverQueue, error) { return SolverQueue{Queued: queued}, nil })
+	b.sleep = func(context.Context, time.Duration) error { return nil }
+	at := time.Unix(0, 0)
+	b.now = func() time.Time { return at }
+	read := func() time.Duration {
+		at = at.Add(brakeReadEvery)
+		if err := b.Hold(context.Background()); err != nil {
+			t.Fatalf("Hold: %v", err)
+		}
+		return b.Holding()
+	}
+	if got := read(); got != 4*time.Second {
+		t.Errorf("the first reading of a deep queue holds %v, want one step of four seconds", got)
+	}
+	for i := 0; i < 10; i++ {
+		read()
+	}
+	if got := b.Holding(); got != brakeCeiling {
+		t.Fatalf("after a run of readings the brake holds %v, want the ceiling", got)
+	}
+	queued = 0
+	if got := read(); got != brakeCeiling-4*time.Second {
+		t.Errorf("the first reading of an empty queue holds %v, want the ceiling less one step", got)
+	}
+}
+
+func TestBrake_SpreadsTheHoldsSoTheThreadsDoNotLeaveTogether(t *testing.T) {
+	// Each request draws its own share of the pause, from half of it to half
+	// again: threads held together leave one by one.
+	b := NewBrake(func(context.Context) (SolverQueue, error) { return SolverQueue{Queued: 3}, nil })
+	var waited []time.Duration
+	b.sleep = func(_ context.Context, d time.Duration) error { waited = append(waited, d); return nil }
+	draws := []float64{0, 0.999}
+	b.rand = func() float64 { d := draws[0]; draws = draws[1:]; return d }
+	for i := 0; i < 2; i++ {
+		if err := b.Hold(context.Background()); err != nil {
+			t.Fatalf("Hold: %v", err)
+		}
+	}
+	held := b.Holding()
+	if waited[0] != held/2 || waited[1] < held*149/100 {
+		t.Errorf("two requests under a pause of %v waited %v, want from half of it to half again", held, waited)
 	}
 }
