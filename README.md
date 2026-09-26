@@ -896,16 +896,16 @@ project does, here and in a fork's own release workflow.
 Measured on a live list of 15 000 addresses — ordinary datacentre proxies of
 middling quality, about one in twelve answering at any moment — through
 BlankTrail 1.4.987, on 8514 queries up to ten pages deep with the result
-addresses kept:
+addresses kept, at 100 threads:
 
-| | 100 threads | 300 threads |
-|---|---|---|
-| Pages a minute, once the start has passed | **~1100** | **~1570** |
-| Pages a minute, the whole job | 890–950 | 1235 |
-| Whole job, 8514 queries | 33–49 min | 26 min |
-| Captchas per 1000 pages, the whole job | 30–38 | 38 |
-| Challenges solved | 98% | — |
-| Hidden addresses read, per page | ~9 | ~9 |
+| | |
+|---|---|
+| Pages a minute, once the start has passed | **~1100** |
+| Pages a minute, the whole job | 890–950 |
+| Whole job, 8514 queries | 33–49 min |
+| Captchas per 1000 pages, the whole job | 30–38 |
+| Challenges solved | 98% |
+| Hidden addresses read, per page | ~9 |
 
 How long the whole job takes depends mostly on how deep Google lets the queries
 go: the same list came back at 3.7 pages a query on one run and 5.1 on another.
@@ -914,10 +914,7 @@ The start is the slow part. Every session that rested between jobs is checked
 again on its first request, so a run climbs for ten to twenty minutes and then
 settles. The end is not: the last queries are finished without the rest.
 
-What limits it past three hundred threads was not this program. At five hundred
-the machine running BlankTrail had every core busy — about sixteen of them on
-the challenge solver — and five hundred threads were slower than three hundred.
-What these numbers depend on beyond that is your address list, your BlankTrail
+Beyond that, what these numbers depend on is your address list, your BlankTrail
 licence and the machine it runs on.
 
 ---
