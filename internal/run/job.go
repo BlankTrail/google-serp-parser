@@ -254,6 +254,11 @@ type Runner struct {
 	// ports are the identities has nothing to keep and carries the refusal to
 	// the next port as it always did.
 	ShellTries int
+	// StartEvery is the gap between the starts of two threads of a run, so a
+	// run of many threads comes up to speed over a while rather than all at
+	// once. Nought leaves it to startGap: together up to a hundred threads,
+	// five a second past that.
+	StartEvery time.Duration
 	// carrying is the register of queries the sessions of the run in hand are
 	// carrying, kept here so what is under a session can be asked of the run
 	// from outside it.
@@ -382,6 +387,16 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 		wg.Add(1)
 		go func(thread int) {
 			defer wg.Done()
+			// Thread n starts n gaps after the first. At the start of a job
+			// every session in rotation is woken and checked at once, and
+			// every one of them is a challenge for the solver: five hundred
+			// threads started together put five hundred there in the first
+			// minute. The user asked for the start spread over time.
+			if gap := startGap(threads, r.StartEvery); gap > 0 && thread > 0 {
+				if err := r.Pool.Sleep(ctx, time.Duration(thread)*gap); err != nil {
+					return
+				}
+			}
 
 			// A parsing job walks its queries page by page, and that is the one
 			// kind where a thread holds several at once: the pause belongs to
@@ -597,3 +612,27 @@ func found(pos google.Position) []google.Result {
 	r.Position = pos.Rank
 	return []google.Result{r}
 }
+
+// startGap is the gap between the starts of two threads: the one the runner
+// was given, or, given none, nothing for a run of up to startTogetherUpTo
+// threads and startSpreadEvery for a bigger one.
+//
+// A hundred threads have always started together, and their start wave is
+// what the runs measured here were measured with. At five hundred the wave
+// was the solver's whole queue in the first minute; the user asked for a big
+// run's start spread over time, so it comes up five threads a second: three
+// hundred over a minute, five hundred over a hundred seconds.
+func startGap(threads int, given time.Duration) time.Duration {
+	switch {
+	case given > 0:
+		return given
+	case threads > startTogetherUpTo:
+		return startSpreadEvery
+	}
+	return 0
+}
+
+const (
+	startTogetherUpTo = 100
+	startSpreadEvery  = 200 * time.Millisecond
+)

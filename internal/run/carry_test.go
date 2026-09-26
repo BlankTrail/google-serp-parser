@@ -1189,3 +1189,45 @@ func TestCrew_AsksForTheJobsRestUntilTheQueueIsDrained(t *testing.T) {
 		t.Errorf("at the end a session is asked with %v–%v, want no rest", got.Pause, got.UpTo)
 	}
 }
+
+func TestRunner_StartsABigRunsThreadsOverTimeRatherThanAllAtOnce(t *testing.T) {
+	// Up to a hundred threads start together, as they always have; past that
+	// five a second, so a big run's wave of checks comes over a while.
+	for _, c := range []struct {
+		threads int
+		given   time.Duration
+		want    time.Duration
+	}{
+		{100, 0, 0},
+		{101, 0, 200 * time.Millisecond},
+		{500, 0, 200 * time.Millisecond},
+		{4, 333 * time.Millisecond, 333 * time.Millisecond},
+	} {
+		if got := startGap(c.threads, c.given); got != c.want {
+			t.Errorf("%d threads given %v start %v apart, want %v", c.threads, c.given, got, c.want)
+		}
+	}
+
+	// And the threads do wait their turn: thread n sleeps n gaps first.
+	o := newDeepOrigin(t, 1)
+	var mu sync.Mutex
+	var slept []time.Duration
+	f := poolFacing(t, o.addr(), 3, inSessions, func(c *blanktrail.PoolConfig) {
+		c.Sleep = func(ctx context.Context, d time.Duration) error {
+			mu.Lock()
+			slept = append(slept, d)
+			mu.Unlock()
+			return ctx.Err()
+		}
+	})
+	r := &Runner{Pool: f.Pool, Threads: 3, StartEvery: 333 * time.Millisecond,
+		Keeper: sessions.NewKeeper(sessions.NewMemory()), Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+	r.Run(context.Background(), Job{Queries: []google.Query{usQuery("a"), usQuery("b"), usQuery("c")}, Pages: 1})
+	mu.Lock()
+	defer mu.Unlock()
+	for _, want := range []time.Duration{333 * time.Millisecond, 666 * time.Millisecond} {
+		if !slices.Contains(slept, want) {
+			t.Errorf("no thread waited %v before it started: %v", want, slept)
+		}
+	}
+}
