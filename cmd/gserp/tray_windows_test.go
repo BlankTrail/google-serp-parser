@@ -76,7 +76,7 @@ func trayWindowOfThisProcess(t *testing.T, class *uint16) uintptr {
 			return 0
 		}
 		var owner uint32
-		_, _, _ = procGetWindowThreadProcessId.Call(found, uintptr(unsafe.Pointer(&owner)))
+		_, _, _ = procGetWindowThreadProcessID.Call(found, uintptr(unsafe.Pointer(&owner)))
 		if uintptr(owner) == mine {
 			return found
 		}
@@ -86,7 +86,7 @@ func trayWindowOfThisProcess(t *testing.T, class *uint16) uintptr {
 
 var (
 	procFindWindowEx             = user32.NewProc("FindWindowExW")
-	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
+	procGetWindowThreadProcessID = user32.NewProc("GetWindowThreadProcessId")
 )
 
 func TestTrayIcon_GoesUpInTheNotificationAreaAndComesBackDown(t *testing.T) {

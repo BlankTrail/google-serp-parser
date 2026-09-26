@@ -69,7 +69,6 @@ var (
 	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
 	procCreateIconFromResEx  = user32.NewProc("CreateIconFromResourceEx")
 	procShowWindow           = user32.NewProc("ShowWindow")
-	procFindWindow           = user32.NewProc("FindWindowW")
 	procGetModuleHandle      = kernel32.NewProc("GetModuleHandleW")
 	procShellNotifyIcon      = shell32.NewProc("Shell_NotifyIconW")
 	procGetConsoleWindow     = kernel32.NewProc("GetConsoleWindow")

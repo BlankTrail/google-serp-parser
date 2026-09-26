@@ -60,7 +60,7 @@ type Cookie struct {
 	Domain   string    `json:"domain,omitempty"`
 	Expires  time.Time `json:"expires,omitempty"`
 	Secure   bool      `json:"secure,omitempty"`
-	HttpOnly bool      `json:"http_only,omitempty"`
+	HTTPOnly bool      `json:"http_only,omitempty"`
 	SameSite int       `json:"same_site,omitempty"`
 }
 
@@ -110,7 +110,7 @@ func (j *Jar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 			Domain:   c.Domain,
 			Expires:  expires,
 			Secure:   c.Secure,
-			HttpOnly: c.HttpOnly,
+			HTTPOnly: c.HttpOnly,
 			SameSite: int(c.SameSite),
 		}
 	}
@@ -189,7 +189,7 @@ func (j *Jar) restore(held []Cookie) {
 			Domain:   c.Domain,
 			Expires:  c.Expires,
 			Secure:   c.Secure,
-			HttpOnly: c.HttpOnly,
+			HttpOnly: c.HTTPOnly,
 			SameSite: http.SameSite(c.SameSite),
 		}})
 	}

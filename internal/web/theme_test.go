@@ -124,6 +124,7 @@ func TestTheme_IsRememberedRatherThanAskedForOnEveryScreen(t *testing.T) {
 	}
 	if kept == nil {
 		t.Fatalf("pressing %s wrote nothing down, so the next page is light again", at)
+		return
 	}
 	if kept.Value != themeDark {
 		t.Errorf("pressing it wrote down %q", kept.Value)

@@ -39,7 +39,7 @@ type askedOne struct {
 }
 
 func (a *askedCheck) TestEgress(ctx context.Context, eg blanktrail.Egress, hop blanktrail.FirstHop,
-	checks ...string) (map[string]blanktrail.CheckResult, error) {
+	_ ...string) (map[string]blanktrail.CheckResult, error) {
 	a.mu.Lock()
 	a.at++
 	if a.at > a.most {
@@ -330,7 +330,7 @@ func TestListCheck_CountsTheAnswersThatCameFromAnExitTerminatingTLS(t *testing.T
 	// itself and presents its own certificate. It is part of what answered —
 	// the road carries traffic — and it is counted apart, because whether a
 	// port may use it is the switch on this same screen.
-	cl := &askedCheck{answer: func(eg blanktrail.Egress, _ blanktrail.FirstHop) (bool, error) {
+	cl := &askedCheck{answer: func(_ blanktrail.Egress, _ blanktrail.FirstHop) (bool, error) {
 		return true, nil
 	}, code: func(eg blanktrail.Egress) string {
 		if strings.HasSuffix(eg.Upstream, ":1000") || strings.HasSuffix(eg.Upstream, ":1001") {

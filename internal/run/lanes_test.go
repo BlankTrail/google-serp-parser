@@ -456,7 +456,11 @@ func TestRunner_SpreadsTheLookupsOfAJobsLastQueryOverTheRoom(t *testing.T) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/goto"):
 			n := now.Add(1)
-			for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+			for {
+				m := most.Load()
+				if n <= m || most.CompareAndSwap(m, n) {
+					break
+				}
 			}
 			time.Sleep(60 * time.Millisecond)
 			now.Add(-1)

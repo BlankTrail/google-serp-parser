@@ -33,7 +33,7 @@ type cookieOrigin struct {
 func newCookieOrigin(t *testing.T, search func(n int) string) *cookieOrigin {
 	t.Helper()
 	c := &cookieOrigin{origin: &origin{}}
-	c.origin.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 		if !strings.HasPrefix(r.URL.Path, "/search") {
 			c.homes.Add(1)
@@ -47,7 +47,7 @@ func newCookieOrigin(t *testing.T, search func(n int) string) *cookieOrigin {
 		http.SetCookie(w, &http.Cookie{Name: "NID", Value: "search-" + strconv.Itoa(n), Path: "/"})
 		_, _ = io.WriteString(w, search(n))
 	}))
-	t.Cleanup(c.origin.Close)
+	t.Cleanup(c.Close)
 	return c
 }
 

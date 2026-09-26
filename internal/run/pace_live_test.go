@@ -891,3 +891,24 @@ func phrasesOf(t *testing.T, job, most int) []google.Query {
 	}
 	return out
 }
+
+// line is the census on one line, for a log that prints one a minute: every
+// place that has anybody in it, with how many and how long the longest of them
+// has been there.
+func (c Census) line() string {
+	if len(c.Standing) == 0 {
+		return "nothing standing anywhere yet"
+	}
+	var says []string
+	for _, s := range c.Standing {
+		if s.Threads == 0 {
+			continue
+		}
+		says = append(says, fmt.Sprintf("%s %d (longest %v, %.0f%% of the time)",
+			string(s.Doing), s.Threads, s.Longest.Round(time.Second), 100*c.Share(s.Doing)))
+	}
+	if len(says) == 0 {
+		return "no thread is standing anywhere"
+	}
+	return strings.Join(says, "; ")
+}

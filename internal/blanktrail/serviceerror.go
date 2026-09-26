@@ -132,13 +132,6 @@ func (e *ServiceError) Is(target error) bool {
 	return false
 }
 
-// serviceRefusal reads an answer the service composed about itself, and says
-// whether this was one.
-//
-// Only the header decides. A status alone cannot: 523 from the service is its
-// own answer, and 523 from something at the far end is a page — and on a list
-// where most requests fail, guessing wrong either way is thousands of addresses
-// blamed or thousands of refusals mistaken for pages.
 // ChallengeUnsolved says the service's own browser met Google's check on the
 // way and could not clear it.
 //
@@ -157,6 +150,13 @@ func (e *ServiceError) resumeDefect() bool {
 	return e.Reason == unreachableReason && strings.Contains(e.Detail, resumeDefectDetail)
 }
 
+// serviceRefusal reads an answer the service composed about itself, and says
+// whether this was one.
+//
+// Only the header decides. A status alone cannot: 523 from the service is its
+// own answer, and 523 from something at the far end is a page — and on a list
+// where most requests fail, guessing wrong either way is thousands of addresses
+// blamed or thousands of refusals mistaken for pages.
 func serviceRefusal(resp *http.Response) (*ServiceError, bool) {
 	if resp == nil {
 		return nil, false

@@ -50,7 +50,7 @@ func (c control) call(ctx context.Context, method, path string, body any, out an
 	if err != nil {
 		return fmt.Errorf("control %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("control %s: HTTP %d", path, resp.StatusCode)
 	}
@@ -211,7 +211,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		defer writer.Close()
+		defer func() { _ = writer.Close() }()
 	}
 	out := json.NewEncoder(writer)
 	emit := func(v any) {
@@ -277,7 +277,7 @@ func run() error {
 			emit(map[string]any{"event": "exit_ip", "phase": phase, "available": false})
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var result struct {
 			IP string `json:"ip"`
 		}

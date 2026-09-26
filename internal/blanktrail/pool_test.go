@@ -2991,13 +2991,11 @@ func TestPool_LeavesTheServiceRoomAndStopsGrowingThere(t *testing.T) {
 		c.PortsHeldBack = 5
 	})
 
-	var held []*Lease
 	for i := 0; i < 4; i++ {
 		l, err := p.Acquire(context.Background())
 		if err != nil {
 			t.Fatalf("acquire %d: %v", i+1, err)
 		}
-		held = append(held, l)
 		l.Release()
 	}
 

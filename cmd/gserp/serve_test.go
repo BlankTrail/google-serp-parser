@@ -1192,6 +1192,7 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 	warm.mu.Unlock()
 	if owed == nil {
 		t.Fatal("the number saved while the job ran was not remembered")
+		return
 	}
 	if err := warm.bring(t.Context(), owed.want, owed.device); err != nil {
 		t.Fatalf("bringing about what was owed: %v", err)
