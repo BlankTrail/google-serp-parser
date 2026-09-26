@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1408,5 +1409,41 @@ func TestKeeper_HandsASessionOutAgainOnlyOnceWhatBecameOfItIsWrittenDown(t *test
 				t.Errorf("session %d was handed out while what became of it was being written down", s.ID)
 			}
 		})
+	}
+}
+
+// countingHistory counts the reads of every session, and makes each one take a
+// moment so that reads asked together are in flight together.
+type countingHistory struct {
+	*Memory
+	reads atomic.Int64
+}
+
+func (h *countingHistory) Sessions(ctx context.Context, device string, since time.Time) ([]store.Session, error) {
+	h.reads.Add(1)
+	time.Sleep(30 * time.Millisecond)
+	return h.Memory.Sessions(ctx, device, since)
+}
+
+func TestKeeper_ReadsTheHistoryOnceHoweverManyThreadsAskAtOnce(t *testing.T) {
+	// Every thread of a job asks the keeper at the same moment when the job
+	// starts. Each of five hundred reading every session and its cookies took
+	// the program from a third of a gigabyte to eight in a minute.
+	h := &countingHistory{Memory: NewMemory()}
+	k := keeperAt(h, startClock())
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			p := listPort(i+1, fmt.Sprintf("addr-%d", i+1), fmt.Sprintf("addr-%d", i+1))
+			if held, err := k.Take(context.Background(), p, desktop); err == nil {
+				held.PutBack()
+			}
+		}(i)
+	}
+	wg.Wait()
+	if got := h.reads.Load(); got != 1 {
+		t.Errorf("fifty threads asking at once read the history %d times, want once", got)
 	}
 }

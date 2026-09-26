@@ -80,6 +80,9 @@ type Keeper struct {
 	known map[int64]*kept
 	// loaded are the kinds of result page whose sessions have been read.
 	loaded map[string]bool
+	// loading is held by the one thread reading the history, so the others
+	// wait for it rather than each reading the whole of it: see load.
+	loading sync.Mutex
 	// used is when each address last carried a session. It outlives the
 	// sessions on it: "the one that has rested longest" is about the address.
 	used map[string]time.Time
@@ -552,6 +555,20 @@ func (k *Keeper) release(s *kept) {
 func (k *Keeper) load(ctx context.Context, device string) error {
 	k.mu.Lock()
 	done := k.loaded[device]
+	k.mu.Unlock()
+	if done {
+		return nil
+	}
+	// One thread reads; the rest wait for it and then find the work done.
+	// Unguarded, every thread of a job asked at once: on the first run of five
+	// hundred threads each of them read every session and its cookies — about
+	// 36 MB a read, five hundred reads together — and the program went from a
+	// third of a gigabyte to eight in a minute, with 384 threads standing in
+	// "taking a session" for most of it (2026-09-26).
+	k.loading.Lock()
+	defer k.loading.Unlock()
+	k.mu.Lock()
+	done = k.loaded[device]
 	k.mu.Unlock()
 	if done {
 		return nil
