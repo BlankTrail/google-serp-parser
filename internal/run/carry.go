@@ -73,6 +73,16 @@ func (c *crew) carry(ctx context.Context) {
 				// moves to an address that is free and pays the one check.
 				held, err = c.a.Keeper.TakeStranded(ctx, leasePort{lease}, c.want(drained), c.walks.carriers())
 			}
+			// Still nothing to do at the end of a job, where the job is as long
+			// as its slowest request: a query whose request has waited past
+			// twinAfter on the far end is started again beside it, through a
+			// session of its own, and whichever finishes first settles it.
+			if one == nil && errors.Is(err, sessions.ErrNothingDue) {
+				if twin := c.twin(drained, time.Now()); twin != nil {
+					one = twin
+					held, err = c.a.Keeper.Take(ctx, leasePort{lease}, c.want(drained))
+				}
+			}
 			if one == nil && errors.Is(err, sessions.ErrNothingDue) {
 				lease.Release()
 				if c.over(drained) {
@@ -272,15 +282,25 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 	c.r.Where.At(c.thread, DoingAsk)
 	for {
 		asked := time.Now()
+		// A request of its own to call off: the walk may lose its race while
+		// this is out, and what it waits for is then for nobody.
+		reqCtx, stop := context.WithCancel(ctx)
+		c.walks.asking(one, asked, stop)
 		if one.next == "" {
-			serp, err = search.Search(ctx, q)
+			serp, err = search.Search(reqCtx, q)
 		} else {
 			// The address the page before it carried, with the tags Google
 			// issued to this session on it.
-			serp, err = search.SearchAt(ctx, q, one.next)
+			serp, err = search.SearchAt(reqCtx, q, one.next)
 		}
+		c.walks.asked(one)
+		stop()
 		c.r.step(c.thread, StageAsk, asked, q.Text, err)
-		if err == nil || ctx.Err() != nil {
+		// A walk that lost its race while this was out has had its request
+		// called off, and asking again would be asking for nobody. What came
+		// back goes the way of any answer: the race keeps none of its pages
+		// and settles nothing through it; see keepRaced and win.
+		if err == nil || ctx.Err() != nil || c.walks.lost(one) {
 			break
 		}
 		if class, judged := google.ClassOf(err); judged {
@@ -340,7 +360,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 		// when it stops — but nothing further is asked of the service or the
 		// history under a context that has ended.
 		if err == nil {
-			c.keep(one.at, serp)
+			c.keep(one, serp)
 		}
 	case err == nil:
 		// The move may also have happened inside this request: the address it
@@ -389,7 +409,7 @@ func (c *crew) took(ctx context.Context, one *walk, session int64, serp google.S
 		c.done(ctx, one, session, nil)
 		return
 	}
-	c.keep(one.at, serp)
+	c.keep(one, serp)
 	// The page says where the next one is, and says nothing when there is none:
 	// the last page of a query links back and not on. That, and the depth the
 	// job asked for, are the two ends of a walk.
@@ -444,6 +464,10 @@ func (c *crew) stopped(ctx context.Context, one *walk, session int64, err error,
 // with neither pages nor a reason is reported as done and written to the
 // history as done, and a job resumed afterwards never asks it again.
 func (c *crew) never(one *walk, session int64) {
+	if one.race != nil && c.aside(one) {
+		c.walks.end(session)
+		return
+	}
 	c.walks.end(session)
 	c.mu.Lock()
 	c.results[one.at].Attempted = false
@@ -454,6 +478,12 @@ func (c *crew) never(one *walk, session int64) {
 // done takes the walk out of the register and settles its query with what it
 // collected.
 func (c *crew) done(ctx context.Context, one *walk, session int64, err error) {
+	if one.race != nil && !c.win(one, err) {
+		// The other of its race settled the query, or is still carrying it
+		// past a failure of this one's: see win.
+		c.walks.end(session)
+		return
+	}
 	c.walks.end(session)
 	if err != nil {
 		c.mu.Lock()
@@ -467,10 +497,15 @@ func (c *crew) done(ctx context.Context, one *walk, session int64, err error) {
 // keep adds a page to what its query has collected.
 //
 // The results are shared now: a query started by one thread is carried on by
-// whichever thread the keeper hands its session to next.
-func (c *crew) keep(at int, serp google.SERP) {
+// whichever thread the keeper hands its session to next. A walk carried twice
+// keeps through its race; see keepRaced.
+func (c *crew) keep(one *walk, serp google.SERP) {
+	if one.race != nil {
+		c.keepRaced(one, serp)
+		return
+	}
 	c.mu.Lock()
-	c.results[at].Pages = append(c.results[at].Pages, serp)
+	c.results[one.at].Pages = append(c.results[one.at].Pages, serp)
 	c.mu.Unlock()
 }
 

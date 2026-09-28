@@ -259,6 +259,10 @@ type Runner struct {
 	// once. Nought leaves it to startGap: together up to a hundred threads,
 	// five a second past that.
 	StartEvery time.Duration
+	// TwinAfter is how long a request of one of a job's last queries may wait
+	// on the far end before another session starts the same query beside it.
+	// Nought is twinAfter.
+	TwinAfter time.Duration
 	// carrying is the register of queries the sessions of the run in hand are
 	// carrying, kept here so what is under a session can be asked of the run
 	// from outside it.

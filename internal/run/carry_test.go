@@ -50,7 +50,12 @@ type deepOrigin struct {
 	// the session itself, one request at a time — which refuse cannot say,
 	// being every request from where it is set.
 	walls func(n int) bool
-	mu    sync.Mutex
+	// pick, when set, is asked about every search by its query and page: how
+	// long to hold it before answering — a request the far end is working on,
+	// a check being solved — and whether to answer it with Google refusing the
+	// session. A held request the client calls off is left unanswered.
+	pick func(q string, page int) (hold time.Duration, wall bool)
+	mu   sync.Mutex
 
 	asked []string
 	count int
@@ -97,6 +102,20 @@ func newDeepOrigin(t *testing.T, depth int) *deepOrigin {
 			_, _ = fmt.Sscanf(p, "%d", &page)
 		}
 		http.SetCookie(w, &http.Cookie{Name: "NID", Value: fmt.Sprintf("search-%d", n), Path: "/"})
+		if o.pick != nil {
+			hold, wall := o.pick(r.URL.Query().Get("q"), page)
+			if hold > 0 {
+				select {
+				case <-time.After(hold):
+				case <-r.Context().Done():
+					return
+				}
+			}
+			if wall {
+				_, _ = io.WriteString(w, wallBody)
+				return
+			}
+		}
 		if o.clears != nil {
 			if given := o.clears(n); given != "" {
 				http.SetCookie(w, &http.Cookie{Name: "GOOGLE_ABUSE_EXEMPTION", Value: given, Path: "/"})

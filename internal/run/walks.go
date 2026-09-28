@@ -36,6 +36,21 @@ type walk struct {
 	tries int
 	// began is when the query was first asked, for the reading a screen shows.
 	began time.Time
+
+	// asking is when the request in flight set out, and stop calls it off; both
+	// are empty between two requests. They are what the end of a job reads to
+	// find a request that has waited too long; see hedge.
+	asking time.Time
+	stop   func()
+	// race is set on a walk carried twice, and on its twin; see race. twin says
+	// this is the second, and pages is what it has collected: a twin keeps its
+	// pages to itself until it has settled the query.
+	race  *race
+	twin  bool
+	pages []google.SERP
+	// ended says the walk has left the register, settled or dropped. A walk that
+	// lost its race may still be in a thread's hands, and it must not be put back.
+	ended bool
 }
 
 // walks is the register of queries in flight, each under the session carrying
@@ -85,6 +100,10 @@ func (w *walks) give(session int64, one *walk) (*walk, bool) {
 	if held, ok := w.carrying[session]; ok {
 		return held, false
 	}
+	if one.ended {
+		// It lost its race while the thread was finding it a session.
+		return nil, false
+	}
 	w.carrying[session] = one
 	return one, true
 }
@@ -121,6 +140,9 @@ func (w *walks) park(session int64) {
 func (w *walks) waitFor(one *walk) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if one.ended {
+		return
+	}
 	w.waiting = append(w.waiting, one)
 }
 
@@ -193,6 +215,7 @@ func (w *walks) end(session int64) (*walk, bool) {
 		return nil, false
 	}
 	delete(w.carrying, session)
+	one.ended = true
 	w.live--
 	return one, true
 }
@@ -210,10 +233,19 @@ func (w *walks) left() []*walk {
 	defer w.mu.Unlock()
 	out := make([]*walk, 0, len(w.carrying)+len(w.waiting))
 	for id, one := range w.carrying {
-		out = append(out, one)
+		// A twin's pages are its own until it wins, and the walk it was
+		// started beside is in the register too: what that one collected is
+		// the query's, and it is settled once, through that one.
+		if !one.twin {
+			out = append(out, one)
+		}
 		delete(w.carrying, id)
 	}
-	out = append(out, w.waiting...)
+	for _, one := range w.waiting {
+		if !one.twin {
+			out = append(out, one)
+		}
+	}
 	w.waiting = nil
 	w.live = 0
 	// In the order the queries were opened, so a run settles what it has the
