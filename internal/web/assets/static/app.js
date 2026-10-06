@@ -377,6 +377,14 @@
 			// other kinds.
 			mark(root, "multiword", kind.value !== "suggest");
 			mark(root, "suggestlimit", kind.value !== "suggest");
+			// A suggestions job has no sessions to rest, and retries each
+			// substitution rather than a phrase.
+			mark(root, "cooldown", kind.value === "suggest");
+			var parts = root.querySelectorAll("[data-kind]");
+			for (var p = 0; p < parts.length; p++) {
+				var mine = parts[p].getAttribute("data-kind") === "suggest";
+				parts[p].hidden = mine !== (kind.value === "suggest");
+			}
 			var nolang = root.querySelector("#suggest-nolang");
 			var language = root.querySelector("[name=language]");
 			if (nolang && language) {

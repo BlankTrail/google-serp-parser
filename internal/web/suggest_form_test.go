@@ -192,3 +192,39 @@ func TestNewJob_WarnsThatASuggestionsJobWithNoLanguageTypesInLatinLetters(t *tes
 		}
 	}
 }
+
+func TestNewJob_CallsASuggestionsJobsTriesPerRequestAndPutsAwayTheRest(t *testing.T) {
+	// A suggestions job retries each substitution and has no sessions to rest:
+	// the form, come back for another reason, says the one and hides the other.
+	s := testServerWithSupervisor(t)
+	body := postForm(t, s, "/new?do=start", url.Values{"kind": {store.KindSuggest}, "queries": {"coffee"},
+		"language": {"en"}}).Body.String()
+	if !strings.Contains(body, `<span data-kind="suggest">`+LangEN.T("form.tries.suggest")+`</span>`) {
+		t.Error("the tries are not called tries per request")
+	}
+	if !strings.Contains(body, `<span data-kind="other" hidden>`+LangEN.T("form.tries")+`</span>`) {
+		t.Error("tries per phrase still shows")
+	}
+	if !strings.Contains(body, `<div class="field" hidden>`+"\n"+`<label for="cooldown">`) {
+		t.Error("the session rest still shows")
+	}
+	search := postForm(t, s, "/new?do=start", url.Values{"kind": {store.KindParse}, "queries": {"coffee"}}).Body.String()
+	if strings.Contains(search, `<div class="field" hidden>`+"\n"+`<label for="cooldown">`) {
+		t.Error("the session rest is hidden for a search")
+	}
+}
+
+func TestJobPage_CallsASuggestionsJobsTriesPerRequestAndPutsAwayTheRest(t *testing.T) {
+	s := testServerWithSupervisor(t)
+	id, err := s.store.CreateJob(t.Context(), store.JobSpec{Name: "c", Kind: store.KindSuggest, Pages: 1}, []string{"coffee"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	body := get(t, s, jobPath(id)+"?lang=en").Body.String()
+	if !strings.Contains(body, `<label for="tries">`+LangEN.T("form.tries.suggest")+`</label>`) {
+		t.Error("the job page does not call the tries per request")
+	}
+	if strings.Contains(body, LangEN.T("form.rest.why")) {
+		t.Error("the job page still explains a session's rest")
+	}
+}

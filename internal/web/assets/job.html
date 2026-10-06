@@ -258,11 +258,13 @@
 <input id="threads" name="threads" type="number" min="1" value="{{.Job.Threads}}">
 </div>
 <div class="field">
-<label for="tries">{{.T "form.tries"}}</label>
+<label for="tries">{{if .IsSuggest}}{{.T "form.tries.suggest"}}{{else}}{{.T "form.tries"}}{{end}}</label>
 <input id="tries" name="tries" type="number" min="1" value="{{.Job.Tries}}">
 </div>
-{{/* The two ends of the rest, side by side under one label: see new.html. */}}
-<div class="field">
+{{/* The two ends of the rest, side by side under one label: see new.html. A
+     suggestions job has no sessions to rest, and its boxes stay in the form
+     unseen, so a press saves what it had. */}}
+<div class="field"{{if .IsSuggest}} hidden{{end}}>
 <label for="cooldown">{{.T "form.rest"}}</label>
 <div class="pair">
 <input id="cooldown" name="cooldown" type="number" min="0" value="{{.Job.Pause}}" aria-label="{{.T "form.rest.from"}}">
@@ -275,7 +277,7 @@
 <summary>{{.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{.T "job.reshape.why"}}</li>
-<li>{{.T "form.rest.why"}}</li>
+{{if not .IsSuggest}}<li>{{.T "form.rest.why"}}</li>{{end}}
 </ul>
 </details>
 {{/* What came of the last press. It is the answer to something the reader has

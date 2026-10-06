@@ -161,12 +161,15 @@
 <input id="threads" name="threads" type="number" min="1" value="{{.Form.Threads}}">
 </div>
 <div class="field">
-<label for="tries">{{.T "form.tries"}}</label>
+{{/* A suggestions job retries each substitution, not a phrase: the same box,
+     called what it counts there. The script swaps the two as the kind changes. */}}
+<label for="tries"><span data-kind="other"{{if eq .Form.Kind "suggest"}} hidden{{end}}>{{.T "form.tries"}}</span><span data-kind="suggest"{{if ne .Form.Kind "suggest"}} hidden{{end}}>{{.T "form.tries.suggest"}}</span></label>
 <input id="tries" name="tries" type="number" min="1" value="{{.Form.Tries}}">
 </div>
 {{/* The two ends of the rest stand side by side under one label, because they
-     are one setting: a session's rest is drawn between them at every use. */}}
-<div class="field">
+     are one setting: a session's rest is drawn between them at every use. A
+     suggestions job has no sessions, and the field is put away for it. */}}
+<div class="field"{{if eq .Form.Kind "suggest"}} hidden{{end}}>
 <label for="cooldown">{{.T "form.rest"}}</label>
 <div class="pair">
 <input id="cooldown" name="cooldown" type="number" min="0" value="{{.Form.Cooldown}}" aria-label="{{.T "form.rest.from"}}">
@@ -178,8 +181,9 @@
 <details class="help">
 <summary>{{.T "help.what"}}</summary>
 <ul class="notes">
-<li>{{.T "form.tries.why"}}</li>
-<li>{{.T "form.rest.why"}}</li>
+<li data-kind="other"{{if eq .Form.Kind "suggest"}} hidden{{end}}>{{.T "form.tries.why"}}</li>
+<li data-kind="suggest"{{if ne .Form.Kind "suggest"}} hidden{{end}}>{{.T "form.tries.suggest.why"}}</li>
+<li data-kind="other"{{if eq .Form.Kind "suggest"}} hidden{{end}}>{{.T "form.rest.why"}}</li>
 </ul>
 <p class="empty">{{.T "form.pool.why"}}</p>
 </details>
