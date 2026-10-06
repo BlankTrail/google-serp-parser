@@ -115,7 +115,10 @@ func eolOf(asked string) (string, bool) {
 }
 
 // checkLayout asks the part's own catalog whether it can write the layout.
-func checkLayout(part string, l export.Layout) error {
+func checkLayout(job store.JobSummary, part string, l export.Layout) error {
+	if job.Kind == store.KindSuggest && part == partResults {
+		return export.Completions.Check(l)
+	}
 	switch part {
 	case partAds:
 		return export.Ads.Check(l)
@@ -194,7 +197,7 @@ func (s *Server) askedExport(w http.ResponseWriter, r *http.Request) (exportAsk,
 	}
 	layout := export.Layout{Format: format, Fields: fields, Header: q.Get(headerField) != "0",
 		EOL: eol, Sep: sep, Unique: q.Get(uniqueField) == "1", BOM: q.Get(bomField) == "1"}
-	if err := checkLayout(part, layout); err != nil {
+	if err := checkLayout(job, part, layout); err != nil {
 		http.Error(w, lang.T("exports.refused.fields"), http.StatusBadRequest)
 		return exportAsk{}, false
 	}
@@ -258,10 +261,10 @@ func fieldsOf(job store.JobSummary, part string) []string {
 	case partVerdicts:
 		return export.Verdicts.Names()
 	}
-	// A completion has no page and no place among results: the key and its
-	// text are the whole of it.
+	// A completion has no page and no place among results: the key and the
+	// suggestion are the whole of it, and are called that.
 	if job.Kind == store.KindSuggest {
-		return []string{export.ColOrdinal, export.ColQuery, export.ColTitle}
+		return export.Completions.Names()
 	}
 	return columnsOf(job.Fields)
 }
@@ -301,7 +304,11 @@ func (s *Server) writePart(ctx context.Context, w io.Writer, ask exportAsk, prev
 			})
 		})
 	}
-	return feed(w, export.Results, ask.layout, preview, func(fn func(export.Row) error) error {
+	catalog := export.Results
+	if ask.job.Kind == store.KindSuggest {
+		catalog = export.Completions
+	}
+	return feed(w, catalog, ask.layout, preview, func(fn func(export.Row) error) error {
 		return s.walkRows(ctx, id, fn)
 	})
 }

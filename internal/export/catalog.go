@@ -15,6 +15,10 @@ const (
 	ColText      = "text"
 	ColAddress   = "address"
 	ColHeld      = "held"
+	// ColKey and ColSuggestion are a search suggestions job's two columns: the
+	// key it typed and a suggestion Google offered for it.
+	ColKey        = "key"
+	ColSuggestion = "suggestion"
 )
 
 // Field is one column a file can carry: what a header and a download call it,
@@ -173,6 +177,16 @@ var Suggestions = Catalog[Suggestion]{Fields: []Field[Suggestion]{
 	{Name: ColPage, Text: func(g Suggestion) string { return itoa(g.Page) }, Value: func(g Suggestion) any { return g.Page }},
 	{Name: ColPosition, Text: func(g Suggestion) string { return itoa(g.Position) }, Value: func(g Suggestion) any { return g.Position }},
 	{Name: ColText, Text: func(g Suggestion) string { return g.Text }},
+}}
+
+// Completions is what a search suggestions job's results can be written with.
+// They are filed as results — the key as the query, the suggestion as the title
+// — and named here for what they are, so a file of suggestions says key and
+// suggestion rather than query and title.
+var Completions = Catalog[Row]{Fields: []Field[Row]{
+	{Name: ColOrdinal, Text: func(r Row) string { return itoa(r.Ordinal) }, Value: func(r Row) any { return r.Ordinal }},
+	{Name: ColKey, Text: func(r Row) string { return r.Query }},
+	{Name: ColSuggestion, Text: func(r Row) string { return r.Title }},
 }}
 
 // Verdicts is what an index check's answer can be written with. Held is written

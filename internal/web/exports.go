@@ -61,6 +61,15 @@ type exportField struct {
 	Up, Down string
 }
 
+// fieldLabelOf is the phrase naming a column of this job's file: a search
+// suggestions job's lines are keys, so its number is a key's.
+func fieldLabelOf(job store.JobSummary, name string) string {
+	if job.Kind == store.KindSuggest && name == export.ColOrdinal {
+		return "export.field.keyordinal"
+	}
+	return fieldLabel(name)
+}
+
 // fieldLabel is the phrase naming a column. The parts a job can be asked to
 // keep are named as the new-job form names them.
 func fieldLabel(name string) string {
@@ -71,6 +80,15 @@ func fieldLabel(name string) string {
 		return "field.path"
 	}
 	return "export.field." + name
+}
+
+// partLabelOf is the phrase naming a part of this job: a search suggestions
+// job's results are its suggestions.
+func partLabelOf(job store.JobSummary, part string) string {
+	if job.Kind == store.KindSuggest && part == partResults {
+		return "exports.part.suggestions"
+	}
+	return partLabel(part)
 }
 
 // partLabel is the phrase naming a part of a job.
@@ -173,7 +191,7 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 		part = partsOf(job)[0]
 	}
 	for _, p := range partsOf(job) {
-		view.Parts = append(view.Parts, exportPart{Name: p, Label: partLabel(p), Current: p == part})
+		view.Parts = append(view.Parts, exportPart{Name: p, Label: partLabelOf(job, p), Current: p == part})
 	}
 
 	allowed := fieldsOf(job, part)
@@ -183,11 +201,22 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 	// nothing.
 	view.Explicit = q.Has("format")
 	chosen := map[string]bool{}
-	if view.Explicit || q.Has(colsField) {
+	said := view.Explicit || q.Has(colsField)
+	named, known := 0, 0
+	if said {
 		for _, name := range colsOf(q) {
 			chosen[name] = true
+			named++
+			if slices.Contains(allowed, name) {
+				known++
+			}
 		}
-	} else {
+	}
+	// A choice naming columns of which this part has none — remembered from
+	// another kind of job, or from before a part's columns were renamed — is
+	// no choice at all, and every field is offered ticked. One that named
+	// nothing is a reader who unticked everything, and stays that.
+	if !said || (named > 0 && known == 0) {
 		for _, name := range allowed {
 			chosen[name] = true
 		}
@@ -233,7 +262,7 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 		return exportsAt + "?" + m.Encode()
 	}
 	for i, name := range order {
-		f := exportField{Name: name, Label: fieldLabel(name), Chosen: chosen[name]}
+		f := exportField{Name: name, Label: fieldLabelOf(job, name), Chosen: chosen[name]}
 		if i > 0 {
 			f.Up = moveTo(name, "up")
 		}

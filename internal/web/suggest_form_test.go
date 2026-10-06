@@ -5,6 +5,7 @@ package web
 import (
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -165,7 +166,7 @@ func TestJobPage_DrawsACompletionsJobAsKeysAndSuggestions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Progress: %v", err)
 	}
-	if got := strings.Join(fieldsOf(sum, partResults), ","); got != "ordinal,query,title" {
+	if got := strings.Join(fieldsOf(sum, partResults), ","); got != "ordinal,key,suggestion" {
 		t.Errorf("a completions job exports with %s, want the key and the text alone", got)
 	}
 }
@@ -226,5 +227,43 @@ func TestJobPage_CallsASuggestionsJobsTriesPerRequestAndPutsAwayTheRest(t *testi
 	}
 	if strings.Contains(body, LangEN.T("form.rest.why")) {
 		t.Error("the job page still explains a session's rest")
+	}
+}
+
+func TestExports_NameASuggestionsJobsColumnsForWhatTheyAre(t *testing.T) {
+	// On the export tab and in the file, a suggestions job's columns are the
+	// key and the suggestion, its part its suggestions — not the phrase, the
+	// title and the results a search's are.
+	s := testServerWithSupervisor(t)
+	id, err := s.store.CreateJob(t.Context(), store.JobSpec{Name: "c", Kind: store.KindSuggest, Pages: 1,
+		Fields: store.FieldsOf([]string{store.FieldTitle})}, []string{"coffee"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: 0,
+		Pages: []google.SERP{{Results: []google.Result{{Position: 1, Title: "coffee maker"}}}}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	tab := get(t, s, exportsAt+"?lang=ru&job="+strconv.FormatInt(id, 10)).Body.String()
+	for _, want := range []string{LangRU.T("export.field.keyordinal"), LangRU.T("export.field.key"),
+		LangRU.T("export.field.suggestion"), LangRU.T("exports.part.suggestions")} {
+		if !strings.Contains(tab, want) {
+			t.Errorf("the tab does not say %q", want)
+		}
+	}
+	for _, unwanted := range []string{">" + LangRU.T("export.field.query") + "<", ">" + LangRU.T("field.title") + "<"} {
+		if strings.Contains(tab, unwanted) {
+			t.Errorf("the tab still says %q", unwanted)
+		}
+	}
+	file := get(t, s, "/export?format=csv&cols=ordinal,key,suggestion&job="+strconv.FormatInt(id, 10)).Body.String()
+	if !strings.HasPrefix(strings.TrimPrefix(file, "\ufeff"), "ordinal,key,suggestion\n") ||
+		!strings.Contains(file, "0,coffee,coffee maker") {
+		t.Errorf("the file begins %q, want a header of key and suggestion and the row", file[:min(len(file), 80)])
+	}
+	// Columns remembered from a search are no choice for this part.
+	stale := get(t, s, exportsAt+"?lang=ru&cols=query,title&job="+strconv.FormatInt(id, 10)).Body.String()
+	if strings.Count(stale, `name="cols" value="key" checked`)+strings.Count(stale, `name="cols" value="suggestion" checked`) != 2 {
+		t.Error("columns of another kind left this part with nothing ticked")
 	}
 }
