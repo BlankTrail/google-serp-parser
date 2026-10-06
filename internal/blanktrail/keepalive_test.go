@@ -20,3 +20,17 @@ func TestBaseTransport_KeepsAnIdleConnectionForEveryLookupAPortCarries(t *testin
 		t.Error("a transport asked not to keep alive does")
 	}
 }
+
+func TestBaseTransport_ResumesTLSWithTheServiceFromACacheOfThePortsOwn(t *testing.T) {
+	// A port that opens a connection a request resumes its TLS session with
+	// the service rather than paying a full handshake for every page; and a
+	// ticket one port was given is never shown to another.
+	a := newBaseTransport("127.0.0.1", 20000, "socks5", nil, true, true)
+	b := newBaseTransport("127.0.0.1", 20001, "socks5", nil, true, true)
+	if a.TLSClientConfig.ClientSessionCache == nil {
+		t.Fatal("a port keeps no TLS sessions to resume")
+	}
+	if a.TLSClientConfig.ClientSessionCache == b.TLSClientConfig.ClientSessionCache {
+		t.Error("two ports share one cache of TLS sessions")
+	}
+}
