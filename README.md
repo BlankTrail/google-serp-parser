@@ -254,22 +254,45 @@ before you start it.
 | Kind of job | **Parsing** — collect the results. **Position check** — where one site stands for each phrase. **Index check** — whether Google holds an address at all. **Search suggestions** — every completion Google's search box offers for a key |
 | Site to look for | Only for a position check: the domain whose place you want |
 | Where the phrases come from | Paste them, one per line, or upload a `.txt` |
+| Query format | Parsing only: `{query}` where the phrase goes and anything around it, one format a line; **+** adds one. See below |
 | What to keep of each result | Organic results, ads, related queries — each can be kept or left |
 | Country, language | Two-letter codes, e.g. `de`, `en` |
 | Pages per query | Depth of pagination. One page is the first ten results |
 | Result page | Desktop or mobile |
-| Dropping duplicates | Keep everything, one row per URL, or one per host |
+| Dropping duplicates | Keep everything, one row per URL, or one per host. A suggestions job keeps each suggestion once by its text, by default |
 | Browser, system, version | The fingerprint the job's sessions wear. Nothing chosen spreads them over every browser and system the program knows, at the newest releases |
 | Proxy profile | Which set of exits the job goes out through |
 | Threads | How many phrases are taken at once. Past a hundred they start five a second rather than all at once |
-| Tries per phrase | How many identities one phrase may be carried to before it is called failed |
-| Session rest, seconds — from, to | How long one session rests between two of its requests, drawn afresh each time between the two. **Thirty to sixty** by default: on the same 8514 queries it was both faster and cheaper in checks than sixty to a hundred and twenty or fifteen to thirty. The thread does not wait with it — it carries another session meanwhile |
+| Tries per phrase | How many identities one phrase may be carried to before it is called failed. For search suggestions it is **Tries per request**: how many addresses one substitution is taken to when Google refuses it |
+| Session rest, seconds — from, to | How long one session rests between two of its requests, drawn afresh each time between the two. **Thirty to sixty** by default: on the same 8514 queries it was both faster and cheaper in checks than sixty to a hundred and twenty or fifteen to thirty. The thread does not wait with it — it carries another session meanwhile. Not asked for search suggestions, which keep no sessions |
 
 Threads decide how many sessions the run keeps in work at once; a session new to the run pays
 one check to Challenge Breaker, and the solver's processes are what your
 licence counts.
 
 ![The new job form: kind of job, depth, country, what to keep, and the pool it runs on](assets/screenshots/new-job-en.png)
+
+**Query formats.** A parsing job can make several queries of each line. A
+format is one line with `{query}` where the phrase goes (`{qery}` reads the
+same) and whatever is to be said around it: `site:{query}` searches one site,
+`"{query}"` the exact phrase, `{query} review` adds a word. Two macros stand
+for a run of values:
+
+- `{ABC:a:z:2}` — every word of one to two letters from a to z: `a … z`, then
+  `aa … zz`, 702 in all. Any range of characters and any number of rounds:
+  `{ABC:а:я:1}` for Russian letters.
+- `{num:1:1000}` — every number from 1 to 1000.
+
+Two macros in one format make every combination. **+** adds a format — the
+second starts as `{query} {ABC:a:z:2}`, the third as `{query} {num:1:1000}` —
+and **−** takes one away; what the macros do is under a fold on the form. Every
+format is applied to every line, typed in or uploaded, and what they make is
+put together and **kept once** before the job starts, so a line listed twice is
+searched once. A format with no `{query}`, a macro that cannot be read, or one
+making more than a million queries of a line is refused on the form. Position,
+index and suggestions jobs take their lines as they are.
+
+![The query format field: four formats, two of them with macros, and the fold that explains them](assets/screenshots/new-job-format-en.png)
 
 **Search suggestions.** Choose that kind and each line is a key. The key is
 typed into Google's search box again and again — on its own, followed by a
@@ -280,8 +303,18 @@ that comes back is kept, once. It is the operator's link generator
 same cursor positions, generated as the job runs. **Multiword** also puts a
 letter between each two words of a key. A key is hundreds of requests, so the
 threads share them out, and one key keeps every thread busy; the box beside
-Multiword caps how many one key may cost. The depth, the site and the parts of
-a result mean nothing to this kind and are put away.
+Multiword caps how many one key may cost. The depth, the site, the parts of a
+result and the session rest mean nothing to this kind and are put away.
+
+The alphabet is the job's **search language**: `ru` types Russian letters, `de`
+German, and so on. A job with none types a to z and nought to nine, as the link
+generator did, and the form says so under the language — set it for keys that
+are not in Latin script. Repeats are dropped across the whole job by default,
+**by the suggestion's text**, however many keys bring it; *Keep everything* is
+still a choice. The job's page and the status screen read **keys a minute** and
+**requests a minute** — every substitution answered — where a search reads
+queries and pages, and the export's columns are the **key** and the
+**suggestion**.
 
 ![The new job form set to search suggestions: the keys, Multiword and the cap on requests per key](assets/screenshots/new-job-suggest-en.png)
 
@@ -321,6 +354,48 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 ---
 
 ## 📜 Recent changes
+
+### 0.4.7
+
+- **TLS sessions with BlankTrail are resumed.** A search opens a connection to
+  the service for every page, and every one of them paid a full TLS handshake.
+  Each port now keeps a small cache of its own TLS sessions, and a new
+  connection resumes one. Checked against BlankTrail 1.4.1068; older builds of
+  the service simply do not resume. Nothing of it reaches Google.
+- Keep-alive for searches was examined and left off: a session lands on the
+  same port about once in a hundred, and a kept connection would let a new
+  session travel through the previous one's tunnel.
+
+### 0.4.6
+
+- **A search suggestions job and the hidden-address lookups keep their
+  connections to BlankTrail alive** instead of opening one a request — TCP,
+  SOCKS5 and a full TLS handshake each time. A port drops every connection it
+  holds whenever it is moved to another address. The same suggestions job of
+  200 requests: 127 of 175 on a connection used before, 9.1 seconds against
+  14.4.
+
+### 0.4.5
+
+- **Query formats and macros** for a parsing job — `{query}`, `site:{query}`,
+  `"{query}"`, `{ABC:a:z:2}`, `{num:1:1000}`, several formats a job — see
+  [the first run](#6-new-job-the-first-run). A parsing job's list is now kept
+  once: a line listed twice is searched once.
+- A suggestions job made from the page receives its **Multiword**, its **cap on
+  requests per key** and a choice to keep every repeat; they were lost on the
+  way.
+- A suggestions job's export names its columns **key number, key, suggestion**,
+  and its part **suggestions**.
+
+### 0.4.1 – 0.4.4
+
+- A suggestions job reads as **keys a minute** and **requests a minute**; its
+  results are the key and the suggestion, with no position and no address.
+- **Repeats dropped by the suggestion's text** across the whole job, by default.
+- A warning on the form for a suggestions job with **no search language**,
+  which types its keys in Latin letters.
+- **Tries per request** for suggestions, and no session rest, which that kind
+  does not use.
 
 ### 0.4.0
 
@@ -523,6 +598,9 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   - **Search suggestions** — reads each line as a key and collects every
     completion Google's search box offers for it, typed with each letter of
     the job language's alphabet around it.
+- **Query formats and macros** for parsing: `site:{query}`, `"{query}"`,
+  `{query} {ABC:a:z:2}`, `{query} {num:1:1000}` — several formats a job, what
+  they make kept once.
 - Organic results, ads and related queries, each exportable on its own.
 - Pagination to any depth; country and interface language per job.
 - Desktop and mobile result pages.
@@ -621,6 +699,9 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   never covers more than three quarters of the list, so the pool cannot run out
   of addresses to try.
 - Load is spread evenly: every address is used once before any is used twice.
+- **Less work for BlankTrail**: each port resumes its TLS sessions with the
+  service, and a suggestions job and the hidden-address lookups keep their
+  connections alive.
 - **Threads per proxy**, one by default — and worth raising to two or three on a
   long address list, where the spare identities are asked less often and last
   longer. On a short list of gateways it is the other way: more identities
@@ -658,7 +739,8 @@ measured to it:
 - An **export tab** that lays a job's file out field by field — parts, columns,
   order, separators, line ends, a byte-order mark — with a preview. TXT writes a
   single field one per line and nothing else.
-- Deduplication by URL or by host, or none.
+- Deduplication by URL or by host, or none; for search suggestions, by the
+  suggestion's text.
 - HTTP API under `/api/v1/`: set a job going, watch it, stop it, resume it.
 - Streaming endpoints: a job's results and a site's history, one JSON object
   per line, so a million rows read a line at a time.
@@ -701,12 +783,13 @@ measured to it:
 |---|---|
 | Proxy profile | Which set of exits the job goes out through. Changeable afterwards on the job's own page |
 | Threads | Queries taken at once. Past a hundred they start five a second |
-| Tries per phrase | How many identities one phrase may be taken to |
-| Session rest, seconds — from, to | How long one session rests between two of its requests. Thirty to sixty by default |
+| Tries per phrase | How many identities one phrase may be taken to. For search suggestions, tries per request: how many addresses one substitution may be taken to |
+| Session rest, seconds — from, to | How long one session rests between two of its requests. Thirty to sixty by default. Not for search suggestions |
 | Browser, system, version | The fingerprint the job's sessions wear |
 | Pages per query | Depth of pagination |
 | Country, language | Two-letter codes, e.g. `de` |
-| Deduplication | Keep everything, one row per URL, or one per host |
+| Deduplication | Keep everything, one row per URL, or one per host; for search suggestions, one per suggestion text (the default) |
+| Query format | Parsing only: one or more formats with `{query}` and the macros `{ABC:a:z:2}`, `{num:1:1000}`. `{query}` by default |
 | Multiword | Search suggestions only: also put a letter between each two words of a key |
 | Requests per key, at most | Search suggestions only: the cap on what one key may cost. Nought is no cap |
 
