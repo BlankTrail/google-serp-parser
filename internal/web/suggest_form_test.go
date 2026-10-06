@@ -267,3 +267,21 @@ func TestExports_NameASuggestionsJobsColumnsForWhatTheyAre(t *testing.T) {
 		t.Error("columns of another kind left this part with nothing ticked")
 	}
 }
+
+func TestSupervisor_AsksForKeptAliveConnectionsForASuggestionsJobAlone(t *testing.T) {
+	// A suggestions job's ports carry no sessions and keep their connections;
+	// a search's open one a request, as they were measured to want.
+	pools := &raisedPools{}
+	v, _ := raisingSupervisor(t, pools, 1, 1)
+	for _, kind := range []string{store.KindParse, store.KindSuggest} {
+		if eng, err := v.raise(t.Context(), source{raise: pools.raise}, store.JobSummary{
+			Kind: kind, Ports: 1, Threads: 1, Device: "desktop"}); err == nil && eng != nil {
+			_ = eng.Close()
+		}
+	}
+	pools.mu.Lock()
+	defer pools.mu.Unlock()
+	if len(pools.asked) != 2 || pools.asked[0].KeepAlive || !pools.asked[1].KeepAlive {
+		t.Errorf("asked %+v, want a search without and a suggestions job with kept-alive connections", pools.asked)
+	}
+}

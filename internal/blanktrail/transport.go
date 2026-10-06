@@ -76,11 +76,15 @@ func newBaseTransport(proxyHost string, port int, protocol string, ca *x509.Cert
 		tlsCfg.RootCAs = ca
 	}
 	return &http.Transport{
-		Proxy:               http.ProxyURL(proxyURL),
-		TLSClientConfig:     tlsCfg,
-		DisableKeepAlives:   noKeepAlives,
-		MaxIdleConns:        4,
-		MaxIdleConnsPerHost: 4,
+		Proxy:             http.ProxyURL(proxyURL),
+		TLSClientConfig:   tlsCfg,
+		DisableKeepAlives: noKeepAlives,
+		// Enough idle connections for every request a port carries at once —
+		// a port the hidden addresses are read through carries ten — so a
+		// pool that keeps them alive does not close the ones past four the
+		// moment their answers are in.
+		MaxIdleConns:        16,
+		MaxIdleConnsPerHost: 16,
 		IdleConnTimeout:     90 * time.Second,
 	}
 }

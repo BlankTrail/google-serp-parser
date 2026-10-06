@@ -468,7 +468,9 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 		// and growing it one address at a time would leave the machine's warm
 		// ones scattered through a job's ports when the job ended.
 		if pool, mine, err := warm.raiseFor(ctx, want.Ports, want.Threads, want.Device, want.Profile.ID,
-			want.WholePool || want.Addresses || want.Worn != (blanktrail.Worn{})); err != nil {
+			// A job keeping its connections alive opens its own too: the standing
+			// ones were opened for searches, a connection a request.
+			want.WholePool || want.Addresses || want.KeepAlive || want.Worn != (blanktrail.Worn{})); err != nil {
 			return web.Identities{}, err
 		} else if mine {
 			// The job's own pause, and nothing else's.
@@ -591,6 +593,13 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 		ports = o.Ports
 	}
 	cfg := poolConfig(threads, ports, want.WholePool)
+	// A search suggestions job keeps its connections to the service alive:
+	// measured on the stand at 77 thousand requests a minute, a connection a
+	// request was 1.3 requests a connection and 43 per cent of the service's
+	// CPU spent on full TLS handshakes. Its ports carry no sessions, so what
+	// poolConfig fears — a live connection outlasting the road behind it — is
+	// met by the pool dropping a port's connections whenever it moves it.
+	cfg.NoKeepAlives = !want.KeepAlive
 	cfg.Spec.Protocol = prof.Protocol
 	// What this profile's ports are made of, beyond where they go out.
 	cfg.Spec.VDNSMode = prof.VDNSMode
@@ -746,6 +755,10 @@ func lookupPortsOf(cfg blanktrail.PoolConfig) blanktrail.PoolConfig {
 	plain.Specs = nil
 	plain.Cooldown = time.Millisecond
 	plain.Warmest = true
+	// Kept alive: a lookup port carries ten at once and no session, and it
+	// drops its connections whenever it is moved or renewed. A connection a
+	// lookup was a full TLS handshake on the service for every hidden address.
+	plain.NoKeepAlives = false
 	return plain
 }
 

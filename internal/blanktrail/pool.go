@@ -2053,6 +2053,10 @@ func (l *Lease) Client() *http.Client { return l.pt.client }
 // Do is shorthand for l.Client().Do(req).
 func (l *Lease) Do(req *http.Request) (*http.Response, error) { return l.pt.client.Do(req) }
 
+// KeepsAlive says whether the pool's ports keep their connections to the service
+// open between requests.
+func (p *Pool) KeepsAlive() bool { return !p.cfg.NoKeepAlives }
+
 // Port is the port number backing this lease.
 func (l *Lease) Port() int { return l.pt.num }
 

@@ -217,6 +217,8 @@ type poolShape struct {
 	// Worn is the identity the job asked its ports to wear, which is the zero
 	// value for a job that named none of it.
 	Worn blanktrail.Worn
+	// KeepAlive is whether the job asked its ports to keep their connections.
+	KeepAlive bool
 }
 
 // raisedPools stands where the pools go.
@@ -246,7 +248,7 @@ func (r *raisedPools) raise(_ context.Context, want Wanted) (engine, error) {
 	r.mu.Lock()
 	r.asked = append(r.asked, poolShape{
 		Ports: want.Ports, Threads: want.Threads, Profile: want.Profile.ID,
-		WholePool: want.WholePool, Worn: want.Worn,
+		WholePool: want.WholePool, Worn: want.Worn, KeepAlive: want.KeepAlive,
 	})
 	if r.refuse != nil {
 		err := r.refuse

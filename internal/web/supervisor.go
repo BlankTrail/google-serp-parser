@@ -233,6 +233,12 @@ type Wanted struct {
 	// all.
 	WholePool bool
 	Addresses bool
+	// KeepAlive says the job's ports keep their connections to the service
+	// open between requests. A search suggestions job does: it has no sessions,
+	// so nothing is put on a port between two of its requests, and a port moved
+	// to another address drops what it holds. Every other kind opens one per
+	// request, as it always has; see poolConfig.
+	KeepAlive bool
 }
 
 // Dial raises the identities one job asked to run on.
@@ -915,6 +921,7 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 		RestUpTo:  sum.RestUpTo,
 		WholePool: sum.WholePool,
 		Addresses: sum.Fields.Keeps(store.FieldURL),
+		KeepAlive: sum.Kind == store.KindSuggest,
 	})
 	if err != nil {
 		return nil, err
