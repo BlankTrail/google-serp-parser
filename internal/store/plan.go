@@ -90,12 +90,12 @@ func (s *Store) OpenPlan(ctx context.Context, spec JobSpec) (*Plan, error) {
 	}
 	ports, threads, tries := spec.pool()
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, rest_up_to_ms, fields, profile_id, whole_pool, browser, os, browser_release, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, rest_up_to_ms, fields, profile_id, whole_pool, browser, os, browser_release, suggest_multiword, suggest_limit, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
 		spec.Device, spec.Country, spec.Language, ports, threads, tries,
 		spec.Cooldown.Milliseconds(), spec.RestUpTo.Milliseconds(), string(spec.Fields), spec.ProfileID, spec.WholePool,
-		spec.Browser, spec.OS, spec.Release)
+		spec.Browser, spec.OS, spec.Release, spec.Multiword, spec.suggestLimit())
 	if err != nil {
 		return nil, fmt.Errorf("store: recording the job: %w", err)
 	}

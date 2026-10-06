@@ -47,7 +47,14 @@ const (
 	KindPosition = "position"
 	// KindIndex asks whether Google holds each address in the list.
 	KindIndex = "index"
+	// KindSuggest asks Google's completion box about each key, the key typed
+	// again and again with a letter around it, and keeps every completion.
+	KindSuggest = "suggest"
 )
+
+// suggestLimit is the cap as the column keeps it: never below nought, which is
+// no cap.
+func (s JobSpec) suggestLimit() int { return max(s.SuggestLimit, 0) }
 
 // ErrNoTarget is returned when a position check is written down without the
 // site it is supposed to be about.
@@ -184,6 +191,12 @@ type JobSpec struct {
 	Browser string
 	OS      string
 	Release int
+	// Multiword and SuggestLimit are how a completions job generates its
+	// questions: Multiword also puts a letter between each two words of a key,
+	// and SuggestLimit caps the questions one key may cost, nought for none.
+	// Both mean nothing to any other kind.
+	Multiword    bool
+	SuggestLimit int
 	// Fields is what each result of this job keeps. Empty is everything, which
 	// is what a job that never chose means and what every job written before the
 	// choice existed carries.
@@ -290,12 +303,12 @@ func (s *Store) CreateJob(ctx context.Context, spec JobSpec, queries []string) (
 	// after its last batch.
 	ports, threads, tries := spec.pool()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, rest_up_to_ms, fields, profile_id, whole_pool, browser, os, browser_release, plan_ready)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		`INSERT INTO jobs(name, created_at, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, rest_up_to_ms, fields, profile_id, whole_pool, browser, os, browser_release, suggest_multiword, suggest_limit, plan_ready)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 		spec.Name, time.Now().UTC().Format(time.RFC3339), spec.kind(), spec.target(), string(spec.UniqueBy), pages,
 		spec.Device, spec.Country, spec.Language, ports, threads, tries,
 		spec.Cooldown.Milliseconds(), spec.RestUpTo.Milliseconds(), string(spec.Fields), spec.ProfileID, spec.WholePool,
-		spec.Browser, spec.OS, spec.Release)
+		spec.Browser, spec.OS, spec.Release, spec.Multiword, spec.suggestLimit())
 	if err != nil {
 		return 0, fmt.Errorf("store: recording the job: %w", err)
 	}
@@ -399,7 +412,7 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 	// has to know which unit the column is written in.
 	var cooldownMS, restUpToMS int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, rest_up_to_ms, fields, profile_id, whole_pool, browser, os, browser_release
+		`SELECT id, name, kind, target, unique_by, pages, device, country, language, ports, threads, tries, cooldown_ms, rest_up_to_ms, fields, profile_id, whole_pool, browser, os, browser_release, suggest_multiword, suggest_limit
 		   FROM jobs
 		  WHERE name = ? AND finished_at IS NULL AND plan_ready = 1
 		  ORDER BY created_at DESC, id DESC
@@ -407,7 +420,7 @@ func (s *Store) LastUnfinished(ctx context.Context, name string) (UnfinishedJob,
 		Scan(&j.ID, &j.Spec.Name, &j.Spec.Kind, &j.Spec.Target, &j.Spec.UniqueBy, &j.Spec.Pages,
 			&j.Spec.Device, &j.Spec.Country, &j.Spec.Language, &j.Spec.Ports, &j.Spec.Threads,
 			&j.Spec.Tries, &cooldownMS, &restUpToMS, &j.Spec.Fields, &j.Spec.ProfileID, &j.Spec.WholePool,
-			&j.Spec.Browser, &j.Spec.OS, &j.Spec.Release)
+			&j.Spec.Browser, &j.Spec.OS, &j.Spec.Release, &j.Spec.Multiword, &j.Spec.SuggestLimit)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UnfinishedJob{}, fmt.Errorf("%w: %q", ErrNoUnfinishedJob, name)
 	}

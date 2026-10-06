@@ -67,6 +67,12 @@ type jobForm struct {
 	// and half again.
 	Cooldown int
 	RestUpTo int
+	// Multiword and SuggestLimit are how a completions job generates its
+	// questions: Multiword also puts a letter between each two words of a key,
+	// as the link generator's box of that name did, and SuggestLimit caps the
+	// questions one key may cost, nought for none. Nothing to any other kind.
+	Multiword    bool
+	SuggestLimit int
 	// Profile is the proxy profile this job goes out through. Nought is a job
 	// that named none and runs on whichever is default, which is what a form
 	// offering no profiles at all can only mean.
@@ -209,6 +215,7 @@ func kinds() []jobKind {
 		{Value: store.KindParse, Label: "form.kind.parse"},
 		{Value: store.KindPosition, Label: "form.kind.position"},
 		{Value: store.KindIndex, Label: "form.kind.index"},
+		{Value: store.KindSuggest, Label: "form.kind.suggest"},
 	}
 }
 
@@ -280,7 +287,9 @@ func filterKey(unique string) (string, bool) {
 // here, as the depth is, so that the job filed in the history and the job that
 // runs say one thing.
 func (f jobForm) filter() store.UniqueBy {
-	if f.Kind == store.KindIndex || f.Kind == store.KindPosition {
+	// A completions job keeps no address to filter by: its repeats are taken
+	// out per key as the completions come in.
+	if f.Kind == store.KindIndex || f.Kind == store.KindPosition || f.Kind == store.KindSuggest {
 		return store.UniqueOff
 	}
 	return store.UniqueBy(f.Unique)
@@ -299,6 +308,8 @@ func runKind(kind string) run.Kind {
 		return run.Index
 	case store.KindPosition:
 		return run.Position
+	case store.KindSuggest:
+		return run.Suggest
 	}
 	return run.Parse
 }
@@ -310,7 +321,8 @@ func runKind(kind string) run.Kind {
 // filed in the history, the estimate quoted for it and the work actually done
 // all name one number.
 func (f jobForm) depth() int {
-	if f.Kind == store.KindIndex {
+	// A completions job has no pages either: each question is one answer.
+	if f.Kind == store.KindIndex || f.Kind == store.KindSuggest {
 		return 1
 	}
 	return f.Pages
@@ -365,6 +377,9 @@ func (f jobForm) faults() []string {
 	}
 	if f.depth() < 1 {
 		complaints = append(complaints, "form.pages.positive")
+	}
+	if f.Kind == store.KindSuggest && f.SuggestLimit < 0 {
+		complaints = append(complaints, "form.suggestlimit.bad")
 	}
 	// A span whose far end is nearer than its near one is a pair of boxes filled
 	// in the wrong order. Taken as written it would not be read as a span at all
@@ -467,8 +482,30 @@ func (f jobForm) spec() store.JobSpec {
 		Cooldown:  time.Duration(f.Cooldown) * time.Second,
 		RestUpTo:  time.Duration(f.RestUpTo) * time.Second,
 		ProfileID: f.Profile,
-		Fields:    store.FieldsOf(f.Keep),
+		Fields:    f.fields(),
+		// Only a completions job reads these, and only one keeps them.
+		Multiword:    f.Kind == store.KindSuggest && f.Multiword,
+		SuggestLimit: f.suggestLimit(),
 	}
+}
+
+// fields is what each result of this job keeps. A completion is its text and
+// nothing else, so a completions job keeps the title it is filed under whatever
+// the boxes for a page's parts say.
+func (f jobForm) fields() store.Fields {
+	if f.Kind == store.KindSuggest {
+		return store.FieldsOf([]string{store.FieldTitle})
+	}
+	return store.FieldsOf(f.Keep)
+}
+
+// suggestLimit is the cap on one key's questions as a job keeps it: nought for
+// any other kind, and for one that named none.
+func (f jobForm) suggestLimit() int {
+	if f.Kind != store.KindSuggest {
+		return 0
+	}
+	return max(f.SuggestLimit, 0)
 }
 
 // formOf reads the posted form, leaving numbers that will not parse at zero so
@@ -479,26 +516,28 @@ func formOf(r *http.Request) jobForm {
 		return n
 	}
 	return jobForm{
-		Name:     strings.TrimSpace(r.FormValue("name")),
-		Kind:     strings.TrimSpace(r.FormValue("kind")),
-		Target:   strings.TrimSpace(r.FormValue("target")),
-		Unique:   strings.TrimSpace(r.FormValue("unique")),
-		Queries:  r.FormValue("queries"),
-		Country:  strings.TrimSpace(r.FormValue("country")),
-		Language: strings.TrimSpace(r.FormValue("language")),
-		Device:   strings.TrimSpace(r.FormValue("device")),
-		Browser:  strings.TrimSpace(r.FormValue("browser")),
-		OS:       strings.TrimSpace(r.FormValue("os")),
-		Release:  atoi("release"),
-		Pages:    atoi("pages"),
-		Threads:  atoi("threads"),
-		Tries:    atoi("tries"),
-		Cooldown: atoi("cooldown"),
-		RestUpTo: atoi("restupto"),
-		Profile:  atoi64(r, profileField),
-		From:     strings.TrimSpace(r.FormValue(fromField)),
-		Keep:     r.Form["keep"],
-		Chose:    r.FormValue(choseField) != "",
+		Name:         strings.TrimSpace(r.FormValue("name")),
+		Kind:         strings.TrimSpace(r.FormValue("kind")),
+		Target:       strings.TrimSpace(r.FormValue("target")),
+		Unique:       strings.TrimSpace(r.FormValue("unique")),
+		Queries:      r.FormValue("queries"),
+		Country:      strings.TrimSpace(r.FormValue("country")),
+		Language:     strings.TrimSpace(r.FormValue("language")),
+		Device:       strings.TrimSpace(r.FormValue("device")),
+		Browser:      strings.TrimSpace(r.FormValue("browser")),
+		OS:           strings.TrimSpace(r.FormValue("os")),
+		Release:      atoi("release"),
+		Pages:        atoi("pages"),
+		Threads:      atoi("threads"),
+		Tries:        atoi("tries"),
+		Cooldown:     atoi("cooldown"),
+		RestUpTo:     atoi("restupto"),
+		Multiword:    r.FormValue("multiword") != "",
+		SuggestLimit: atoi("suggestlimit"),
+		Profile:      atoi64(r, profileField),
+		From:         strings.TrimSpace(r.FormValue(fromField)),
+		Keep:         r.Form["keep"],
+		Chose:        r.FormValue(choseField) != "",
 	}
 }
 

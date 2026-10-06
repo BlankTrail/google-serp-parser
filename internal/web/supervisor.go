@@ -1099,6 +1099,7 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSumm
 	// to put one, and the lookups are a request apiece.
 	j := run.Job{Kind: runKind(sum.Kind), Target: sum.Target,
 		Pages: sum.Pages, Tries: sum.Tries,
+		Multiword: sum.Multiword, SuggestLimit: sum.SuggestLimit,
 		Mobile:    runsOnPhones(sum.Device),
 		Addresses: sum.Fields.Keeps(store.FieldURL)}
 	for _, q := range left {

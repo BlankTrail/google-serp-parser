@@ -1,0 +1,209 @@
+// SPDX-License-Identifier: MIT
+
+package run
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/blanktrail/google-serp-parser/internal/google"
+)
+
+// completionOrigin answers the completion address the way the gws-wiz-serp
+// client is answered: for "<key> <letter>" it offers "<key> <letter>1" and
+// "<key> shared", so every key has one completion all its questions repeat.
+// refuse, when set, is asked for every request and answers it with a rate
+// limit instead.
+type completionOrigin struct {
+	*httptest.Server
+	mu      sync.Mutex
+	asked   map[string]int
+	refuse  func(n int) bool
+	hold    time.Duration
+	count   atomic.Int64
+	at      atomic.Int64
+	busiest atomic.Int64
+}
+
+func newCompletionOrigin(t *testing.T) *completionOrigin {
+	t.Helper()
+	o := &completionOrigin{asked: map[string]int{}}
+	o.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/complete/search" {
+			http.NotFound(w, r)
+			return
+		}
+		n := int(o.count.Add(1))
+		now := o.at.Add(1)
+		defer o.at.Add(-1)
+		for {
+			b := o.busiest.Load()
+			if now <= b || o.busiest.CompareAndSwap(b, now) {
+				break
+			}
+		}
+		if o.hold > 0 {
+			time.Sleep(o.hold)
+		}
+		q := r.URL.Query()
+		o.mu.Lock()
+		o.asked[q.Get("pq")]++
+		o.mu.Unlock()
+		if o.refuse != nil && o.refuse(n) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		typed := strings.TrimSpace(q.Get("q"))
+		key := q.Get("pq")
+		_, _ = w.Write([]byte(")]}'\n[[[\"" + typed + "\\u003cb\\u003e1\\u003c/b\\u003e\",0,[512]],[\"" + key +
+			" shared\",0,[512]]],{}]"))
+	}))
+	t.Cleanup(o.Close)
+	return o
+}
+
+func TestRunner_AsksEveryQuestionOfEveryKeyAndKeepsEachCompletionOnce(t *testing.T) {
+	o := newCompletionOrigin(t)
+	f := poolFacing(t, o.Listener.Addr().String(), 3)
+	r := &Runner{Pool: f.Pool, Threads: 3}
+	keys := []google.Query{usQuery("coffee"), usQuery("tea pot")}
+	rep := r.Run(context.Background(), Job{Kind: Suggest, Queries: keys, Tries: 3})
+
+	if rep.Done != 2 || rep.Failed != 0 {
+		t.Fatalf("report says %d done and %d failed, want both keys done", rep.Done, rep.Failed)
+	}
+	alphabet := google.SuggestAlphabet("en")
+	for i, q := range keys {
+		want := len(google.SuggestVariants(q.Text, alphabet, false))
+		o.mu.Lock()
+		asked := o.asked[q.Text]
+		o.mu.Unlock()
+		if asked != want {
+			t.Errorf("key %q: %d questions asked, want the generator's %d", q.Text, asked, want)
+		}
+		got := rep.Results[i].Pages
+		if len(got) != 1 {
+			t.Fatalf("key %q settled with %d pages, want one", q.Text, len(got))
+		}
+		shared := 0
+		seen := map[string]bool{}
+		for n, res := range got[0].Results {
+			if seen[res.Title] {
+				t.Errorf("key %q kept %q twice", q.Text, res.Title)
+			}
+			seen[res.Title] = true
+			if res.Title == q.Text+" shared" {
+				shared++
+			}
+			if res.Position != n+1 {
+				t.Errorf("completion %d of %q is numbered %d", n+1, q.Text, res.Position)
+			}
+			if strings.Contains(res.Title, "<b>") {
+				t.Errorf("completion %q kept its markup", res.Title)
+			}
+		}
+		if shared != 1 {
+			t.Errorf("key %q kept the completion every question repeats %d times, want once", q.Text, shared)
+		}
+	}
+}
+
+func TestRunner_TakesARefusedCompletionQuestionToAnotherAddress(t *testing.T) {
+	// Every third request is a rate limit. A question refused once is asked
+	// again through another address, and the key comes out whole.
+	o := newCompletionOrigin(t)
+	o.refuse = func(n int) bool { return n%3 == 0 }
+	f := poolFacing(t, o.Listener.Addr().String(), 3)
+	r := &Runner{Pool: f.Pool, Threads: 2}
+	rep := r.Run(context.Background(), Job{Kind: Suggest, Queries: []google.Query{usQuery("coffee")}, Tries: 5, SuggestLimit: 12})
+
+	if rep.Done != 1 {
+		t.Fatalf("report says %d done, want the key done", rep.Done)
+	}
+	if o.count.Load() <= 12 {
+		t.Fatalf("%d requests for twelve questions, want refusals among them", o.count.Load())
+	}
+	// Twelve questions, each answered "<what was typed>1": the first three
+	// type the key itself and come to one, the nine with a letter to nine more,
+	// and the one every question repeats makes eleven.
+	if got := len(rep.Results[0].Pages[0].Results); got != 11 {
+		t.Errorf("%d completions kept, want eleven: none lost to a refusal", got)
+	}
+}
+
+func TestRunner_SpreadsOneKeysQuestionsOverTheThreads(t *testing.T) {
+	// One key and four threads: the questions are the work, not the key, so
+	// more than one is in flight at once.
+	o := newCompletionOrigin(t)
+	o.hold = 20 * time.Millisecond
+	f := poolFacing(t, o.Listener.Addr().String(), 4)
+	r := &Runner{Pool: f.Pool, Threads: 4}
+	rep := r.Run(context.Background(), Job{Kind: Suggest, Queries: []google.Query{usQuery("coffee")}, SuggestLimit: 16})
+	if rep.Done != 1 {
+		t.Fatalf("report says %d done", rep.Done)
+	}
+	if got := o.busiest.Load(); got < 2 {
+		t.Errorf("at most %d question in flight at once, want the threads sharing one key's questions", got)
+	}
+}
+
+func TestSuggestion_FailsOnlyAKeyNoQuestionOfWhichWasAnswered(t *testing.T) {
+	k := &suggestion{last: errFake}
+	if _, err := k.settled("k"); err == nil {
+		t.Error("a key with no answered question settled without an error")
+	}
+	k.answered = 1
+	if pages, err := k.settled("k"); err != nil || len(pages) != 1 {
+		t.Errorf("a key with one answered question settled %v, %v; want one page and no error", pages, err)
+	}
+}
+
+var errFake = errorString("refused")
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }
+
+func TestRunner_LeavesAKeyStoppedHalfwayUntried(t *testing.T) {
+	// Stopped part way through a key's questions, the key is left as it was
+	// found — untried, to be asked whole by the next run — rather than filed as
+	// done with half its completions.
+	o := newCompletionOrigin(t)
+	o.hold = 30 * time.Millisecond
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+	r := &Runner{Pool: f.Pool, Threads: 2}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	rep := r.Run(ctx, Job{Kind: Suggest, Queries: []google.Query{usQuery("coffee")}})
+	if o.count.Load() == 0 {
+		t.Fatal("nothing was asked before the stop")
+	}
+	if got := rep.Results[0]; got.Attempted || got.Pages != nil {
+		t.Errorf("the key stopped halfway came back attempted %v with %d pages, want untried and empty",
+			got.Attempted, len(got.Pages))
+	}
+}
+
+func TestAttempt_AsksACompletionQuestionAgainOnceThePortHasGivenUp(t *testing.T) {
+	// The first three requests are rate limits: the port's own ladder asks
+	// once more and gives up, and the question is taken to another address
+	// rather than lost.
+	o := newCompletionOrigin(t)
+	o.refuse = func(n int) bool { return n <= 3 }
+	f := poolFacing(t, o.Listener.Addr().String(), 3)
+	a := &Attempt{Pool: f.Pool, Tries: 3}
+	got, err := a.Complete(context.Background(), usQuery("coffee"),
+		google.SuggestVariant{Key: "coffee", Text: "coffee a", Cursor: 1})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("completions %q, %v; want the two of the answer that came through", got, err)
+	}
+	if n := o.count.Load(); n < 4 {
+		t.Errorf("%d requests, want the question asked past three refusals", n)
+	}
+}

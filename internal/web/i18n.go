@@ -238,6 +238,11 @@ var catalogue = map[Lang]map[string]string{
 		"form.kind.parse.why":    "Parsing — reads the line as a phrase and saves every result it returns.",
 		"form.kind.position.why": "Position check — searches the same phrases and records where one site stands, or that it was not found.",
 		"form.kind.index.why":    "Index check — reads the line as an address and asks whether Google holds it. One page per address, whatever the depth.",
+		"form.kind.suggest":      "Search suggestions",
+		"form.kind.suggest.why":  "Search suggestions — reads the line as a key and collects every completion Google's search box offers for it: the key typed with each letter of the job language's alphabet before it, after it and joined to it, as the link generator typed it. Hundreds of requests per key, shared out over the threads.",
+		"form.multiword":         "Multiword — also put a letter between the words of a key",
+		"form.suggestlimit":      "Requests per key, at most (0 — no limit)",
+		"form.suggestlimit.bad":  "Requests per key cannot be negative.",
 		"form.kind.unknown":      "That is not one of the things a job asks.",
 		// The site a position check is about. The sentence says what cannot be
 		// changed later and why, because a reader who finds that out afterwards
@@ -829,6 +834,11 @@ var catalogue = map[Lang]map[string]string{
 		"form.kind.parse.why":    "Парсинг — читает строку как фразу и сохраняет все её результаты.",
 		"form.kind.position.why": "Проверка позиций — ищет по тем же фразам один сайт и записывает его место или отсутствие.",
 		"form.kind.index.why":    "Проверка индексации — читает строку как адрес и проверяет, есть ли он в индексе. Одна страница на адрес, независимо от глубины.",
+		"form.kind.suggest":      "Поисковые подсказки",
+		"form.kind.suggest.why":  "Поисковые подсказки — читает строку как ключ и собирает все подсказки поисковой строки Google: ключ набирается с каждой буквой алфавита языка задания — перед ним, после него и слитно, как набирал генератор ссылок. Сотни запросов на ключ, их делят между собой потоки.",
+		"form.multiword":         "Multiword — ещё и вставлять букву между словами ключа",
+		"form.suggestlimit":      "Запросов на ключ, не больше (0 — без ограничения)",
+		"form.suggestlimit.bad":  "Запросов на ключ не может быть меньше нуля.",
 		"form.kind.unknown":      "Такого задания не бывает.",
 
 		"form.target":          "Искомый сайт",

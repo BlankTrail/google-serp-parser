@@ -95,6 +95,10 @@ type JobSummary struct {
 	// ChecksMet is how many of Google's checks the job has paid for over all its
 	// runs: the captchas the challenge solver solved for it. See AddChecks.
 	ChecksMet int
+	// Multiword and SuggestLimit are how a completions job generates its
+	// questions; see JobSpec.
+	Multiword    bool
+	SuggestLimit int
 
 	Total   int
 	Done    int
@@ -114,6 +118,7 @@ const jobSummaryQuery = `
 	       j.pages, j.country, j.language, j.device,
 	       j.ports, j.threads, j.tries, j.cooldown_ms, j.rest_up_to_ms, j.fields, j.profile_id, j.whole_pool,
 	       j.browser, j.os, j.browser_release, j.plan_ready, j.checks_met,
+	       j.suggest_multiword, j.suggest_limit,
 	       count(q.id),
 	       sum(CASE WHEN q.state = 'done'    THEN 1 ELSE 0 END),
 	       sum(CASE WHEN q.state = 'failed'  THEN 1 ELSE 0 END),
@@ -233,6 +238,7 @@ func scanSummary(row scanner) (JobSummary, error) {
 		&sum.Pages, &sum.Country, &sum.Language, &sum.Device,
 		&sum.Ports, &sum.Threads, &sum.Tries, &cooldownMS, &restUpToMS, &sum.Fields, &sum.ProfileID, &sum.WholePool,
 		&sum.Browser, &sum.OS, &sum.Release, &sum.PlanReady, &sum.ChecksMet,
+		&sum.Multiword, &sum.SuggestLimit,
 		&sum.Total, &sum.Done, &sum.Failed, &sum.Pending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return JobSummary{}, err

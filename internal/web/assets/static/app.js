@@ -363,7 +363,8 @@
 		var forKind = {
 			search: ["target"],
 			position: [],
-			index: ["target", "keep"]
+			index: ["target", "keep"],
+			suggest: ["target", "keep"]
 		};
 		var apply = function () {
 			var hidden = forKind[kind.value] || [];
@@ -371,7 +372,11 @@
 			mark(root, "keep", hidden.indexOf("keep") >= 0);
 			// The depth is settled for an index check whatever the box says: the
 			// first page answers the question, and the handler forces it.
-			mark(root, "pages", kind.value === "index");
+			mark(root, "pages", kind.value === "index" || kind.value === "suggest");
+			// What a completions job types its keys with means nothing to the
+			// other kinds.
+			mark(root, "multiword", kind.value !== "suggest");
+			mark(root, "suggestlimit", kind.value !== "suggest");
 			mark(root, "queries", from.value === "file");
 			mark(root, "list", from.value !== "file");
 		};

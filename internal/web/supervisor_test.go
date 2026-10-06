@@ -1135,6 +1135,7 @@ func TestSupervisor_TakesAJobThroughTheEngineAsTheKindItWasFiledUnder(t *testing
 		{kind: store.KindParse, want: run.Parse},
 		{kind: store.KindPosition, target: "example.com", want: run.Position},
 		{kind: "", want: run.Parse},
+		{kind: store.KindSuggest, want: run.Suggest},
 	}
 	for _, tc := range cases {
 		t.Run("filed as "+tc.kind, func(t *testing.T) {

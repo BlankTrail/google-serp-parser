@@ -33,6 +33,17 @@
 <label for="target">{{.T "form.target"}}</label>
 <input id="target" name="target" value="{{.Form.Target}}">
 </div>
+{{/* How a completions job types its keys. The alphabet is the one of the
+     job's language, below. */}}
+<div class="row">
+<div class="field">
+<label for="suggestlimit">{{.T "form.suggestlimit"}}</label>
+<input id="suggestlimit" name="suggestlimit" type="number" min="0" value="{{.Form.SuggestLimit}}">
+</div>
+<div class="field">
+<label><input type="checkbox" name="multiword" value="on"{{if .Form.Multiword}} checked{{end}}> {{.T "form.multiword"}}</label>
+</div>
+</div>
 {{/* One fold for the kind and the site, because they are one question: the
      site is what one of the three kinds is about and means nothing to the other
      two. Two folds standing under one another, both offering to explain, read
@@ -43,6 +54,7 @@
 <li>{{.T "form.kind.parse.why"}}</li>
 <li>{{.T "form.kind.position.why"}}</li>
 <li>{{.T "form.kind.index.why"}}</li>
+<li>{{.T "form.kind.suggest.why"}}</li>
 <li>{{.T "form.target.why"}}</li>
 </ul>
 </details>

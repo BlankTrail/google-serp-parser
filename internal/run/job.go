@@ -60,6 +60,10 @@ const (
 	// result that was the job's target, or none. It is a walk that stops at the
 	// answer, so a site found on the first page costs one page and not the depth.
 	Position
+	// Suggest reads each line as a key and reports every completion Google's
+	// box offers for it, the key typed again and again with a letter around it
+	// the way the operator's link generator typed it; see completions.
+	Suggest
 )
 
 // Job is a list of queries and how deep to take each one.
@@ -72,6 +76,11 @@ type Job struct {
 	// has no question, and every query of it is refused rather than answered
 	// "not found" — see google.ErrNoSite.
 	Target string
+	// Multiword and SuggestLimit are how a Suggest job generates its questions:
+	// Multiword also puts a letter between each two words of a key, and
+	// SuggestLimit caps the questions one key may cost, nought for none.
+	Multiword    bool
+	SuggestLimit int
 	// Queries are taken in this order and reported in it.
 	Queries []google.Query
 	// Captured, when set, is told about each page as it comes back, before the
@@ -305,7 +314,10 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	if threads < 1 {
 		threads = 1
 	}
-	if threads > len(j.Queries) {
+	// A thread past the number of queries has nothing to take, except in a
+	// completions job, where the work is each key's hundreds of questions and
+	// one key is enough to keep every thread busy.
+	if threads > len(j.Queries) && j.Kind != Suggest {
 		threads = len(j.Queries)
 	}
 	pages := j.Pages
@@ -387,6 +399,15 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	starved := make(chan struct{})
 	var starveOnce sync.Once
 	var wg sync.WaitGroup
+	if j.Kind == Suggest {
+		// A completions job is worked question by question rather than query
+		// by query, by threads of its own; see completions. None of the
+		// threads below are started, and nothing is handed out to them.
+		if r.completions(ctx, j, attempt, results, threads, settle) {
+			starveOnce.Do(func() { close(starved) })
+		}
+		threads = 0
+	}
 	for w := 0; w < threads; w++ {
 		wg.Add(1)
 		go func(thread int) {
@@ -478,6 +499,9 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 
 sending:
 	for i := range j.Queries {
+		if j.Kind == Suggest {
+			break sending
+		}
 		if ctx.Err() != nil {
 			// A cancelled job hands out nothing further. The select below alone
 			// would still pass work to a thread that happened to be free, and
