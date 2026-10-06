@@ -249,11 +249,10 @@ func TestUpload_ReadsAFileByTheSameRuleTheBoxIsReadBy(t *testing.T) {
 	}
 }
 
-func TestUpload_KeepsALineListedTwiceAsTwoPiecesOfWork(t *testing.T) {
-	// A repeat is not a mistake to be tidied away. Somebody who listed a phrase
-	// twice gets it searched for twice, exactly as the box does it, and a job
-	// that silently ran fewer queries than the file holds would have nothing on
-	// any screen saying so.
+func TestUpload_KeepsALineListedTwiceInAParseJobOnce(t *testing.T) {
+	// The user's rule since the query formats: what a parse job's formats
+	// make of its list is put together and kept once before the job runs, so
+	// a phrase listed twice is searched for once.
 	s := testServerHolding(t)
 	if rec := postUpload(t, s, map[string]string{"name": "twice", "pages": "1"},
 		"iphone 13\ngolang generics\niphone 13\n"); rec.Code != http.StatusSeeOther {
@@ -264,11 +263,24 @@ func TestUpload_KeepsALineListedTwiceAsTwoPiecesOfWork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pending: %v", err)
 	}
-	if len(left) != 3 {
-		t.Fatalf("%d queries were kept, want the three lines that were sent", len(left))
+	if len(left) != 2 || left[0].Text != "iphone 13" || left[1].Text != "golang generics" {
+		t.Fatalf("kept %v, want the two different lines in the order they came", left)
 	}
-	if left[0].Text != left[2].Text {
-		t.Errorf("the repeated line came back as %q and %q", left[0].Text, left[2].Text)
+}
+
+func TestUpload_KeepsALineListedTwiceInAnIndexJobAsTwoPiecesOfWork(t *testing.T) {
+	// The other kinds take their lines as they are, as they always did.
+	s := testServerHolding(t)
+	if rec := postUpload(t, s, map[string]string{"name": "twice", "pages": "1", "kind": store.KindIndex},
+		"example.com/a\nexample.com/a\n"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("uploading gave %d, want a redirect", rec.Code)
+	}
+	left, err := s.store.Pending(t.Context(), theOneJob(t, s).ID)
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if len(left) != 2 {
+		t.Errorf("%d addresses kept, want both lines", len(left))
 	}
 }
 

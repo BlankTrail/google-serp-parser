@@ -3,12 +3,14 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/expand"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
 	"github.com/blanktrail/google-serp-parser/internal/sessions"
@@ -70,6 +72,11 @@ type jobForm struct {
 	// and half again.
 	Cooldown int
 	RestUpTo int
+	// Formats are what a parse job makes of each query: {query} with whatever
+	// is said around it and the macros of internal/expand. Every format is
+	// applied to every query and what they make is kept once. Nothing to any
+	// other kind.
+	Formats []string
 	// Multiword and SuggestLimit are how a completions job generates its
 	// questions: Multiword also puts a letter between each two words of a key,
 	// as the link generator's box of that name did, and SuggestLimit caps the
@@ -190,6 +197,7 @@ func blankForm() jobForm {
 		// is what every job this program ran before there was a choice ran on.
 		Device:   blanktrail.DeviceDesktop,
 		Pages:    1,
+		Formats:  []string{expand.Default},
 		Threads:  2,
 		Tries:    defaultTries,
 		Cooldown: defaultCooldown,
@@ -398,6 +406,11 @@ func (f jobForm) faults() []string {
 	if f.Kind == store.KindSuggest && f.SuggestLimit < 0 {
 		complaints = append(complaints, "form.suggestlimit.bad")
 	}
+	if f.isParse() {
+		if _, err := expand.NewExpander(f.Formats); err != nil {
+			complaints = append(complaints, formatComplaint(err))
+		}
+	}
 	// A span whose far end is nearer than its near one is a pair of boxes filled
 	// in the wrong order. Taken as written it would not be read as a span at all
 	// — a far end at or below the near one is how a job says it named one end —
@@ -457,6 +470,43 @@ func (f jobForm) keepFaults() []string {
 	return complaints
 }
 
+// isParse says the job is a parse, the only kind its formats reach. An empty
+// kind is a parse, as it has always been.
+func (f jobForm) isParse() bool { return f.Kind == store.KindParse || f.Kind == "" }
+
+// formatComplaint names what is wrong with a job's formats.
+func formatComplaint(err error) string {
+	switch {
+	case errors.Is(err, expand.ErrNoQuery):
+		return "form.format.noquery"
+	case errors.Is(err, expand.ErrTooMany):
+		return "form.format.toomany"
+	}
+	return "form.format.macro"
+}
+
+// expanded is a parse job's list once its formats have made what they make of
+// it, each query once; any other kind's list as it was given.
+func (f jobForm) expanded(queries []string) []string {
+	if !f.isParse() {
+		return queries
+	}
+	e, err := expand.NewExpander(f.Formats)
+	if err != nil {
+		// Refused already, by faults; nothing is run with a format that
+		// cannot be read.
+		return queries
+	}
+	out := make([]string, 0, len(queries))
+	for _, q := range queries {
+		_ = e.Expand(q, func(made string) error {
+			out = append(out, made)
+			return nil
+		})
+	}
+	return out
+}
+
 // parse pulls the queries out of the box and lists everything wrong at once.
 //
 // Every fault is reported together rather than the first one alone: a reader
@@ -473,7 +523,7 @@ func (f jobForm) parse() ([]string, []string) {
 	if len(queries) == 0 {
 		complaints = append(complaints, "form.queries.required")
 	}
-	return queries, complaints
+	return f.expanded(queries), complaints
 }
 
 // spec is the job as the history will file it.
@@ -550,6 +600,7 @@ func formOf(r *http.Request) jobForm {
 		Tries:        atoi("tries"),
 		Cooldown:     atoi("cooldown"),
 		RestUpTo:     atoi("restupto"),
+		Formats:      r.Form["format"],
 		Multiword:    r.FormValue("multiword") != "",
 		SuggestLimit: atoi("suggestlimit"),
 		Profile:      atoi64(r, profileField),

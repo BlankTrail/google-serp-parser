@@ -225,6 +225,29 @@
 <p class="empty">{{.T "form.identity.why"}}</p>
 </details>
 </fieldset>
+{{/* What a parse job makes of each query: one format a line, {query} where
+     the query goes, and the macros below. The + adds a line; the server takes
+     every line there is, applies each to every query and keeps what they make
+     once. It stands before the list because the parts are sent in the order
+     they stand, and the formats have to be known before the first line of a
+     file arrives. */}}
+<div class="field formats" data-formats data-drop="{{.T "form.format.drop"}}">
+<label for="format-1">{{.T "form.format"}}</label>
+{{range $i, $f := .Form.Formats}}<div class="format-row">
+<input {{if not $i}}id="format-1" {{end}}name="format" value="{{$f}}" autocomplete="off" spellcheck="false">
+{{if $i}}<button type="button" class="format-drop" aria-label="{{$.T "form.format.drop"}}">−</button>{{else}}<button type="button" class="format-add" aria-label="{{$.T "form.format.add"}}">+</button>{{end}}
+</div>
+{{end}}</div>
+<details class="help">
+<summary>{{.T "form.format.macros"}}</summary>
+<ul class="notes">
+<li>{{.T "form.format.why.query"}}</li>
+<li>{{.T "form.format.why.around"}}</li>
+<li>{{.T "form.format.why.abc"}}</li>
+<li>{{.T "form.format.why.num"}}</li>
+<li>{{.T "form.format.why.many"}}</li>
+</ul>
+</details>
 {{/* One form, and a switch saying where the phrases come from. Two forms
      doing one thing made the reader choose between them before they knew what
      the difference was; the switch names it. The whole form is sent as parts so

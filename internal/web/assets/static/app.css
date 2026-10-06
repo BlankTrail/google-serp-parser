@@ -1437,3 +1437,26 @@ legend button {
 .fold[open] > summary {
 	margin-bottom: 0.75rem;
 }
+
+/* A parse job's formats: one line each, the box taking the width and the + or
+   − beside it the width of a letter. */
+.formats .format-row {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	min-width: 0;
+}
+
+.formats .format-row + .format-row {
+	margin-top: 0.4rem;
+}
+
+.formats .format-row input {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.formats .format-row button {
+	flex: 0 0 auto;
+	min-width: 2.4rem;
+}

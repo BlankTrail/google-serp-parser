@@ -354,6 +354,47 @@
 		return box ? box.closest(".field") || box : null;
 	}
 
+	// The lines of a parse job's formats: + adds one, − takes one away. The
+	// second line starts as the query with a run of letters, the third with a
+	// run of numbers, and any after that as the query alone — the operator's
+	// order of what is usually wanted next.
+	function formatRows(root) {
+		var box = root.querySelector("[data-formats]");
+		if (!box || box.getAttribute("data-wired")) {
+			return;
+		}
+		box.setAttribute("data-wired", "1");
+		var starts = ["{query}", "{query} {ABC:a:z:2}", "{query} {num:1:1000}"];
+		var drop = box.getAttribute("data-drop") || "";
+		box.addEventListener("click", function (e) {
+			var button = e.target.closest("button");
+			if (!button) {
+				return;
+			}
+			if (button.classList.contains("format-add")) {
+				var rows = box.querySelectorAll(".format-row");
+				var row = document.createElement("div");
+				row.className = "format-row";
+				var input = document.createElement("input");
+				input.name = "format";
+				input.autocomplete = "off";
+				input.spellcheck = false;
+				input.value = starts[rows.length] || "{query}";
+				var minus = document.createElement("button");
+				minus.type = "button";
+				minus.className = "format-drop";
+				minus.textContent = "\u2212";
+				minus.setAttribute("aria-label", drop || "");
+				row.appendChild(input);
+				row.appendChild(minus);
+				rows[rows.length - 1].after(row);
+				input.focus();
+			} else if (button.classList.contains("format-drop")) {
+				button.closest(".format-row").remove();
+			}
+		});
+	}
+
 	function shape(root) {
 		var kind = root.querySelector("[name=kind]");
 		var from = root.querySelector("[name=from]");
@@ -377,6 +418,15 @@
 			// other kinds.
 			mark(root, "multiword", kind.value !== "suggest");
 			mark(root, "suggestlimit", kind.value !== "suggest");
+			// The formats are a parse job's alone.
+			var formats = root.querySelector("[data-formats]");
+			if (formats) {
+				formats.hidden = kind.value !== "search";
+				var help = formats.nextElementSibling;
+				if (help && help.tagName === "DETAILS") {
+					help.hidden = formats.hidden;
+				}
+			}
 			// A suggestions job has no sessions to rest, and retries each
 			// substitution rather than a phrase.
 			mark(root, "cooldown", kind.value === "suggest");
@@ -407,6 +457,7 @@
 			mark(root, "queries", from.value === "file");
 			mark(root, "list", from.value !== "file");
 		};
+		formatRows(root);
 		kind.addEventListener("change", function () {
 			// The user's rule: a completions job drops the repeats of the whole
 			// job unless asked not to, so choosing the kind chooses the filter.

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/blanktrail/google-serp-parser/internal/expand"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -169,6 +170,19 @@ func (s *Server) streamInto(r *http.Request, form jobForm, list io.Reader) (int6
 		}
 	}()
 
+	// A parse job's formats are applied as the list arrives, and what they make
+	// is kept once across the whole file. Any other kind takes the lines as
+	// they are, as it always did.
+	add := func(text string) error { return plan.Add(r.Context(), text) }
+	if form.isParse() {
+		e, err := expand.NewExpander(form.Formats)
+		if err != nil {
+			return plan.JobID(), plan.Count(), err
+		}
+		add = func(text string) error {
+			return e.Expand(text, func(made string) error { return plan.Add(r.Context(), made) })
+		}
+	}
 	lines := bufio.NewScanner(list)
 	lines.Buffer(make([]byte, 0, lineStart), lineCap)
 	for lines.Scan() {
@@ -176,7 +190,7 @@ func (s *Server) streamInto(r *http.Request, form jobForm, list io.Reader) (int6
 		if !ok {
 			continue
 		}
-		if err := plan.Add(r.Context(), text); err != nil {
+		if err := add(text); err != nil {
 			return plan.JobID(), plan.Count(), err
 		}
 	}
@@ -235,7 +249,17 @@ func (f jobForm) carrying(box, value string) jobForm {
 	case "target":
 		f.Target = value
 	case "unique":
-		f.Unique = value
+		// Arrived at all is the choice made, even a choice to keep everything;
+		// see filter.
+		f.Unique, f.UniqueSaid = value, true
+	case "format":
+		// One part each, as the ticks are: a form with three formats sends
+		// three of these, in the order they stand on the page.
+		f.Formats = append(f.Formats, value)
+	case "multiword":
+		f.Multiword = value != ""
+	case "suggestlimit":
+		f.SuggestLimit, _ = strconv.Atoi(value)
 	case "country":
 		f.Country = value
 	case "language":
