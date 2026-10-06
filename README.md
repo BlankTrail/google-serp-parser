@@ -251,7 +251,7 @@ before you start it.
 | Field | What to put in it |
 |---|---|
 | Name | Anything you will recognise in the history |
-| Kind of job | **Parsing** — collect the results. **Position check** — where one site stands for each phrase. **Index check** — whether Google holds an address at all |
+| Kind of job | **Parsing** — collect the results. **Position check** — where one site stands for each phrase. **Index check** — whether Google holds an address at all. **Search suggestions** — every completion Google's search box offers for a key |
 | Site to look for | Only for a position check: the domain whose place you want |
 | Where the phrases come from | Paste them, one per line, or upload a `.txt` |
 | What to keep of each result | Organic results, ads, related queries — each can be kept or left |
@@ -270,6 +270,20 @@ one check to Challenge Breaker, and the solver's processes are what your
 licence counts.
 
 ![The new job form: kind of job, depth, country, what to keep, and the pool it runs on](assets/screenshots/new-job-en.png)
+
+**Search suggestions.** Choose that kind and each line is a key. The key is
+typed into Google's search box again and again — on its own, followed by a
+space, preceded by one, and with each letter of the job language's alphabet
+after it, joined to it, before it and joined in front — and every completion
+that comes back is kept, once. It is the operator's link generator
+(`run4linkgen.php`) built in: the same seven patterns, the same alphabets, the
+same cursor positions, generated as the job runs. **Multiword** also puts a
+letter between each two words of a key. A key is hundreds of requests, so the
+threads share them out, and one key keeps every thread busy; the box beside
+Multiword caps how many one key may cost. The depth, the site and the parts of
+a result mean nothing to this kind and are put away.
+
+![The new job form set to search suggestions: the keys, Multiword and the cap on requests per key](assets/screenshots/new-job-suggest-en.png)
 
 **Press Start.**
 
@@ -307,6 +321,18 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 ---
 
 ## 📜 Recent changes
+
+### 0.4.0
+
+- **Search suggestions**, a fourth kind of job: every completion Google's
+  search box offers for each key, the key typed the way `run4linkgen.php`
+  typed it — its seven patterns, its alphabets, its Multiword — with the links
+  made as the job runs. Two keys with Multiword on twenty threads: 402
+  requests in 12 seconds, 1052 and 1189 completions.
+- **The end of a job does not wait on one slow check**: once nothing is left to
+  hand out, a query whose request has waited a minute is started again through
+  another session beside it, and the first to finish settles it. The last
+  thirty queries of 8514 took 1.8 minutes instead of 3.9.
 
 ### 0.3.0
 
@@ -488,12 +514,15 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ### Core
 
-- Three kinds of job:
+- Four kinds of job:
   - **Parsing** — reads each line as a phrase and saves every result.
   - **Position check** — searches the same phrases and records where a given
     site stands, or that it was not found.
   - **Index check** — reads each line as an address and asks whether Google
     holds it.
+  - **Search suggestions** — reads each line as a key and collects every
+    completion Google's search box offers for it, typed with each letter of
+    the job language's alphabet around it.
 - Organic results, ads and related queries, each exportable on its own.
 - Pagination to any depth; country and interface language per job.
 - Desktop and mobile result pages.
@@ -678,6 +707,8 @@ measured to it:
 | Pages per query | Depth of pagination |
 | Country, language | Two-letter codes, e.g. `de` |
 | Deduplication | Keep everything, one row per URL, or one per host |
+| Multiword | Search suggestions only: also put a letter between each two words of a key |
+| Requests per key, at most | Search suggestions only: the cap on what one key may cost. Nought is no cap |
 
 ---
 

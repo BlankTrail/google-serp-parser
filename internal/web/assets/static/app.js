@@ -377,6 +377,9 @@
 			// other kinds.
 			mark(root, "multiword", kind.value !== "suggest");
 			mark(root, "suggestlimit", kind.value !== "suggest");
+			// Nor is the filter for repeats: a completions job takes them out per
+			// key as they come, and the handler files it with none.
+			mark(root, "unique", kind.value === "suggest");
 			mark(root, "queries", from.value === "file");
 			mark(root, "list", from.value !== "file");
 		};
