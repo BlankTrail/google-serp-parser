@@ -33,8 +33,15 @@
      answers wrongly for the rest of the day — and not of the last few queries,
      which jumped with every burst. The label says a minute and nothing more: a
      span in it read as a count over that span. */}}
+{{if .IsSuggest}}
+{{/* A completions job's lines are keys, and what it lands is answers to the
+     questions each key is typed into: a request a substitution. */}}
+<div><dt class="label"><abbr title="{{.T "state.speed.keys"}}">{{.T "job.speed.keys"}}</abbr></dt><dd class="figure" id="run-speed">{{.Speed}}</dd></div>
+<div><dt class="label"><abbr title="{{.T "state.speed.requests"}}">{{.T "job.speed.requests"}}</abbr></dt><dd class="figure" id="run-page-speed">{{.PageSpeed}}</dd></div>
+{{else}}
 <div><dt class="label"><abbr title="{{.T "state.speed"}}">{{.T "job.speed"}}</abbr></dt><dd class="figure" id="run-speed">{{.Speed}}</dd></div>
 <div><dt class="label"><abbr title="{{.T "state.speed.pages"}}">{{.T "job.speed.pages"}}</abbr></dt><dd class="figure" id="run-page-speed">{{.PageSpeed}}</dd></div>
+{{end}}
 {{/* What the job has cost the challenge solver, over all its runs. It stays
      after the run, beside what the job collected and how fast: the rest a
      session takes is chosen by both. */}}
@@ -108,6 +115,9 @@
 <div class="metric"><dt class="label">{{$.T "proxies.resting"}}</dt><dd class="figure" id="banned">{{.Resting}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "proxies.ports"}}</dt><dd class="figure" id="ports">{{.Ports}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "proxies.quarantined"}}</dt><dd class="figure" id="quarantined">{{.Quarantined}}</dd></div>
+{{/* A completions job asks through the ports without kept sessions, so it
+     has none to count and no session-made speed to climb to. */}}
+{{if not $.IsSuggest}}
 <div class="metric"><dt class="label">{{$.T "job.sessions"}}</dt><dd class="figure" id="sessions">{{.Sessions}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "job.sessions.working"}}</dt><dd class="figure" id="sessions-working">{{.Working}}</dd></div>
 <div class="metric"><dt class="label">{{$.T "job.sessions.asleep"}}</dt><dd class="figure" id="sessions-asleep">{{.Asleep}}</dd></div>
@@ -117,7 +127,9 @@
      making them is a run whose sessions cover its threads — and the speed above
      is the speed this job runs at rather than one it is still climbing to. */}}
 <div class="metric"><dt class="label">{{$.T "job.ramp"}}</dt><dd class="state" id="ramp">{{$.T .Ramp}}</dd></div>
+{{end}}
 </dl>
+{{if not $.IsSuggest}}
 <details class="help">
 <summary>{{$.T "help.what"}}</summary>
 <ul class="notes">
@@ -125,6 +137,7 @@
 <li>{{$.T "job.ramp.why"}}</li>
 </ul>
 </details>
+{{end}}
 </section>
 
 {{/* Google's checks. How many were met is this run's own count, read off the
@@ -207,7 +220,7 @@
      labelled "site" would be a setting asking to be explained. */}}
 {{if .Job.Target}}<div><dt>{{.T "form.target"}}</dt><dd>{{.Job.Target}}</dd></div>{{end}}
 <div><dt>{{.T "form.unique"}}</dt><dd>{{.T .Job.Filter}}</dd></div>
-<div><dt>{{.T "form.pages"}}</dt><dd>{{.Job.Pages}}</dd></div>
+{{if not .IsSuggest}}<div><dt>{{.T "form.pages"}}</dt><dd>{{.Job.Pages}}</dd></div>{{end}}
 <div><dt>{{.T "form.country"}}</dt><dd>{{if .Job.Country}}{{.Job.Country}}{{else}}—{{end}}</dd></div>
 <div><dt>{{.T "form.language"}}</dt><dd>{{if .Job.Language}}{{.Job.Language}}{{else}}—{{end}}</dd></div>
 <div><dt>{{.T "form.device"}}</dt><dd>{{.T .Job.Device}}</dd></div>
@@ -337,6 +350,24 @@
 {{if .Sampled}}<p class="empty">{{.T "job.results.sample"}} {{.Shown}}</p>{{end}}
 <section class="card">
 <table>
+{{if .IsSuggest}}
+{{/* A completion is a key and what Google offered for it: it has no place in
+     a list of results and no address. */}}
+<thead>
+<tr>
+<th>{{.T "job.result.key"}}</th>
+<th>{{.T "job.result.suggestion"}}</th>
+</tr>
+</thead>
+<tbody>
+{{range .Rows}}
+<tr>
+<td>{{.Query}}</td>
+<td class="wraps">{{.Title}}</td>
+</tr>
+{{end}}
+</tbody>
+{{else}}
 <thead>
 <tr>
 <th>{{.T "history.query"}}</th>
@@ -355,6 +386,7 @@
 </tr>
 {{end}}
 </tbody>
+{{end}}
 </table>
 </section>
 {{else}}

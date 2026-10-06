@@ -207,3 +207,24 @@ func TestAttempt_AsksACompletionQuestionAgainOnceThePortHasGivenUp(t *testing.T)
 		t.Errorf("%d requests, want the question asked past three refusals", n)
 	}
 }
+
+func TestRunner_ToldOfEveryAnsweredCompletionQuestion(t *testing.T) {
+	// The screen counts a completions job's requests a minute off what it is
+	// told comes back: one for every substitution answered, and none of them
+	// carrying completions, which are counted once, when the key is written.
+	o := newCompletionOrigin(t)
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+	r := &Runner{Pool: f.Pool, Threads: 2}
+	var told, carried atomic.Int64
+	rep := r.Run(context.Background(), Job{Kind: Suggest, Queries: []google.Query{usQuery("coffee")}, SuggestLimit: 20,
+		Captured: func(p google.SERP) {
+			told.Add(1)
+			carried.Add(int64(len(p.Results)))
+		}})
+	if rep.Done != 1 {
+		t.Fatalf("report says %d done", rep.Done)
+	}
+	if told.Load() != 20 || carried.Load() != 0 {
+		t.Errorf("told of %d answers carrying %d completions, want 20 carrying none", told.Load(), carried.Load())
+	}
+}

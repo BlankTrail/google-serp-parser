@@ -88,6 +88,8 @@ type statePage struct {
 
 // runningView is the job in flight, drawn large.
 type runningView struct {
+	// Suggest is a completions job, which has no pages to count a speed of.
+	Suggest bool
 	ID      int64
 	Name    string
 	Total   int
@@ -277,6 +279,7 @@ func (s *Server) stateOf(ctx context.Context) (statePage, error) {
 // the figure that used to do that was read as a promise and was not one.
 func (s *Server) runningView(sum store.JobSummary, pace store.Pace, landed []time.Time) *runningView {
 	view := &runningView{
+		Suggest:   sum.Kind == store.KindSuggest,
 		ID:        sum.ID,
 		Name:      sum.Name,
 		Total:     sum.Total,

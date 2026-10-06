@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/blanktrail/google-serp-parser/internal/google"
 )
@@ -27,6 +28,10 @@ const (
 	UniqueURL UniqueBy = "url"
 	// UniqueHost keeps the first result from each site.
 	UniqueHost UniqueBy = "host"
+	// UniqueText keeps the first result with each text. It is a completions
+	// job's filter: a completion has no address, only what it says, and keys
+	// near each other are offered many of the same.
+	UniqueText UniqueBy = "text"
 )
 
 // keyOf is what a result is remembered by under this filter, and whether there
@@ -53,6 +58,8 @@ func keyOf(by UniqueBy, r google.Result) (string, bool) {
 		if key == "" {
 			key = google.CanonicalHost(r.Host)
 		}
+	case UniqueText:
+		key = strings.TrimSpace(r.Title)
 	default:
 		return "", false
 	}

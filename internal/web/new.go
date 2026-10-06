@@ -33,10 +33,13 @@ type jobForm struct {
 	// Unique is what the job throws away as a repeat, in the word the history
 	// files it under. Empty keeps everything, so a form posted without the field
 	// is the job this program did before there was a choice.
-	Unique   string
-	Queries  string
-	Country  string
-	Language string
+	Unique string
+	// UniqueSaid says the form carried the choice at all, which is what tells
+	// a form that chose to keep everything from one that never asked.
+	UniqueSaid bool
+	Queries    string
+	Country    string
+	Language   string
 	// Device is which kind of result page this job asks Google for: a desktop or
 	// a phone.
 	Device  string
@@ -255,6 +258,7 @@ func filters() []jobFilter {
 		{Value: string(store.UniqueOff), Label: "form.unique.off"},
 		{Value: string(store.UniqueURL), Label: "form.unique.url"},
 		{Value: string(store.UniqueHost), Label: "form.unique.host"},
+		{Value: string(store.UniqueText), Label: "form.unique.text"},
 	}
 }
 
@@ -287,10 +291,17 @@ func filterKey(unique string) (string, bool) {
 // here, as the depth is, so that the job filed in the history and the job that
 // runs say one thing.
 func (f jobForm) filter() store.UniqueBy {
-	// A completions job keeps no address to filter by: its repeats are taken
-	// out per key as the completions come in.
-	if f.Kind == store.KindIndex || f.Kind == store.KindPosition || f.Kind == store.KindSuggest {
+	if f.Kind == store.KindIndex || f.Kind == store.KindPosition {
 		return store.UniqueOff
+	}
+	// A completions job has no address to tell repeats apart by, only the
+	// text, and drops the repeats of the whole job by default — the user's
+	// rule: a form that said nothing, or named a filter by address, gets the
+	// one by text. Keeping everything has to be asked for.
+	if f.Kind == store.KindSuggest {
+		if !f.UniqueSaid || f.Unique == string(store.UniqueURL) || f.Unique == string(store.UniqueHost) {
+			return store.UniqueText
+		}
 	}
 	return store.UniqueBy(f.Unique)
 }
@@ -366,6 +377,12 @@ func (f jobForm) faults() []string {
 	// nobody chose is a run to do again.
 	if _, known := filterKey(f.Unique); !known {
 		complaints = append(complaints, "form.unique.unknown")
+	}
+	// The filter by text reads a completion's text and is for completions: a
+	// search filtered by its titles would drop different pages that happen to
+	// share one.
+	if f.filter() == store.UniqueText && f.Kind != store.KindSuggest {
+		complaints = append(complaints, "form.unique.textonly")
 	}
 	// A position check with nothing to look for is refused here and would be
 	// refused by the history underneath. It is said here because this is the only
@@ -520,6 +537,7 @@ func formOf(r *http.Request) jobForm {
 		Kind:         strings.TrimSpace(r.FormValue("kind")),
 		Target:       strings.TrimSpace(r.FormValue("target")),
 		Unique:       strings.TrimSpace(r.FormValue("unique")),
+		UniqueSaid:   r.Form.Has("unique"),
 		Queries:      r.FormValue("queries"),
 		Country:      strings.TrimSpace(r.FormValue("country")),
 		Language:     strings.TrimSpace(r.FormValue("language")),

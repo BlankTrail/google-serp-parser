@@ -217,6 +217,10 @@ type jobPage struct {
 	// list captured no results.
 	IsIndex    bool
 	IsPosition bool
+	// IsSuggest is a completions job: one answer per question and no pages, no
+	// place in a result list and no address, and no sessions — so the page
+	// draws none of what reads those.
+	IsSuggest bool
 	// Filtering says the job drops repeats, and it is what puts the count of
 	// dropped results on the screen. A job that keeps everything is not given a
 	// figure reading nought: a number on a screen is a thing to wonder about,
@@ -361,6 +365,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		Verdicts:   verdicts,
 		IsIndex:    sum.Kind == store.KindIndex,
 		IsPosition: sum.Kind == store.KindPosition,
+		IsSuggest:  sum.Kind == store.KindSuggest,
 		Filtering:  sum.UniqueBy != store.UniqueOff,
 		// There is always more than this on a job of any size, and the page says
 		// so rather than leaving a reader to wonder whether twenty results is all

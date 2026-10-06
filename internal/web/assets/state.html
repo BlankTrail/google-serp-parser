@@ -26,8 +26,13 @@
      the estimate that used to stand here was made before the run and was read
      as a promise it could not keep. */}}
 <div class="metric"><dt class="label">{{.T "state.elapsed"}}</dt><dd class="figure" id="run-elapsed">{{.Running.Elapsed}}</dd></div>
+{{if .Running.Suggest}}
+<div class="metric"><dt class="label">{{.T "state.speed.keys"}}</dt><dd class="figure" id="run-speed">{{.Running.Speed}}</dd></div>
+<div class="metric"><dt class="label">{{.T "state.speed.requests"}}</dt><dd class="figure" id="run-page-speed">{{.Running.PageSpeed}}</dd></div>
+{{else}}
 <div class="metric"><dt class="label">{{.T "state.speed"}}</dt><dd class="figure" id="run-speed">{{.Running.Speed}}</dd></div>
 <div class="metric"><dt class="label">{{.T "state.speed.pages"}}</dt><dd class="figure" id="run-page-speed">{{.Running.PageSpeed}}</dd></div>
+{{end}}
 <div class="metric"><dt class="label">{{.T "state.rest"}}</dt><dd class="figure" id="run-rest">{{.Running.Rest}}</dd></div>
 </dl>
 {{/* Stopping a run is watched, so the stop stands where it is watched from, and

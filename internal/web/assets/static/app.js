@@ -377,13 +377,32 @@
 			// other kinds.
 			mark(root, "multiword", kind.value !== "suggest");
 			mark(root, "suggestlimit", kind.value !== "suggest");
-			// Nor is the filter for repeats: a completions job takes them out per
-			// key as they come, and the handler files it with none.
-			mark(root, "unique", kind.value === "suggest");
+			// The filters by address mean nothing to completions, and the one by
+			// text means nothing to anything else.
+			var unique = root.querySelector("[name=unique]");
+			if (unique) {
+				for (var i = 0; i < unique.options.length; i++) {
+					var o = unique.options[i];
+					var forSuggest = o.value === "text";
+					var byAddress = o.value === "url" || o.value === "host";
+					o.hidden = kind.value === "suggest" ? byAddress : forSuggest;
+				}
+				if (unique.selectedOptions.length && unique.selectedOptions[0].hidden) {
+					unique.value = "";
+				}
+			}
 			mark(root, "queries", from.value === "file");
 			mark(root, "list", from.value !== "file");
 		};
-		kind.addEventListener("change", apply);
+		kind.addEventListener("change", function () {
+			// The user's rule: a completions job drops the repeats of the whole
+			// job unless asked not to, so choosing the kind chooses the filter.
+			var unique = root.querySelector("[name=unique]");
+			if (unique && kind.value === "suggest") {
+				unique.value = "text";
+			}
+			apply();
+		});
 		from.addEventListener("change", apply);
 		apply();
 	}

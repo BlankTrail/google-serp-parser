@@ -206,6 +206,10 @@ func (a *Attempt) completeOnce(ctx context.Context, q google.Query, v google.Sug
 	got, err := s.Complete(ctx, q, v)
 	if err == nil {
 		lease.Answered()
+		// Told as a page with nothing on it: the request is what the screen
+		// counts a minute of, and the completions are counted once, when the
+		// key is written.
+		a.caught(google.SERP{Query: v.Text}, nil)
 		return got, nil
 	}
 	if _, classified := google.ClassOf(err); classified {

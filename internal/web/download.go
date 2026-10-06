@@ -258,6 +258,11 @@ func fieldsOf(job store.JobSummary, part string) []string {
 	case partVerdicts:
 		return export.Verdicts.Names()
 	}
+	// A completion has no page and no place among results: the key and its
+	// text are the whole of it.
+	if job.Kind == store.KindSuggest {
+		return []string{export.ColOrdinal, export.ColQuery, export.ColTitle}
+	}
 	return columnsOf(job.Fields)
 }
 
