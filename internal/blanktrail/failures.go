@@ -68,6 +68,30 @@ var Failures = []Failure{
 // and it has not been told that is allowed.
 const relayRefused = 526
 
+// dialFailed says whether anywhere in err is a dial that failed.
+//
+// net/http does not hand the dial's error back as it is: a request through a
+// proxy wraps it as "proxyconnect tcp: dial tcp …", an OpError of its own around
+// the dial's. errors.As stops at the first OpError it meets, which is the
+// wrapper, so a check of that one alone never saw a dial — and every port the
+// service had closed was taken for an address that had failed. Measured live
+// when the service restarted under a suggestions job: every request refused,
+// none reopened, and the job's keys failing three a minute for as long as it
+// ran. So every OpError in the chain is looked at.
+func dialFailed(err error) bool {
+	for err != nil {
+		var op *net.OpError
+		if !errors.As(err, &op) {
+			return false
+		}
+		if op.Op == "dial" {
+			return true
+		}
+		err = op.Err
+	}
+	return false
+}
+
 // failureOf names what went wrong with one attempt, from what came back.
 //
 // Errors are read before statuses because an attempt that produced an error
@@ -82,8 +106,7 @@ func failureOf(err error, status int) Failure {
 		// only thing this program connects to, everything beyond it being the
 		// proxy's business. So nothing travelled, and there is nothing to hold
 		// against the address.
-		var dial *net.OpError
-		if errors.As(err, &dial) && dial.Op == "dial" {
+		if dialFailed(err) {
 			return FailurePort
 		}
 		// The transport's own deadline arrives as an error that says so in

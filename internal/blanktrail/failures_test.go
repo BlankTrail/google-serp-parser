@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -272,6 +273,16 @@ func TestFailureOf_TellsTheProxysOwnPortFromTheAddressBehindIt(t *testing.T) {
 		t.Errorf("a port that would not be dialled is named %q, want %q", got, FailurePort)
 	}
 
+	// The same dial as a request through a proxy reports it: net/http wraps it
+	// in an OpError of its own, "proxyconnect", inside a url.Error.
+	through := &url.Error{Op: "Get", URL: "https://www.google.com/", Err: &net.OpError{
+		Op: "proxyconnect", Net: "tcp", Err: dialed,
+	}}
+	if got := failureOf(through, 0); got != FailurePort {
+		t.Errorf("a proxy port that would not be dialled, as net/http reports it, is named %q, want %q",
+			got, FailurePort)
+	}
+
 	// And a failure that happened after the dial travelled through the proxy, so
 	// it is about the address.
 	after := &net.OpError{
@@ -282,6 +293,31 @@ func TestFailureOf_TellsTheProxysOwnPortFromTheAddressBehindIt(t *testing.T) {
 	if got := failureOf(after, 0); got != FailureTransport {
 		t.Errorf("a connection closed after it was made is named %q, want %q",
 			got, FailureTransport)
+	}
+}
+
+func TestFailureOf_ReadsAClosedProxyPortAsNetHTTPReportsIt(t *testing.T) {
+	// The wrapping is net/http's, not this program's, so it is taken from
+	// net/http itself: a request through a proxy port nobody listens on, which
+	// is what every port is the moment the service restarts.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	for _, scheme := range []string{"socks5", "http"} {
+		proxy, _ := url.Parse(scheme + "://" + addr)
+		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy)}, Timeout: 5 * time.Second}
+		resp, err := client.Get("https://example.invalid/")
+		if err == nil {
+			_ = resp.Body.Close()
+			t.Fatalf("%s: a request through a closed port was answered", scheme)
+		}
+		if got := failureOf(err, 0); got != FailurePort {
+			t.Errorf("%s: a closed proxy port is named %q, want %q: the port would never be "+
+				"opened again and the address behind it would be blamed (%v)", scheme, got, FailurePort, err)
+		}
 	}
 }
 
