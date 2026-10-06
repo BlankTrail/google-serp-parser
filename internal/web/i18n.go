@@ -247,6 +247,7 @@ var catalogue = map[Lang]map[string]string{
 		"form.multiword":         "Multiword — also put a letter between the words of a key",
 		"form.suggestlimit":      "Requests per key, at most (0 — no limit)",
 		"form.suggestlimit.bad":  "Requests per key cannot be negative.",
+		"form.suggest.nolang":    "No search language is set, so the substitutions are typed in Latin letters and digits, a to z and 0 to 9. For keys that are not in Latin script set the language — ru for Russian keys — and they are typed in its alphabet.",
 		"form.kind.unknown":      "That is not one of the things a job asks.",
 		// The site a position check is about. The sentence says what cannot be
 		// changed later and why, because a reader who finds that out afterwards
@@ -851,6 +852,7 @@ var catalogue = map[Lang]map[string]string{
 		"form.multiword":         "Multiword — ещё и вставлять букву между словами ключа",
 		"form.suggestlimit":      "Запросов на ключ, не больше (0 — без ограничения)",
 		"form.suggestlimit.bad":  "Запросов на ключ не может быть меньше нуля.",
+		"form.suggest.nolang":    "Язык поиска не задан — подстановки пойдут латиницей и цифрами, a–z и 0–9. Для ключей не на латинице укажите язык, например ru для русских ключей, и подстановки пойдут его алфавитом.",
 		"form.kind.unknown":      "Такого задания не бывает.",
 
 		"form.target":          "Искомый сайт",

@@ -169,3 +169,26 @@ func TestJobPage_DrawsACompletionsJobAsKeysAndSuggestions(t *testing.T) {
 		t.Errorf("a completions job exports with %s, want the key and the text alone", got)
 	}
 }
+
+func TestNewJob_WarnsThatASuggestionsJobWithNoLanguageTypesInLatinLetters(t *testing.T) {
+	// Said, not refused: the form comes back for another reason, and the
+	// warning stands shown for a suggestions job with no language and hidden
+	// for one that named its language.
+	warning := LangEN.T("form.suggest.nolang")
+	for _, c := range []struct {
+		language string
+		shown    bool
+	}{{"", true}, {"ru", false}} {
+		s := testServerWithSupervisor(t)
+		rec := postForm(t, s, "/new?do=start", url.Values{"kind": {store.KindSuggest},
+			"queries": {"купить кофе"}, "language": {c.language}})
+		body := rec.Body.String()
+		if !strings.Contains(body, warning) {
+			t.Fatalf("language %q: the form does not carry the warning at all", c.language)
+		}
+		shown := strings.Contains(body, `id="suggest-nolang">`)
+		if shown != c.shown {
+			t.Errorf("language %q: the warning is shown %v, want %v", c.language, shown, c.shown)
+		}
+	}
+}

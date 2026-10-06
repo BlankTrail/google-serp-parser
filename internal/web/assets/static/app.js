@@ -377,6 +377,11 @@
 			// other kinds.
 			mark(root, "multiword", kind.value !== "suggest");
 			mark(root, "suggestlimit", kind.value !== "suggest");
+			var nolang = root.querySelector("#suggest-nolang");
+			var language = root.querySelector("[name=language]");
+			if (nolang && language) {
+				nolang.hidden = kind.value !== "suggest" || language.value.trim() !== "";
+			}
 			// The filters by address mean nothing to completions, and the one by
 			// text means nothing to anything else.
 			var unique = root.querySelector("[name=unique]");
@@ -404,6 +409,10 @@
 			apply();
 		});
 		from.addEventListener("change", apply);
+		var typed = root.querySelector("[name=language]");
+		if (typed) {
+			typed.addEventListener("input", apply);
+		}
 		apply();
 	}
 

@@ -96,6 +96,15 @@
 {{end}}</select>
 </div>
 </div>
+{{/* A suggestions job types its keys with the alphabet of its language, and a
+     job with none types a to z and nought to nine: Russian keys typed with
+     Latin letters bring back completions about fonts. It is said, not
+     refused — a Latin-script list wants no language at all. The script shows
+     and hides it as the kind and the language change; drawn by the server it
+     says the same thing, for a form that came back with something to fix. */}}
+<div class="banner" id="suggest-nolang"{{if not .SuggestNoLanguage}} hidden{{end}}>
+<p>{{.T "form.suggest.nolang"}}</p>
+</div>
 {{/* What to do with repeats. It stands with the settings of the run because
      that is what it is, and the sentence under it says the part that cannot be
      taken back. */}}

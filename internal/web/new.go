@@ -567,6 +567,9 @@ type newPage struct {
 	// Kinds is every kind a job can be, so the choice on the page is the choice
 	// the handler takes and not a second list of it.
 	Kinds []jobKind
+	// SuggestNoLanguage says the form is a suggestions job with no search
+	// language: its keys will be typed in Latin letters, and the page says so.
+	SuggestNoLanguage bool
 	// Filters is every way of dropping repeats, offered on the same terms.
 	Filters []jobFilter
 	// Devices is every kind of result page, on the same terms again. The list
@@ -689,20 +692,21 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		}
 	}
 	s.render(w, r, "new.html", newPage{
-		page:       s.frame(r, lang, "new.title", jobsAt),
-		Form:       form,
-		Complaints: complaints,
-		Kinds:      kinds(),
-		Filters:    filters(),
-		Devices:    devicesOffered(form.Device),
-		Browsers:   browsersOffered(),
-		Systems:    systemsOffered(),
-		Sources:    sources(),
-		Keeps:      keeps(form),
-		Countries:  google.Countries(),
-		Languages:  google.Languages(),
-		Chose:      choseField,
-		Profiles:   profilesOffered(offered, form.Profile),
+		page:              s.frame(r, lang, "new.title", jobsAt),
+		Form:              form,
+		Complaints:        complaints,
+		Kinds:             kinds(),
+		SuggestNoLanguage: form.Kind == store.KindSuggest && strings.TrimSpace(form.Language) == "",
+		Filters:           filters(),
+		Devices:           devicesOffered(form.Device),
+		Browsers:          browsersOffered(),
+		Systems:           systemsOffered(),
+		Sources:           sources(),
+		Keeps:             keeps(form),
+		Countries:         google.Countries(),
+		Languages:         google.Languages(),
+		Chose:             choseField,
+		Profiles:          profilesOffered(offered, form.Profile),
 	})
 }
 
