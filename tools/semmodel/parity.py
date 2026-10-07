@@ -4,7 +4,6 @@
 #   python tools/semmodel/parity.py <snapshot dir> internal/semantic/testdata
 import base64, io, json, os, random, struct, sys
 from tokenizers import Tokenizer
-from tokenizers.normalizers import Normalizer
 
 snap, out = sys.argv[1], sys.argv[2]
 tok_json = json.load(open(os.path.join(snap, 'tokenizer.json'), encoding='utf-8'))
@@ -28,7 +27,12 @@ words = ['кофе', 'машина', 'дома', 'купить', 'чайник',
 extras = ['Coffee Maker', 'кофе, машина!', 'a/b', '"цитата"', 'кофе   машина', 'ｃｏｆｆｅｅ', 'ﬁlter',
           'и\u0306огурт', 'кофе ☕', 'iphone 15 pro', '', ' ', 'КОФЕ МАШИНА', 'café-bar', "it's", '100%',
           'tab\u2003separated', 'кофе\u00a0машина', 'x²', '①②', 'Ⅻ',
-          'ｃ\u0301afe', 'ﬁ\u0301lter', 'ｅ\u0301\u0302\u0303 test']
+          'ｃ\u0301afe', 'ﬁ\u0301lter', 'ｅ\u0301\u0302\u0303 test',
+          '👨\u200d👩\u200d👧 family', '☕\ufe0f cup', '☕\U000e0100 tag', 'कॉफी मशीन', '1\ufe0f\u20e3 one', 'a\u20dd circle',
+          '!"#$%&'+"'"+'()*+,-./:;<=>?@[\\]^_`{|}~', 'a\u0085b', 'a\u180eb', 'x\u2028y\u2029z',
+          'µ\u0903 mc', 'µ\u20dd me', 'µ\ufe0f vs', 'µ\u200d zwj', 'a\x7f\ufe0f ctl', '\x7f\u0301 ctl2', 'a\U000e0100 tag',
+          '\u09c7\u09be bengali', 'ｃ\u200dd joined',
+          'a!a"a#a$a%a&a'+"'"+'a(a)a*a+a,a-a.a/a:a;a<a=a>a?a@a[a'+'\\'+'a]a^a_a`a{a|a}a~a']
 phrases = list(extras)
 while len(phrases) < 2000:
     n = random.randint(1, 4)

@@ -122,25 +122,29 @@ func (c *Charsmap) Normalize(s string) string {
 }
 
 // clusterLen is how many bytes the first cluster of s takes: one rune and the
-// marks, variation selectors and zero-width joiners (with what they join) that
-// follow it.
+// combining marks after it (the variation selectors of the BMP are marks too).
+// Two things the reference's grapheme rules join are left out on purpose, as
+// the parity phrases show they cannot change a result with this table: the
+// zero-width joiner, which the table itself replaces with a space, so a
+// cluster that holds one is cut rune by rune either way (it is six bytes or
+// more, or the joiner ends the text and the space is trimmed); and the
+// supplementary variation selectors (U+E0100 and up), which are four bytes, so
+// a cluster with one is never shorter than six bytes unless its base is one
+// ASCII byte, and the table has no entry for a printable ASCII character.
 func clusterLen(s string) int {
-	_, n := utf8.DecodeRuneInString(s)
+	first, n := utf8.DecodeRuneInString(s)
+	if unicode.Is(unicode.Cc, first) {
+		// A control character is a cluster of its own: nothing is joined to it,
+		// as in the reference's grapheme rules (the table maps some of them, and
+		// the mark after one must not be swallowed by its replacement).
+		return n
+	}
 	for n < len(s) {
 		r, size := utf8.DecodeRuneInString(s[n:])
-		switch {
-		case unicode.Is(unicode.Mn, r), unicode.Is(unicode.Me, r), unicode.Is(unicode.Mc, r),
-			r >= 0xFE00 && r <= 0xFE0F, r >= 0xE0100 && r <= 0xE01EF:
-			n += size
-		case r == 0x200D:
-			n += size
-			if n < len(s) {
-				_, next := utf8.DecodeRuneInString(s[n:])
-				n += next
-			}
-		default:
+		if !unicode.In(r, unicode.Mn, unicode.Me, unicode.Mc) {
 			return n
 		}
+		n += size
 	}
 	return n
 }

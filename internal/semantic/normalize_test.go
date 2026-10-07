@@ -44,7 +44,7 @@ func TestNormalize_WritesEveryPhraseAsTheReferenceTokenizerDoes(t *testing.T) {
 			}
 		}
 	}
-	if n < 2000 {
+	if n != 2000 {
 		t.Fatalf("%d references read, want 2000", n)
 	}
 	if wrong > 0 {
@@ -53,7 +53,8 @@ func TestNormalize_WritesEveryPhraseAsTheReferenceTokenizerDoes(t *testing.T) {
 }
 
 func TestParseCharsmap_RefusesWhatIsNotOne(t *testing.T) {
-	for _, raw := range [][]byte{nil, {1, 0}, {255, 255, 255, 255, 0, 0, 0, 0}} {
+	for _, raw := range [][]byte{nil, {1, 0}, {255, 255, 255, 255, 0, 0, 0, 0},
+		{0, 0, 0, 0, 9, 9}, {5, 0, 0, 0, 1, 2, 3, 4, 5}, {8, 0, 0, 0, 1, 2, 3, 4}} {
 		if _, err := ParseCharsmap(raw); err == nil {
 			t.Errorf("ParseCharsmap(%v) accepted it", raw)
 		}
