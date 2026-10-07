@@ -48,10 +48,11 @@ with io.open(os.path.join(out, 'normalized.tsv'), 'w', encoding='utf-8', newline
         pre = ''.join(s for s, _ in tk.pre_tokenizer.pre_tokenize_str(norm))
         f.write(p + '\t' + pre + '\n')
 
-unk = tk.token_to_id('[UNK]')
+# [UNK] stays in: model2vec keeps it for a Unigram tokenizer (the model has no
+# unk_token for it to look up), so the reference vectors average it in.
 with io.open(os.path.join(out, 'tokens.tsv'), 'w', encoding='utf-8', newline='\n') as f:
     for p in phrases:
-        ids = [i for i in tk.encode(p, add_special_tokens=False).ids if i != unk]
+        ids = tk.encode(p, add_special_tokens=False).ids
         f.write(p + '\t' + ' '.join(map(str, ids)) + '\n')
 
 from model2vec import StaticModel

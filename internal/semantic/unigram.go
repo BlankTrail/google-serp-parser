@@ -48,8 +48,12 @@ func NewUnigram(v Vocab) *Unigram {
 
 // Tokenize is the best path through the text (Viterbi): for every position the
 // best total score of the pieces that reach it, and the piece that got there.
-// Unknown pieces are left out of what comes back, as model2vec leaves them out
-// of the average.
+// A character no piece covers comes back as the unknown piece, and a run of
+// such characters as one unknown piece: the reference (HF tokenizers' Unigram,
+// which has no fuse_unk switch and always fuses) does that, and model2vec does
+// not remove it for a Unigram tokenizer, because the model exposes no unk_token
+// for it to look up. The unknown piece has a vector of its own in the table and
+// is averaged in like any other piece.
 func (u *Unigram) Tokenize(text string) []int32 {
 	n := len(text)
 	if n == 0 {
@@ -93,9 +97,10 @@ func (u *Unigram) Tokenize(text string) []int32 {
 	}
 	var out []int32
 	for end := n; end > 0; end = from[end] {
-		if piece[end] != u.unk {
-			out = append(out, piece[end])
+		if piece[end] == u.unk && len(out) > 0 && out[len(out)-1] == u.unk {
+			continue // the run of unknown characters is one unknown piece
 		}
+		out = append(out, piece[end])
 	}
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]

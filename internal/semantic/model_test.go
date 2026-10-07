@@ -100,18 +100,34 @@ func TestModel_MatchesTheReferenceVectors(t *testing.T) {
 	}
 	count, dim := int(binary.LittleEndian.Uint32(ref)), int(binary.LittleEndian.Uint32(ref[4:]))
 	phrases := readPhrases(t)
-	worst := float32(1)
+	worst, zero := float32(1), 0
 	for i := 0; i < count; i++ {
 		got := m.Vector(phrases[i])
-		var dot float32
+		var dot, refNorm, gotNorm float32
 		for j := 0; j < dim; j++ {
 			want := math.Float32frombits(binary.LittleEndian.Uint32(ref[8+4*(i*dim+j):]))
 			dot += got[j] * want
+			refNorm += want * want
+			gotNorm += got[j] * got[j]
 		}
-		if phrases[i] != "" && dot < worst {
+		if refNorm == 0 {
+			// An empty or whitespace-only phrase has no pieces and the reference
+			// gives the nought vector; agreeing means giving nought too, which a
+			// cosine cannot say.
+			zero++
+			if gotNorm != 0 {
+				t.Errorf("phrase %d has a nought reference vector but ours has norm %v", i, gotNorm)
+			}
+			continue
+		}
+		if dot < worst {
 			worst = dot
 		}
 	}
+	if zero == 0 {
+		t.Error("no nought reference vector among the phrases: the empty phrases are missing from the reference")
+	}
+	t.Logf("%d phrases: worst cosine %.4f, %d nought reference vectors agreed", count, worst, zero)
 	// int8 costs a little: the vectors agree to 0.99 or better, not exactly.
 	if worst < 0.99 {
 		t.Errorf("the worst phrase agrees with the reference to %.4f, want 0.99 or better", worst)
@@ -354,10 +370,12 @@ func TestModel_APieceOfNoughtGivesTheNoughtVector(t *testing.T) {
 	}
 }
 
-func TestModel_UnknownWordsAreLeftOutAndScoreIsSymmetric(t *testing.T) {
+func TestModel_UnknownWordsCountAsTheUnknownPieceAndScoreIsSymmetric(t *testing.T) {
 	m := tinyModel(t)
+	// The unknown piece's row is nought in tinyModel, so an unknown word adds
+	// nothing to the direction (a real table's row is not nought: see below).
 	if got := m.Score("кофе", "кофе ёёё"); got < 0.99 {
-		t.Errorf("an unknown word changes the vector: score %.4f, want 0.99 or better", got)
+		t.Errorf("an unknown word with a nought row changes the vector: score %.4f, want 0.99 or better", got)
 	}
 	if a, b := m.Score("кофе", "погода"), m.Score("погода", "кофе"); a != b {
 		t.Errorf("score is not symmetric: %v and %v", a, b)
@@ -431,8 +449,24 @@ func TestModel_TheUnknownPieceIsTheOneTheFileNames(t *testing.T) {
 	if v := m.Vector("кофе"); v[0] < 0.99 {
 		t.Errorf("a known word as piece 0 reads as %v, want its own row", v)
 	}
-	if v := m.Vector("ё"); v[0] != 0 || v[1] != 0 {
-		t.Errorf("an unknown character reads as %v, want nought", v)
+	// The unknown piece's row is the second axis here, so an unknown character
+	// reads as that row (model2vec averages it in), not as nought.
+	if v := m.Vector("ё"); v[0] != 0 || v[1] < 0.99 {
+		t.Errorf("an unknown character reads as %v, want the unknown piece's row", v)
+	}
+}
+
+func TestModel_TheUnknownPieceIsSummedLikeAnyOtherPiece(t *testing.T) {
+	m := pieceTables(t, []string{"▁кофе", "[UNK]"}, []float32{-2, 0}, 1, [][]float32{{1, 0}, {0, 1}})
+	// "кофе ё" is the word and one unknown piece: the direction of (1,0)+(0,1).
+	v := m.Vector("кофе ё")
+	if math.Abs(float64(v[0])-math.Sqrt2/2) > 0.01 || math.Abs(float64(v[1])-math.Sqrt2/2) > 0.01 {
+		t.Errorf("a word and an unknown piece read as %v, want both axes at 0.707", v)
+	}
+	// A run of unknown characters is one unknown piece, not three: with three
+	// the unknown axis would outweigh the word.
+	if w := m.Vector("кофе ёёё"); math.Abs(float64(w[0]-v[0])) > 0.01 {
+		t.Errorf("a run of unknown characters reads as %v, want %v", w, v)
 	}
 }
 

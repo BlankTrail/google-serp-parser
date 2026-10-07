@@ -41,16 +41,27 @@ func TestUnigram_ALaterPathWithABetterTotalReplacesAnEarlierOne(t *testing.T) {
 	}
 }
 
-func TestUnigram_LeavesOutWhatTheVocabularyHasNoPieceFor(t *testing.T) {
-	// A character no piece covers is the unknown piece, and the unknown piece
-	// is dropped: model2vec averages nothing for it.
+func TestUnigram_ReturnsTheUnknownPieceForWhatTheVocabularyHasNoPieceFor(t *testing.T) {
+	// A character no piece covers is the unknown piece, and it stays in what
+	// comes back: model2vec does not remove it for a Unigram tokenizer. A run of
+	// such characters is fused into one, as the HF tokenizers' Unigram does
+	// (checked against the reference: three U+180E in a row give one [UNK]).
 	u := NewUnigram(Vocab{
 		Pieces: []string{"[PAD]", "[UNK]", "▁", "а", "б"},
 		Scores: []float32{0, 0, -1, -1, -1},
 		Unk:    1,
 	})
-	if got, want := u.Tokenize("▁а☕б"), []int32{2, 3, 4}; !slices.Equal(got, want) {
+	if got, want := u.Tokenize("▁а☕б"), []int32{2, 3, 1, 4}; !slices.Equal(got, want) {
 		t.Errorf("Tokenize = %v, want %v", got, want)
+	}
+	if got, want := u.Tokenize("▁а☕☕☕б"), []int32{2, 3, 1, 4}; !slices.Equal(got, want) {
+		t.Errorf("a run of unknown characters: %v, want one unknown piece %v", got, want)
+	}
+	if got, want := u.Tokenize("▁а☕б☕"), []int32{2, 3, 1, 4, 1}; !slices.Equal(got, want) {
+		t.Errorf("unknown characters apart stay apart: %v, want %v", got, want)
+	}
+	if got, want := u.Tokenize("☕☕"), []int32{1}; !slices.Equal(got, want) {
+		t.Errorf("only unknown characters: %v, want %v", got, want)
 	}
 	if got := u.Tokenize(""); len(got) != 0 {
 		t.Errorf("an empty text tokenized to %v", got)

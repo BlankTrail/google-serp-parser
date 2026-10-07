@@ -196,7 +196,10 @@ func Read(r io.Reader) (*Model, error) {
 
 // Vector is a phrase's vector: the direction of the sum of its pieces' vectors,
 // which is the normalized mean model2vec makes (the mean is the sum over a
-// positive number, and normalizing undoes it). A phrase with no known piece is the nought vector.
+// positive number, and normalizing undoes it). The unknown piece counts like any
+// other: model2vec keeps it for this tokenizer and its row is not nought in the
+// real table. Only a phrase that normalizes to nothing has no pieces and is the
+// nought vector.
 func (m *Model) Vector(text string) []float32 {
 	if m.medianLen > 0 {
 		if limit := maxTokens * m.medianLen; utf8.RuneCountInString(text) > limit {
@@ -235,8 +238,8 @@ func (m *Model) Vector(text string) []float32 {
 }
 
 // Score is how close a completion is to its key: the cosine of their vectors,
-// from -1 to 1 and in practice from nought to one. A phrase with no known piece
-// scores nought against anything.
+// from -1 to 1 and in practice from nought to one. A phrase that normalizes to
+// nothing has no pieces and scores nought against anything.
 func (m *Model) Score(key, completion string) float32 {
 	a, b := m.Vector(key), m.Vector(completion)
 	var dot float32
