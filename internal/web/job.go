@@ -267,6 +267,9 @@ type jobPage struct {
 	ScoreDone  int
 	ScoreTotal int
 	ScoreFault string
+	// ScoreElsewhere says another job is being scored, which is all that can be
+	// said of it on this page.
+	ScoreElsewhere bool
 }
 
 // job draws one job and everything a reader can do with it.
@@ -347,7 +350,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	// no score has reached yet. Counted only for such a job, so the page of any
 	// other kind pays no query for a button it cannot have.
 	canScore := false
-	if sum.Kind == store.KindSuggest && s.semantic != nil && !s.jobInFlight(sum.ID) && !scoring &&
+	if sum.Kind == store.KindSuggest && s.semantic != nil && !s.jobInFlight(sum.ID) && !scoring && !s.scoringElsewhere(sum.ID) &&
 		s.modelState() == semantic.Ready {
 		n, err := s.store.UnscoredCount(r.Context(), sum.ID)
 		if err != nil {
@@ -356,6 +359,7 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		}
 		canScore = n > 0
 	}
+	elsewhere := sum.Kind == store.KindSuggest && !scoring && s.scoringElsewhere(sum.ID)
 	frame := s.frame(r, lang, "job.title", jobsAt)
 	if scoring {
 		frame.Refresh = listRefresh.Milliseconds()
@@ -417,11 +421,12 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			!at.Running && !at.Queued && !at.Finished && at.Pending > 0,
 		CanRetry: s.sup != nil && sum.PlanReady &&
 			!at.Running && !at.Queued && at.Failed > 0,
-		CanScore:   canScore,
-		Scoring:    scoring,
-		ScoreDone:  scoreDone,
-		ScoreTotal: scoreTotal,
-		ScoreFault: scoreFault,
+		CanScore:       canScore,
+		Scoring:        scoring,
+		ScoreDone:      scoreDone,
+		ScoreTotal:     scoreTotal,
+		ScoreFault:     scoreFault,
+		ScoreElsewhere: elsewhere,
 	})
 }
 

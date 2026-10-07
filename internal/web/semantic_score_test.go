@@ -3,6 +3,7 @@
 package web
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,7 +24,20 @@ import (
 // can be held, with the model in place when withModel says so.
 func scoreServer(t *testing.T, withModel bool) (*Server, *Supervisor) {
 	t.Helper()
-	st := testStore(t)
+	s, v, _ := scoreServerAt(t, withModel)
+	return s, v
+}
+
+// scoreServerAt is scoreServer with the path of its database, so a test can
+// open a second connection to it and break a write from outside.
+func scoreServerAt(t *testing.T, withModel bool) (*Server, *Supervisor, string) {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "gserp.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
 	v := newSupervisor(st, &heldEngine{hold: make(chan struct{})})
 	t.Cleanup(func() { _ = v.Close() })
 	model := filepath.Join(t.TempDir(), semantic.FileName)
@@ -42,7 +56,7 @@ func scoreServer(t *testing.T, withModel bool) (*Server, *Supervisor) {
 		t.Fatalf("New: %v", err)
 	}
 	s.modelSize = int64(len(body))
-	return s, v
+	return s, v, dbPath
 }
 
 // collectedJob is a job of the kind given with two suggestions of one key,
@@ -54,6 +68,24 @@ func collectedJob(t *testing.T, s *Server, kind string) int64 {
 		t.Fatalf("CreateJob: %v", err)
 	}
 	p := google.SERP{Results: []google.Result{{Position: 1, Title: "кофе"}, {Position: 2, Title: "tea"}}}
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: 0, Pages: []google.SERP{p}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	return id
+}
+
+// collectedMany is a suggestions job of one key with n suggestions, none of
+// them measured.
+func collectedMany(t *testing.T, s *Server, n int) int64 {
+	t.Helper()
+	id, err := s.store.CreateJob(t.Context(), store.JobSpec{Name: "many", Kind: store.KindSuggest, Pages: 1}, []string{"кофе"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	p := google.SERP{}
+	for i := 1; i <= n; i++ {
+		p.Results = append(p.Results, google.Result{Position: i, Title: "кофе " + strconv.Itoa(i)})
+	}
 	if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: 0, Pages: []google.SERP{p}}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
@@ -271,5 +303,98 @@ func TestScore_ASecondPressWhileOneRunsStartsNothing(t *testing.T) {
 	s.scoring.mu.Unlock()
 	if total != 99 {
 		t.Errorf("the second press reset the first one's figures (total %d)", total)
+	}
+}
+
+func TestScore_WalksAJobInSeveralBatchesAndLeavesNoRowBehind(t *testing.T) {
+	// Seven rows in batches of two end on a batch of one: a walk that stops when
+	// a batch comes back short, or that never reaches the last one, leaves it
+	// unmeasured.
+	s, _ := scoreServer(t, true)
+	s.scoreBatch = 2
+	id := collectedMany(t, s, 7)
+	pressScore(t, s, id)
+	scoreIdle(t, s)
+	if _, done, total, fault := s.scoringOf(id); done != 7 || total != 7 || fault != "" {
+		t.Errorf("the scoring reports %d of %d with fault %q, want 7 of 7 and none", done, total, fault)
+	}
+	if n, _ := s.store.UnscoredCount(t.Context(), id); n != 0 {
+		t.Errorf("%d rows left unmeasured after a walk in batches", n)
+	}
+}
+
+func TestScore_AFailedWriteStopsTheScoringTellsAndAPressCarriesOn(t *testing.T) {
+	s, _, dbPath := scoreServerAt(t, true)
+	s.scoreBatch = 2
+	id := collectedMany(t, s, 5)
+	rows, err := s.store.Unscored(t.Context(), id, 0, 10)
+	if err != nil || len(rows) != 5 {
+		t.Fatalf("setup: %d rows (%v)", len(rows), err)
+	}
+	// The third row cannot be written, so the first batch lands and the second
+	// fails whole.
+	raw, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.Exec(`CREATE TRIGGER stop BEFORE UPDATE ON results WHEN NEW.id = ` +
+		strconv.FormatInt(rows[2].ID, 10) + ` BEGIN SELECT RAISE(ABORT, 'no'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	pressScore(t, s, id)
+	// A deadline of its own: a scoring that does not stop on a failure would
+	// spin here, and this test must fail rather than hang.
+	scoreIdle(t, s)
+	running, done, _, fault := s.scoringOf(id)
+	if running || fault != "job.score.failed" || done != 2 {
+		t.Errorf("after the failure: running %v, done %d, fault %q; want stopped, 2, job.score.failed", running, done, fault)
+	}
+	if n, _ := s.store.UnscoredCount(t.Context(), id); n != 3 {
+		t.Errorf("%d rows unmeasured, want the 3 of the batch that failed and the one after it", n)
+	}
+	if page := get(t, s, jobPath(id)).Body.String(); !strings.Contains(page, LangEN.T("job.score.failed")) ||
+		!strings.Contains(page, scoreAction) {
+		t.Error("the page does not tell of the failure and offer the press again")
+	}
+
+	if _, err := raw.Exec(`DROP TRIGGER stop`); err != nil {
+		t.Fatal(err)
+	}
+	pressScore(t, s, id)
+	scoreIdle(t, s)
+	if _, _, _, fault := s.scoringOf(id); fault != "" {
+		t.Errorf("the fault %q stays after a press that finished", fault)
+	}
+	if n, _ := s.store.UnscoredCount(t.Context(), id); n != 0 {
+		t.Errorf("%d rows still unmeasured after the second press", n)
+	}
+}
+
+func TestScore_AnotherJobsPageSaysSoAndOffersNothing(t *testing.T) {
+	s, _ := scoreServer(t, true)
+	busy := collectedJob(t, s, store.KindSuggest)
+	idle := collectedJob(t, s, store.KindSuggest)
+	search := collectedJob(t, s, store.KindParse)
+	s.scoring.mu.Lock()
+	s.scoring.job, s.scoring.running = busy, true
+	s.scoring.mu.Unlock()
+	page := get(t, s, jobPath(idle)).Body.String()
+	if strings.Contains(page, scoreAction) {
+		t.Error("a job is offered a scoring that would do nothing while another is scored")
+	}
+	if !strings.Contains(page, LangEN.T("job.score.elsewhere")) {
+		t.Error("the page does not say another job is being scored")
+	}
+	if page := get(t, s, jobPath(search)).Body.String(); strings.Contains(page, LangEN.T("job.score.elsewhere")) {
+		t.Error("a search job is told of a scoring it has nothing to do with")
+	}
+	s.scoring.mu.Lock()
+	s.scoring.running = false
+	s.scoring.mu.Unlock()
+	if page := get(t, s, jobPath(idle)).Body.String(); !strings.Contains(page, scoreAction) ||
+		strings.Contains(page, LangEN.T("job.score.elsewhere")) {
+		t.Error("the button does not come back when the other scoring is over")
 	}
 }

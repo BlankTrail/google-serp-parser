@@ -105,6 +105,7 @@
 <a class="press export-link" href="/exports?job={{.Progress.ID}}">{{.T "job.export"}}</a>
 </div>
 {{if .Scoring}}<p id="scoring">{{.T "job.score.running"}} {{.ScoreDone}} / {{.ScoreTotal}}</p>{{end}}
+{{if .ScoreElsewhere}}<p id="score-elsewhere">{{.T "job.score.elsewhere"}}</p>{{end}}
 {{if .ScoreFault}}<p id="score-fault">{{.T .ScoreFault}}</p>{{end}}
 
 {{/* What the identities under this job are doing. It is drawn only while the

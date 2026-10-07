@@ -110,6 +110,7 @@ func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
 		// The closeness of a suggestion to its key, which the thirty-second step brought.
+		`DROP INDEX results_unscored`,
 		`ALTER TABLE results DROP COLUMN similarity`,
 		// The mark of a completion about something else, which the
 		// thirty-first step brought.

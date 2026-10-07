@@ -157,8 +157,10 @@ func (s *Server) scoringOf(job int64) (running bool, done, total int, fault stri
 	return s.scoring.running, s.scoring.done, s.scoring.total, s.scoring.fault
 }
 
-// scoreBatch is how many suggestions are read, scored and written at once.
-const scoreBatch = 10_000
+// scoreBatchSize is how many suggestions are read, scored and written at once.
+// A server's scoreBatch starts from it; a test makes it small to walk a few
+// rows in many batches.
+const scoreBatchSize = 10_000
 
 // apiScore starts scoring a job's unscored suggestions and goes back to its page.
 // Everything the page does not offer is refused quietly with the same redirect,
@@ -180,14 +182,40 @@ func (s *Server) apiScore(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, backTo(r, id), http.StatusSeeOther)
 		return
 	}
+	// Counted before the lock is taken: it is a query over the job's rows, and
+	// the pages that poll the scoring take the same lock. A total that is a
+	// moment stale (a press that loses the race to a running scoring counts for
+	// nothing) is harmless; a page waiting on a count is not.
+	total, err := s.store.UnscoredCount(r.Context(), id)
+	if err != nil {
+		s.log.Error("counting a job's unscored suggestions failed", "job", id, "error", err)
+		http.Redirect(w, r, backTo(r, id), http.StatusSeeOther)
+		return
+	}
 	s.scoring.mu.Lock()
 	if !s.scoring.running {
-		total, _ := s.store.UnscoredCount(r.Context(), id)
 		s.scoring.job, s.scoring.running, s.scoring.done, s.scoring.total, s.scoring.fault = id, true, 0, total, ""
 		go s.scoreJob(id, m)
 	}
 	s.scoring.mu.Unlock()
 	http.Redirect(w, r, backTo(r, id), http.StatusSeeOther)
+}
+
+// scoreBatchOrDefault is the batch size, which only a test changes.
+func (s *Server) scoreBatchOrDefault() int {
+	if s.scoreBatch > 0 {
+		return s.scoreBatch
+	}
+	return scoreBatchSize
+}
+
+// scoringElsewhere is whether a scoring of some other job is under way. One at
+// a time: pressing the button of another job would do nothing, so its page
+// does not offer it and says what is going on instead.
+func (s *Server) scoringElsewhere(job int64) bool {
+	s.scoring.mu.Lock()
+	defer s.scoring.mu.Unlock()
+	return s.scoring.running && s.scoring.job != job
 }
 
 // jobInFlight is whether the job is the one being run right now: its rows are
@@ -209,7 +237,7 @@ func (s *Server) scoreJob(id int64, m *semantic.Model) {
 	var after int64
 	var fault string
 	for {
-		batch, err := s.store.Unscored(ctx, id, after, scoreBatch)
+		batch, err := s.store.Unscored(ctx, id, after, s.scoreBatchOrDefault())
 		if err != nil {
 			fault = "job.score.failed"
 			s.log.Error("scoring a job's suggestions stopped", "job", id, "error", err)

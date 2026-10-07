@@ -115,6 +115,9 @@ type Server struct {
 	fetching modelFetch
 	// scoring is the scoring of one job's old suggestions, or the last one made.
 	scoring jobScoring
+	// scoreBatch is how many suggestions are scored at once, and zero is the
+	// default; a field so that a test can walk a few rows in many batches.
+	scoreBatch int
 	// modelURL and modelSum are where the model is downloaded from and what it
 	// must hash to. Fields so that a test can point the download at a server of
 	// its own: nothing in a test may reach the real address.

@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/blanktrail/google-serp-parser/internal/google"
@@ -101,5 +102,40 @@ func TestSetSimilarity_WritesAllOrNone(t *testing.T) {
 	}
 	if n, _ := s.UnscoredCount(ctx, id); n != 2 {
 		t.Errorf("%d unmeasured after a half-failed write, want both: the first row stuck", n)
+	}
+}
+
+// planOf is the query plan SQLite chooses for a statement, as one string.
+func planOf(t *testing.T, s *Store, query string, args ...any) string {
+	t.Helper()
+	rows, err := s.db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatalf("EXPLAIN: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	return plan
+}
+
+func TestUnscored_ReadsThroughThePartialIndexAndNotTheWholeTable(t *testing.T) {
+	// On a job of half a million rows the walk and the count must find the few
+	// unmeasured ones by the index kept for them, not by reading every row.
+	s := testStore(t)
+	id := suggestJob(t, s, "j", "coffee", "coffee maker")
+	walk := planOf(t, s, unscoredSQL, id, 0, 10)
+	count := planOf(t, s, unscoredCountSQL, id)
+	if !strings.Contains(walk, "results_unscored") {
+		t.Errorf("the walk does not use the partial index:\n%s", walk)
+	}
+	if !strings.Contains(count, "results_unscored") {
+		t.Errorf("the count does not use the partial index:\n%s", count)
 	}
 }
