@@ -4,7 +4,9 @@ package semantic
 
 import (
 	"bufio"
+	"bytes"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -66,9 +68,100 @@ func fullModelSource(t *testing.T) string {
 	return dir
 }
 
+func TestUnigram_AnEqualTotalKeepsTheFirstPathFound(t *testing.T) {
+	// ▁a + b and ▁ + ab both total -5 at the end of ▁ab. The reference's
+	// lattice walks the pieces ending at a position in the order they were
+	// inserted, which is by start position, and replaces a candidate only on a
+	// strictly better score (HF tokenizers' Viterbi uses >), so the path through
+	// the earlier-starting piece wins: ▁ then ab (ab starts at 1, b at 2).
+	u := NewUnigram(Vocab{
+		Pieces: []string{"[UNK]", "▁", "a", "b", "ab", "▁a"},
+		Scores: []float32{0, -2, -9, -2, -3, -3},
+		Unk:    0,
+	})
+	if got, want := u.Tokenize("▁ab"), []int32{1, 4}; !slices.Equal(got, want) {
+		t.Errorf("Tokenize = %v, want %v", got, want)
+	}
+}
+
+func TestUnigram_AnUnknownCharacterTyingAPieceDoesNotReplaceIt(t *testing.T) {
+	// XY is one piece at 0; X (10) then an unknown Y (lowest 0, less the
+	// penalty 10) also totals 0. The piece was found first and a tie keeps it,
+	// so the text is [XY], not [X] with Y unknown.
+	u := NewUnigram(Vocab{
+		Pieces: []string{"[UNK]", "X", "XY"},
+		Scores: []float32{0, 10, 0},
+		Unk:    0,
+	})
+	if got, want := u.Tokenize("XY"), []int32{2}; !slices.Equal(got, want) {
+		t.Errorf("Tokenize = %v, want %v", got, want)
+	}
+}
+
+func writeTokenizer(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tokenizer.json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestReadTokenizerJSON(t *testing.T) {
+	const norm = `{"type":"Precompiled","precompiled_charsmap":"AQID"}`
+	const vocab = `[["[UNK]",0],["a",-1.5]]`
+	doc := func(typ, vocab, unk, normalizer string) string {
+		return `{"normalizer":` + normalizer + `,"model":{"type":"` + typ + `","unk_id":` + unk + `,"vocab":` + vocab + `}}`
+	}
+	good := doc("Unigram", vocab, "0", `{"type":"Sequence","normalizers":[{"type":"Strip"},`+norm+`]}`)
+	v, raw, err := readTokenizerJSON(writeTokenizer(t, good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(v.Pieces, []string{"[UNK]", "a"}) || !slices.Equal(v.Scores, []float32{0, -1.5}) || v.Unk != 0 {
+		t.Errorf("vocabulary = %+v", v)
+	}
+	if !slices.Equal(raw, []byte{1, 2, 3}) {
+		t.Errorf("charsmap = %v", raw)
+	}
+
+	bad := map[string]string{
+		"not json":           `{`,
+		"not Unigram":        doc("BPE", vocab, "0", norm),
+		"malformed entry":    doc("Unigram", `[["[UNK]",0],["a","x"]]`, "0", norm),
+		"no normalizer":      `{"model":{"type":"Unigram","unk_id":0,"vocab":` + vocab + `}}`,
+		"no charsmap":        doc("Unigram", vocab, "0", `{"type":"Strip"}`),
+		"empty charsmap":     doc("Unigram", vocab, "0", `{"type":"Precompiled","precompiled_charsmap":""}`),
+		"broken nested":      doc("Unigram", vocab, "0", `{"type":"Sequence","normalizers":[7,`+norm+`]}`),
+		"charsmap not b64":   doc("Unigram", vocab, "0", `{"type":"Precompiled","precompiled_charsmap":"!!"}`),
+		"unk_id too big":     doc("Unigram", vocab, "2", norm),
+		"unk_id is negative": doc("Unigram", vocab, "-1", norm),
+	}
+	for name, body := range bad {
+		t.Run(name, func(t *testing.T) {
+			v, raw, err := readTokenizerJSON(writeTokenizer(t, body))
+			if err == nil {
+				t.Fatal("no error")
+			}
+			if v.Pieces != nil || raw != nil {
+				t.Errorf("an error came with a vocabulary %v or a table %v", v.Pieces, raw)
+			}
+		})
+	}
+	if _, _, err := readTokenizerJSON(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Error("a missing file read without error")
+	}
+	if _, _, err := readTokenizerJSON(writeTokenizer(t, doc("Unigram", vocab, "0", `{"type":"Strip"}`))); err == nil || !strings.Contains(err.Error(), "no precompiled normalization table") {
+		t.Errorf("no table gave %v", err)
+	}
+	if _, _, err := readTokenizerJSON(writeTokenizer(t, `{"model":{"type":"Unigram","unk_id":0,"vocab":`+vocab+`}}`)); err == nil || !strings.Contains(err.Error(), "no precompiled normalization table") {
+		t.Errorf("no normalizer gave %v", err)
+	}
+}
+
 func TestUnigram_CutsEveryPhraseAsTheReferenceTokenizerDoes(t *testing.T) {
 	src := fullModelSource(t)
-	v, raw, err := readTokenizerJSON(src + "/tokenizer.json")
+	v, raw, err := readTokenizerJSON(filepath.Join(src, "tokenizer.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,12 +176,16 @@ func TestUnigram_CutsEveryPhraseAsTheReferenceTokenizerDoes(t *testing.T) {
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
-	wrong := 0
+	wrong, seen := 0, 0
 	for sc.Scan() {
+		seen++
 		phrase, ids, _ := strings.Cut(sc.Text(), "\t")
 		var want []int32
 		for _, s := range strings.Fields(ids) {
-			n, _ := strconv.Atoi(s)
+			n, err := strconv.Atoi(s)
+			if err != nil {
+				t.Fatalf("tokens.tsv line %d: %v", seen, err)
+			}
 			want = append(want, int32(n))
 		}
 		if got := u.Tokenize(Normalize(c, phrase)); !slices.Equal(got, want) {
@@ -97,6 +194,17 @@ func TestUnigram_CutsEveryPhraseAsTheReferenceTokenizerDoes(t *testing.T) {
 				t.Errorf("%q: %v, want %v", phrase, got, want)
 			}
 		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	// A reference file that read as empty must not look like a pass.
+	lines, err := os.ReadFile("testdata/tokens.tsv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := bytes.Count(lines, []byte{'\n'}); seen == 0 || seen != want {
+		t.Fatalf("checked %d phrases, tokens.tsv has %d lines", seen, want)
 	}
 	if wrong > 0 {
 		t.Errorf("%d phrases cut differently from the reference", wrong)

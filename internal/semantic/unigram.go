@@ -26,7 +26,7 @@ type Unigram struct {
 	ids      map[string]int32
 	scores   []float32
 	unk      int32
-	unkScore float32
+	unkScore float64
 	longest  int // the longest piece, in bytes
 }
 
@@ -42,7 +42,7 @@ func NewUnigram(v Vocab) *Unigram {
 		lowest = min(lowest, v.Scores[i])
 		u.longest = max(u.longest, len(p))
 	}
-	u.unkScore = lowest - unkPenalty
+	u.unkScore = float64(lowest) - unkPenalty
 	return u
 }
 
@@ -55,7 +55,10 @@ func (u *Unigram) Tokenize(text string) []int32 {
 	if n == 0 {
 		return nil
 	}
-	best := make([]float32, n+1)
+	// Totals are summed in float64 though the scores are stored as float32:
+	// the reference sums in float64, and two paths whose totals differ only in
+	// the last float32 bit must not be told apart (or tied) differently here.
+	best := make([]float64, n+1)
 	from := make([]int, n+1)
 	piece := make([]int32, n+1)
 	reached := make([]bool, n+1)
@@ -71,7 +74,7 @@ func (u *Unigram) Tokenize(text string) []int32 {
 				if end-at == first {
 					single = true
 				}
-				if s := best[at] + u.scores[id]; !reached[end] || s > best[end] {
+				if s := best[at] + float64(u.scores[id]); !reached[end] || s > best[end] {
 					best[end], from[end], piece[end], reached[end] = s, at, id, true
 				}
 			}
