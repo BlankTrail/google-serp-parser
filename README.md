@@ -410,6 +410,31 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ## 📜 Recent changes
 
+### 0.4.11
+
+- **A meaning filter for search suggestions.** A model downloaded once from the
+  settings page (≈132 MB, minishlab/potion-multilingual-128M, MIT) scores every
+  suggestion for how close it is to its key; old jobs are scored from their
+  page. The export filters *by words* or *by meaning* with a threshold and says
+  how much it leaves out. Measured on 7773 Russian keys: by meaning removes
+  about two thirds of the junk for about 4% of the good suggestions.
+- The history moves to schema version 32 on the first start.
+
+### 0.4.10
+
+- **Suggestions with no word of their key are marked** and left out of the
+  export unless asked for; a *Related to the key* column says which is which.
+
+### 0.4.9
+
+- **The question Google hands back is left out**: a suggestion that keeps the
+  letter typed on its own where it was typed is not collected.
+
+### 0.4.8
+
+- **A port BlankTrail has closed is opened again**, so a job survives the
+  service restarting under it.
+
 ### 0.4.7
 
 - **TLS sessions with BlankTrail are resumed.** A search opens a connection to
