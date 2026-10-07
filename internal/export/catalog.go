@@ -19,6 +19,8 @@ const (
 	// key it typed and a suggestion Google offered for it.
 	ColKey        = "key"
 	ColSuggestion = "suggestion"
+	// ColRelated says whether a suggestion has anything of its key in it.
+	ColRelated = "related"
 )
 
 // Field is one column a file can carry: what a header and a download call it,
@@ -187,6 +189,7 @@ var Completions = Catalog[Row]{Fields: []Field[Row]{
 	{Name: ColOrdinal, Text: func(r Row) string { return itoa(r.Ordinal) }, Value: func(r Row) any { return r.Ordinal }},
 	{Name: ColKey, Text: func(r Row) string { return r.Query }},
 	{Name: ColSuggestion, Text: func(r Row) string { return r.Title }},
+	{Name: ColRelated, Text: func(r Row) string { return strconv.FormatBool(!r.Offtopic) }, Value: func(r Row) any { return !r.Offtopic }},
 }}
 
 // Verdicts is what an index check's answer can be written with. Held is written

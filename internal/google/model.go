@@ -41,6 +41,10 @@ type Result struct {
 	Link string
 
 	Form LinkForm
+
+	// Offtopic marks a search suggestion with nothing of its key in it; see
+	// Related. It means nothing on a result of a search.
+	Offtopic bool
 }
 
 // Resolved reports whether this result carries the exact destination address.

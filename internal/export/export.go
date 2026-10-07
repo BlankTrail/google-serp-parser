@@ -33,6 +33,8 @@ type Row struct {
 	// parser and both are kept only when the job asked for them.
 	Link        string `json:"link"`
 	DisplayPath string `json:"display_path"`
+	// Offtopic marks a search suggestion with nothing of its key in it.
+	Offtopic bool `json:"offtopic"`
 }
 
 // Writer takes rows one at a time and finishes the file on Close.

@@ -166,7 +166,9 @@ func (k *suggestion) settled(key string) ([]google.SERP, error) {
 	}
 	page := google.SERP{Query: key, Results: make([]google.Result, 0, len(k.found))}
 	for i, s := range k.found {
-		page.Results = append(page.Results, google.Result{Position: i + 1, Title: s})
+		// Marked, not left out: what has nothing of its key in it is for an
+		// export to set aside, and for a reader to see that it was.
+		page.Results = append(page.Results, google.Result{Position: i + 1, Title: s, Offtopic: !google.Related(key, s)})
 	}
 	return []google.SERP{page}, nil
 }

@@ -25,6 +25,9 @@ type Row struct {
 	// choice existed.
 	Link        string
 	DisplayPath string
+	// Offtopic marks a search suggestion with nothing of its key in it. Every
+	// row written before the mark existed reads false.
+	Offtopic bool
 }
 
 // Rows hands every result of a job to fn, in the order the job had.
@@ -35,7 +38,8 @@ type Row struct {
 // back unchanged, so a caller can stop it with its own sentinel.
 func (s *Store) Rows(ctx context.Context, jobID int64, fn func(Row) error) error {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT q.ordinal, q.text, p.number, r.rank, r.title, r.url, r.host, r.snippet, r.link, r.display_path
+		`SELECT q.ordinal, q.text, p.number, r.rank, r.title, r.url, r.host, r.snippet, r.link, r.display_path,
+		        r.offtopic
 		   FROM results r
 		   JOIN pages   p ON p.id = r.page_id
 		   JOIN queries q ON q.id = p.query_id
@@ -49,7 +53,7 @@ func (s *Store) Rows(ctx context.Context, jobID int64, fn func(Row) error) error
 	for rows.Next() {
 		var r Row
 		if err := rows.Scan(&r.Ordinal, &r.Query, &r.Page, &r.Rank,
-			&r.Title, &r.URL, &r.Host, &r.Snippet, &r.Link, &r.DisplayPath); err != nil {
+			&r.Title, &r.URL, &r.Host, &r.Snippet, &r.Link, &r.DisplayPath, &r.Offtopic); err != nil {
 			return fmt.Errorf("store: reading a result: %w", err)
 		}
 		if err := fn(r); err != nil {

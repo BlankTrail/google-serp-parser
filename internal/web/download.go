@@ -85,6 +85,10 @@ const (
 	eolField    = "eol"
 	uniqueField = "unique"
 	bomField    = "bom"
+	// offtopicField keeps the search suggestions with nothing of their key in
+	// them. Nothing said leaves them out: it is what a suggestions file is
+	// for, and a choice remembered from before the box existed says nothing.
+	offtopicField = "offtopic"
 )
 
 // colsOf is the columns a download asked for, in its order. A link names them
@@ -185,7 +189,7 @@ func (s *Server) askedExport(w http.ResponseWriter, r *http.Request) (exportAsk,
 	allowed := fieldsOf(job, part)
 	fields := colsOf(q)
 	if !q.Has(colsField) {
-		fields = allowed
+		fields = chosenOf(job, part)
 	}
 	// A column the part has but this job never kept is refused like one nobody
 	// has heard of: it would stand in the file empty.
@@ -201,7 +205,7 @@ func (s *Server) askedExport(w http.ResponseWriter, r *http.Request) (exportAsk,
 		http.Error(w, lang.T("exports.refused.fields"), http.StatusBadRequest)
 		return exportAsk{}, false
 	}
-	return exportAsk{job: job, part: part, layout: layout}, true
+	return exportAsk{job: job, part: part, layout: layout, offtopic: q.Get(offtopicField) == "1"}, true
 }
 
 // exportAsk is one file asked for: of which job, which part of it, and how it
@@ -210,6 +214,9 @@ type exportAsk struct {
 	job    store.JobSummary
 	part   string
 	layout export.Layout
+	// offtopic keeps a suggestions job's completions with nothing of their key
+	// in them, which are left out otherwise.
+	offtopic bool
 }
 
 // partsOf is what a job can be exported as, the first being what a download
@@ -269,6 +276,19 @@ func fieldsOf(job store.JobSummary, part string) []string {
 	return columnsOf(job.Fields)
 }
 
+// chosenOf is the columns a file of this part carries when nobody chose: all
+// of them but whether a suggestion is related to its key, which a file that
+// leaves out the unrelated ones would say yes to on every line.
+func chosenOf(job store.JobSummary, part string) []string {
+	var out []string
+	for _, name := range fieldsOf(job, part) {
+		if name != export.ColRelated {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // writePart writes one part of a job as the layout says. A preview stops at the
 // first records a screen shows.
 func (s *Server) writePart(ctx context.Context, w io.Writer, ask exportAsk, preview bool) error {
@@ -308,8 +328,16 @@ func (s *Server) writePart(ctx context.Context, w io.Writer, ask exportAsk, prev
 	if ask.job.Kind == store.KindSuggest {
 		catalog = export.Completions
 	}
+	// A suggestion with nothing of its key in it is set aside unless asked
+	// for; see google.Related. Only a suggestions job's rows are ever marked.
+	leaveOut := ask.job.Kind == store.KindSuggest && !ask.offtopic
 	return feed(w, catalog, ask.layout, preview, func(fn func(export.Row) error) error {
-		return s.walkRows(ctx, id, fn)
+		return s.walkRows(ctx, id, func(r export.Row) error {
+			if leaveOut && r.Offtopic {
+				return nil
+			}
+			return fn(r)
+		})
 	})
 }
 
@@ -352,6 +380,7 @@ func (s *Server) walkRows(ctx context.Context, jobID int64, fn func(export.Row) 
 			Snippet:     row.Snippet,
 			Link:        row.Link,
 			DisplayPath: row.DisplayPath,
+			Offtopic:    row.Offtopic,
 		})
 	})
 }

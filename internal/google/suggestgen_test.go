@@ -269,3 +269,41 @@ func TestEchoes_KnowsTheWordsOfOneLetterOfTheJobsLanguage(t *testing.T) {
 		}
 	}
 }
+
+func TestRelated_TellsACompletionAboutTheKeyFromOneAboutSomethingElse(t *testing.T) {
+	cases := []struct {
+		name, key, completion string
+		related               bool
+	}{
+		{"the key finished", "coffee maker", "coffee maker reviews", true},
+		{"one word of the key", "coffee maker", "best coffee", true},
+		{"another form of a word", "купить кофемашину", "кофемашины в москве", true},
+		{"a stem two thirds of the shorter word", "делает видео", "делающий", true},
+		{"a misspelling put right", "expresso", "espresso machine", true},
+		{"a word typed in the other script", "kofemashina", "кофемашина купить", true},
+		{"a Russian word typed in Latin letters", "нейросеть", "neyroset online", true},
+		{"two words joined", "coffee maker", "coffeemaker deals", true},
+		{"one word split", "coffeemaker", "coffee maker deals", true},
+		{"an underscore between words", "coffee_maker", "coffee maker deals", true},
+		{"a word spelled out of a long brand", "bestcoffeegrinder", "grinder for espresso", true},
+		{"a word spelled out of a short one", "tvshow", "show times", true},
+		{"three letters are not spelled out", "bestcoffeegrinder", "fee schedule", false},
+		{"two letters apart in a long word", "photoshop", "fotoshop online", true},
+		{"a letter apart in a short word", "gogle", "google translate", true},
+		{"one word split into short ones", "aiart", "ai art generator", true},
+		{"an underscore between short words", "ai_art", "art prints", true},
+		{"two short words joined", "pl ai", "plai beach", true},
+		{"a short word matched whole", "ai art", "ai music", true},
+		{"a key of words that say nothing", "how to", "anything at all", true},
+		{"something else entirely", "coffee maker", "kafka on the shore", false},
+		{"a short word is not a prefix", "ai art", "air fryer", false},
+		{"only a word that says nothing", "как сварить кофе", "как похудеть быстро", false},
+		{"letters in common inside another word", "pl ai", "jpl airport", false},
+		{"two letters apart in a short word", "maker", "mixer grinder", false},
+	}
+	for _, c := range cases {
+		if got := Related(c.key, c.completion); got != c.related {
+			t.Errorf("%s: Related(%q, %q) = %v, want %v", c.name, c.key, c.completion, got, c.related)
+		}
+	}
+}

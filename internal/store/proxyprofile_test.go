@@ -542,6 +542,9 @@ func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *test
 func windBackToVersion27(t *testing.T, s *Store) {
 	t.Helper()
 	for _, statement := range []string{
+		// The mark of a completion about something else, which the
+		// thirty-first step brought.
+		`ALTER TABLE results DROP COLUMN offtopic`,
 		`ALTER TABLE jobs DROP COLUMN checks_met`,
 		`PRAGMA user_version = 27`,
 	} {

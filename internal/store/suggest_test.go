@@ -97,3 +97,34 @@ func TestRecord_DropsACompletionAnotherKeyOfTheJobAlreadyBrought(t *testing.T) {
 		t.Errorf("%d completions dropped, want the one the first key already brought", sum.Dropped)
 	}
 }
+
+func TestRecord_KeepsTheMarkOfACompletionAboutSomethingElse(t *testing.T) {
+	// A completion with nothing of its key in it is written and marked, not
+	// left out, and reads back with the mark; the others read back without it.
+	s := testStore(t)
+	id, err := s.CreateJob(t.Context(), JobSpec{Name: "m", Kind: KindSuggest, Pages: 1},
+		[]string{"coffee maker"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	page := google.SERP{Results: []google.Result{
+		{Position: 1, Title: "coffee maker app"},
+		{Position: 2, Title: "kafka on the shore", Offtopic: true},
+	}}
+	if err := s.Record(t.Context(), id, QueryOutcome{Ordinal: 0, Pages: []google.SERP{page}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	marked := map[string]bool{}
+	if err := s.Rows(t.Context(), id, func(r Row) error {
+		marked[r.Title] = r.Offtopic
+		return nil
+	}); err != nil {
+		t.Fatalf("Rows: %v", err)
+	}
+	if len(marked) != 2 {
+		t.Fatalf("%d completions read back, want both: a marked one is kept, not left out", len(marked))
+	}
+	if marked["coffee maker app"] || !marked["kafka on the shore"] {
+		t.Errorf("read back marked %v, want only kafka on the shore marked", marked)
+	}
+}

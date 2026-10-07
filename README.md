@@ -315,6 +315,17 @@ everything collected. A letter that is a word of the job's language (`в`, `с`,
 `и`; `a`, `i`) and a digit are kept: `картина дрим арт в москве` is a real
 completion.
 
+A suggestion with **no word of its key in it**, in any form, is marked as
+unrelated: what a letter typed after the key led Google to instead. A word
+counts in another form (`кофемашина`, `кофемашины`), a letter or two
+misspelled (`expresso` → `espresso`), in the other script (`kofemashina` →
+`кофемашина`) and joined or split (`coffee maker` → `coffeemaker`). On 7773
+Russian keys it marked 5.5% of what was collected. The marked ones are kept in
+the job and left out of the export unless *Keep suggestions unrelated to the
+key* is ticked; the **Related to the key** column says which is which. A
+translation or a synonym with no letters in common is marked too — about one
+suggestion in a hundred.
+
 The alphabet is the job's **search language**: `ru` types Russian letters, `de`
 German, and so on. A job with none types a to z and nought to nine, as the link
 generator did, and the form says so under the language — set it for keys that
@@ -750,6 +761,8 @@ measured to it:
   single field one per line and nothing else.
 - Deduplication by URL or by host, or none; for search suggestions, by the
   suggestion's text.
+- Search suggestions unrelated to their key left out of the file unless asked
+  for, with a column that says which is which.
 - HTTP API under `/api/v1/`: set a job going, watch it, stop it, resume it.
 - Streaming endpoints: a job's results and a site's history, one JSON object
   per line, so a million rows read a line at a time.

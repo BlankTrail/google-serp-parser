@@ -264,3 +264,18 @@ func TestRunner_LeavesOutTheQuestionHandedBack(t *testing.T) {
 		}
 	}
 }
+
+func TestSuggestion_MarksACompletionWithNothingOfItsKey(t *testing.T) {
+	// Marked, not left out: the completion about something else is still on
+	// the page, and only it carries the mark.
+	k := &suggestion{answered: 1, found: []string{"coffee maker app", "kafka on the shore"}}
+	pages, err := k.settled("coffee maker")
+	if err != nil || len(pages) != 1 || len(pages[0].Results) != 2 {
+		t.Fatalf("settled to %v, %v; want one page of both completions", pages, err)
+	}
+	for _, r := range pages[0].Results {
+		if want := r.Title == "kafka on the shore"; r.Offtopic != want {
+			t.Errorf("%q marked %v, want %v", r.Title, r.Offtopic, want)
+		}
+	}
+}

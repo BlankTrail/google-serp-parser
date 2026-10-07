@@ -166,8 +166,13 @@ func TestJobPage_DrawsACompletionsJobAsKeysAndSuggestions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Progress: %v", err)
 	}
-	if got := strings.Join(fieldsOf(sum, partResults), ","); got != "ordinal,key,suggestion" {
-		t.Errorf("a completions job exports with %s, want the key and the text alone", got)
+	if got := strings.Join(chosenOf(sum, partResults), ","); got != "ordinal,key,suggestion" {
+		t.Errorf("a completions job exports with %s when nobody chose, want the key and the text alone", got)
+	}
+	// Whether a suggestion is related to its key is offered, not given: a file
+	// that leaves out the unrelated ones would say yes on every line.
+	if got := strings.Join(fieldsOf(sum, partResults), ","); got != "ordinal,key,suggestion,related" {
+		t.Errorf("a completions job offers %s, want the key, the text and whether it is related", got)
 	}
 }
 
@@ -283,5 +288,67 @@ func TestSupervisor_AsksForKeptAliveConnectionsForASuggestionsJobAlone(t *testin
 	defer pools.mu.Unlock()
 	if len(pools.asked) != 2 || pools.asked[0].KeepAlive || !pools.asked[1].KeepAlive {
 		t.Errorf("asked %+v, want a search without and a suggestions job with kept-alive connections", pools.asked)
+	}
+}
+
+func TestExport_LeavesOutTheSuggestionsUnrelatedToTheKeyUnlessAskedFor(t *testing.T) {
+	// A suggestion marked as having nothing of its key in it is set aside by
+	// the file and the preview alike unless the box keeps it; the column that
+	// says which is which is offered and not ticked; and the box is a
+	// suggestions job's alone.
+	s := testServerWithSupervisor(t)
+	id, err := s.store.CreateJob(t.Context(), store.JobSpec{Name: "c", Kind: store.KindSuggest, Pages: 1,
+		Fields: store.FieldsOf([]string{store.FieldTitle})}, []string{"coffee maker"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: 0,
+		Pages: []google.SERP{{Results: []google.Result{
+			{Position: 1, Title: "coffee maker app"},
+			{Position: 2, Title: "kafka on the shore", Offtopic: true},
+		}}}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	job := strconv.FormatInt(id, 10)
+
+	file := get(t, s, "/export?format=csv&job="+job).Body.String()
+	if !strings.Contains(file, "coffee maker app") || strings.Contains(file, "kafka on the shore") {
+		t.Errorf("the file with nothing said is %q, want the related suggestion alone", file)
+	}
+	if !strings.HasPrefix(file, "ordinal,key,suggestion\n") {
+		t.Errorf("the file with nothing said begins %q, want the related column left out", file[:min(len(file), 40)])
+	}
+	kept := get(t, s, "/export?format=csv&offtopic=1&cols=key,suggestion,related&job="+job).Body.String()
+	if !strings.Contains(kept, "coffee maker,coffee maker app,true") || !strings.Contains(kept, "coffee maker,kafka on the shore,false") {
+		t.Errorf("the file keeping them is %q, want both, each saying whether it is related", kept)
+	}
+
+	preview := get(t, s, "/export/preview?format=csv&job="+job).Body.String()
+	if strings.Contains(preview, "kafka on the shore") {
+		t.Errorf("the preview showed the unrelated suggestion: %q", preview)
+	}
+	if !strings.Contains(get(t, s, "/export/preview?format=csv&offtopic=1&job="+job).Body.String(), "kafka on the shore") {
+		t.Error("the preview asked to keep the unrelated suggestion left it out")
+	}
+
+	tab := get(t, s, exportsAt+"?job="+job).Body.String()
+	if strings.Contains(tab, "kafka on the shore") {
+		t.Error("the tab's own preview showed the unrelated suggestion")
+	}
+	if !strings.Contains(get(t, s, exportsAt+"?format=csv&offtopic=1&cols=key,suggestion&job="+job).Body.String(), "kafka on the shore") {
+		t.Error("the tab's own preview asked to keep the unrelated suggestion left it out")
+	}
+	if !strings.Contains(tab, `name="offtopic"`) {
+		t.Error("the tab of a suggestions job does not offer to keep the unrelated suggestions")
+	}
+	if strings.Contains(tab, `name="cols" value="related" checked`) {
+		t.Error("the tab ticks the related column on a screen nobody chose")
+	}
+	search, err := s.store.CreateJob(t.Context(), store.JobSpec{Name: "s", Pages: 1}, []string{"coffee"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if strings.Contains(get(t, s, exportsAt+"?job="+strconv.FormatInt(search, 10)).Body.String(), `name="offtopic"`) {
+		t.Error("the tab of a search offers a box about suggestions")
 	}
 }

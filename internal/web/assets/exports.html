@@ -54,6 +54,11 @@
 </div>
 <div class="field"><label><input type="checkbox" name="unique" value="1"{{if .Unique}} checked{{end}}> {{.T "exports.unique"}}</label></div>
 <div class="field"><label><input type="checkbox" name="bom" value="1"{{if .BOM}} checked{{end}}> {{.T "exports.bom"}}</label></div>
+{{if .Suggest}}<div class="field"><label><input type="checkbox" name="offtopic" value="1"{{if .Offtopic}} checked{{end}}> {{.T "exports.offtopic"}}</label>
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<p class="empty">{{.T "exports.offtopic.hint"}}</p>
+</details></div>{{end}}
 <details class="help">
 <summary>{{.T "help.what"}}</summary>
 <p class="empty">{{.T "exports.file.why"}}</p>

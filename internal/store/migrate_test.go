@@ -109,6 +109,9 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// The mark of a completion about something else, which the
+		// thirty-first step brought.
+		`ALTER TABLE results DROP COLUMN offtopic`,
 		// The road a profile's ports take to their addresses, which the
 		// twentieth step brought.
 		`ALTER TABLE proxy_profiles DROP COLUMN first_hop`,

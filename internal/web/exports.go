@@ -37,6 +37,11 @@ type exportsPage struct {
 	Header  bool
 	Unique  bool
 	BOM     bool
+	// Suggest says the job is a search suggestions job, which alone offers to
+	// keep the suggestions with nothing of their key in them, and Offtopic
+	// that they are kept.
+	Suggest  bool
+	Offtopic bool
 	// Explicit says the screen was drawn from a choice rather than opened
 	// cold. The script restores the last choice only onto a screen opened cold,
 	// so a screen it drew itself is never drawn again.
@@ -217,7 +222,7 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 	// no choice at all, and every field is offered ticked. One that named
 	// nothing is a reader who unticked everything, and stays that.
 	if !said || (named > 0 && known == 0) {
-		for _, name := range allowed {
+		for _, name := range chosenOf(job, part) {
 			chosen[name] = true
 		}
 	}
@@ -238,6 +243,8 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 	view.Header = q.Get(headerField) != "0"
 	view.Unique = q.Get(uniqueField) == "1"
 	view.BOM = q.Get(bomField) == "1"
+	view.Suggest = job.Kind == store.KindSuggest
+	view.Offtopic = view.Suggest && q.Get(offtopicField) == "1"
 	view.Order = strings.Join(order, ",")
 
 	// What every move link carries: the whole choice as it stands, so a move
@@ -251,6 +258,9 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 	state.Set(headerField, yes(view.Header))
 	state.Set(uniqueField, yes(view.Unique))
 	state.Set(bomField, yes(view.BOM))
+	if view.Suggest {
+		state.Set(offtopicField, yes(view.Offtopic))
+	}
 	state[colsField] = fields
 	state.Set(orderField, view.Order)
 	moveTo := func(name, way string) string {
@@ -285,7 +295,8 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 		layout := export.Layout{Format: view.Format, Fields: fields, Header: view.Header,
 			EOL: eol, Sep: sep, Unique: view.Unique}
 		var buf bytes.Buffer
-		if err := s.writePart(r.Context(), &buf, exportAsk{job: job, part: part, layout: layout}, true); err != nil {
+		ask := exportAsk{job: job, part: part, layout: layout, offtopic: view.Offtopic}
+		if err := s.writePart(r.Context(), &buf, ask, true); err != nil {
 			s.fail(w, r, err)
 			return
 		}
