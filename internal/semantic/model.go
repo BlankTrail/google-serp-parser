@@ -72,10 +72,17 @@ func Write(w io.Writer, v Vocab, charsmap []byte, rows [][]float32, medianLen in
 		}
 		var top float32
 		for _, x := range row {
+			if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+				return fmt.Errorf("%w: a row holds %v", ErrModel, x)
+			}
 			top = max(top, float32(math.Abs(float64(x))))
 		}
 		scale := top / 127
 		for j, x := range row {
+			// A zero row would divide 0 by 0 and convert NaN to int8, which Go
+			// leaves to the implementation. It is 0 on amd64 and arm64 today,
+			// so no test here can tell the guard from its absence; it stays so
+			// that the zero row does not depend on that.
 			if scale > 0 {
 				q[j] = int8(math.Round(float64(x / scale)))
 			} else {
@@ -98,60 +105,98 @@ func Load(path string) (*Model, error) {
 	return Read(f)
 }
 
-// Read reads a model.
+// maxPieces, maxDim and maxCells bound what a header may claim. The real model
+// is about 500 thousand pieces of 256, some 128 million cells; the bound on the
+// product is what keeps a hostile header from asking for tens of gigabytes,
+// which Go does not report as an error but dies of.
+const (
+	maxPieces = 10_000_000
+	maxDim    = 4096
+	maxCells  = 1 << 31
+)
+
+// bad is an unreadable file, with what went wrong behind it.
+func bad(err error) error { return fmt.Errorf("%w: %v", ErrModel, err) }
+
+// Read reads a model. Nothing is allocated from a size in the header before the
+// bytes it promises have arrived: the tables grow as they are read, so a short
+// file with a large header costs what it is, not what it claims.
 func Read(r io.Reader) (*Model, error) {
 	br := bufio.NewReaderSize(r, 1<<20)
 	head := make([]byte, len(signature))
-	if _, err := io.ReadFull(br, head); err != nil || string(head) != signature {
-		return nil, ErrModel
+	if _, err := io.ReadFull(br, head); err != nil {
+		return nil, bad(err)
+	}
+	if string(head) != signature {
+		return nil, bad(errors.New("the signature is not this format's"))
 	}
 	var dim, pieces, unk, median, cmLen uint32
 	for _, x := range []*uint32{&dim, &pieces, &unk, &median, &cmLen} {
 		if err := binary.Read(br, binary.LittleEndian, x); err != nil {
-			return nil, ErrModel
+			return nil, bad(err)
 		}
 	}
-	if dim == 0 || dim > 4096 || pieces == 0 || pieces > 10_000_000 || unk >= pieces || cmLen > 64<<20 {
-		return nil, ErrModel
+	if dim == 0 || dim > maxDim || pieces == 0 || pieces > maxPieces || unk >= pieces || cmLen > 64<<20 {
+		return nil, bad(fmt.Errorf("a header of %d pieces of %d, unknown %d, table of %d bytes", pieces, dim, unk, cmLen))
 	}
-	cm := make([]byte, cmLen)
-	if _, err := io.ReadFull(br, cm); err != nil {
-		return nil, ErrModel
+	if uint64(pieces)*uint64(dim) > maxCells {
+		return nil, bad(fmt.Errorf("%d pieces of %d is larger than the %d values a model may hold", pieces, dim, uint64(maxCells)))
+	}
+	cm, err := io.ReadAll(io.LimitReader(br, int64(cmLen)))
+	if err != nil {
+		return nil, bad(err)
 	}
 	charsmap, err := ParseCharsmap(cm)
 	if err != nil {
-		return nil, ErrModel
+		return nil, bad(err)
 	}
-	v := Vocab{Pieces: make([]string, pieces), Scores: make([]float32, pieces), Unk: int32(unk)}
-	for i := range v.Pieces {
+	v := Vocab{Unk: int32(unk)}
+	for i := 0; i < int(pieces); i++ {
 		var n uint16
 		if err := binary.Read(br, binary.LittleEndian, &n); err != nil {
-			return nil, ErrModel
+			return nil, bad(err)
 		}
 		b := make([]byte, n)
-		if _, err := io.ReadFull(br, b); err != nil || !utf8.Valid(b) {
-			return nil, ErrModel
+		if _, err := io.ReadFull(br, b); err != nil {
+			return nil, bad(err)
 		}
-		v.Pieces[i] = string(b)
-		if err := binary.Read(br, binary.LittleEndian, &v.Scores[i]); err != nil {
-			return nil, ErrModel
+		if !utf8.Valid(b) {
+			return nil, bad(errors.New("a piece is not text"))
 		}
+		var score float32
+		if err := binary.Read(br, binary.LittleEndian, &score); err != nil {
+			return nil, bad(err)
+		}
+		v.Pieces = append(v.Pieces, string(b))
+		v.Scores = append(v.Scores, score)
 	}
-	m := &Model{charsmap: charsmap, unigram: NewUnigram(v), dim: int(dim), medianLen: int(median),
-		scale: make([]float32, pieces), rows: make([]int8, int(pieces)*int(dim))}
+	m := &Model{charsmap: charsmap, unigram: NewUnigram(v), dim: int(dim), medianLen: int(median)}
+	row := make([]int8, dim)
 	for i := 0; i < int(pieces); i++ {
-		if err := binary.Read(br, binary.LittleEndian, &m.scale[i]); err != nil {
-			return nil, ErrModel
+		var scale float32
+		if err := binary.Read(br, binary.LittleEndian, &scale); err != nil {
+			return nil, bad(err)
 		}
-		if err := binary.Read(br, binary.LittleEndian, m.rows[i*int(dim):(i+1)*int(dim)]); err != nil {
-			return nil, ErrModel
+		if !(scale >= 0) || math.IsInf(float64(scale), 0) {
+			// A negative scale flips a row and NaN or infinity poisons every
+			// phrase that reaches it; Write never writes either.
+			return nil, bad(fmt.Errorf("the scale of row %d is %v", i, scale))
 		}
+		if err := binary.Read(br, binary.LittleEndian, row); err != nil {
+			return nil, bad(err)
+		}
+		m.scale = append(m.scale, scale)
+		m.rows = append(m.rows, row...)
+	}
+	if _, err := br.ReadByte(); err != io.EOF {
+		return nil, bad(errors.New("bytes follow the last row"))
 	}
 	return m, nil
 }
 
-// Vector is a phrase's vector: the mean of its pieces' vectors, normalized, as
-// model2vec makes it. A phrase with no known piece is the nought vector.
+// Vector is a phrase's vector: the direction of the sum of its pieces' vectors,
+// which is the normalized mean model2vec makes (the mean is the sum over a
+// positive number, and normalizing undoes it). A phrase with no known piece is the nought vector.
 func (m *Model) Vector(text string) []float32 {
 	if m.medianLen > 0 {
 		if limit := maxTokens * m.medianLen; utf8.RuneCountInString(text) > limit {

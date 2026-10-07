@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // tinyModel writes a model of a handful of pieces through Write and reads it
@@ -54,7 +55,7 @@ func TestModel_ScoresAPhraseAboutTheKeyAboveOneAboutSomethingElse(t *testing.T) 
 	}
 }
 
-func TestModel_AveragesThePiecesAndNormalizes(t *testing.T) {
+func TestModel_VectorIsTheNormalizedSumOfThePieces(t *testing.T) {
 	m := tinyModel(t)
 	v := m.Vector("кофе машина")
 	want := []float64{1.9, 0.5, 0}
@@ -201,8 +202,9 @@ func TestRead_ABoundOnTheDimensionAndOnWhatItAllocates(t *testing.T) {
 	// allocated for it; the file behind it is only a few bytes.
 	file := tinyFile(t)
 	for name, bad := range map[string][]byte{
-		"ten million and one pieces":     patched(patched(file, offPieces, 10_000_001), offDim, 4),
-		"a charsmap of 64 MB and a byte": patched(file, offCmLen, 64<<20+1),
+		"ten million and one pieces":                      patched(patched(file, offPieces, 10_000_001), offDim, 4),
+		"a charsmap of 64 MB and a byte":                  patched(file, offCmLen, 64<<20+1),
+		"a charsmap of exactly 64 MB, no bytes behind it": patched(file, offCmLen, 64<<20),
 	} {
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
@@ -446,5 +448,151 @@ func TestModel_TheScoresOfTheFileChooseTheCut(t *testing.T) {
 	}
 	if v := split.Vector("аб"); v[2] > 0.01 || v[0] < 0.5 {
 		t.Errorf("scores that favour the parts read as %v, want the rows of the parts", v)
+	}
+}
+
+func TestRead_RefusesAHeaderWhosePiecesTimesDimensionIsTooMuch(t *testing.T) {
+	file := tinyFile(t)
+	// Each factor is within its own bound; the product is 40 billion values.
+	hostile := patched(patched(file, offPieces, 10_000_000), offDim, 4096)
+	start := time.Now()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err := Read(bytes.NewReader(hostile))
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrModel) || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("got %v, want ErrModel for a table that is too large", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("refusing took %v", d)
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 8<<20 {
+		t.Errorf("refusing allocated %d MB", grew>>20)
+	}
+	// Under the bound but with no data behind it: nothing is allocated for the
+	// claim, the file runs out first.
+	claim := patched(patched(file, offPieces, 2_000_000), offDim, 1000)
+	runtime.ReadMemStats(&before)
+	_, err = Read(bytes.NewReader(claim))
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrModel) {
+		t.Errorf("got %v, want ErrModel", err)
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 8<<20 {
+		t.Errorf("a short file claiming 2 GB allocated %d MB", grew>>20)
+	}
+}
+
+func TestRead_RefusesBytesAfterTheLastRow(t *testing.T) {
+	raw := tinyFile(t)
+	if _, err := Read(bytes.NewReader(append(raw, 0))); !errors.Is(err, ErrModel) {
+		t.Errorf("a file one byte long: got %v, want ErrModel", err)
+	}
+}
+
+func TestRead_RefusesAScaleThatIsNotAScale(t *testing.T) {
+	raw := tinyFile(t)
+	cm := int(binary.LittleEndian.Uint32(raw[offCmLen:]))
+	at := headerEnd + cm
+	for i := 0; i < 3; i++ {
+		at += 2 + int(binary.LittleEndian.Uint16(raw[at:])) + 4
+	}
+	// Row 1 follows row 0's scale (4 bytes) and 3 values.
+	row1 := at + 4 + 3
+	for name, v := range map[string]float32{
+		"negative": -0.5, "NaN": float32(math.NaN()), "infinite": float32(math.Inf(1)), "negative infinity": float32(math.Inf(-1)),
+	} {
+		damaged := append([]byte(nil), raw...)
+		binary.LittleEndian.PutUint32(damaged[row1:], math.Float32bits(v))
+		if _, err := Read(bytes.NewReader(damaged)); !errors.Is(err, ErrModel) {
+			t.Errorf("a %s scale: got %v, want ErrModel", name, err)
+		}
+	}
+	good := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint32(good[row1:], math.Float32bits(0.5))
+	if _, err := Read(bytes.NewReader(good)); err != nil {
+		t.Errorf("a scale of 0.5: %v", err)
+	}
+}
+
+func TestWrite_RefusesARowWithNoNumberInIt(t *testing.T) {
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Vocab{Pieces: []string{"a"}, Scores: []float32{0}}
+	for name, x := range map[string]float32{"NaN": float32(math.NaN()), "Inf": float32(math.Inf(1)), "-Inf": float32(math.Inf(-1))} {
+		if err := Write(io.Discard, v, raw, [][]float32{{1, x}}, 4); !errors.Is(err, ErrModel) {
+			t.Errorf("%s: got %v, want ErrModel", name, err)
+		}
+	}
+}
+
+func TestRead_TheErrorIsErrModelAndSaysWhy(t *testing.T) {
+	raw := tinyFile(t)
+	_, err := Read(bytes.NewReader(raw[:len(raw)-1]))
+	if !errors.Is(err, ErrModel) {
+		t.Fatalf("got %v, want ErrModel", err)
+	}
+	if !strings.Contains(err.Error(), "EOF") {
+		t.Errorf("%q does not say why the file was refused", err)
+	}
+}
+
+func TestRead_ABoundOnTheNormalizationTable(t *testing.T) {
+	// A well-formed table one byte past 64 MB: a trie of 8 bytes, then
+	// replacements.
+	big := make([]byte, 64<<20+1)
+	binary.LittleEndian.PutUint32(big, 8)
+	v := Vocab{Pieces: []string{"[UNK]"}, Scores: []float32{0}}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, big, [][]float32{{1}}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(&buf); !errors.Is(err, ErrModel) {
+		t.Errorf("a table of 64 MB and a byte: got %v, want ErrModel", err)
+	}
+}
+
+func TestRead_ReadsAModelAsBigAsTheRealOneIsInProportion(t *testing.T) {
+	// Five thousand pieces of 256 is above a million values: the bound on the
+	// product is a ceiling for hostile files, not a limit a real model meets.
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 5000
+	v := Vocab{Pieces: make([]string, n), Scores: make([]float32, n)}
+	rows := make([][]float32, n)
+	for i := range rows {
+		v.Pieces[i] = "p" + strings.Repeat("x", i%7) + string(rune('a'+i%26)) + string(rune(0x4e00+i))
+		rows[i] = make([]float32, 256)
+		rows[i][i%256] = 1
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, raw, rows, 4); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.rows) != n*256 || len(m.scale) != n {
+		t.Errorf("read %d values and %d scales, want %d and %d", len(m.rows), len(m.scale), n*256, n)
+	}
+}
+
+func TestRead_RefusesNoDimensionEvenWhenTheFileIsWhole(t *testing.T) {
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Vocab{Pieces: []string{"[UNK]"}, Scores: []float32{0}}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, raw, [][]float32{{}}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(&buf); !errors.Is(err, ErrModel) {
+		t.Errorf("a model of dimension 0: got %v, want ErrModel", err)
 	}
 }
