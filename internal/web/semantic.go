@@ -6,10 +6,12 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/semantic"
+	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
 // semanticAt is where the settings page asks for the model to be downloaded.
@@ -128,4 +130,109 @@ func (s *Server) downloadModel(url, sum string) {
 		s.log.Error("the model was not downloaded", "error", err)
 	}
 	s.fetching.mu.Unlock()
+}
+
+// jobScoring is the one job whose old suggestions are being scored, and how
+// far it has got. One at a time: the model is shared and the work is the
+// database's, and two would only slow each other down.
+type jobScoring struct {
+	mu          sync.Mutex
+	job         int64
+	running     bool
+	done, total int
+	// fault is the catalogue key of what to tell the reader when the last
+	// scoring stopped; the cause itself goes to the log.
+	fault string
+}
+
+// scoringOf is what a job's page reads of the scoring: whether it is this job
+// that is being scored, how far, and whether the last one stopped. Another
+// job's scoring is nothing to this page, which must not show its progress.
+func (s *Server) scoringOf(job int64) (running bool, done, total int, fault string) {
+	s.scoring.mu.Lock()
+	defer s.scoring.mu.Unlock()
+	if s.scoring.job != job {
+		return false, 0, 0, ""
+	}
+	return s.scoring.running, s.scoring.done, s.scoring.total, s.scoring.fault
+}
+
+// scoreBatch is how many suggestions are read, scored and written at once.
+const scoreBatch = 10_000
+
+// apiScore starts scoring a job's unscored suggestions and goes back to its page.
+// Everything the page does not offer is refused quietly with the same redirect,
+// for the reason a stop pressed twice is: the page the reader lands on says
+// what is true now.
+func (s *Server) apiScore(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.FormValue("job"), 10, 64)
+	if err != nil || s.semantic == nil {
+		http.NotFound(w, r)
+		return
+	}
+	sum, err := s.store.Progress(r.Context(), id)
+	if err != nil || sum.Kind != store.KindSuggest || s.jobInFlight(id) || s.modelState() != semantic.Ready {
+		http.Redirect(w, r, backTo(r, id), http.StatusSeeOther)
+		return
+	}
+	m, err := s.semantic.Get()
+	if err != nil {
+		http.Redirect(w, r, backTo(r, id), http.StatusSeeOther)
+		return
+	}
+	s.scoring.mu.Lock()
+	if !s.scoring.running {
+		total, _ := s.store.UnscoredCount(r.Context(), id)
+		s.scoring.job, s.scoring.running, s.scoring.done, s.scoring.total, s.scoring.fault = id, true, 0, total, ""
+		go s.scoreJob(id, m)
+	}
+	s.scoring.mu.Unlock()
+	http.Redirect(w, r, backTo(r, id), http.StatusSeeOther)
+}
+
+// jobInFlight is whether the job is the one being run right now: its rows are
+// still arriving, and a row written after the scoring has passed would be left
+// unmeasured by a run that then reports itself finished.
+func (s *Server) jobInFlight(id int64) bool {
+	if s.sup == nil {
+		return false
+	}
+	running, ok := s.sup.Running()
+	return ok && running == id
+}
+
+// scoreJob walks the job's unscored suggestions batch by batch. Stopped part way
+// - the program closed - it has lost nothing: what was written is scored, and
+// the next press carries on with what is not.
+func (s *Server) scoreJob(id int64, m *semantic.Model) {
+	ctx := context.Background()
+	var after int64
+	var fault string
+	for {
+		batch, err := s.store.Unscored(ctx, id, after, scoreBatch)
+		if err != nil {
+			fault = "job.score.failed"
+			s.log.Error("scoring a job's suggestions stopped", "job", id, "error", err)
+			break
+		}
+		if len(batch) == 0 {
+			break
+		}
+		scores := make(map[int64]float64, len(batch))
+		for _, u := range batch {
+			scores[u.ID] = float64(m.Score(u.Key, u.Text))
+		}
+		if err := s.store.SetSimilarity(ctx, scores); err != nil {
+			fault = "job.score.failed"
+			s.log.Error("scoring a job's suggestions stopped", "job", id, "error", err)
+			break
+		}
+		after = batch[len(batch)-1].ID
+		s.scoring.mu.Lock()
+		s.scoring.done += len(batch)
+		s.scoring.mu.Unlock()
+	}
+	s.scoring.mu.Lock()
+	s.scoring.running, s.scoring.fault = false, fault
+	s.scoring.mu.Unlock()
 }

@@ -96,8 +96,16 @@
 <button type="submit">{{.T "job.retry"}}</button>
 </form>
 {{end}}
+{{if .CanScore}}
+<form method="post" action="/api/score">
+<input type="hidden" name="job" value="{{.Progress.ID}}">
+<button type="submit">{{.T "job.score"}}</button>
+</form>
+{{end}}
 <a class="press export-link" href="/exports?job={{.Progress.ID}}">{{.T "job.export"}}</a>
 </div>
+{{if .Scoring}}<p id="scoring">{{.T "job.score.running"}} {{.ScoreDone}} / {{.ScoreTotal}}</p>{{end}}
+{{if .ScoreFault}}<p id="score-fault">{{.T .ScoreFault}}</p>{{end}}
 
 {{/* What the identities under this job are doing. It is drawn only while the
      job is running: the pool is raised for one job and taken down when that job

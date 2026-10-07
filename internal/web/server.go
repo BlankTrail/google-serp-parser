@@ -113,6 +113,8 @@ type Server struct {
 	// fetching is the download of that model, or the last one made. One at a
 	// time: it is 140 MB, and two of them would be two writers of one file.
 	fetching modelFetch
+	// scoring is the scoring of one job's old suggestions, or the last one made.
+	scoring jobScoring
 	// modelURL and modelSum are where the model is downloaded from and what it
 	// must hash to. Fields so that a test can point the download at a server of
 	// its own: nothing in a test may reach the real address.
@@ -328,6 +330,7 @@ var browserPolls = []poll{
 	{http.MethodPost, "/api/stop", func(s *Server) http.HandlerFunc { return s.apiStop }},
 	{http.MethodPost, "/api/resume", func(s *Server) http.HandlerFunc { return s.apiResume }},
 	{http.MethodPost, "/api/retry", func(s *Server) http.HandlerFunc { return s.apiRetry }},
+	{http.MethodPost, "/api/score", func(s *Server) http.HandlerFunc { return s.apiScore }},
 	{http.MethodPost, "/api/delete", func(s *Server) http.HandlerFunc { return s.apiDelete }},
 	{http.MethodPost, "/api/reshape", func(s *Server) http.HandlerFunc { return s.apiReshape }},
 	// Both are presses rather than links: a browser walking one would wipe

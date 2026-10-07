@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/semantic"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -257,6 +258,15 @@ type jobPage struct {
 	// what a pool that went away leaves behind — and that job has no other way
 	// back into the queue.
 	CanRetry bool
+	// CanScore offers to measure the closeness of the suggestions a job
+	// collected before there was a model, or while there was none. Scoring says
+	// whether that is going on for this job now, and the fields after it are
+	// what the page tells of it.
+	CanScore   bool
+	Scoring    bool
+	ScoreDone  int
+	ScoreTotal int
+	ScoreFault string
 }
 
 // job draws one job and everything a reader can do with it.
@@ -331,7 +341,25 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	// word, for the reason a kind of job is.
 	device, _ := deviceKey(sum.Device)
 
+	scoring, scoreDone, scoreTotal, scoreFault := s.scoringOf(sum.ID)
+	// Offered only where it can do something and nothing else is going on: a
+	// completions job, not the one in flight, with a model that loads, and rows
+	// no score has reached yet. Counted only for such a job, so the page of any
+	// other kind pays no query for a button it cannot have.
+	canScore := false
+	if sum.Kind == store.KindSuggest && s.semantic != nil && !s.jobInFlight(sum.ID) && !scoring &&
+		s.modelState() == semantic.Ready {
+		n, err := s.store.UnscoredCount(r.Context(), sum.ID)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		canScore = n > 0
+	}
 	frame := s.frame(r, lang, "job.title", jobsAt)
+	if scoring {
+		frame.Refresh = listRefresh.Milliseconds()
+	}
 	// Asked for again only while the job can answer differently. A job nobody is
 	// running reads the same in the morning.
 	if at.Watch {
@@ -389,6 +417,11 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 			!at.Running && !at.Queued && !at.Finished && at.Pending > 0,
 		CanRetry: s.sup != nil && sum.PlanReady &&
 			!at.Running && !at.Queued && at.Failed > 0,
+		CanScore:   canScore,
+		Scoring:    scoring,
+		ScoreDone:  scoreDone,
+		ScoreTotal: scoreTotal,
+		ScoreFault: scoreFault,
 	})
 }
 
