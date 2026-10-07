@@ -307,12 +307,12 @@ Multiword caps how many one key may cost. The depth, the site, the parts of a
 result and the session rest mean nothing to this kind and are put away.
 
 Google often hands a letter typed on its own straight back: for
-`картина дрим р арт` it offers `картина дрим р арт это`. That is the question,
+`кофе машина р дома` it offers `кофе машина р дома это`. That is the question,
 not a completion of the key, and it is left out — a completion that still has
 the letter standing alone where it was typed, between the words, after the key
 or before it. On 7773 Russian keys with Multiword it was nearly half of
 everything collected. A letter that is a word of the job's language (`в`, `с`,
-`и`; `a`, `i`) and a digit are kept: `картина дрим арт в москве` is a real
+`и`; `a`, `i`) and a digit are kept: `кофе машина дома в москве` is a real
 completion.
 
 A suggestion with **no word of its key in it**, in any form, is marked as

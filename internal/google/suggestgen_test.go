@@ -175,9 +175,9 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestEchoes_DropsTheQuestionHandedBackAndKeepsWhatAnswersIt(t *testing.T) {
-	// The completions of the operator's own report, for "картина дрим арт"
-	// with Multiword: the letter р put between дрим and арт comes back where
-	// it was typed, and that is the question, not a completion of the key.
+	// As Google answers "кофе машина дома" with Multiword: the letter р put
+	// between машина and дома comes back where it was typed, and that is the
+	// question, not a completion of the key.
 	ru := SuggestAlphabet("ru")
 	variant := func(t *testing.T, key, text string, multiword bool) SuggestVariant {
 		t.Helper()
@@ -189,14 +189,14 @@ func TestEchoes_DropsTheQuestionHandedBackAndKeepsWhatAnswersIt(t *testing.T) {
 		t.Fatalf("no question %q is asked for %q", text, key)
 		return SuggestVariant{}
 	}
-	between := variant(t, "картина дрим арт", "картина дрим р арт", true)
-	after := variant(t, "картина дрим арт", "картина дрим арт р", false)
-	before := variant(t, "картина дрим арт", "р картина дрим арт", false)
-	afterWord := variant(t, "картина дрим арт", "картина дрим арт в", false)
-	beforeWord := variant(t, "картина дрим арт", "в картина дрим арт", false)
-	betweenWord := variant(t, "картина дрим арт", "картина в дрим арт", true)
-	joined := variant(t, "картина дрим арт", "картина дрим арть", false)
-	firstPlace := variant(t, "картина дрим арт", "картина р дрим арт", true)
+	between := variant(t, "кофе машина дома", "кофе машина р дома", true)
+	after := variant(t, "кофе машина дома", "кофе машина дома р", false)
+	before := variant(t, "кофе машина дома", "р кофе машина дома", false)
+	afterWord := variant(t, "кофе машина дома", "кофе машина дома в", false)
+	beforeWord := variant(t, "кофе машина дома", "в кофе машина дома", false)
+	betweenWord := variant(t, "кофе машина дома", "кофе в машина дома", true)
+	joined := variant(t, "кофе машина дома", "кофе машина домаь", false)
+	firstPlace := variant(t, "кофе машина дома", "кофе р машина дома", true)
 
 	cases := []struct {
 		name       string
@@ -204,23 +204,23 @@ func TestEchoes_DropsTheQuestionHandedBackAndKeepsWhatAnswersIt(t *testing.T) {
 		completion string
 		echo       bool
 	}{
-		{"the letter left between the words", between, "картина дрим р арт это", true},
-		{"the letter left before a longer word", between, "картина дрим р артемьева", true},
-		{"the question itself", between, "картина дрим р арт", true},
-		{"as Google writes it, in capitals", between, "Картина Дрим Р Арт портреты", true},
-		{"an answer that did not keep the letter", between, "дрим арт до после", false},
-		{"the letter in its place after other words", between, "купить дрим р арт", false},
-		{"the letter grown into a word", between, "картина дрим рисунок арт", false},
-		{"a letter one place further on", firstPlace, "картина дрим р арт", false},
-		{"the letter left after the key", after, "картина дрим арт р", true},
-		{"the letter left after the key, with more", after, "картина дрим арт р это", true},
-		{"the letter after the key finished", after, "картина дрим арт ростов", false},
-		{"the letter left before the key", before, "р картина дрим арт", true},
-		{"the letter before the key finished", before, "рисунок картина дрим арт", false},
-		{"a word of one letter after the key", afterWord, "картина дрим арт в москве", false},
-		{"a word of one letter before the key", beforeWord, "в картина дрим арт", false},
-		{"a word of one letter between the words", betweenWord, "картина в дрим арт", false},
-		{"a letter joined to the key", joined, "картина дрим арть", false},
+		{"the letter left between the words", between, "кофе машина р дома это", true},
+		{"the letter left before a longer word", between, "кофе машина р домашняя", true},
+		{"the question itself", between, "кофе машина р дома", true},
+		{"as Google writes it, in capitals", between, "Кофе Машина Р Дома цена", true},
+		{"an answer that did not keep the letter", between, "машина дома до после", false},
+		{"the letter in its place after other words", between, "купить машина р дома", false},
+		{"the letter grown into a word", between, "кофе машина ручная дома", false},
+		{"a letter one place further on", firstPlace, "кофе машина р дома", false},
+		{"the letter left after the key", after, "кофе машина дома р", true},
+		{"the letter left after the key, with more", after, "кофе машина дома р это", true},
+		{"the letter after the key finished", after, "кофе машина дома ростов", false},
+		{"the letter left before the key", before, "р кофе машина дома", true},
+		{"the letter before the key finished", before, "растворимый кофе машина дома", false},
+		{"a word of one letter after the key", afterWord, "кофе машина дома в москве", false},
+		{"a word of one letter before the key", beforeWord, "в кофе машина дома", false},
+		{"a word of one letter between the words", betweenWord, "кофе в машина дома", false},
+		{"a letter joined to the key", joined, "кофе машина домаь", false},
 		{"a question with no letter", SuggestVariant{Key: "k", Text: "k "}, "k", false},
 	}
 	for _, c := range cases {

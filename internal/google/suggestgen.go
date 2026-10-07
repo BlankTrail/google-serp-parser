@@ -65,13 +65,13 @@ type SuggestVariant struct {
 
 // Echoes says whether a completion is the question handed back rather than
 // an answer to it: the letter put in still stands alone where it was typed,
-// "картина дрим р арт это" for "картина дрим р арт". Measured on 897 thousand
+// "кофе машина р дома это" for "кофе машина р дома". Measured on 897 thousand
 // completions of 7773 Russian keys with Multiword, 458 thousand kept the
 // letter where it was typed, and 426 thousand of those a letter that is no
-// word at all — nearly half of everything the job collected. A letter that is a word of the job's
-// language — в, с, и; a, i — is a word the searcher may well have meant, and
-// "картина дрим арт в москве" is kept, as is a digit, which is a model or a
-// year as often as not.
+// word at all — nearly half of everything the job collected. A letter that is
+// a word of the job's language — в, с, и; a, i — is a word the searcher may
+// well have meant, and "кофе машина дома в москве" is kept, as is a digit,
+// which is a model or a year as often as not.
 func Echoes(v SuggestVariant, lang, completion string) bool {
 	if v.Letter == "" || len(v.Echo) == 0 || standsAlone(lang, v.Letter) {
 		return false
