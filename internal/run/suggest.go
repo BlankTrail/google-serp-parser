@@ -160,9 +160,20 @@ func (r *Runner) completions(ctx context.Context, j Job, a *Attempt, results []Q
 // settled is what a key comes to once every question is in: its completions as
 // one page of results, numbered in the order they first came back, and a
 // failure only if not one question was answered.
-func (k *suggestion) settled(key string, similar func(string, string) float32) ([]google.SERP, error) {
+func (k *suggestion) settled(key string, similar func(string, []string) []float32) ([]google.SERP, error) {
 	if k.answered == 0 {
 		return nil, fmt.Errorf("run: no completion question for %q was answered: %w", key, k.last)
+	}
+	// One call for the key's completions, so the key is turned into a vector
+	// once. A scorer that answers with another number of scores than it was
+	// asked for has scored something else, and nothing of it is kept: the
+	// completions go unmeasured, as with no model, rather than each being given
+	// a neighbour's score.
+	var scores []float32
+	if similar != nil {
+		if got := similar(key, k.found); len(got) == len(k.found) {
+			scores = got
+		}
 	}
 	page := google.SERP{Query: key, Results: make([]google.Result, 0, len(k.found))}
 	for i, s := range k.found {
@@ -171,8 +182,8 @@ func (k *suggestion) settled(key string, similar func(string, string) float32) (
 		r := google.Result{Position: i + 1, Title: s, Offtopic: !google.Related(key, s)}
 		// Scored is set beside the number, not read off it: a suggestion the
 		// model put at nought was measured, and one with no model was not.
-		if similar != nil {
-			r.Similarity, r.Scored = similar(key, s), true
+		if scores != nil {
+			r.Similarity, r.Scored = scores[i], true
 		}
 		page.Results = append(page.Results, r)
 	}

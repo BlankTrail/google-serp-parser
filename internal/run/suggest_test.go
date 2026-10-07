@@ -282,13 +282,22 @@ func TestSuggestion_MarksACompletionWithNothingOfItsKey(t *testing.T) {
 
 func TestSuggestion_ScoresEachCompletionWhenAModelIsThere(t *testing.T) {
 	k := &suggestion{answered: 1, found: []string{"coffee maker app", "kafka on the shore"}}
-	similar := func(_, s string) float32 {
-		if s == "coffee maker app" {
-			return 0.8
+	asked := 0
+	similar := func(_ string, cs []string) []float32 {
+		asked++
+		out := make([]float32, len(cs))
+		for i, s := range cs {
+			out[i] = 0.1
+			if s == "coffee maker app" {
+				out[i] = 0.8
+			}
 		}
-		return 0.1
+		return out
 	}
 	pages, err := k.settled("coffee maker", similar)
+	if asked != 1 {
+		t.Errorf("the scorer was asked %d times for one key, want once with all its completions", asked)
+	}
 	if err != nil || len(pages) != 1 {
 		t.Fatalf("settled to %v, %v", pages, err)
 	}
@@ -310,7 +319,7 @@ func TestSuggestion_ACompletionScoredNoughtWasStillScored(t *testing.T) {
 	// Nought is a measurement. Telling a scored suggestion from an unscored one
 	// by the number would read every unrelated phrase as never measured.
 	k := &suggestion{answered: 1, found: []string{"coffee maker app"}}
-	pages, _ := k.settled("coffee maker", func(string, string) float32 { return 0 })
+	pages, _ := k.settled("coffee maker", func(_ string, cs []string) []float32 { return make([]float32, len(cs)) })
 	if r := pages[0].Results[0]; !r.Scored || r.Similarity != 0 {
 		t.Errorf("a score of nought read back as %v (%v)", r.Similarity, r.Scored)
 	}
@@ -323,13 +332,20 @@ func TestRunner_HandsTheJobsScorerToEveryKeyItSettles(t *testing.T) {
 	o := newCompletionOrigin(t)
 	f := poolFacing(t, o.Listener.Addr().String(), 2)
 	r := &Runner{Pool: f.Pool, Threads: 2}
-	similar := func(_, s string) float32 { return float32(len(s)) / 100 }
+	one := func(s string) float32 { return float32(len(s)) / 100 }
+	similar := func(_ string, cs []string) []float32 {
+		out := make([]float32, len(cs))
+		for i, s := range cs {
+			out[i] = one(s)
+		}
+		return out
+	}
 	rep := r.Run(context.Background(), Job{Kind: Suggest, Queries: []google.Query{usQuery("coffee")}, Tries: 3, Similar: similar})
 	if rep.Done != 1 || len(rep.Results[0].Pages) != 1 {
 		t.Fatalf("the key did not settle: %+v", rep)
 	}
 	for _, res := range rep.Results[0].Pages[0].Results {
-		if !res.Scored || res.Similarity != similar("coffee", res.Title) {
+		if !res.Scored || res.Similarity != one(res.Title) {
 			t.Errorf("%q came back with %v (%v), want the job's score", res.Title, res.Similarity, res.Scored)
 		}
 	}
@@ -338,6 +354,21 @@ func TestRunner_HandsTheJobsScorerToEveryKeyItSettles(t *testing.T) {
 	for _, res := range plain.Results[0].Pages[0].Results {
 		if res.Scored {
 			t.Errorf("%q was scored on a job with no scorer", res.Title)
+		}
+	}
+}
+
+func TestSuggestion_AScorerThatAnswersForOtherCompletionsIsNotKept(t *testing.T) {
+	// One score fewer than completions is a scorer that scored something else:
+	// kept, every completion after the gap would carry its neighbour's number.
+	k := &suggestion{answered: 1, found: []string{"coffee maker app", "coffee maker sale"}}
+	pages, err := k.settled("coffee maker", func(string, []string) []float32 { return []float32{0.5} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range pages[0].Results {
+		if r.Scored {
+			t.Errorf("%q was kept as scored %v from a scorer that answered for one of two", r.Title, r.Similarity)
 		}
 	}
 }

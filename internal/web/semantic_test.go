@@ -78,6 +78,10 @@ func TestSettings_OffersTheModelOnlyWhereThereIsNone(t *testing.T) {
 	if !strings.Contains(page, LangEN.T("settings.semantic.ready")) {
 		t.Error("the page does not say the model is ready")
 	}
+	// Ready, with the version: the file's name carries it.
+	if !strings.Contains(page, "<code>"+semantic.FileName+"</code>") {
+		t.Errorf("the ready line does not name the model's version %s", semantic.FileName)
+	}
 	if strings.Contains(page, `action="`+semanticAt+`"`) {
 		t.Error("the page still offers to download a model that is there")
 	}

@@ -1019,6 +1019,33 @@
 			remember();
 			redraw();
 		});
+		// The slider's count is redrawn a moment after it stops moving, not at
+		// every change. A pointer fires one change on release, but the arrow
+		// keys fire one per step, and a screen redrawn per step replaces the
+		// slider under the keyboard: the focus is lost after the first press and
+		// the reader stepping 0.54 down to 0.48 gets 0.53 and a page with nothing
+		// focused. So the redraw waits until the steps pause, and the slider
+		// drawn in place of the one that had the focus is given it back.
+		var minTimer = 0;
+		var redrawMin = function () {
+			window.clearTimeout(minTimer);
+			minTimer = window.setTimeout(function () {
+				var slider = form.querySelector("[name=min]");
+				var focused = slider !== null && document.activeElement === slider;
+				remember();
+				if (focused) {
+					var refocus = function () {
+						window.removeEventListener("gserp:screen", refocus);
+						var again = document.querySelector("#export-builder [name=min]");
+						if (again) {
+							again.focus();
+						}
+					};
+					window.addEventListener("gserp:screen", refocus);
+				}
+				show("/exports?" + choice().toString(), true);
+			}, 400);
+		};
 		form.addEventListener("change", function (event) {
 			// Another job or another part has other fields, and only the server
 			// knows which: that is a new screen, drawn by it.
@@ -1031,8 +1058,12 @@
 			}
 			// A new filter shows or hides the threshold slider, and a released
 			// slider has a new count of what is left out: both are the server's to
-			// draw, from the choice as it stands.
-			if (event.target.name === "filter" || event.target.name === "min") {
+			// draw, from the choice as it stands. The slider's, once it rests.
+			if (event.target.name === "min") {
+				redrawMin();
+				return;
+			}
+			if (event.target.name === "filter") {
 				remember();
 				show("/exports?" + choice().toString(), true);
 				return;

@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"unicode/utf8"
 )
 
@@ -95,14 +96,29 @@ func Write(w io.Writer, v Vocab, charsmap []byte, rows [][]float32, medianLen in
 	return bw.Flush()
 }
 
-// Load reads a model from a file.
+// Load reads a model from a file. Unlike Read it knows how long the file is,
+// and that is what keeps its cost at the size of the table: the header's count
+// of pieces and their dimension say exactly how many bytes the rows take, so a
+// file whose length disagrees is refused before anything is allocated for it,
+// and a file that agrees has its rows and scales allocated once, at their final
+// size, and read straight into them. The 500-thousand-piece model is 128 MB of
+// rows; read by appending they cost twice that at the moment the slice doubles,
+// and the converting reads allocated per row on top, close to a gigabyte passing
+// through the heap for a table of 128 MB. That matters more than it looks: Go
+// does not report running out of memory as an error a caller can handle, it
+// ends the process, so a load that asks for several times the model's size can
+// take the whole program down on a machine with little memory to spare.
 func Load(path string) (*Model, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	return Read(f)
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return read(f, info.Size())
 }
 
 // maxPieces, maxDim and maxCells bound what a header may claim. The real model
@@ -115,84 +131,124 @@ const (
 	maxCells  = 1 << 31
 )
 
+// headerLen is the signature and the five numbers after it.
+const headerLen = len(signature) + 5*4
+
 // bad is an unreadable file, with what went wrong behind it.
 func bad(err error) error { return fmt.Errorf("%w: %v", ErrModel, err) }
 
-// Read reads a model. Nothing is allocated from a size in the header before the
-// bytes it promises have arrived: the tables grow as they are read, so a short
-// file with a large header costs what it is, not what it claims.
-func Read(r io.Reader) (*Model, error) {
+// Read reads a model from a stream whose length is not known. Nothing is
+// allocated from a size in the header before the bytes it promises have arrived:
+// the tables grow as they are read, so a short file with a large header costs
+// what it is, not what it claims. Growing, the rows cost up to twice their size
+// while the slice is copied; Load, which knows the file's length, does not.
+func Read(r io.Reader) (*Model, error) { return read(r, -1) }
+
+// read reads a model; size is the length of the file, or -1 when it is not
+// known. With a size, the header is checked against it before anything is
+// allocated, and the tables are allocated once at their final size.
+func read(r io.Reader, size int64) (*Model, error) {
 	br := bufio.NewReaderSize(r, 1<<20)
-	head := make([]byte, len(signature))
+	head := make([]byte, headerLen)
 	if _, err := io.ReadFull(br, head); err != nil {
 		return nil, bad(err)
 	}
-	if string(head) != signature {
+	if string(head[:len(signature)]) != signature {
 		return nil, bad(errors.New("the signature is not this format's"))
 	}
-	var dim, pieces, unk, median, cmLen uint32
-	for _, x := range []*uint32{&dim, &pieces, &unk, &median, &cmLen} {
-		if err := binary.Read(br, binary.LittleEndian, x); err != nil {
-			return nil, bad(err)
-		}
-	}
+	le := binary.LittleEndian
+	field := func(i int) uint32 { return le.Uint32(head[len(signature)+4*i:]) }
+	dim, pieces, unk, median, cmLen := field(0), field(1), field(2), field(3), field(4)
 	if dim == 0 || dim > maxDim || pieces == 0 || pieces > maxPieces || unk >= pieces || cmLen > 64<<20 {
 		return nil, bad(fmt.Errorf("a header of %d pieces of %d, unknown %d, table of %d bytes", pieces, dim, unk, cmLen))
 	}
 	if uint64(pieces)*uint64(dim) > maxCells {
 		return nil, bad(fmt.Errorf("%d pieces of %d is larger than the %d values a model may hold", pieces, dim, uint64(maxCells)))
 	}
+	// Each row is its scale and its values, and each piece at least its length
+	// and its score: the shortest file this header can describe. A known size
+	// below it is a file that cannot hold what the header claims.
+	rowsLen := int64(pieces) * (4 + int64(dim))
+	if size >= 0 {
+		if least := int64(headerLen) + int64(cmLen) + int64(pieces)*(2+4) + rowsLen; size < least {
+			return nil, bad(fmt.Errorf("a file of %d bytes cannot hold %d pieces of %d, which take at least %d", size, pieces, dim, least))
+		}
+	}
 	cm, err := io.ReadAll(io.LimitReader(br, int64(cmLen)))
 	if err != nil {
 		return nil, bad(err)
+	}
+	if len(cm) != int(cmLen) {
+		return nil, bad(io.ErrUnexpectedEOF)
 	}
 	charsmap, err := ParseCharsmap(cm)
 	if err != nil {
 		return nil, bad(err)
 	}
 	v := Vocab{Unk: int32(unk)}
+	if size >= 0 {
+		// The size has vouched for the count: every piece takes six bytes at
+		// least, and they are all there.
+		v.Pieces, v.Scores = make([]string, 0, pieces), make([]float32, 0, pieces)
+	}
+	at := int64(headerLen) + int64(cmLen)
+	// A piece is at most 65535 bytes and its score follows it; one buffer holds
+	// both, and each piece's text is copied out of it once, into its string.
+	var buf [math.MaxUint16 + 4]byte
 	for i := 0; i < int(pieces); i++ {
-		var n uint16
-		if err := binary.Read(br, binary.LittleEndian, &n); err != nil {
+		if _, err := io.ReadFull(br, buf[:2]); err != nil {
 			return nil, bad(err)
 		}
-		b := make([]byte, n)
-		if _, err := io.ReadFull(br, b); err != nil {
+		n := int(le.Uint16(buf[:2]))
+		if _, err := io.ReadFull(br, buf[:n+4]); err != nil {
 			return nil, bad(err)
 		}
+		b := buf[:n]
 		if !utf8.Valid(b) {
 			return nil, bad(errors.New("a piece is not text"))
 		}
-		var score float32
-		if err := binary.Read(br, binary.LittleEndian, &score); err != nil {
-			return nil, bad(err)
-		}
 		v.Pieces = append(v.Pieces, string(b))
-		v.Scores = append(v.Scores, score)
+		v.Scores = append(v.Scores, math.Float32frombits(le.Uint32(buf[n:n+4])))
+		at += 2 + int64(n) + 4
 	}
 	m := &Model{charsmap: charsmap, unigram: NewUnigram(v), dim: int(dim), medianLen: int(median)}
-	row := make([]int8, dim)
+	if size >= 0 {
+		// Now the vocabulary is read, the rows must fill the rest exactly;
+		// only then are they allocated.
+		if rest := size - at; rest != rowsLen {
+			return nil, bad(fmt.Errorf("%d bytes follow the vocabulary, and %d pieces of %d take %d", rest, pieces, dim, rowsLen))
+		}
+		m.scale = make([]float32, 0, pieces)
+		m.rows = make([]int8, 0, int(pieces)*int(dim))
+	}
+	row := make([]byte, 4+int(dim))
 	for i := 0; i < int(pieces); i++ {
-		var scale float32
-		if err := binary.Read(br, binary.LittleEndian, &scale); err != nil {
+		if _, err := io.ReadFull(br, row); err != nil {
 			return nil, bad(err)
 		}
+		scale := math.Float32frombits(le.Uint32(row))
 		if !(scale >= 0) || math.IsInf(float64(scale), 0) {
 			// A negative scale flips a row and NaN or infinity poisons every
 			// phrase that reaches it; Write never writes either.
 			return nil, bad(fmt.Errorf("the scale of row %d is %v", i, scale))
 		}
-		if err := binary.Read(br, binary.LittleEndian, row); err != nil {
-			return nil, bad(err)
-		}
 		m.scale = append(m.scale, scale)
-		m.rows = append(m.rows, row...)
+		// Grow is a no-op when Load has allocated the table already, and grows
+		// it the way append would when Read does not know its size.
+		start := len(m.rows)
+		m.rows = slices.Grow(m.rows, int(dim))[:start+int(dim)]
+		for j, q := range row[4:] {
+			m.rows[start+j] = int8(q)
+		}
 	}
 	if _, err := br.ReadByte(); err != io.EOF {
 		return nil, bad(errors.New("bytes follow the last row"))
 	}
 	return m, nil
 }
+
+// Pieces is how many pieces the model has a vector for.
+func (m *Model) Pieces() int { return len(m.scale) }
 
 // Vector is a phrase's vector: the direction of the sum of its pieces' vectors,
 // which is the normalized mean model2vec makes (the mean is the sum over a
@@ -241,10 +297,29 @@ func (m *Model) Vector(text string) []float32 {
 // from -1 to 1 and in practice from nought to one. A phrase that normalizes to
 // nothing has no pieces and scores nought against anything.
 func (m *Model) Score(key, completion string) float32 {
-	a, b := m.Vector(key), m.Vector(completion)
-	var dot float32
-	for j := range a {
-		dot += a[j] * b[j]
+	return dot(m.Vector(key), m.Vector(completion))
+}
+
+// ScoreAll is Score of each completion against one key, in their order. The
+// key's vector is made once rather than once per completion: a key settles
+// with a few hundred completions, and the backfill scores a job's rows a key
+// at a time, so making it again for each was half the work thrown away. The
+// numbers are Score's to the last bit: the same vectors, multiplied in the
+// same order.
+func (m *Model) ScoreAll(key string, completions []string) []float32 {
+	a := m.Vector(key)
+	out := make([]float32, len(completions))
+	for i, c := range completions {
+		out[i] = dot(a, m.Vector(c))
 	}
-	return dot
+	return out
+}
+
+// dot is the dot product of two vectors of one length.
+func dot(a, b []float32) float32 {
+	var d float32
+	for j := range a {
+		d += a[j] * b[j]
+	}
+	return d
 }

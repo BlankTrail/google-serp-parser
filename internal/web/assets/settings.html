@@ -140,7 +140,7 @@
 {{if .Model.Available}}
 <section class="card">
 <h2>{{.T "settings.semantic.title"}}</h2>
-{{if .Model.Present}}<p>{{.T "settings.semantic.ready"}}</p>
+{{if .Model.Present}}<p>{{.T "settings.semantic.ready"}} ({{.T "settings.semantic.version"}} <code>{{.Model.Version}}</code>)</p>
 {{else if .Model.Running}}<p>{{.T "settings.semantic.loading"}} {{.Model.Percent}}%</p>
 {{else}}{{if .Model.Damaged}}<ul class="faults"><li>{{.T "settings.semantic.damaged"}}</li></ul>{{end}}
 <form method="post" action="/settings/semantic"><button type="submit">{{.T "settings.semantic.fetch"}} (≈{{.Model.SizeMB}} {{.T "settings.semantic.mb"}})</button></form>{{end}}

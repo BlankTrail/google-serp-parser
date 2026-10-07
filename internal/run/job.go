@@ -81,9 +81,11 @@ type Job struct {
 	// SuggestLimit caps the questions one key may cost, nought for none.
 	Multiword    bool
 	SuggestLimit int
-	// Similar scores a search suggestion against its key for the meaning
-	// filter, and is nil where no model is downloaded; see semantic.Model.
-	Similar func(key, completion string) float32
+	// Similar scores a key's search suggestions against it for the meaning
+	// filter, one score per completion in their order, and is nil where no
+	// model is downloaded; see semantic.Model.ScoreAll. It takes all of a key's
+	// completions at once so that the key's vector is made once per key.
+	Similar func(key string, completions []string) []float32
 	// Queries are taken in this order and reported in it.
 	Queries []google.Query
 	// Captured, when set, is told about each page as it comes back, before the

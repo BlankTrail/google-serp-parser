@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -99,6 +100,13 @@ const (
 	// through, and a higher one starts costing good suggestions faster than it
 	// removes junk.
 	defaultMin = 0.54
+	// lowestMin and highestMin are the slider's ends on the exports tab. A
+	// threshold outside them is brought to the nearer end, so that a link made
+	// by hand and the slider drawn from it agree on what the file leaves out:
+	// a slider can only stand inside its range, and a file filtered by a value
+	// it cannot show would be a file the tab describes wrongly.
+	lowestMin  = 0.30
+	highestMin = 0.80
 )
 
 // suggestFilter is how a suggestions job's export leaves things out.
@@ -130,8 +138,10 @@ func filterOf(q url.Values, scored bool) suggestFilter {
 			f.mode = "none"
 		}
 	}
-	if v, err := strconv.ParseFloat(q.Get(minField), 64); err == nil && v >= 0 && v <= 1 {
-		f.min = v
+	// Anything that is not a number is the default; NaN parses, and is not
+	// one either. A number is brought inside the slider's range.
+	if v, err := strconv.ParseFloat(q.Get(minField), 64); err == nil && !math.IsNaN(v) {
+		f.min = min(highestMin, max(lowestMin, v))
 	}
 	return f
 }

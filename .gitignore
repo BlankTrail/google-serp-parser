@@ -59,3 +59,9 @@ gserp-settings.json
 /.superpowers/
 /testdata-corpus/
 *.har
+
+# The meaning filter's model and the download or conversion still in progress:
+# 139 MB of a third party's weights that are published as a release asset and
+# never committed, and a .part that is only ever a file half written.
+gserp-semantic-*.bin
+*.part

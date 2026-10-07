@@ -16,7 +16,7 @@ import (
 
 // plannedAs plans a job of the kind given, on a supervisor that keeps the
 // holder given, and hands back what the run would be told.
-func plannedAs(t *testing.T, kind string, h *semantic.Holder, logged *bytes.Buffer) func(key, completion string) float32 {
+func plannedAs(t *testing.T, kind string, h *semantic.Holder, logged *bytes.Buffer) func(key string, completions []string) []float32 {
 	t.Helper()
 	v, st := supervisorOn(t, &heldEngine{hold: make(chan struct{})})
 	if logged != nil {

@@ -1143,7 +1143,7 @@ func (v *Supervisor) SetSemantic(h *semantic.Holder) { v.semantic.Store(h) }
 // have not asked for it. A file that is there and cannot be read is: the job
 // still runs, unscored, and a reader of the log learns why its suggestions have
 // no closeness. It is said once here, per plan, and not once per suggestion.
-func (v *Supervisor) similarFor() func(key, completion string) float32 {
+func (v *Supervisor) similarFor() func(key string, completions []string) []float32 {
 	h := v.semantic.Load()
 	if h == nil {
 		return nil
@@ -1155,7 +1155,7 @@ func (v *Supervisor) similarFor() func(key, completion string) float32 {
 		}
 		return nil
 	}
-	return m.Score
+	return m.ScoreAll
 }
 
 // settle writes down what the run paid in Google's checks, and stamps a job

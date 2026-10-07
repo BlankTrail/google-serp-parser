@@ -321,15 +321,18 @@ counts in another form (`кофемашина`, `кофемашины`), a lette
 misspelled (`expresso` → `espresso`), in the other script (`kofemashina` →
 `кофемашина`) and joined or split (`coffee maker` → `coffeemaker`). On 7773
 Russian keys it marked 5.5% of what was collected. The marked ones are kept in
-the job and left out of the export unless *Keep suggestions unrelated to the
-key* is ticked; the **Related to the key** column says which is which. A
-translation or a synonym with no letters in common is marked too — about one
-suggestion in a hundred.
+the job; what the export does with them is the *Suggestions filter* on the
+export tab (below): *By meaning* by default where the job's suggestions have
+been scored, *By words* otherwise, and both leave the marked ones out; *No
+filter* keeps them. The **Related to the key** column says which is which, and
+the old `offtopic=1` link parameter still keeps everything. A translation or a
+synonym with no letters in common is marked too — about one suggestion in a
+hundred.
 
 **Meaning filter.** Words alone let through a suggestion that keeps one word of
 the key and goes somewhere else, so there is a second, optional check by
 meaning. **Settings** has a block *Meaning filter for search suggestions* with a
-**Download the model** button: about 133 MB (139 186 847 bytes) of
+**Download the model** button: about 132 MB (139 186 847 bytes) of
 `minishlab/potion-multilingual-128M`, a model2vec model distilled from
 `BAAI/bge-m3`, MIT licence. It is saved beside the database as
 `gserp-semantic-v1.bin` and checked by SHA-256; a damaged file is reported and
@@ -339,11 +342,13 @@ was there can be scored from the job's page with **Score closeness to the key**:
 it runs in the background and is safe to interrupt. On the **export tab** of a
 suggestions job, *Suggestions filter* has three choices: *No filter*, *By words*
 (the check above) and *By meaning*, which leaves out a suggestion with no word
-of its key in any form **or** with a closeness below the threshold. The
-threshold is a slider from 0.30 to 0.80, 0.54 by default, and *Left out: N / M*
-shows what it costs before the file is made; the **Closeness to the key** column
-can be added. A suggestion not scored yet is judged by words only, and the old
-`offtopic=1` link parameter still keeps everything.
+of its key in any form **or** with a closeness below the threshold. It opens on
+*By meaning* when any of the job's suggestions are scored and on *By words*
+when none are. The threshold is a slider from 0.30 to 0.80, 0.54 by default (a
+link with a number outside that range is read as the nearer end), and *Left
+out: N / M (X%)* shows what it costs before the file is made; the **Closeness
+to the key** column can be added. A suggestion not scored yet is judged by
+words only, and the old `offtopic=1` link parameter still keeps everything.
 
 On one job of 7773 Russian keys, checked against 300 pairs labelled by Claude,
 about a fifth of what was collected was off topic. *By words* removed a quarter
@@ -352,7 +357,9 @@ two thirds (64%) and lost about 4% of the good ones. The model counts words
 without their order: it measures how close the topics are and understands
 nothing. A translation or a synonym with no letters in common is judged better
 than by words, but a suggestion that keeps one word of the key and changes the
-subject can still pass, and a good one can fall below the line.
+subject can still pass, and a good one can fall below the line. The threshold
+and these figures come from the same 300 pairs, so on other keys expect it to
+do slightly worse than they say.
 
 The alphabet is the job's **search language**: `ru` types Russian letters, `de`
 German, and so on. A job with none types a to z and nought to nine, as the link
@@ -791,8 +798,8 @@ measured to it:
   single field one per line and nothing else.
 - Deduplication by URL or by host, or none; for search suggestions, by the
   suggestion's text.
-- Search suggestions unrelated to their key left out of the file unless asked
-  for, with a column that says which is which.
+- Search suggestions unrelated to their key marked, with a column that says
+  which is which; the filter below leaves them out unless set to none.
 - A suggestions filter on the export tab: none, by words or by meaning, with a
   threshold, a count of what is left out and an optional closeness column.
 - HTTP API under `/api/v1/`: set a job going, watch it, stop it, resume it.

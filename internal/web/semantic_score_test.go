@@ -4,6 +4,7 @@ package web
 
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -396,5 +397,82 @@ func TestScore_AnotherJobsPageSaysSoAndOffersNothing(t *testing.T) {
 	if page := get(t, s, jobPath(idle)).Body.String(); !strings.Contains(page, scoreAction) ||
 		strings.Contains(page, LangEN.T("job.score.elsewhere")) {
 		t.Error("the button does not come back when the other scoring is over")
+	}
+}
+
+func TestScore_AModelThatDoesNotLoadIsToldOnTheJobPage(t *testing.T) {
+	// A file the length of the model that begins as one, so the page offers the
+	// scoring, but whose header is nought: the holder fails to read it at the
+	// press. The press must not come back as if nothing had happened.
+	s, _ := scoreServer(t, true)
+	broken := tinyModelBytes(t)
+	for i := 8; i < 28; i++ {
+		broken[i] = 0
+	}
+	if err := os.WriteFile(s.semantic.Path(), broken, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var logged strings.Builder
+	s.log = slog.New(slog.NewTextHandler(&logged, nil))
+	id := collectedJob(t, s, store.KindSuggest)
+	if page := get(t, s, jobPath(id)).Body.String(); !strings.Contains(page, scoreAction) {
+		t.Fatal("the page does not offer the scoring of a file that looks like the model")
+	}
+	pressScore(t, s, id)
+	scoreIdle(t, s)
+	page := get(t, s, jobPath(id)).Body.String()
+	if !strings.Contains(page, LangEN.T("job.score.damaged")) {
+		t.Error("the job page does not say the model did not load")
+	}
+	if !strings.Contains(logged.String(), "the model did not load for scoring") {
+		t.Errorf("the log does not say why: %q", logged.String())
+	}
+	if n, _ := s.store.UnscoredCount(t.Context(), id); n != 2 {
+		t.Errorf("%d left unmeasured, want 2", n)
+	}
+	// Another job's page is not told of it.
+	other := collectedJob(t, s, store.KindSuggest)
+	if page := get(t, s, jobPath(other)).Body.String(); strings.Contains(page, LangEN.T("job.score.damaged")) {
+		t.Error("another job's page tells of this job's failure")
+	}
+}
+
+func TestScore_ABatchOfSeveralKeysScoresEachRowAgainstItsOwnKey(t *testing.T) {
+	// The backfill gathers a batch's rows by key to make each key's vector once;
+	// a row must still be scored against its own key, to the bit what Score
+	// says, whichever batch it falls in and wherever its key's rows are split.
+	s, _ := scoreServer(t, true)
+	// Four: the first batch holds the first key's three rows and one of the
+	// second's, and the second batch the rest of the second's.
+	s.scoreBatch = 4
+	id, err := s.store.CreateJob(t.Context(), store.JobSpec{Name: "two", Kind: store.KindSuggest, Pages: 1}, []string{"кофе", "погода"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ordinal, titles := range [][]string{{"кофе машина", "погода", "кофе"}, {"кофе чайник", "погода", "чайник", "кофе"}} {
+		p := google.SERP{}
+		for i, x := range titles {
+			p.Results = append(p.Results, google.Result{Position: i + 1, Title: x})
+		}
+		if err := s.store.Record(t.Context(), id, store.QueryOutcome{Ordinal: ordinal, Pages: []google.SERP{p}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pressScore(t, s, id)
+	scoreIdle(t, s)
+	m, err := s.semantic.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	err = s.store.Rows(t.Context(), id, func(r store.Row) error {
+		seen++
+		if want := float64(m.Score(r.Query, r.Title)); !r.Scored || r.Similarity != want {
+			t.Errorf("%q of %q kept %v (%v), the model says %v", r.Title, r.Query, r.Similarity, r.Scored, want)
+		}
+		return nil
+	})
+	if err != nil || seen != 7 {
+		t.Fatalf("rows = %d (%v), want 7", seen, err)
 	}
 }

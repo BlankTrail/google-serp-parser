@@ -43,13 +43,16 @@ type exportsPage struct {
 	// of a meaning filter, as two decimals. Scored says some suggestions were
 	// measured, which alone offers the meaning. Cut of Total is what the filter
 	// leaves out, CutShare that as a percent.
-	Suggest  bool
-	Filter   string
-	Min      string
-	Scored   bool
-	Cut      int
-	Total    int
-	CutShare string
+	Suggest bool
+	Filter  string
+	Min     string
+	// MinLow and MinHigh are the slider's ends, from the same constants the
+	// download brings a threshold inside, so the two cannot drift apart.
+	MinLow, MinHigh string
+	Scored          bool
+	Cut             int
+	Total           int
+	CutShare        string
 	// Explicit says the screen was drawn from a choice rather than opened
 	// cold. The script restores the last choice only onto a screen opened cold,
 	// so a screen it drew itself is never drawn again.
@@ -261,6 +264,7 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 		}
 		filter = filterOf(q, view.Scored)
 		view.Filter, view.Min = filter.mode, fmt.Sprintf("%.2f", filter.min)
+		view.MinLow, view.MinHigh = fmt.Sprintf("%.2f", lowestMin), fmt.Sprintf("%.2f", highestMin)
 		if filter.mode != "none" {
 			view.Total, view.Cut, err = s.store.FilterCount(r.Context(), job.ID, filter.mode == "meaning", filter.min)
 			if err != nil {

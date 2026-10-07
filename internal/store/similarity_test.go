@@ -125,18 +125,75 @@ func planOf(t *testing.T, s *Store, query string, args ...any) string {
 	return plan
 }
 
-func TestUnscored_ReadsThroughThePartialIndexAndNotTheWholeTable(t *testing.T) {
-	// On a job of half a million rows the walk and the count must find the few
-	// unmeasured ones by the index kept for them, not by reading every row.
-	s := testStore(t)
-	id := suggestJob(t, s, "j", "coffee", "coffee maker")
-	walk := planOf(t, s, unscoredSQL, id, 0, 10)
-	count := planOf(t, s, unscoredCountSQL, id)
-	if !strings.Contains(walk, "results_unscored") {
-		t.Errorf("the walk does not use the partial index:\n%s", walk)
-	}
-	if !strings.Contains(count, "results_unscored") {
-		t.Errorf("the count does not use the partial index:\n%s", count)
+func TestUnscored_StartsFromTheJobAndNeverReadsOtherJobsUnmeasuredRows(t *testing.T) {
+	// Search, position and index jobs never measure their results, so the
+	// partial index of unmeasured rows holds all of theirs forever. The walk and
+	// the count of a suggestions job must reach its results through the index
+	// by page, from its own queries' pages, and never scan the results (or that
+	// index) over every unmeasured row in the database — with no statistics for
+	// the planner, with the ones ANALYZE writes, and with those of a database
+	// whose pages are huge, each of which changes its choice.
+	for _, stats := range []string{"none", "analysed", "skewed"} {
+		s := testStore(t)
+		ctx := t.Context()
+		id := suggestJob(t, s, "j", "coffee", "coffee maker")
+		if stats == "skewed" {
+			// A search of one key whose one page holds twenty thousand rows,
+			// inserted in one statement, and analysed: a database of few and
+			// huge pages, whose statistics tip the planner, left free, into
+			// reading the results table in id order to spare itself the sort.
+			search := suggestJob(t, s, "search", "tea", "tea pot")
+			if _, err := s.db.ExecContext(ctx, `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+				INSERT INTO results(page_id, rank, title, url, host, snippet)
+				SELECT (SELECT p.id FROM pages p JOIN queries q ON q.id = p.query_id WHERE q.job_id = ?),
+				       1 + i, 'tea', '', '', '' FROM n`, search); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			search, err := s.CreateJob(ctx, JobSpec{Name: "search", Pages: 1}, []string{"green tea", "black tea"})
+			if err != nil {
+				t.Fatalf("CreateJob: %v", err)
+			}
+			for q := 0; q < 2; q++ {
+				p := google.SERP{}
+				for i := 0; i < 400; i++ {
+					p.Results = append(p.Results, google.Result{Position: i + 1, Title: "tea " + strconv.Itoa(i)})
+				}
+				if err := s.Record(ctx, search, QueryOutcome{Ordinal: q, Pages: []google.SERP{p}}); err != nil {
+					t.Fatalf("Record: %v", err)
+				}
+			}
+		}
+		if stats != "none" {
+			if _, err := s.db.ExecContext(ctx, `ANALYZE`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for name, plan := range map[string]string{
+			// A batch the size the backfill asks for: the planner weighs the
+			// limit, and a large one is what tips it into reading the table.
+			"walk":  planOf(t, s, unscoredSQL, id, 0, 10_000),
+			"count": planOf(t, s, unscoredCountSQL, id),
+		} {
+			if !strings.Contains(plan, "SEARCH r USING INDEX results_unscored (page_id=?)") {
+				t.Errorf("%s statistics: the %s does not reach the results by page through the partial index:\n%s", stats, name, plan)
+			}
+			if strings.Contains(plan, "SCAN r") {
+				t.Errorf("%s statistics: the %s scans the results:\n%s", stats, name, plan)
+			}
+			if stats != "skewed" && !strings.HasPrefix(plan, "SEARCH q USING") {
+				// Skewed, the queries are two rows and reading both is cheaper
+				// than an index; the results are what must not be read whole.
+				t.Errorf("%s statistics: the %s does not start from the job's queries:\n%s", stats, name, plan)
+			}
+		}
+		// And the other job's unmeasured rows are not this job's.
+		if n, err := s.UnscoredCount(ctx, id); err != nil || n != 1 {
+			t.Errorf("UnscoredCount = (%d, %v), want 1", n, err)
+		}
+		if rows, err := s.Unscored(ctx, id, 0, 1000); err != nil || len(rows) != 1 {
+			t.Errorf("Unscored = %d rows (%v), want 1", len(rows), err)
+		}
 	}
 }
 

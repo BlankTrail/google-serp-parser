@@ -174,3 +174,28 @@ func TestScript_BuildsTheExportInPlaceAndRemembersIt(t *testing.T) {
 		t.Error("the builder is not taken up on a screen swapped in as well as on one loaded")
 	}
 }
+
+func TestScript_TheThresholdSliderRedrawsOnlyOnceItRests(t *testing.T) {
+	// The arrow keys fire a change per step, and a screen redrawn per step
+	// replaces the slider under the keyboard. Pinned, for want of a runtime: the
+	// slider's change goes to a redraw that waits for the steps to pause, and the
+	// slider drawn in its place is given the focus back.
+	script := mustAsset(t, "static/app.js")
+	for _, part := range []string{
+		`if (event.target.name === "min") {
+				redrawMin();
+				return;
+			}`,
+		"window.clearTimeout(minTimer);",
+		"}, 400);",
+		`document.querySelector("#export-builder [name=min]")`,
+		"again.focus();",
+	} {
+		if !strings.Contains(script, part) {
+			t.Errorf("the script lacks %q", part)
+		}
+	}
+	if strings.Contains(script, `event.target.name === "filter" || event.target.name === "min"`) {
+		t.Error("a change of the slider still redraws the screen at once")
+	}
+}

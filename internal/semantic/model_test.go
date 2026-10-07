@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -628,5 +629,137 @@ func TestRead_RefusesNoDimensionEvenWhenTheFileIsWhole(t *testing.T) {
 	}
 	if _, err := Read(&buf); !errors.Is(err, ErrModel) {
 		t.Errorf("a model of dimension 0: got %v, want ErrModel", err)
+	}
+}
+
+// wideModelFile writes a model of pieces rows of dim, large enough that its
+// table dwarfs the normalization table and the vocabulary, and returns its path
+// and the size of the table (rows and scales).
+func wideModelFile(t *testing.T, pieces, dim int) (string, uint64) {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Vocab{Unk: 0}
+	rows := make([][]float32, pieces)
+	for i := range rows {
+		v.Pieces = append(v.Pieces, "▁p"+strconv.Itoa(i))
+		v.Scores = append(v.Scores, -1)
+		rows[i] = make([]float32, dim)
+		rows[i][i%dim] = 1
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, raw, rows, 4); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, uint64(pieces) * uint64(dim+4)
+}
+
+// allocatedBy is how many bytes f allocated, all told.
+func allocatedBy(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+func TestLoad_AllocatesTheTableOnceAtItsSize(t *testing.T) {
+	// The real model's 128 MB of rows once cost close to a gigabyte of
+	// allocation to load: a slice doubling as rows were appended, and a fresh
+	// buffer for every row and every scale read. Load knows the file's size and
+	// must allocate the table once; a bound of one and a half times the table
+	// leaves room for the normalization table and the vocabulary and none for a
+	// second copy.
+	path, table := wideModelFile(t, 3000, 4096)
+	var m *Model
+	var err error
+	grew := allocatedBy(func() { m, err = Load(path) })
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	t.Logf("a table of %d bytes allocated %d to load", table, grew)
+	if grew > table*3/2 {
+		t.Errorf("loading a table of %d MB allocated %d MB, want under one and a half times it", table>>20, grew>>20)
+	}
+	if m.Pieces() != 3000 {
+		t.Errorf("Load read %d pieces, want 3000", m.Pieces())
+	}
+	if got := m.Score("p7", "p7"); got < 0.999 {
+		t.Errorf("a phrase scores %.4f against itself after Load, want 1", got)
+	}
+}
+
+func TestLoad_RefusesAFileWhoseLengthDisagreesWithItsHeaderBeforeAllocating(t *testing.T) {
+	file := tinyFile(t)
+	dir := t.TempDir()
+	write := func(name string, raw []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	// A header within every bound claiming two gigabytes of rows, in a file of a
+	// few hundred kilobytes: refused for its length, before a byte is allocated
+	// for the claim.
+	claim := write("claim.bin", patched(patched(file, offPieces, 2_000_000), offDim, 1000))
+	var err error
+	grew := allocatedBy(func() { _, err = Load(claim) })
+	if !errors.Is(err, ErrModel) || !strings.Contains(err.Error(), "cannot hold") {
+		t.Errorf("a header claiming 2 GB: got %v, want ErrModel for a file that cannot hold it", err)
+	}
+	// The one allocation allowed is the megabyte of the read buffer.
+	if grew > 2<<20 {
+		t.Errorf("refusing it allocated %d KB", grew>>10)
+	}
+	// One row's worth too many or too few bytes after the vocabulary: the rows
+	// would not fill the rest exactly, and that is known before they are read.
+	for name, raw := range map[string][]byte{
+		"a row too long":  append(append([]byte(nil), file...), 0, 0, 0, 0, 0, 0, 0),
+		"a row too short": file[:len(file)-7],
+	} {
+		if _, err := Load(write("rest.bin", raw)); !errors.Is(err, ErrModel) || !strings.Contains(err.Error(), "follow the vocabulary") {
+			t.Errorf("%s: got %v, want ErrModel for rows that do not fill the file", name, err)
+		}
+	}
+}
+
+func TestModel_ScoreAllIsScoreWithTheKeyMadeOnce(t *testing.T) {
+	m := tinyModel(t)
+	key := "кофе машина"
+	completions := []string{"кофе чайник", "погода", "", "кофе машина", "чайник погода"}
+	got := m.ScoreAll(key, completions)
+	if len(got) != len(completions) {
+		t.Fatalf("ScoreAll gave %d scores for %d completions", len(got), len(completions))
+	}
+	for i, c := range completions {
+		// To the bit: the export and the backfill compare these with what was
+		// kept at collection, and a job scored both ways must read the same.
+		if want := m.Score(key, c); got[i] != want {
+			t.Errorf("ScoreAll(%q)[%d] = %v, Score gives %v", key, i, got[i], want)
+		}
+	}
+	if len(m.ScoreAll(key, nil)) != 0 {
+		t.Error("no completions scored to something")
+	}
+	// The key is made into a vector once: scoring ten completions costs the
+	// key's vector once and each completion's once, and one slice for the
+	// scores. Made per completion, it would cost ten of the key's.
+	ten := make([]string, 10)
+	for i := range ten {
+		ten[i] = "кофе чайник"
+	}
+	keyCost := testing.AllocsPerRun(20, func() { _ = m.Vector(key) })
+	oneCost := testing.AllocsPerRun(20, func() { _ = m.Vector("кофе чайник") })
+	allCost := testing.AllocsPerRun(20, func() { _ = m.ScoreAll(key, ten) })
+	if limit := keyCost + 10*oneCost + 1; allCost > limit {
+		t.Errorf("ScoreAll of ten made %v allocations, want at most %v: the key's vector once", allCost, limit)
 	}
 }

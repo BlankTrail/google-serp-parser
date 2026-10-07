@@ -45,11 +45,15 @@ type modelReading struct {
 	Running bool
 	Percent int
 	SizeMB  int
+	// Version is the name of the model's file, which carries its version: the
+	// settings page says which model is in use, so that a reader comparing two
+	// installations, or a report of odd scores, can tell them apart.
+	Version string
 	Fault   string
 }
 
 func (s *Server) modelReading() modelReading {
-	out := modelReading{SizeMB: int(s.modelSize >> 20)}
+	out := modelReading{SizeMB: int(s.modelSize >> 20), Version: semantic.FileName}
 	if s.semantic == nil {
 		return out
 	}
@@ -109,7 +113,7 @@ func (s *Server) fetchModel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) downloadModel(url, sum string) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelFetchTimeout)
 	defer cancel()
-	err := semantic.Fetch(ctx, &http.Client{}, url, sum, s.semantic.Path(),
+	err := semantic.Fetch(ctx, &http.Client{}, url, sum, s.modelSize, s.semantic.Path(),
 		func(done, total int64) {
 			s.fetching.mu.Lock()
 			s.fetching.done = done
@@ -179,6 +183,18 @@ func (s *Server) apiScore(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := s.semantic.Get()
 	if err != nil {
+		// The file looked like the model and was not: the holder now calls it
+		// damaged, so the button is gone from the page, and the page must say
+		// why rather than come back as if the press had not happened. It is
+		// told as this job's fault, which is where its page reads one; the
+		// cause goes to the log. Not while another scoring runs: that one's
+		// page is the one reading the fault, and it has its own.
+		s.log.Error("the model did not load for scoring", "job", id, "error", err)
+		s.scoring.mu.Lock()
+		if !s.scoring.running {
+			s.scoring.job, s.scoring.done, s.scoring.total, s.scoring.fault = id, 0, 0, "job.score.damaged"
+		}
+		s.scoring.mu.Unlock()
 		http.Redirect(w, r, backTo(r, id), http.StatusSeeOther)
 		return
 	}
@@ -247,8 +263,27 @@ func (s *Server) scoreJob(id int64, m *semantic.Model) {
 			break
 		}
 		scores := make(map[int64]float64, len(batch))
+		// A batch is rows in id order, which is a key's rows together, but a
+		// batch boundary or a resumed job can put one key in two places, so the
+		// rows are gathered by key first: each key is turned into a vector once
+		// per batch rather than once per row.
+		var keys []string
+		byKey := map[string][]store.Unscored{}
 		for _, u := range batch {
-			scores[u.ID] = float64(m.Score(u.Key, u.Text))
+			if _, ok := byKey[u.Key]; !ok {
+				keys = append(keys, u.Key)
+			}
+			byKey[u.Key] = append(byKey[u.Key], u)
+		}
+		for _, key := range keys {
+			rows := byKey[key]
+			texts := make([]string, len(rows))
+			for i, u := range rows {
+				texts[i] = u.Text
+			}
+			for i, v := range m.ScoreAll(key, texts) {
+				scores[rows[i].ID] = float64(v)
+			}
 		}
 		if err := s.store.SetSimilarity(ctx, scores); err != nil {
 			fault = "job.score.failed"

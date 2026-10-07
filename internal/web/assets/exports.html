@@ -60,7 +60,7 @@
 <option value="words"{{if eq .Filter "words"}} selected{{end}}>{{.T "exports.filter.words"}}</option>
 {{if .Scored}}<option value="meaning"{{if eq .Filter "meaning"}} selected{{end}}>{{.T "exports.filter.meaning"}}</option>{{end}}
 </select></label>
-{{if eq .Filter "meaning"}}<label>{{.T "exports.filter.min"}} <input type="range" name="min" min="0.30" max="0.80" step="0.01" value="{{.Min}}"> <output>{{.Min}}</output></label>{{end}}
+{{if eq .Filter "meaning"}}<label>{{.T "exports.filter.min"}} <input type="range" name="min" min="{{.MinLow}}" max="{{.MinHigh}}" step="0.01" value="{{.Min}}"> <output>{{.Min}}</output></label>{{end}}
 {{if ne .Filter "none"}}<p class="empty">{{.T "exports.filter.cut"}} {{.Cut}} / {{.Total}} ({{.CutShare}}%)</p>{{end}}
 <details class="help">
 <summary>{{.T "help.what"}}</summary>

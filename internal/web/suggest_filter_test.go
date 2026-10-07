@@ -12,8 +12,8 @@ import (
 )
 
 // filterJob makes a suggestions job of four answers to one key, each told by
-// its last word: A is related and measured at 0.8, B related and measured at
-// 0.2, C marked as having nothing of its key and measured at 0.9, and D related
+// its last word: A is related and measured at 0.7, B related and measured at
+// 0.4, C marked as having nothing of its key and measured at 0.9, and D related
 // and never measured. With scored false none is measured, as a job collected
 // before the model was downloaded.
 func filterJob(t *testing.T, s *Server, scored bool) string {
@@ -37,7 +37,7 @@ func filterJob(t *testing.T, s *Server, scored bool) string {
 		if err != nil || len(rows) != 4 {
 			t.Fatalf("Unscored = %d rows (%v), want 4", len(rows), err)
 		}
-		if err := s.store.SetSimilarity(t.Context(), map[int64]float64{rows[0].ID: 0.8, rows[1].ID: 0.2, rows[2].ID: 0.9}); err != nil {
+		if err := s.store.SetSimilarity(t.Context(), map[int64]float64{rows[0].ID: 0.7, rows[1].ID: 0.4, rows[2].ID: 0.9}); err != nil {
 			t.Fatalf("SetSimilarity: %v", err)
 		}
 	}
@@ -67,10 +67,13 @@ func TestExport_FiltersSuggestionsByWordsOrByMeaning(t *testing.T) {
 		{"&filter=meaning&min=0.5", "alpha delta", "by meaning leaves out the marked and the measured below the threshold, never the unmeasured"},
 		{"", "alpha delta", "nothing said on a job with scores is by meaning at the default threshold"},
 		{"&offtopic=1", "alpha bravo charlie delta", "the old box keeps everything, as links made before it do"},
-		{"&filter=meaning&min=0.1", "alpha bravo delta", "a lower threshold leaves less out"},
+		{"&filter=meaning&min=0.35", "alpha bravo delta", "a lower threshold leaves less out"},
 		{"&filter=meaning&min=junk", "alpha delta", "a threshold that is no number is the default"},
-		{"&filter=meaning&min=7", "alpha delta", "a threshold out of range is the default"},
-		{"&filter=meaning&min=-1", "alpha delta", "a negative threshold is the default"},
+		{"&filter=meaning&min=NaN", "alpha delta", "NaN is no number either and is the default"},
+		{"&filter=meaning&min=0.1", "alpha bravo delta", "a threshold below the slider's range is its low end, 0.30, not the default"},
+		{"&filter=meaning&min=-1", "alpha bravo delta", "a negative threshold is the slider's low end"},
+		{"&filter=meaning&min=0.85", "delta", "a threshold above the slider's range is its high end, 0.80"},
+		{"&filter=meaning&min=7", "delta", "a threshold far above the range is its high end too"},
 	} {
 		if got := leftIn(t, s, c.query, job); got != c.want {
 			t.Errorf("%s: %q holds %q, want %q", c.why, c.query, got, c.want)
@@ -98,7 +101,7 @@ func TestExport_TheClosenessColumnIsEmptyWhereNothingWasMeasured(t *testing.T) {
 	s := testServerWithSupervisor(t)
 	job := filterJob(t, s, true)
 	file := get(t, s, "/export?format=csv&filter=none&cols=suggestion,similarity&job="+job).Body.String()
-	for _, want := range []string{"coffee maker alpha,0.800\n", "coffee maker bravo,0.200\n", "charlie,0.900\n", "coffee maker delta,\n"} {
+	for _, want := range []string{"coffee maker alpha,0.700\n", "coffee maker bravo,0.400\n", "charlie,0.900\n", "coffee maker delta,\n"} {
 		if !strings.Contains(file, want) {
 			t.Errorf("the file is %q, want the line %q", file, want)
 		}
@@ -130,11 +133,16 @@ func TestExportsTab_OffersTheFilterAndCountsWhatItLeavesOut(t *testing.T) {
 		t.Error("the tab still offers the box that came before the filter")
 	}
 	// Nothing said on a job with scores opens on the meaning at the default
-	// threshold, shown as two decimals; a threshold out of range is the default.
-	for _, query := range []string{"", "&filter=meaning&min=9", "&filter=meaning&min=junk"} {
+	// threshold, shown as two decimals; a threshold that is no number is the
+	// default, and one out of the slider's range is the slider's nearer end.
+	for query, want := range map[string]string{
+		"": "0.54", "&filter=meaning&min=junk": "0.54",
+		"&filter=meaning&min=9": "0.80", "&filter=meaning&min=0.05": "0.30",
+	} {
 		page := get(t, s, exportsAt+"?job="+job+query).Body.String()
-		if !strings.Contains(page, `value="meaning" selected`) || !strings.Contains(page, `value="0.54"`) {
-			t.Errorf("%q: the tab does not open on the meaning at 0.54", query)
+		if !strings.Contains(page, `value="meaning" selected`) || !strings.Contains(page, `value="`+want+`"`) ||
+			!strings.Contains(page, `min="0.30" max="0.80"`) {
+			t.Errorf("%q: the tab does not open on the meaning at %s within 0.30 to 0.80", query, want)
 		}
 	}
 	// By words the slider is gone and the count is of the marked.

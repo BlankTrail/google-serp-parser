@@ -15,24 +15,42 @@ type Unscored struct {
 	Key, Text string
 }
 
-// Both queries here name the partial index of rows with no score, rather than
-// leaving the choice to the planner. Left to itself it starts from the job's
-// queries and reads every result the job has, sorting them for each batch, which
-// on a job of half a million rows with a few thousand unmeasured is the whole
-// job read once per batch. Starting from the index reads only the unmeasured
-// rows, in id order, and filters them by job.
+// Both queries start from the job — its queries by their (job_id, ordinal)
+// index, their pages by the unique (query_id, number) one — and reach the
+// results through the partial index of unmeasured rows keyed by page. The index
+// used to be keyed by id and named in the query with INDEXED BY, so that the
+// walk read unmeasured rows in id order; but every search, position and index
+// job's results are unmeasured forever, and that index made a count on a
+// database with two million of them read all two million (a third of a second
+// per job page). Keyed by page, a job's walk reads only its own unmeasured rows
+// and sorts them: a batch costs the rows still to do, which the backfill
+// shrinks as it goes, and the rows of other jobs are never touched.
+//
+// Two things keep the walk on that path, whatever statistics the database has;
+// the count, with no order and no limit to tempt the planner, takes it freely.
+// CROSS JOIN fixes the order of the tables, which SQLite takes as an
+// instruction not to reorder them: statistics that make a page look like a
+// million rows (a database whose few pages are huge) otherwise send it to read
+// the results table whole and join each row to its page and query. And the
+// unary plus on r.id > after keeps that term from being used to reach the
+// rows: as a range on the rowid it would be applied to every page in turn,
+// reading every result above after for each, and once the database has been
+// analysed the walk's ORDER BY r.id ... LIMIT tempts the planner to take it.
+// Which index each table is reached by is still the planner's choice, and a
+// test asserts it with no statistics, with real ones and with skewed ones,
+// with another job's unmeasured rows in the table.
 
 const unscoredSQL = `SELECT r.id, q.text, r.title
-		   FROM results r INDEXED BY results_unscored
-		   JOIN pages   p ON p.id = r.page_id
-		   JOIN queries q ON q.id = p.query_id
-		  WHERE q.job_id = ? AND r.similarity IS NULL AND r.id > ?
+		   FROM queries q
+		  CROSS JOIN pages   p ON p.query_id = q.id
+		  CROSS JOIN results r ON r.page_id = p.id
+		  WHERE q.job_id = ? AND r.similarity IS NULL AND +r.id > ?
 		  ORDER BY r.id
 		  LIMIT ?`
 
-const unscoredCountSQL = `SELECT count(*) FROM results r INDEXED BY results_unscored
-		   JOIN pages p ON p.id = r.page_id
-		   JOIN queries q ON q.id = p.query_id
+const unscoredCountSQL = `SELECT count(*) FROM queries q
+		   JOIN pages   p ON p.query_id = q.id
+		   JOIN results r ON r.page_id = p.id
 		  WHERE q.job_id = ? AND r.similarity IS NULL`
 
 // Unscored hands over up to limit of a job's suggestions with no closeness
