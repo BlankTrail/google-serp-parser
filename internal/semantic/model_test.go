@@ -1,0 +1,450 @@
+// SPDX-License-Identifier: MIT
+
+package semantic
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"io"
+	"math"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// tinyModel writes a model of a handful of pieces through Write and reads it
+// back, so every test below goes through the file format a real model does.
+func tinyModel(t *testing.T) *Model { return tinyModelWith(t, 4) }
+
+// tinyModelWith is tinyModel with the median piece length the text is cut by.
+func tinyModelWith(t *testing.T, medianLen int) *Model {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Vocab{
+		Pieces: []string{"[PAD]", "[UNK]", "▁", "▁кофе", "▁машина", "▁чайник", "▁погода"},
+		Scores: []float32{0, 0, -5, -2, -2, -2, -2},
+		Unk:    1,
+	}
+	rows := [][]float32{
+		{0, 0, 0}, {0, 0, 0}, {0.1, 0.1, 0.1},
+		{1, 0.2, 0}, {0.9, 0.3, 0}, {0.8, 0.1, 0.1}, {0, 0, 1},
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, raw, rows, medianLen); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	m, err := Read(&buf)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	return m
+}
+
+func TestModel_ScoresAPhraseAboutTheKeyAboveOneAboutSomethingElse(t *testing.T) {
+	m := tinyModel(t)
+	near, far := m.Score("кофе машина", "кофе чайник"), m.Score("кофе машина", "погода")
+	if !(near > 0.9 && far < 0.2) {
+		t.Errorf("near %.3f, far %.3f; want near above 0.9 and far below 0.2", near, far)
+	}
+}
+
+func TestModel_AveragesThePiecesAndNormalizes(t *testing.T) {
+	m := tinyModel(t)
+	v := m.Vector("кофе машина")
+	want := []float64{1.9, 0.5, 0}
+	n := math.Sqrt(1.9*1.9 + 0.5*0.5)
+	for i := range want {
+		if d := math.Abs(float64(v[i]) - want[i]/n); d > 0.02 {
+			t.Errorf("component %d is %.4f, want %.4f", i, v[i], want[i]/n)
+		}
+	}
+	if z := m.Vector(""); z[0] != 0 || z[1] != 0 || z[2] != 0 {
+		t.Errorf("an empty phrase is %v, want nought", z)
+	}
+	if got := m.Score("", "кофе"); got != 0 {
+		t.Errorf("an empty key scores %v, want nought", got)
+	}
+}
+
+func TestRead_RefusesAFileThatIsNotAModel(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"empty":           nil,
+		"wrong signature": []byte("NOTAMODEL0000000"),
+		"cut short":       append([]byte("GSSEM1\x00\x00"), binary.LittleEndian.AppendUint32(nil, 256)...),
+	} {
+		if _, err := Read(bytes.NewReader(raw)); err == nil {
+			t.Errorf("%s: read as a model", name)
+		}
+	}
+}
+
+func TestModel_MatchesTheReferenceVectors(t *testing.T) {
+	path := os.Getenv("GSERP_SEMANTIC_MODEL")
+	if path == "" {
+		t.Skip("GSERP_SEMANTIC_MODEL is not set: no converted model on this machine")
+	}
+	m, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := os.ReadFile("testdata/vectors.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, dim := int(binary.LittleEndian.Uint32(ref)), int(binary.LittleEndian.Uint32(ref[4:]))
+	phrases := readPhrases(t)
+	worst := float32(1)
+	for i := 0; i < count; i++ {
+		got := m.Vector(phrases[i])
+		var dot float32
+		for j := 0; j < dim; j++ {
+			want := math.Float32frombits(binary.LittleEndian.Uint32(ref[8+4*(i*dim+j):]))
+			dot += got[j] * want
+		}
+		if phrases[i] != "" && dot < worst {
+			worst = dot
+		}
+	}
+	// int8 costs a little: the vectors agree to 0.99 or better, not exactly.
+	if worst < 0.99 {
+		t.Errorf("the worst phrase agrees with the reference to %.4f, want 0.99 or better", worst)
+	}
+}
+
+func readPhrases(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/phrases.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+}
+
+// tinyFile is the bytes of a three-piece model, for the tests that damage a file.
+func tinyFile(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Vocab{Pieces: []string{"[UNK]", "▁кофе", "▁чайник"}, Scores: []float32{0, -2, -2}, Unk: 0}
+	rows := [][]float32{{0, 0, 0}, {1, 0.2, 0}, {0.8, 0.1, 0.1}}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, raw, rows, 4); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// Offsets of the header fields in a file: signature, dim, pieces, unk,
+// medianLen, charsmapLen.
+const (
+	offDim    = 8
+	offPieces = 12
+	offUnk    = 16
+	offCmLen  = 24
+	headerEnd = 28
+)
+
+func patched(raw []byte, off int, v uint32) []byte {
+	out := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint32(out[off:], v)
+	return out
+}
+
+func TestRead_RefusesAHeaderThatCannotBeAModel(t *testing.T) {
+	raw := tinyFile(t)
+	if _, err := Read(bytes.NewReader(raw)); err != nil {
+		t.Fatalf("the undamaged file: %v", err)
+	}
+	for name, bad := range map[string][]byte{
+		"another version of the format":   append([]byte("GSSEM2\x00\x00"), raw[8:]...),
+		"a signature of another file":     append([]byte("GSSEM1\x00\x01"), raw[8:]...),
+		"no dimension":                    patched(raw, offDim, 0),
+		"no pieces":                       patched(raw, offPieces, 0),
+		"an unknown id past the pieces":   patched(raw, offUnk, 3),
+		"a charsmap longer than the file": patched(raw, offCmLen, uint32(len(raw))),
+	} {
+		if _, err := Read(bytes.NewReader(bad)); !errors.Is(err, ErrModel) {
+			t.Errorf("%s: got %v, want ErrModel", name, err)
+		}
+	}
+}
+
+func TestRead_ABoundOnTheDimensionAndOnWhatItAllocates(t *testing.T) {
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := func(dim int) []byte {
+		var buf bytes.Buffer
+		v := Vocab{Pieces: []string{"[UNK]"}, Scores: []float32{0}}
+		if err := Write(&buf, v, raw, [][]float32{make([]float32, dim)}, 4); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	if _, err := Read(bytes.NewReader(build(4096))); err != nil {
+		t.Errorf("a dimension of 4096: %v", err)
+	}
+	if _, err := Read(bytes.NewReader(build(4097))); !errors.Is(err, ErrModel) {
+		t.Errorf("a dimension of 4097: got %v, want ErrModel", err)
+	}
+
+	// A header that claims more than the limits is refused before anything is
+	// allocated for it; the file behind it is only a few bytes.
+	file := tinyFile(t)
+	for name, bad := range map[string][]byte{
+		"ten million and one pieces":     patched(patched(file, offPieces, 10_000_001), offDim, 4),
+		"a charsmap of 64 MB and a byte": patched(file, offCmLen, 64<<20+1),
+	} {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := Read(bytes.NewReader(bad))
+		runtime.ReadMemStats(&after)
+		if !errors.Is(err, ErrModel) {
+			t.Errorf("%s: got %v, want ErrModel", name, err)
+		}
+		if grew := after.TotalAlloc - before.TotalAlloc; grew > 8<<20 {
+			t.Errorf("%s: reading it allocated %d MB before refusing", name, grew>>20)
+		}
+	}
+}
+
+func TestRead_RefusesAFileCutShortAnywhere(t *testing.T) {
+	raw := tinyFile(t)
+	cm := int(binary.LittleEndian.Uint32(raw[offCmLen:]))
+	piecesAt := headerEnd + cm
+	// Each pieces record is a uint16, the bytes of the piece and a float32.
+	rowsAt := piecesAt
+	for i := 0; i < 3; i++ {
+		rowsAt += 2 + int(binary.LittleEndian.Uint16(raw[rowsAt:])) + 4
+	}
+	cuts := []int{headerEnd, headerEnd + 1, headerEnd + cm - 1, piecesAt, piecesAt + 1, piecesAt + 3,
+		rowsAt - 1, rowsAt, rowsAt + 2, rowsAt + 4, rowsAt + 5, len(raw) - 1}
+	for i := 9; i < headerEnd; i += 3 {
+		cuts = append(cuts, i)
+	}
+	for _, n := range cuts {
+		if _, err := Read(bytes.NewReader(raw[:n])); !errors.Is(err, ErrModel) {
+			t.Errorf("cut to %d of %d bytes: got %v, want ErrModel", n, len(raw), err)
+		}
+	}
+}
+
+func TestRead_RefusesAPieceThatIsNotText(t *testing.T) {
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Vocab{Pieces: []string{"[UNK]", "\xff\xfe"}, Scores: []float32{0, -1}}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, raw, [][]float32{{0}, {1}}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(&buf); !errors.Is(err, ErrModel) {
+		t.Errorf("a piece of invalid UTF-8: got %v, want ErrModel", err)
+	}
+}
+
+func TestRead_RefusesANormalizationTableThatIsNotOne(t *testing.T) {
+	v := Vocab{Pieces: []string{"[UNK]"}, Scores: []float32{0}}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, []byte{1, 2, 3}, [][]float32{{1}}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(&buf); !errors.Is(err, ErrModel) {
+		t.Errorf("a table of three bytes: got %v, want ErrModel", err)
+	}
+}
+
+func TestLoad_ReadsAFileAndReportsAMissingOne(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := os.WriteFile(path, tinyFile(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Score("кофе", "кофе"); got < 0.999 {
+		t.Errorf("a phrase scores %.4f against itself, want 1", got)
+	}
+	if _, err := Load(filepath.Join(t.TempDir(), "absent.bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a missing file: got %v, want not-exist", err)
+	}
+}
+
+func TestWrite_RefusesWhatItCannotWriteAsAModel(t *testing.T) {
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	two := Vocab{Pieces: []string{"a", "b"}, Scores: []float32{0, 0}}
+	for name, c := range map[string]struct {
+		v    Vocab
+		rows [][]float32
+	}{
+		"fewer rows than pieces":          {two, [][]float32{{1}}},
+		"fewer scores than pieces":        {Vocab{Pieces: []string{"a", "b"}, Scores: []float32{0}}, [][]float32{{1}, {1}}},
+		"no pieces":                       {Vocab{}, nil},
+		"a ragged row":                    {two, [][]float32{{1, 2}, {1}}},
+		"a piece too long for its length": {Vocab{Pieces: []string{strings.Repeat("a", 65536)}, Scores: []float32{0}}, [][]float32{{1}}},
+	} {
+		if err := Write(io.Discard, c.v, raw, c.rows, 4); !errors.Is(err, ErrModel) {
+			t.Errorf("%s: got %v, want ErrModel", name, err)
+		}
+	}
+}
+
+// quantModel has a piece whose row quantizes with a fractional part near .9 and
+// whose largest component is negative, and a known piece whose row is nought.
+func quantModel(t *testing.T) *Model {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Vocab{Pieces: []string{"[UNK]", "▁кофе", "▁нуль"}, Scores: []float32{0, -2, -2}}
+	x := float32(75.9 / 127)
+	rows := [][]float32{{0, 0, 0}, {-1, -x, x}, {0, 0, 0}}
+	var buf bytes.Buffer
+	if err := Write(&buf, v, raw, rows, 4); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestModel_QuantizesToTheNearestStepAndKeepsTheSign(t *testing.T) {
+	m := quantModel(t)
+	x := 75.9 / 127.0
+	n := math.Sqrt(1 + 2*x*x)
+	want := []float64{-1 / n, -x / n, x / n}
+	got := m.Vector("кофе")
+	for i := range want {
+		if d := math.Abs(float64(got[i]) - want[i]); d > 0.0015 {
+			t.Errorf("component %d is %.5f, want %.5f", i, got[i], want[i])
+		}
+	}
+}
+
+func TestModel_APieceOfNoughtGivesTheNoughtVector(t *testing.T) {
+	m := quantModel(t)
+	for _, phrase := range []string{"нуль", "ё"} {
+		for i, c := range m.Vector(phrase) {
+			if c != 0 {
+				t.Errorf("%q: component %d is %v, want nought (not NaN)", phrase, i, c)
+			}
+		}
+	}
+	if got := m.Score("нуль", "кофе"); got != 0 {
+		t.Errorf("a phrase of nought scores %v against a phrase, want 0", got)
+	}
+}
+
+func TestModel_UnknownWordsAreLeftOutAndScoreIsSymmetric(t *testing.T) {
+	m := tinyModel(t)
+	if got := m.Score("кофе", "кофе ёёё"); got < 0.99 {
+		t.Errorf("an unknown word changes the vector: score %.4f, want 0.99 or better", got)
+	}
+	if a, b := m.Score("кофе", "погода"), m.Score("погода", "кофе"); a != b {
+		t.Errorf("score is not symmetric: %v and %v", a, b)
+	}
+}
+
+func cosine(a, b []float32) float64 {
+	var d float64
+	for i := range a {
+		d += float64(a[i]) * float64(b[i])
+	}
+	return d
+}
+
+func TestModel_CutsALongPhraseAsModel2vecDoes(t *testing.T) {
+	m := tinyModel(t) // a median of 4: the text is cut at 512*4 = 2048 characters
+	// The words of the tail lie past the 2048th character, so they are not read.
+	past := strings.Repeat("машина ", 300) + strings.Repeat("погода ", 100)
+	if c := cosine(m.Vector(past), m.Vector("машина")); c < 0.999 {
+		t.Errorf("a phrase past the text limit: cosine %.4f with its head, want 0.999 or better", c)
+	}
+	// More than 512 characters, but under the limit: the tail is read.
+	within := strings.Repeat("кофе ", 100) + strings.Repeat("погода ", 100)
+	if c := cosine(m.Vector(within), m.Vector("кофе")); c > 0.8 {
+		t.Errorf("a phrase under the text limit: cosine %.4f with its head, want the tail to count (under 0.8)", c)
+	}
+	// More than 512 pieces in under 2048 characters: only the first 512 are
+	// read, all of them the lone mark, before the words that follow.
+	manyPieces := strings.Repeat("а ", 600) + strings.Repeat("погода ", 100)
+	if c := cosine(m.Vector(manyPieces), m.Vector("а")); c < 0.9999 {
+		t.Errorf("a phrase of 600+ pieces: cosine %.4f with its first pieces, want 0.9999 or better", c)
+	}
+	// The cut falls on the 512th piece: it is read, the one after it is not.
+	edge := strings.Repeat("а ", 511) + "кофе погода погода"
+	if c := cosine(m.Vector(edge), m.Vector(strings.Repeat("а ", 511)+"кофе")); c < 0.99999 {
+		t.Errorf("a cut at the 512th piece: cosine %.6f with the first 512 pieces, want 1", c)
+	}
+	// With no median in the file the text is not cut, only the pieces are.
+	free := tinyModelWith(t, 0)
+	if c := cosine(free.Vector(past), free.Vector("машина")); c > 0.99 {
+		t.Errorf("a model of median 0: cosine %.4f, want the text to be left whole", c)
+	}
+	if v := free.Vector("кофе"); v[0] == 0 {
+		t.Errorf("a model of median 0 reads nothing: %v", v)
+	}
+}
+
+// pieceTables writes a model of the given pieces, their scores and the unknown
+// id, with a row per piece taken from rows, and reads it back.
+func pieceTables(t *testing.T, pieces []string, scores []float32, unk int32, rows [][]float32) *Model {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/charsmap.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Write(&buf, Vocab{Pieces: pieces, Scores: scores, Unk: unk}, raw, rows, 4); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Read(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestModel_TheUnknownPieceIsTheOneTheFileNames(t *testing.T) {
+	// The word is piece 0 and the unknown piece is 1: a file that lost its unk
+	// id would drop the word as unknown and keep the marker for the rest.
+	m := pieceTables(t, []string{"▁кофе", "[UNK]"}, []float32{-2, 0}, 1, [][]float32{{1, 0}, {0, 1}})
+	if v := m.Vector("кофе"); v[0] < 0.99 {
+		t.Errorf("a known word as piece 0 reads as %v, want its own row", v)
+	}
+	if v := m.Vector("ё"); v[0] != 0 || v[1] != 0 {
+		t.Errorf("an unknown character reads as %v, want nought", v)
+	}
+}
+
+func TestModel_TheScoresOfTheFileChooseTheCut(t *testing.T) {
+	// "аб" is read as the one piece "аб" or as "а" and "б", whichever the scores
+	// favour; the rows tell the two apart.
+	pieces := []string{"[UNK]", "▁", "а", "б", "аб"}
+	rows := [][]float32{{0, 0, 0}, {0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
+	whole := pieceTables(t, pieces, []float32{0, -1, -3, -3, -2}, 0, rows)
+	split := pieceTables(t, pieces, []float32{0, -1, -1, -1, -5}, 0, rows)
+	if v := whole.Vector("аб"); v[2] < 0.99 {
+		t.Errorf("scores that favour the whole piece read as %v, want its row", v)
+	}
+	if v := split.Vector("аб"); v[2] > 0.01 || v[0] < 0.5 {
+		t.Errorf("scores that favour the parts read as %v, want the rows of the parts", v)
+	}
+}
