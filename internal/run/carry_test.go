@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -967,14 +968,30 @@ func TestRunner_WaitsLongerEachTimeItFindsNothingDue(t *testing.T) {
 	// with nothing asked at all. A thread that finds nothing due waits twice as
 	// long as the last time, up to a second, and starts again from the shortest
 	// once it has something to carry.
+	//
+	// Only the waits the thread takes for having nothing due are counted. The
+	// pool's sleep is asked for other waits of the same shortest length — a
+	// keeper that could not put a session on the port this instant, a session
+	// that wanted an address — and those do not double and are not meant to.
+	// Counted by length alone, one of them reads as a start from the shortest:
+	// once in CI, under the race detector, the first rest read [25ms 25ms 50ms
+	// …] — one more wait of the shortest length than the thread took — and the
+	// test failed for a run that had nothing wrong with its backoff. A wait of
+	// that kind put into a page reproduces the message exactly.
 	const pause = 300 * time.Millisecond
 	var mu sync.Mutex
 	var idle []time.Duration
+	var other []string
 	recording := func(c *blanktrail.PoolConfig) {
 		c.Sleep = func(ctx context.Context, d time.Duration) error {
 			if d >= waitingForAnIdentity {
+				by := sleptFor()
 				mu.Lock()
-				idle = append(idle, d)
+				if by == "(*crew).carry" {
+					idle = append(idle, d)
+				} else {
+					other = append(other, d.String()+" by "+by)
+				}
 				mu.Unlock()
 			}
 			select {
@@ -1014,10 +1031,29 @@ func TestRunner_WaitsLongerEachTimeItFindsNothingDue(t *testing.T) {
 		}
 	}
 	if restarts != 2 {
-		t.Errorf("the waits started from the shortest %d times over two rests, want twice: %v", restarts, idle)
+		t.Errorf("the waits started from the shortest %d times over two rests, want twice: %v (other waits: %v)",
+			restarts, idle, other)
 	}
 	if len(idle) > 12 {
 		t.Errorf("two rests of %v cost %d looks, want a handful: %v", pause, len(idle), idle)
+	}
+}
+
+// sleptFor names the function of this package that asked the pool for the
+// sleep being recorded: the first frame above the pool that is ours.
+func sleptFor() string {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	const ours = "google-serp-parser/internal/run."
+	for {
+		f, more := frames.Next()
+		if i := strings.Index(f.Function, ours); i >= 0 && !strings.Contains(f.Function, "Test") &&
+			!strings.Contains(f.Function, ".func") {
+			return f.Function[i+len(ours):]
+		}
+		if !more {
+			return "?"
+		}
 	}
 }
 
