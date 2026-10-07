@@ -128,7 +128,7 @@ func (r *Runner) completions(ctx context.Context, j Job, a *Attempt, results []Q
 				}
 				finished := k.left == 0
 				if finished {
-					results[one.at].Pages, results[one.at].Err = k.settled(j.Queries[one.at].Text)
+					results[one.at].Pages, results[one.at].Err = k.settled(j.Queries[one.at].Text, j.Similar)
 					delete(keys, one.at)
 				}
 				mu.Unlock()
@@ -160,7 +160,7 @@ func (r *Runner) completions(ctx context.Context, j Job, a *Attempt, results []Q
 // settled is what a key comes to once every question is in: its completions as
 // one page of results, numbered in the order they first came back, and a
 // failure only if not one question was answered.
-func (k *suggestion) settled(key string) ([]google.SERP, error) {
+func (k *suggestion) settled(key string, similar func(string, string) float32) ([]google.SERP, error) {
 	if k.answered == 0 {
 		return nil, fmt.Errorf("run: no completion question for %q was answered: %w", key, k.last)
 	}
@@ -168,7 +168,13 @@ func (k *suggestion) settled(key string) ([]google.SERP, error) {
 	for i, s := range k.found {
 		// Marked, not left out: what has nothing of its key in it is for an
 		// export to set aside, and for a reader to see that it was.
-		page.Results = append(page.Results, google.Result{Position: i + 1, Title: s, Offtopic: !google.Related(key, s)})
+		r := google.Result{Position: i + 1, Title: s, Offtopic: !google.Related(key, s)}
+		// Scored is set beside the number, not read off it: a suggestion the
+		// model put at nought was measured, and one with no model was not.
+		if similar != nil {
+			r.Similarity, r.Scored = similar(key, s), true
+		}
+		page.Results = append(page.Results, r)
 	}
 	return []google.SERP{page}, nil
 }

@@ -162,11 +162,11 @@ func TestRunner_SpreadsOneKeysQuestionsOverTheThreads(t *testing.T) {
 
 func TestSuggestion_FailsOnlyAKeyNoQuestionOfWhichWasAnswered(t *testing.T) {
 	k := &suggestion{last: errFake}
-	if _, err := k.settled("k"); err == nil {
+	if _, err := k.settled("k", nil); err == nil {
 		t.Error("a key with no answered question settled without an error")
 	}
 	k.answered = 1
-	if pages, err := k.settled("k"); err != nil || len(pages) != 1 {
+	if pages, err := k.settled("k", nil); err != nil || len(pages) != 1 {
 		t.Errorf("a key with one answered question settled %v, %v; want one page and no error", pages, err)
 	}
 }
@@ -269,13 +269,75 @@ func TestSuggestion_MarksACompletionWithNothingOfItsKey(t *testing.T) {
 	// Marked, not left out: the completion about something else is still on
 	// the page, and only it carries the mark.
 	k := &suggestion{answered: 1, found: []string{"coffee maker app", "kafka on the shore"}}
-	pages, err := k.settled("coffee maker")
+	pages, err := k.settled("coffee maker", nil)
 	if err != nil || len(pages) != 1 || len(pages[0].Results) != 2 {
 		t.Fatalf("settled to %v, %v; want one page of both completions", pages, err)
 	}
 	for _, r := range pages[0].Results {
 		if want := r.Title == "kafka on the shore"; r.Offtopic != want {
 			t.Errorf("%q marked %v, want %v", r.Title, r.Offtopic, want)
+		}
+	}
+}
+
+func TestSuggestion_ScoresEachCompletionWhenAModelIsThere(t *testing.T) {
+	k := &suggestion{answered: 1, found: []string{"coffee maker app", "kafka on the shore"}}
+	similar := func(_, s string) float32 {
+		if s == "coffee maker app" {
+			return 0.8
+		}
+		return 0.1
+	}
+	pages, err := k.settled("coffee maker", similar)
+	if err != nil || len(pages) != 1 {
+		t.Fatalf("settled to %v, %v", pages, err)
+	}
+	for _, r := range pages[0].Results {
+		want := map[string]float32{"coffee maker app": 0.8, "kafka on the shore": 0.1}[r.Title]
+		if !r.Scored || r.Similarity != want {
+			t.Errorf("%q scored %v (%v), want %v", r.Title, r.Similarity, r.Scored, want)
+		}
+	}
+	plain, _ := k.settled("coffee maker", nil)
+	for _, r := range plain[0].Results {
+		if r.Scored {
+			t.Errorf("%q was scored with no model", r.Title)
+		}
+	}
+}
+
+func TestSuggestion_ACompletionScoredNoughtWasStillScored(t *testing.T) {
+	// Nought is a measurement. Telling a scored suggestion from an unscored one
+	// by the number would read every unrelated phrase as never measured.
+	k := &suggestion{answered: 1, found: []string{"coffee maker app"}}
+	pages, _ := k.settled("coffee maker", func(string, string) float32 { return 0 })
+	if r := pages[0].Results[0]; !r.Scored || r.Similarity != 0 {
+		t.Errorf("a score of nought read back as %v (%v)", r.Similarity, r.Scored)
+	}
+}
+
+func TestRunner_HandsTheJobsScorerToEveryKeyItSettles(t *testing.T) {
+	// The scorer is read off the job in the worker that settles a key, a long
+	// way from where the job is built: a job whose Similar never got there
+	// would collect every suggestion unmeasured and nothing would say so.
+	o := newCompletionOrigin(t)
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+	r := &Runner{Pool: f.Pool, Threads: 2}
+	similar := func(_, s string) float32 { return float32(len(s)) / 100 }
+	rep := r.Run(context.Background(), Job{Kind: Suggest, Queries: []google.Query{usQuery("coffee")}, Tries: 3, Similar: similar})
+	if rep.Done != 1 || len(rep.Results[0].Pages) != 1 {
+		t.Fatalf("the key did not settle: %+v", rep)
+	}
+	for _, res := range rep.Results[0].Pages[0].Results {
+		if !res.Scored || res.Similarity != similar("coffee", res.Title) {
+			t.Errorf("%q came back with %v (%v), want the job's score", res.Title, res.Similarity, res.Scored)
+		}
+	}
+	plain := (&Runner{Pool: f.Pool, Threads: 2}).Run(context.Background(),
+		Job{Kind: Suggest, Queries: []google.Query{usQuery("coffee")}, Tries: 3})
+	for _, res := range plain.Results[0].Pages[0].Results {
+		if res.Scored {
+			t.Errorf("%q was scored on a job with no scorer", res.Title)
 		}
 	}
 }

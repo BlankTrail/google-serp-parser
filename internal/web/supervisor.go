@@ -7,13 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/semantic"
 	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
@@ -407,6 +410,10 @@ type Supervisor struct {
 	// has no honest number of its own to put there.
 	ports   int
 	threads int
+	// semantic is the meaning filter's model, handed in by the server once it
+	// has made the holder, which is after the worker started: the worker reads
+	// it in plan, so it is held atomically and not as a plain field.
+	semantic atomic.Pointer[semantic.Holder]
 
 	// watch is told every stage a thread of a running job passes through, and is
 	// nil unless somebody asked for a trace.
@@ -1109,6 +1116,10 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSumm
 		Multiword: sum.Multiword, SuggestLimit: sum.SuggestLimit,
 		Mobile:    runsOnPhones(sum.Device),
 		Addresses: sum.Fields.Keeps(store.FieldURL)}
+	// Only a job of search suggestions has a key to score a completion against.
+	if sum.Kind == store.KindSuggest {
+		j.Similar = v.similarFor()
+	}
 	for _, q := range left {
 		j.Queries = append(j.Queries,
 			google.Query{Text: q.Text, Country: sum.Country, Language: sum.Language})
@@ -1118,6 +1129,33 @@ func (v *Supervisor) plan(ctx context.Context, id int64) (run.Job, store.JobSumm
 		j.Ordinals = append(j.Ordinals, q.Ordinal)
 	}
 	return j, sum, nil
+}
+
+// SetSemantic gives the supervisor the meaning filter's model, read when a
+// search suggestions job is planned. A job planned before the model was
+// downloaded runs without scores, as it would have.
+func (v *Supervisor) SetSemantic(h *semantic.Holder) { v.semantic.Store(h) }
+
+// similarFor is how a job is to score its suggestions: the model's Score where
+// one is downloaded and loads, and nil where it is not.
+//
+// A missing file is no event, since the filter is optional and most installs
+// have not asked for it. A file that is there and cannot be read is: the job
+// still runs, unscored, and a reader of the log learns why its suggestions have
+// no closeness. It is said once here, per plan, and not once per suggestion.
+func (v *Supervisor) similarFor() func(key, completion string) float32 {
+	h := v.semantic.Load()
+	if h == nil {
+		return nil
+	}
+	m, err := h.Get()
+	if err != nil {
+		if !os.IsNotExist(err) {
+			v.log.Error("the meaning filter's model could not be read; the job runs without it", "error", err)
+		}
+		return nil
+	}
+	return m.Score
 }
 
 // settle writes down what the run paid in Google's checks, and stamps a job

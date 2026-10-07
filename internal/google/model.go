@@ -45,6 +45,12 @@ type Result struct {
 	// Offtopic marks a search suggestion with nothing of its key in it; see
 	// Related. It means nothing on a result of a search.
 	Offtopic bool
+
+	// Similarity is how close a search suggestion is in meaning to its key,
+	// from the meaning filter's model, and Scored says it was measured at all:
+	// a suggestion collected with no model downloaded has none.
+	Similarity float32
+	Scored     bool
 }
 
 // Resolved reports whether this result carries the exact destination address.

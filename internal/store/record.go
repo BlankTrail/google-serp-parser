@@ -112,12 +112,12 @@ func (s *Store) Record(ctx context.Context, jobID int64, out QueryOutcome) error
 			// out of the row rather than written empty: the room is the whole point,
 			// and on a job of ten million results the snippet alone is most of it.
 			_, err := tx.ExecContext(ctx,
-				`INSERT INTO results(page_id, rank, title, url, link, host, snippet, display_path, offtopic)
-				 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO results(page_id, rank, title, url, link, host, snippet, display_path, offtopic, similarity)
+				 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				pageID, rank,
 				kept(keep, FieldTitle, r.Title), kept(keep, FieldURL, r.URL),
 				kept(keep, FieldLink, r.Link), kept(keep, FieldHost, r.Host),
-				kept(keep, FieldSnippet, r.Snippet), kept(keep, FieldPath, r.DisplayPath), r.Offtopic)
+				kept(keep, FieldSnippet, r.Snippet), kept(keep, FieldPath, r.DisplayPath), r.Offtopic, similarityOf(r))
 			if err != nil {
 				return fmt.Errorf("store: recording result %d: %w", rank, err)
 			}
@@ -197,4 +197,15 @@ func writeAside(ctx context.Context, tx *sql.Tx, pageID int64, keep Fields, serp
 		}
 	}
 	return nil
+}
+
+// similarityOf is what the history keeps of a suggestion's closeness to its
+// key: the score, or NULL where nothing was measured. A score of nought is a
+// measurement and is kept as one, which is why NULL is told by Scored and not
+// by the number.
+func similarityOf(r google.Result) any {
+	if !r.Scored {
+		return nil
+	}
+	return float64(r.Similarity)
 }

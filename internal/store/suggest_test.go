@@ -3,6 +3,7 @@
 package store
 
 import (
+	"math"
 	"testing"
 
 	"github.com/blanktrail/google-serp-parser/internal/google"
@@ -126,5 +127,34 @@ func TestRecord_KeepsTheMarkOfACompletionAboutSomethingElse(t *testing.T) {
 	}
 	if marked["coffee maker app"] || !marked["kafka on the shore"] {
 		t.Errorf("read back marked %v, want only kafka on the shore marked", marked)
+	}
+}
+
+func TestRecord_KeepsHowCloseASuggestionIsAndThatSomeWereNeverMeasured(t *testing.T) {
+	s := testStore(t)
+	id, err := s.CreateJob(t.Context(), JobSpec{Name: "m", Kind: KindSuggest, Pages: 1}, []string{"coffee maker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := google.SERP{Results: []google.Result{
+		{Position: 1, Title: "coffee maker app", Similarity: 0.75, Scored: true},
+		{Position: 2, Title: "coffee maker reviews"},
+		{Position: 3, Title: "coffee maker unrelated", Similarity: 0, Scored: true},
+	}}
+	if err := s.Record(t.Context(), id, QueryOutcome{Ordinal: 0, Pages: []google.SERP{page}}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Row{}
+	if err := s.Rows(t.Context(), id, func(r Row) error { got[r.Title] = r; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if r := got["coffee maker app"]; !r.Scored || math.Abs(r.Similarity-0.75) > 1e-6 {
+		t.Errorf("the measured one read back as %v (%v)", r.Similarity, r.Scored)
+	}
+	if r := got["coffee maker reviews"]; r.Scored {
+		t.Errorf("the one never measured read back as measured: %v", r.Similarity)
+	}
+	if r := got["coffee maker unrelated"]; !r.Scored || r.Similarity != 0 {
+		t.Errorf("the one measured at nought read back as %v (%v)", r.Similarity, r.Scored)
 	}
 }

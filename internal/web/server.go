@@ -187,6 +187,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.ModelPath != "" {
 		s.semantic = semantic.NewHolder(cfg.ModelPath)
+		if s.sup != nil {
+			s.sup.SetSemantic(s.semantic)
+		}
 		s.modelURL, s.modelSum, s.modelSize = semantic.ModelURL, semantic.ModelSHA256, semantic.ModelSize
 	}
 	if s.log == nil {

@@ -542,6 +542,8 @@ func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *test
 func windBackToVersion27(t *testing.T, s *Store) {
 	t.Helper()
 	for _, statement := range []string{
+		// The closeness of a suggestion to its key, which the thirty-second step brought.
+		`ALTER TABLE results DROP COLUMN similarity`,
 		// The mark of a completion about something else, which the
 		// thirty-first step brought.
 		`ALTER TABLE results DROP COLUMN offtopic`,

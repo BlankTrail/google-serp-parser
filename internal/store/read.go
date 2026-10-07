@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -28,6 +29,11 @@ type Row struct {
 	// Offtopic marks a search suggestion with nothing of its key in it. Every
 	// row written before the mark existed reads false.
 	Offtopic bool
+	// Similarity is how close in meaning a search suggestion is to its key, and
+	// Scored says it was measured at all: a row collected before the model was
+	// downloaded, or before the column existed, has none.
+	Similarity float64
+	Scored     bool
 }
 
 // Rows hands every result of a job to fn, in the order the job had.
@@ -39,7 +45,7 @@ type Row struct {
 func (s *Store) Rows(ctx context.Context, jobID int64, fn func(Row) error) error {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT q.ordinal, q.text, p.number, r.rank, r.title, r.url, r.host, r.snippet, r.link, r.display_path,
-		        r.offtopic
+		        r.offtopic, r.similarity
 		   FROM results r
 		   JOIN pages   p ON p.id = r.page_id
 		   JOIN queries q ON q.id = p.query_id
@@ -52,10 +58,12 @@ func (s *Store) Rows(ctx context.Context, jobID int64, fn func(Row) error) error
 
 	for rows.Next() {
 		var r Row
+		var similarity sql.NullFloat64
 		if err := rows.Scan(&r.Ordinal, &r.Query, &r.Page, &r.Rank,
-			&r.Title, &r.URL, &r.Host, &r.Snippet, &r.Link, &r.DisplayPath, &r.Offtopic); err != nil {
+			&r.Title, &r.URL, &r.Host, &r.Snippet, &r.Link, &r.DisplayPath, &r.Offtopic, &similarity); err != nil {
 			return fmt.Errorf("store: reading a result: %w", err)
 		}
+		r.Similarity, r.Scored = similarity.Float64, similarity.Valid
 		if err := fn(r); err != nil {
 			return err
 		}
