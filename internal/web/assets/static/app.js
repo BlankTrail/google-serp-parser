@@ -1029,11 +1029,25 @@
 				show("/exports?" + q.toString(), true);
 				return;
 			}
+			// A new filter shows or hides the threshold slider, and a released
+			// slider has a new count of what is left out: both are the server's to
+			// draw, from the choice as it stands.
+			if (event.target.name === "filter" || event.target.name === "min") {
+				remember();
+				show("/exports?" + choice().toString(), true);
+				return;
+			}
 			remember();
 			redraw();
 		});
 		form.addEventListener("input", function (event) {
-			if (event.target.name === "sep") {
+			if (event.target.name === "min") {
+				var shown = event.target.parentNode.querySelector("output");
+				if (shown) {
+					shown.textContent = Number(event.target.value).toFixed(2);
+				}
+			}
+			if (event.target.name === "sep" || event.target.name === "min") {
 				remember();
 				redraw();
 			}

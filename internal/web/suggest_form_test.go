@@ -169,10 +169,11 @@ func TestJobPage_DrawsACompletionsJobAsKeysAndSuggestions(t *testing.T) {
 	if got := strings.Join(chosenOf(sum, partResults), ","); got != "ordinal,key,suggestion" {
 		t.Errorf("a completions job exports with %s when nobody chose, want the key and the text alone", got)
 	}
-	// Whether a suggestion is related to its key is offered, not given: a file
-	// that leaves out the unrelated ones would say yes on every line.
-	if got := strings.Join(fieldsOf(sum, partResults), ","); got != "ordinal,key,suggestion,related" {
-		t.Errorf("a completions job offers %s, want the key, the text and whether it is related", got)
+	// Whether a suggestion is related to its key, and how close it is, are
+	// offered, not given: a file that leaves out the unrelated ones would say yes
+	// on every line, and the closeness is for whoever asked for the numbers.
+	if got := strings.Join(fieldsOf(sum, partResults), ","); got != "ordinal,key,suggestion,related,similarity" {
+		t.Errorf("a completions job offers %s, want the key, the text, whether it is related and how close", got)
 	}
 }
 
@@ -338,8 +339,11 @@ func TestExport_LeavesOutTheSuggestionsUnrelatedToTheKeyUnlessAskedFor(t *testin
 	if !strings.Contains(get(t, s, exportsAt+"?format=csv&offtopic=1&cols=key,suggestion&job="+job).Body.String(), "kafka on the shore") {
 		t.Error("the tab's own preview asked to keep the unrelated suggestion left it out")
 	}
-	if !strings.Contains(tab, `name="offtopic"`) {
-		t.Error("the tab of a suggestions job does not offer to keep the unrelated suggestions")
+	if !strings.Contains(tab, `<select name="filter">`) || strings.Contains(tab, `name="offtopic"`) {
+		t.Error("the tab of a suggestions job does not offer the filter in place of the old box")
+	}
+	if strings.Contains(tab, `value="meaning"`) {
+		t.Error("the tab of a job nobody measured offers a filter by meaning")
 	}
 	if strings.Contains(tab, `name="cols" value="related" checked`) {
 		t.Error("the tab ticks the related column on a screen nobody chose")
@@ -348,7 +352,7 @@ func TestExport_LeavesOutTheSuggestionsUnrelatedToTheKeyUnlessAskedFor(t *testin
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
 	}
-	if strings.Contains(get(t, s, exportsAt+"?job="+strconv.FormatInt(search, 10)).Body.String(), `name="offtopic"`) {
-		t.Error("the tab of a search offers a box about suggestions")
+	if strings.Contains(get(t, s, exportsAt+"?job="+strconv.FormatInt(search, 10)).Body.String(), `name="filter"`) {
+		t.Error("the tab of a search offers a filter of suggestions")
 	}
 }

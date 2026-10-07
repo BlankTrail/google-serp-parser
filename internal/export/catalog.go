@@ -21,6 +21,9 @@ const (
 	ColSuggestion = "suggestion"
 	// ColRelated says whether a suggestion has anything of its key in it.
 	ColRelated = "related"
+	// ColSimilarity is how close in meaning a suggestion is to its key, empty
+	// where it was never measured.
+	ColSimilarity = "similarity"
 )
 
 // Field is one column a file can carry: what a header and a download call it,
@@ -190,6 +193,19 @@ var Completions = Catalog[Row]{Fields: []Field[Row]{
 	{Name: ColKey, Text: func(r Row) string { return r.Query }},
 	{Name: ColSuggestion, Text: func(r Row) string { return r.Title }},
 	{Name: ColRelated, Text: func(r Row) string { return strconv.FormatBool(!r.Offtopic) }, Value: func(r Row) any { return !r.Offtopic }},
+	{Name: ColSimilarity,
+		Text: func(r Row) string {
+			if !r.Scored {
+				return ""
+			}
+			return strconv.FormatFloat(r.Similarity, 'f', 3, 64)
+		},
+		Value: func(r Row) any {
+			if !r.Scored {
+				return nil
+			}
+			return r.Similarity
+		}},
 }}
 
 // Verdicts is what an index check's answer can be written with. Held is written

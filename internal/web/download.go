@@ -85,11 +85,68 @@ const (
 	eolField    = "eol"
 	uniqueField = "unique"
 	bomField    = "bom"
-	// offtopicField keeps the search suggestions with nothing of their key in
-	// them. Nothing said leaves them out: it is what a suggestions file is
-	// for, and a choice remembered from before the box existed says nothing.
+	// offtopicField is the box that came before the filter: ticked, it kept the
+	// search suggestions with nothing of their key in them, which is what
+	// filter=none means. It is still read, so a link or a remembered choice made
+	// before the filter existed keeps meaning what it meant.
 	offtopicField = "offtopic"
+	filterField   = "filter"
+	minField      = "min"
+	// defaultMin is the threshold a meaning filter starts at. It was measured
+	// on a labelled sample of suggestions, each marked as junk or as good:
+	// leaving out what is below 0.54 or has no word of its key removed 64.1% of
+	// the junk and lost 4.0% of the good ones. A lower threshold lets more junk
+	// through, and a higher one starts costing good suggestions faster than it
+	// removes junk.
+	defaultMin = 0.54
 )
+
+// suggestFilter is how a suggestions job's export leaves things out.
+type suggestFilter struct {
+	mode string // none, words or meaning
+	min  float64
+}
+
+// filterOf reads the filter a download asked for. Nothing said is by meaning
+// where the job has scores and by words where it has none; the old box that
+// kept the unrelated ones is no filter at all, so links made before keep
+// meaning what they meant. A filter by meaning asked of a job with no scores is
+// by words: there is nothing to measure by, and the unmeasured are left out
+// only by their words anyway.
+func filterOf(q url.Values, scored bool) suggestFilter {
+	f := suggestFilter{mode: "words", min: defaultMin}
+	if scored {
+		f.mode = "meaning"
+	}
+	switch q.Get(filterField) {
+	case "none", "words":
+		f.mode = q.Get(filterField)
+	case "meaning":
+		if scored {
+			f.mode = "meaning"
+		}
+	case "":
+		if q.Get(offtopicField) == "1" {
+			f.mode = "none"
+		}
+	}
+	if v, err := strconv.ParseFloat(q.Get(minField), 64); err == nil && v >= 0 && v <= 1 {
+		f.min = v
+	}
+	return f
+}
+
+// leaves says whether the filter leaves a row out. A row never measured is left
+// out by meaning only if its words already marked it.
+func (f suggestFilter) leaves(r export.Row) bool {
+	switch f.mode {
+	case "none":
+		return false
+	case "meaning":
+		return r.Offtopic || (r.Scored && r.Similarity < f.min)
+	}
+	return r.Offtopic
+}
 
 // colsOf is the columns a download asked for, in its order. A link names them
 // in one value separated by commas; a form sends one value a box, in the order
@@ -205,7 +262,18 @@ func (s *Server) askedExport(w http.ResponseWriter, r *http.Request) (exportAsk,
 		http.Error(w, lang.T("exports.refused.fields"), http.StatusBadRequest)
 		return exportAsk{}, false
 	}
-	return exportAsk{job: job, part: part, layout: layout, offtopic: q.Get(offtopicField) == "1"}, true
+	// Whether the job has scores settles what a download that said nothing of the
+	// filter means, so it is asked only where there is a filter at all.
+	var filter suggestFilter
+	if job.Kind == store.KindSuggest {
+		scored, err := s.store.HasScores(r.Context(), job.ID)
+		if err != nil {
+			s.fail(w, r, err)
+			return exportAsk{}, false
+		}
+		filter = filterOf(q, scored)
+	}
+	return exportAsk{job: job, part: part, layout: layout, filter: filter}, true
 }
 
 // exportAsk is one file asked for: of which job, which part of it, and how it
@@ -214,9 +282,8 @@ type exportAsk struct {
 	job    store.JobSummary
 	part   string
 	layout export.Layout
-	// offtopic keeps a suggestions job's completions with nothing of their key
-	// in them, which are left out otherwise.
-	offtopic bool
+	// filter is how a suggestions job's completions are left out; see filterOf.
+	filter suggestFilter
 }
 
 // partsOf is what a job can be exported as, the first being what a download
@@ -278,11 +345,12 @@ func fieldsOf(job store.JobSummary, part string) []string {
 
 // chosenOf is the columns a file of this part carries when nobody chose: all
 // of them but whether a suggestion is related to its key, which a file that
-// leaves out the unrelated ones would say yes to on every line.
+// leaves out the unrelated ones would say yes to on every line, and how close it
+// is to its key, which is a column for whoever asked for the numbers.
 func chosenOf(job store.JobSummary, part string) []string {
 	var out []string
 	for _, name := range fieldsOf(job, part) {
-		if name != export.ColRelated {
+		if name != export.ColRelated && name != export.ColSimilarity {
 			out = append(out, name)
 		}
 	}
@@ -328,12 +396,13 @@ func (s *Server) writePart(ctx context.Context, w io.Writer, ask exportAsk, prev
 	if ask.job.Kind == store.KindSuggest {
 		catalog = export.Completions
 	}
-	// A suggestion with nothing of its key in it is set aside unless asked
-	// for; see google.Related. Only a suggestions job's rows are ever marked.
-	leaveOut := ask.job.Kind == store.KindSuggest && !ask.offtopic
+	// What a suggestions job leaves out is the filter's to say, by words or by
+	// meaning; see filterOf and google.Related. Only a suggestions job's rows are
+	// ever marked or measured.
+	leaveOut := ask.job.Kind == store.KindSuggest
 	return feed(w, catalog, ask.layout, preview, func(fn func(export.Row) error) error {
 		return s.walkRows(ctx, id, func(r export.Row) error {
-			if leaveOut && r.Offtopic {
+			if leaveOut && ask.filter.leaves(r) {
 				return nil
 			}
 			return fn(r)
@@ -381,6 +450,8 @@ func (s *Server) walkRows(ctx context.Context, jobID int64, fn func(export.Row) 
 			Link:        row.Link,
 			DisplayPath: row.DisplayPath,
 			Offtopic:    row.Offtopic,
+			Similarity:  row.Similarity,
+			Scored:      row.Scored,
 		})
 	})
 }

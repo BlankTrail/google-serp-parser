@@ -35,6 +35,11 @@ type Row struct {
 	DisplayPath string `json:"display_path"`
 	// Offtopic marks a search suggestion with nothing of its key in it.
 	Offtopic bool `json:"offtopic"`
+	// Similarity is how close in meaning a suggestion is to its key, and Scored
+	// says it was measured: a suggestion collected before the model was there has
+	// no score, which is not the same as a score of nothing.
+	Similarity float64 `json:"similarity"`
+	Scored     bool    `json:"-"`
 }
 
 // Writer takes rows one at a time and finishes the file on Close.

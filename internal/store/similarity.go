@@ -4,6 +4,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -83,4 +85,44 @@ func (s *Store) UnscoredCount(ctx context.Context, jobID int64) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, unscoredCountSQL, jobID).Scan(&n)
 	return n, err
+}
+
+// FilterCount is how many of a job's suggestions there are and how many a
+// filter leaves out: the ones marked as having nothing of their key in them,
+// and, filtering by meaning, the measured ones below floor. A suggestion never
+// measured is left out only by its words. It is the same rule the export
+// applies row by row, so the number the tab shows is the number the download
+// drops. It reads the whole job once, with no index of its own: the screen asks
+// for it when the filter or the threshold changes, not per row.
+func (s *Store) FilterCount(ctx context.Context, jobID int64, meaning bool, floor float64) (total, cut int, err error) {
+	byMeaning := 0
+	if meaning {
+		byMeaning = 1
+	}
+	err = s.db.QueryRowContext(ctx,
+		`SELECT count(*),
+		        coalesce(sum(CASE WHEN r.offtopic = 1
+		                           OR (? = 1 AND r.similarity IS NOT NULL AND r.similarity < ?)
+		                          THEN 1 ELSE 0 END), 0)
+		   FROM results r
+		   JOIN pages p ON p.id = r.page_id
+		   JOIN queries q ON q.id = p.query_id
+		  WHERE q.job_id = ?`, byMeaning, floor, jobID).Scan(&total, &cut)
+	return total, cut, err
+}
+
+// HasScores says whether any of a job's suggestions was measured. Only then is
+// a filter by meaning on offer: without a single score it would be the filter
+// by words under another name.
+func (s *Store) HasScores(ctx context.Context, jobID int64) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM results r
+		   JOIN pages p ON p.id = r.page_id
+		   JOIN queries q ON q.id = p.query_id
+		  WHERE q.job_id = ? AND r.similarity IS NOT NULL LIMIT 1`, jobID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }

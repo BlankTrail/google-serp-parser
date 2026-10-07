@@ -4,6 +4,7 @@ package web
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -37,11 +38,18 @@ type exportsPage struct {
 	Header  bool
 	Unique  bool
 	BOM     bool
-	// Suggest says the job is a search suggestions job, which alone offers to
-	// keep the suggestions with nothing of their key in them, and Offtopic
-	// that they are kept.
+	// Suggest says the job is a search suggestions job, which alone offers a
+	// filter. Filter is its mode (none, words or meaning) and Min the threshold
+	// of a meaning filter, as two decimals. Scored says some suggestions were
+	// measured, which alone offers the meaning. Cut of Total is what the filter
+	// leaves out, CutShare that as a percent.
 	Suggest  bool
-	Offtopic bool
+	Filter   string
+	Min      string
+	Scored   bool
+	Cut      int
+	Total    int
+	CutShare string
 	// Explicit says the screen was drawn from a choice rather than opened
 	// cold. The script restores the last choice only onto a screen opened cold,
 	// so a screen it drew itself is never drawn again.
@@ -244,7 +252,26 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 	view.Unique = q.Get(uniqueField) == "1"
 	view.BOM = q.Get(bomField) == "1"
 	view.Suggest = job.Kind == store.KindSuggest
-	view.Offtopic = view.Suggest && q.Get(offtopicField) == "1"
+	var filter suggestFilter
+	if view.Suggest {
+		var err error
+		if view.Scored, err = s.store.HasScores(r.Context(), job.ID); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		filter = filterOf(q, view.Scored)
+		view.Filter, view.Min = filter.mode, fmt.Sprintf("%.2f", filter.min)
+		if filter.mode != "none" {
+			view.Total, view.Cut, err = s.store.FilterCount(r.Context(), job.ID, filter.mode == "meaning", filter.min)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			if view.Total > 0 {
+				view.CutShare = fmt.Sprintf("%.1f", 100*float64(view.Cut)/float64(view.Total))
+			}
+		}
+	}
 	view.Order = strings.Join(order, ",")
 
 	// What every move link carries: the whole choice as it stands, so a move
@@ -259,7 +286,8 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 	state.Set(uniqueField, yes(view.Unique))
 	state.Set(bomField, yes(view.BOM))
 	if view.Suggest {
-		state.Set(offtopicField, yes(view.Offtopic))
+		state.Set(filterField, view.Filter)
+		state.Set(minField, view.Min)
 	}
 	state[colsField] = fields
 	state.Set(orderField, view.Order)
@@ -295,7 +323,7 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 		layout := export.Layout{Format: view.Format, Fields: fields, Header: view.Header,
 			EOL: eol, Sep: sep, Unique: view.Unique}
 		var buf bytes.Buffer
-		ask := exportAsk{job: job, part: part, layout: layout, offtopic: view.Offtopic}
+		ask := exportAsk{job: job, part: part, layout: layout, filter: filter}
 		if err := s.writePart(r.Context(), &buf, ask, true); err != nil {
 			s.fail(w, r, err)
 			return

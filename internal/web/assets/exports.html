@@ -54,10 +54,17 @@
 </div>
 <div class="field"><label><input type="checkbox" name="unique" value="1"{{if .Unique}} checked{{end}}> {{.T "exports.unique"}}</label></div>
 <div class="field"><label><input type="checkbox" name="bom" value="1"{{if .BOM}} checked{{end}}> {{.T "exports.bom"}}</label></div>
-{{if .Suggest}}<div class="field"><label><input type="checkbox" name="offtopic" value="1"{{if .Offtopic}} checked{{end}}> {{.T "exports.offtopic"}}</label>
+{{if .Suggest}}<div class="field"><label>{{.T "exports.filter"}}
+<select name="filter">
+<option value="none"{{if eq .Filter "none"}} selected{{end}}>{{.T "exports.filter.none"}}</option>
+<option value="words"{{if eq .Filter "words"}} selected{{end}}>{{.T "exports.filter.words"}}</option>
+{{if .Scored}}<option value="meaning"{{if eq .Filter "meaning"}} selected{{end}}>{{.T "exports.filter.meaning"}}</option>{{end}}
+</select></label>
+{{if eq .Filter "meaning"}}<label>{{.T "exports.filter.min"}} <input type="range" name="min" min="0.30" max="0.80" step="0.01" value="{{.Min}}"> <output>{{.Min}}</output></label>{{end}}
+{{if ne .Filter "none"}}<p class="empty">{{.T "exports.filter.cut"}} {{.Cut}} / {{.Total}} ({{.CutShare}}%)</p>{{end}}
 <details class="help">
 <summary>{{.T "help.what"}}</summary>
-<p class="empty">{{.T "exports.offtopic.hint"}}</p>
+<p class="empty">{{.T "exports.filter.why"}}</p>
 </details></div>{{end}}
 <details class="help">
 <summary>{{.T "help.what"}}</summary>

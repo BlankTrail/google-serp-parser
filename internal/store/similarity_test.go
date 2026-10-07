@@ -139,3 +139,73 @@ func TestUnscored_ReadsThroughThePartialIndexAndNotTheWholeTable(t *testing.T) {
 		t.Errorf("the count does not use the partial index:\n%s", count)
 	}
 }
+
+// filteredJob is a suggestions job of four answers to one key: A related and
+// measured at 0.8, B related at 0.2, C marked as having nothing of its key at
+// 0.9, and D related and never measured.
+func filteredJob(t *testing.T, s *Store, name string, measured bool) int64 {
+	t.Helper()
+	id, err := s.CreateJob(t.Context(), JobSpec{Name: name, Kind: KindSuggest, Pages: 1}, []string{"coffee"})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	p := google.SERP{Results: []google.Result{
+		{Position: 1, Title: "coffee alpha"}, {Position: 2, Title: "coffee bravo"},
+		{Position: 3, Title: "charlie", Offtopic: true}, {Position: 4, Title: "coffee delta"},
+	}}
+	if err := s.Record(t.Context(), id, QueryOutcome{Ordinal: 0, Pages: []google.SERP{p}}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if measured {
+		rows, err := s.Unscored(t.Context(), id, 0, 10)
+		if err != nil || len(rows) != 4 {
+			t.Fatalf("Unscored = %d (%v), want 4", len(rows), err)
+		}
+		if err := s.SetSimilarity(t.Context(), map[int64]float64{rows[0].ID: 0.8, rows[1].ID: 0.2, rows[2].ID: 0.9}); err != nil {
+			t.Fatalf("SetSimilarity: %v", err)
+		}
+	}
+	return id
+}
+
+func TestFilterCount_CountsWhatTheExportLeavesOut(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	id := filteredJob(t, s, "mine", true)
+	// Another job's rows are neither counted in nor out.
+	filteredJob(t, s, "other", true)
+
+	for _, c := range []struct {
+		meaning   bool
+		min       float64
+		cut, tote int
+		why       string
+	}{
+		{false, 0, 1, 4, "by words only the marked one is left out, whatever the threshold"},
+		{false, 0.99, 1, 4, "the threshold means nothing by words"},
+		{true, 0.5, 2, 4, "by meaning the marked and the measured below 0.5; the unmeasured stays"},
+		{true, 0.1, 1, 4, "a lower threshold leaves out only the marked"},
+		{true, 0.95, 3, 4, "a higher threshold leaves out all the measured but never the unmeasured one"},
+	} {
+		total, cut, err := s.FilterCount(ctx, id, c.meaning, c.min)
+		if err != nil || total != c.tote || cut != c.cut {
+			t.Errorf("%s: FilterCount(%v, %v) = (%d, %d, %v), want (%d, %d)", c.why, c.meaning, c.min, total, cut, err, c.tote, c.cut)
+		}
+	}
+	if total, cut, err := s.FilterCount(ctx, 9999, true, 0.5); err != nil || total != 0 || cut != 0 {
+		t.Errorf("a job with nothing counts (%d, %d, %v), want (0, 0)", total, cut, err)
+	}
+}
+
+func TestHasScores_SaysWhetherAnythingWasMeasured(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	measured := filteredJob(t, s, "measured", true)
+	bare := filteredJob(t, s, "bare", false)
+	if ok, err := s.HasScores(ctx, measured); err != nil || !ok {
+		t.Errorf("HasScores of a measured job = (%v, %v), want true", ok, err)
+	}
+	if ok, err := s.HasScores(ctx, bare); err != nil || ok {
+		t.Errorf("HasScores of a job nobody measured = (%v, %v), want false (a measured job beside it must not count)", ok, err)
+	}
+}
