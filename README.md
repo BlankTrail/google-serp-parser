@@ -326,6 +326,34 @@ key* is ticked; the **Related to the key** column says which is which. A
 translation or a synonym with no letters in common is marked too — about one
 suggestion in a hundred.
 
+**Meaning filter.** Words alone let through a suggestion that keeps one word of
+the key and goes somewhere else, so there is a second, optional check by
+meaning. **Settings** has a block *Meaning filter for search suggestions* with a
+**Download the model** button: about 133 MB (139 186 847 bytes) of
+`minishlab/potion-multilingual-128M`, a model2vec model distilled from
+`BAAI/bge-m3`, MIT licence. It is saved beside the database as
+`gserp-semantic-v1.bin` and checked by SHA-256; a damaged file is reported and
+can be downloaded again. With the model in place every suggestion collected gets
+a **closeness to its key**, from 0 to 1. Suggestions collected before the model
+was there can be scored from the job's page with **Score closeness to the key**:
+it runs in the background and is safe to interrupt. On the **export tab** of a
+suggestions job, *Suggestions filter* has three choices: *No filter*, *By words*
+(the check above) and *By meaning*, which leaves out a suggestion with no word
+of its key in any form **or** with a closeness below the threshold. The
+threshold is a slider from 0.30 to 0.80, 0.54 by default, and *Left out: N / M*
+shows what it costs before the file is made; the **Closeness to the key** column
+can be added. A suggestion not scored yet is judged by words only, and the old
+`offtopic=1` link parameter still keeps everything.
+
+On one job of 7773 Russian keys, checked against 300 pairs labelled by Claude,
+about a fifth of what was collected was off topic. *By words* removed a quarter
+of that and lost 0.5% of the good ones; *by meaning* at 0.54 removed about
+two thirds (64%) and lost about 4% of the good ones. The model counts words
+without their order: it measures how close the topics are and understands
+nothing. A translation or a synonym with no letters in common is judged better
+than by words, but a suggestion that keeps one word of the key and changes the
+subject can still pass, and a good one can fall below the line.
+
 The alphabet is the job's **search language**: `ru` types Russian letters, `de`
 German, and so on. A job with none types a to z and nought to nine, as the link
 generator did, and the form says so under the language — set it for keys that
@@ -618,6 +646,8 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
   - **Search suggestions** — reads each line as a key and collects every
     completion Google's search box offers for it, typed with each letter of
     the job language's alphabet around it.
+  - An optional **meaning filter** for suggestions: a downloadable model scores
+    how close each one is to its key, and the export can leave out the far ones.
 - **Query formats and macros** for parsing: `site:{query}`, `"{query}"`,
   `{query} {ABC:a:z:2}`, `{query} {num:1:1000}` — several formats a job, what
   they make kept once.
@@ -763,6 +793,8 @@ measured to it:
   suggestion's text.
 - Search suggestions unrelated to their key left out of the file unless asked
   for, with a column that says which is which.
+- A suggestions filter on the export tab: none, by words or by meaning, with a
+  threshold, a count of what is left out and an optional closeness column.
 - HTTP API under `/api/v1/`: set a job going, watch it, stop it, resume it.
 - Streaming endpoints: a job's results and a site's history, one JSON object
   per line, so a million rows read a line at a time.
