@@ -36,8 +36,8 @@ func TestHolder_LooksAgainForAFileThatWasNotThereAndReadsOnceOneThatIs(t *testin
 	if h.Path() != path {
 		t.Errorf("Path = %q, want %q", h.Path(), path)
 	}
-	if h.Present() {
-		t.Error("Present with no file")
+	if got := h.Status(); got != Missing {
+		t.Errorf("Status with no file = %v, want Missing", got)
 	}
 	if _, err := h.Get(); !os.IsNotExist(err) {
 		t.Fatalf("Get with no file: %v, want not-exist", err)
@@ -45,8 +45,8 @@ func TestHolder_LooksAgainForAFileThatWasNotThereAndReadsOnceOneThatIs(t *testin
 	// Downloaded in the meantime: not remembering the absence is what lets the
 	// program use it without a restart.
 	writeTinyModel(t, path)
-	if !h.Present() {
-		t.Error("not Present with a file")
+	if got := h.Status(); got != Ready {
+		t.Errorf("Status with a model = %v, want Ready", got)
 	}
 	m, err := h.Get()
 	if err != nil || m == nil {
@@ -90,5 +90,50 @@ func TestHolder_ResetMakesTheNextGetReadTheFileAgain(t *testing.T) {
 	second, err := h.Get()
 	if err != nil || second == first {
 		t.Errorf("after Reset got %p again (err %v), want a fresh read", second, err)
+	}
+}
+
+func TestHolder_StatusCallsAFileThatIsNotAModelDamagedWithoutLoadingIt(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"garbage": "this is not a model at all",
+		"short":   "GSSEM",
+		"empty":   "",
+	} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := NewHolder(path).Status(); got != Damaged {
+			t.Errorf("%s: Status = %v, want Damaged", name, got)
+		}
+	}
+}
+
+func TestHolder_StatusIsDamagedOnceALoadHasFailedAndReadyAgainAfterReset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	writeTinyModel(t, path)
+	// Cut off in the middle: the signature is right, the rest is not there.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw[:len(raw)/2], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHolder(path)
+	if got := h.Status(); got != Ready {
+		t.Fatalf("before a read Status = %v, want Ready (the signature is right)", got)
+	}
+	if _, err := h.Get(); err == nil {
+		t.Fatal("a cut-off file was read")
+	}
+	if got := h.Status(); got != Damaged {
+		t.Errorf("after a failed read Status = %v, want Damaged", got)
+	}
+	writeTinyModel(t, path)
+	h.Reset()
+	if got := h.Status(); got != Ready {
+		t.Errorf("after a Reset and a good file Status = %v, want Ready", got)
 	}
 }

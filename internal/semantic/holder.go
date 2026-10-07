@@ -3,6 +3,7 @@
 package semantic
 
 import (
+	"io"
 	"os"
 	"sync"
 )
@@ -24,10 +25,46 @@ func NewHolder(path string) *Holder { return &Holder{path: path} }
 // Path is where the model is kept.
 func (h *Holder) Path() string { return h.path }
 
-// Present says the file is there.
-func (h *Holder) Present() bool {
-	_, err := os.Stat(h.path)
-	return err == nil
+// State is what can be said of the model file without reading all 140 MB of it.
+type State int
+
+const (
+	// Missing is no file at the path.
+	Missing State = iota
+	// Ready is a file that looks like a model and has not failed to load.
+	Ready
+	// Damaged is a file that is there and is not a model, or one that was read
+	// and failed.
+	Damaged
+)
+
+// Status is a cheap look at the file, cheap enough for a page that redraws
+// itself every few seconds: whether it is there, whether it begins with the
+// signature of this format, and whether a read of it has already failed. It
+// does not load the model, so a file damaged further in is called Ready until
+// something reads it — and then Damaged, for as long as the failure is
+// remembered. The size is a thing the release knows and this package's reader
+// does not, so the caller that knows it checks it as well.
+func (h *Holder) Status() State {
+	h.mu.Lock()
+	failed := h.tried && h.err != nil
+	h.mu.Unlock()
+	if failed {
+		return Damaged
+	}
+	f, err := os.Open(h.path)
+	if err != nil {
+		// A file that cannot be opened is as good as not there: whatever stops
+		// it being opened stops it being used, and the download that follows
+		// will say if it cannot be written either.
+		return Missing
+	}
+	defer func() { _ = f.Close() }()
+	head := make([]byte, len(signature))
+	if _, err := io.ReadFull(f, head); err != nil || string(head) != signature {
+		return Damaged
+	}
+	return Ready
 }
 
 // Get is the model, read once. A file that is not there is not an error worth

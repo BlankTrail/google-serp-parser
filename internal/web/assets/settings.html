@@ -142,7 +142,8 @@
 <h2>{{.T "settings.semantic.title"}}</h2>
 {{if .Model.Present}}<p>{{.T "settings.semantic.ready"}}</p>
 {{else if .Model.Running}}<p>{{.T "settings.semantic.loading"}} {{.Model.Percent}}%</p>
-{{else}}<form method="post" action="/settings/semantic"><button type="submit">{{.T "settings.semantic.fetch"}} (≈{{.Model.SizeMB}} {{.T "settings.semantic.mb"}})</button></form>{{end}}
+{{else}}{{if .Model.Damaged}}<ul class="faults"><li>{{.T "settings.semantic.damaged"}}</li></ul>{{end}}
+<form method="post" action="/settings/semantic"><button type="submit">{{.T "settings.semantic.fetch"}} (≈{{.Model.SizeMB}} {{.T "settings.semantic.mb"}})</button></form>{{end}}
 {{with .Model.Fault}}<ul class="faults"><li>{{$.T .}}</li></ul>{{end}}
 <details class="help"><summary>{{.T "help.what"}}</summary><p class="empty">{{.T "settings.semantic.why"}}</p></details>
 </section>

@@ -117,6 +117,9 @@ type Server struct {
 	// must hash to. Fields so that a test can point the download at a server of
 	// its own: nothing in a test may reach the real address.
 	modelURL, modelSum string
+	// modelSize is how many bytes the model file is: a file of another length
+	// is called damaged. A field for the same reason as the address.
+	modelSize int64
 	// gateways is the last list of VPN configurations the service gave, so that
 	// a screen redrawing itself every few seconds does not ask again behind
 	// every redraw.
@@ -184,7 +187,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.ModelPath != "" {
 		s.semantic = semantic.NewHolder(cfg.ModelPath)
-		s.modelURL, s.modelSum = semantic.ModelURL, semantic.ModelSHA256
+		s.modelURL, s.modelSum, s.modelSize = semantic.ModelURL, semantic.ModelSHA256, semantic.ModelSize
 	}
 	if s.log == nil {
 		s.log = slog.Default()

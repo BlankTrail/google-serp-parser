@@ -53,6 +53,8 @@ func serverWithModelPath(t *testing.T) (*Server, string) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// The tiny model stands in for the real one, so it is the size that counts.
+	s.modelSize = int64(len(tinyModelBytes(t)))
 	return s, model
 }
 
@@ -292,5 +294,88 @@ func TestFetchModel_AFailureIsToldAndLeavesNoModel(t *testing.T) {
 	waitFetched(t, s)
 	if page := get(t, s, settingsAt).Body.String(); strings.Contains(page, LangEN.T("settings.semantic.failed")) {
 		t.Error("the sentence about the earlier failure outlived a download that worked")
+	}
+}
+
+// offersDownload says the page has the button for the model.
+func offersDownload(page string) bool { return strings.Contains(page, `action="`+semanticAt+`"`) }
+
+func TestSettings_ADamagedModelIsToldAndTheButtonIsOfferedAgain(t *testing.T) {
+	good := tinyModelBytes(t)
+	for name, content := range map[string][]byte{
+		"not a model":        []byte("this is not a model at all"),
+		"the wrong size":     append(append([]byte{}, good...), 0),
+		"cut off, signature": good[:len(good)/2],
+	} {
+		s, model := serverWithModelPath(t)
+		if err := os.WriteFile(model, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		page := get(t, s, settingsAt).Body.String()
+		if !strings.Contains(page, LangEN.T("settings.semantic.damaged")) {
+			t.Errorf("%s: the page does not say the file is damaged", name)
+		}
+		if !offersDownload(page) {
+			t.Errorf("%s: the page does not offer the download again", name)
+		}
+		if strings.Contains(page, LangEN.T("settings.semantic.ready")) {
+			t.Errorf("%s: the page calls a damaged file ready", name)
+		}
+	}
+}
+
+func TestSettings_AModelThatFailedToLoadIsDamaged(t *testing.T) {
+	// The right size and the right signature, and still not a model: only a read
+	// finds that out, and once a read has, the page says so.
+	good := tinyModelBytes(t)
+	broken := append([]byte{}, good...)
+	for i := 16; i < len(broken); i++ {
+		broken[i] = 0xff
+	}
+	s, model := serverWithModelPath(t)
+	if err := os.WriteFile(model, broken, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if page := get(t, s, settingsAt).Body.String(); !strings.Contains(page, LangEN.T("settings.semantic.ready")) {
+		t.Fatal("a file that looks right and was not read is not called ready")
+	}
+	if _, err := s.semantic.Get(); err == nil {
+		t.Fatal("a file of 0xff was read as a model")
+	}
+	page := get(t, s, settingsAt).Body.String()
+	if !strings.Contains(page, LangEN.T("settings.semantic.damaged")) || !offersDownload(page) {
+		t.Error("the page does not call a file that failed to load damaged")
+	}
+}
+
+func TestFetchModel_APressReplacesADamagedFile(t *testing.T) {
+	body := tinyModelBytes(t)
+	sum := sha256.Sum256(body)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	defer srv.Close()
+	s, model := serverWithModelPath(t)
+	s.modelURL, s.modelSum = srv.URL, hex.EncodeToString(sum[:])
+	if err := os.WriteFile(model, []byte("not a model"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	postForm(t, s, semanticAt, url.Values{})
+	waitFetched(t, s)
+	if got, _ := os.ReadFile(model); !bytes.Equal(got, body) {
+		t.Fatal("the damaged file was not replaced")
+	}
+	page := get(t, s, settingsAt).Body.String()
+	if !strings.Contains(page, LangEN.T("settings.semantic.ready")) || strings.Contains(page, LangEN.T("settings.semantic.damaged")) {
+		t.Error("the page does not show the model ready after it replaced a damaged one")
+	}
+}
+
+func TestSettings_ThePercentStaysBetweenNoughtAndAHundred(t *testing.T) {
+	s, _ := serverWithModelPath(t)
+	s.fetching.mu.Lock()
+	s.fetching.running, s.fetching.done, s.fetching.total = true, 250, 100
+	s.fetching.mu.Unlock()
+	if got := s.modelReading().Percent; got != 100 {
+		t.Errorf("Percent with more than the total = %d, want 100", got)
 	}
 }

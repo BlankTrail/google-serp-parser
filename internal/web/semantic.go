@@ -5,6 +5,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -37,40 +38,64 @@ type modelReading struct {
 	// Available is whether this server keeps a model at all.
 	Available bool
 	Present   bool
-	Running   bool
-	Percent   int
-	SizeMB    int
-	Fault     string
+	// Damaged is a file at the path that is not the model, and is not used.
+	Damaged bool
+	Running bool
+	Percent int
+	SizeMB  int
+	Fault   string
 }
 
 func (s *Server) modelReading() modelReading {
-	out := modelReading{SizeMB: int(semantic.ModelSize >> 20)}
+	out := modelReading{SizeMB: int(s.modelSize >> 20)}
 	if s.semantic == nil {
 		return out
 	}
 	out.Available = true
-	out.Present = s.semantic.Present()
+	state := s.modelState()
+	out.Present, out.Damaged = state == semantic.Ready, state == semantic.Damaged
 	s.fetching.mu.Lock()
 	defer s.fetching.mu.Unlock()
 	out.Running, out.Fault = s.fetching.running, s.fetching.fault
 	if s.fetching.total > 0 {
-		out.Percent = int(100 * s.fetching.done / s.fetching.total)
+		// Clamped: a server that sends more than it announced is not a download
+		// that is 104 percent done.
+		out.Percent = int(min(100, max(0, 100*s.fetching.done/s.fetching.total)))
 	}
 	return out
 }
 
+// modelState is the holder's look at the file with the one check only this
+// layer can make: the release says how many bytes the model is, and a file of
+// another length is not it, however it begins. Cheap enough to do on every
+// draw of the settings page; it never loads the model.
+func (s *Server) modelState() semantic.State {
+	state := s.semantic.Status()
+	if state != semantic.Ready {
+		return state
+	}
+	if info, err := os.Stat(s.semantic.Path()); err != nil || info.Size() != s.modelSize {
+		return semantic.Damaged
+	}
+	return semantic.Ready
+}
+
 // fetchModel starts the download and goes back to the settings page, which
 // follows it. A second press while one runs does nothing, and so does a press
-// when the model is already there: the file is replaced only by a release that
-// says so, not by a button that is still on a page somebody left open.
+// when the model is already there and sound: the file is replaced only when it
+// is missing or damaged, not by a button that is still on a page somebody left
+// open. A damaged file is exactly what the button is for.
 func (s *Server) fetchModel(w http.ResponseWriter, r *http.Request) {
 	if s.semantic == nil {
 		http.NotFound(w, r)
 		return
 	}
+	// Looked at before the lock is taken: it is a stat and a read of eight
+	// bytes, and the page that polls this state takes the same lock.
+	wanted := s.modelState() != semantic.Ready
 	s.fetching.mu.Lock()
-	if !s.fetching.running && !s.semantic.Present() {
-		s.fetching.running, s.fetching.done, s.fetching.total, s.fetching.fault = true, 0, semantic.ModelSize, ""
+	if !s.fetching.running && wanted {
+		s.fetching.running, s.fetching.done, s.fetching.total, s.fetching.fault = true, 0, s.modelSize, ""
 		go s.downloadModel(s.modelURL, s.modelSum)
 	}
 	s.fetching.mu.Unlock()
