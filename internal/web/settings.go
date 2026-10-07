@@ -360,6 +360,9 @@ type findingView struct {
 type settingsView struct {
 	page
 	Form settingsForm
+	// Model is how things stand with the meaning filter's model: not there,
+	// downloading, or ready.
+	Model modelReading
 	// KeyTail names the key that is saved without handing it out, and is empty
 	// when there is none.
 	KeyTail    string
@@ -560,6 +563,12 @@ func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, lang Lang,
 	view.Sources = sourcesOffered(view.Form.Source)
 	view.Devices = devicesOffered(view.Form.HotDevice)
 	view.Tongues = tonguesOffered(view.Form.Tongue)
+	// A download in progress is followed on the page itself, as a check of a
+	// list is on the proxy screen: the page draws itself again until it is over.
+	view.Model = s.modelReading()
+	if view.Model.Running {
+		view.Refresh = listRefresh.Milliseconds()
+	}
 	s.render(w, r, "settings.html", view)
 }
 

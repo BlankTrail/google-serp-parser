@@ -23,6 +23,7 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/api"
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/run"
+	"github.com/blanktrail/google-serp-parser/internal/semantic"
 	"github.com/blanktrail/google-serp-parser/internal/sessions"
 	"github.com/blanktrail/google-serp-parser/internal/settings"
 	"github.com/blanktrail/google-serp-parser/internal/store"
@@ -238,6 +239,7 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 		Logger:       log,
 		Supervisor:   sup,
 		SettingsPath: opts.settingsPath(),
+		ModelPath:    opts.modelPath(),
 		Connect:      opts.connect,
 		// What a saved number of warm identities does, at the moment it is saved
 		// rather than at the next start.
@@ -929,6 +931,13 @@ func theFirstProfile(saved settings.Settings, hadSettings bool) store.Profile {
 // carry the connection with it.
 func (o serveOptions) settingsPath() string {
 	return filepath.Join(filepath.Dir(o.DB), settingsName)
+}
+
+// modelPath is where the meaning filter's model is kept: beside the history too,
+// and for the same reason — it is a 140 MB file that belongs to this machine,
+// not to a history that is copied or handed over.
+func (o serveOptions) modelPath() string {
+	return filepath.Join(filepath.Dir(o.DB), semantic.FileName)
 }
 
 // translate reads the languages kept beside this program and says what came of

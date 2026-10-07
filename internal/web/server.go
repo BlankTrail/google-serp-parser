@@ -20,6 +20,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/blanktrail/google-serp-parser/internal/semantic"
 	"github.com/blanktrail/google-serp-parser/internal/settings"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
@@ -59,6 +60,10 @@ type Config struct {
 	// one offers no settings at all, rather than a page whose save button writes
 	// nowhere.
 	SettingsPath string
+	// ModelPath is where the meaning filter's model is kept, or is to be kept
+	// once it is downloaded. A server built without one offers no download and
+	// draws no block about it.
+	ModelPath string
 	// Connect opens what jobs run on, from settings that have just been saved. A
 	// server built without one saves settings and takes none of them into use
 	// until it is started again.
@@ -102,6 +107,16 @@ type Server struct {
 	// settingsPath is the file the connection is kept in, and empty on a server
 	// that keeps none.
 	settingsPath string
+	// semantic is the model of the meaning filter, and is nil on a server that
+	// has nowhere to keep one.
+	semantic *semantic.Holder
+	// fetching is the download of that model, or the last one made. One at a
+	// time: it is 140 MB, and two of them would be two writers of one file.
+	fetching modelFetch
+	// modelURL and modelSum are where the model is downloaded from and what it
+	// must hash to. Fields so that a test can point the download at a server of
+	// its own: nothing in a test may reach the real address.
+	modelURL, modelSum string
 	// gateways is the last list of VPN configurations the service gave, so that
 	// a screen redrawing itself every few seconds does not ask again behind
 	// every redraw.
@@ -166,6 +181,10 @@ func New(cfg Config) (*Server, error) {
 		now:          time.Now,
 		settingsPath: cfg.SettingsPath,
 		browseRoot:   programDir(),
+	}
+	if cfg.ModelPath != "" {
+		s.semantic = semantic.NewHolder(cfg.ModelPath)
+		s.modelURL, s.modelSum = semantic.ModelURL, semantic.ModelSHA256
 	}
 	if s.log == nil {
 		s.log = slog.Default()
@@ -263,6 +282,7 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("GET "+settingsAt, s.settingsPage)
 		s.mux.HandleFunc("POST "+settingsAt, s.saveSettings)
 		s.mux.HandleFunc("POST "+checkAt, s.checkConnection)
+		s.mux.HandleFunc("POST "+semanticAt, s.fetchModel)
 		s.mux.HandleFunc("GET "+browseAt, s.browse)
 	}
 	// Turning the lights out is not a screen and has no page of its own: it
