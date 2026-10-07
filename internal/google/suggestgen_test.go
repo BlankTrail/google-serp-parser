@@ -173,3 +173,99 @@ func redirectedTo(srv *httptest.Server) *http.Client {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestEchoes_DropsTheQuestionHandedBackAndKeepsWhatAnswersIt(t *testing.T) {
+	// The completions of the operator's own report, for "картина дрим арт"
+	// with Multiword: the letter р put between дрим and арт comes back where
+	// it was typed, and that is the question, not a completion of the key.
+	ru := SuggestAlphabet("ru")
+	variant := func(t *testing.T, key, text string, multiword bool) SuggestVariant {
+		t.Helper()
+		for _, v := range SuggestVariants(key, ru, multiword) {
+			if v.Text == text {
+				return v
+			}
+		}
+		t.Fatalf("no question %q is asked for %q", text, key)
+		return SuggestVariant{}
+	}
+	between := variant(t, "картина дрим арт", "картина дрим р арт", true)
+	after := variant(t, "картина дрим арт", "картина дрим арт р", false)
+	before := variant(t, "картина дрим арт", "р картина дрим арт", false)
+	afterWord := variant(t, "картина дрим арт", "картина дрим арт в", false)
+	beforeWord := variant(t, "картина дрим арт", "в картина дрим арт", false)
+	betweenWord := variant(t, "картина дрим арт", "картина в дрим арт", true)
+	joined := variant(t, "картина дрим арт", "картина дрим арть", false)
+	firstPlace := variant(t, "картина дрим арт", "картина р дрим арт", true)
+
+	cases := []struct {
+		name       string
+		v          SuggestVariant
+		completion string
+		echo       bool
+	}{
+		{"the letter left between the words", between, "картина дрим р арт это", true},
+		{"the letter left before a longer word", between, "картина дрим р артемьева", true},
+		{"the question itself", between, "картина дрим р арт", true},
+		{"as Google writes it, in capitals", between, "Картина Дрим Р Арт портреты", true},
+		{"an answer that did not keep the letter", between, "дрим арт до после", false},
+		{"the letter in its place after other words", between, "купить дрим р арт", false},
+		{"the letter grown into a word", between, "картина дрим рисунок арт", false},
+		{"a letter one place further on", firstPlace, "картина дрим р арт", false},
+		{"the letter left after the key", after, "картина дрим арт р", true},
+		{"the letter left after the key, with more", after, "картина дрим арт р это", true},
+		{"the letter after the key finished", after, "картина дрим арт ростов", false},
+		{"the letter left before the key", before, "р картина дрим арт", true},
+		{"the letter before the key finished", before, "рисунок картина дрим арт", false},
+		{"a word of one letter after the key", afterWord, "картина дрим арт в москве", false},
+		{"a word of one letter before the key", beforeWord, "в картина дрим арт", false},
+		{"a word of one letter between the words", betweenWord, "картина в дрим арт", false},
+		{"a letter joined to the key", joined, "картина дрим арть", false},
+		{"a question with no letter", SuggestVariant{Key: "k", Text: "k "}, "k", false},
+	}
+	for _, c := range cases {
+		if got := Echoes(c.v, "ru", c.completion); got != c.echo {
+			t.Errorf("%s: Echoes(%q, %q) = %v, want %v", c.name, c.v.Text, c.completion, got, c.echo)
+		}
+	}
+}
+
+func TestEchoes_KnowsTheWordsOfOneLetterOfTheJobsLanguage(t *testing.T) {
+	// The words of one letter are the language's, so the same letter is a word
+	// in one job and the question handed back in another; a digit is a model
+	// or a year, and kept in every language; a language with no list of its
+	// own has English's, as it has English's alphabet.
+	q := func(key, letter string) SuggestVariant {
+		for _, v := range SuggestVariants(key, []string{letter}, false) {
+			if v.Text == key+" "+letter {
+				return v
+			}
+		}
+		t.Fatalf("no question %q is asked", key+" "+letter)
+		return SuggestVariant{}
+	}
+	cases := []struct {
+		lang, key, letter string
+		echo              bool
+	}{
+		{"en", "coffee", "a", false},
+		{"en", "coffee", "i", false},
+		{"en", "coffee", "b", true},
+		{"ru", "кофе", "в", false},
+		{"ru", "кофе", "я", true},
+		{"ru", "coffee", "a", true},
+		{"es", "cafe", "y", false},
+		{"de", "kaffee", "a", true},
+		{"", "coffee", "a", false},
+		{"", "coffee", "q", true},
+		{"zz", "coffee", "i", false},
+		{"en", "iphone", "5", false},
+		{"ru", "айфон", "5", false},
+	}
+	for _, c := range cases {
+		v := q(c.key, c.letter)
+		if got := Echoes(v, c.lang, v.Text+" case"); got != c.echo {
+			t.Errorf("language %q, %q left standing alone: Echoes = %v, want %v", c.lang, c.letter, got, c.echo)
+		}
+	}
+}

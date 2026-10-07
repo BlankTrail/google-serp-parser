@@ -306,6 +306,15 @@ threads share them out, and one key keeps every thread busy; the box beside
 Multiword caps how many one key may cost. The depth, the site, the parts of a
 result and the session rest mean nothing to this kind and are put away.
 
+Google often hands a letter typed on its own straight back: for
+`картина дрим р арт` it offers `картина дрим р арт это`. That is the question,
+not a completion of the key, and it is left out — a completion that still has
+the letter standing alone where it was typed, between the words, after the key
+or before it. On 7773 Russian keys with Multiword it was nearly half of
+everything collected. A letter that is a word of the job's language (`в`, `с`,
+`и`; `a`, `i`) and a digit are kept: `картина дрим арт в москве` is a real
+completion.
+
 The alphabet is the job's **search language**: `ru` types Russian letters, `de`
 German, and so on. A job with none types a to z and nought to nine, as the link
 generator did, and the form says so under the language — set it for keys that

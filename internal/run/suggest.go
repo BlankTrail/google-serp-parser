@@ -115,6 +115,11 @@ func (r *Runner) completions(ctx context.Context, j Job, a *Attempt, results []Q
 				} else {
 					k.answered++
 					for _, s := range got {
+						// The question handed back is not a completion of the
+						// key; see google.Echoes.
+						if google.Echoes(one.v, j.Queries[one.at].Language, s) {
+							continue
+						}
 						if !k.seen[s] {
 							k.seen[s] = true
 							k.found = append(k.found, s)
