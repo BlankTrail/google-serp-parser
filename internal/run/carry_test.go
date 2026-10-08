@@ -872,6 +872,67 @@ func TestRunner_LeavesAPhraseThatNeverReachedGoogleAsItWasFound(t *testing.T) {
 	}
 }
 
+func TestRunner_AsksAPhraseThatNeverReachedGoogleAgainOnceTheRunHasAnsweredOthers(t *testing.T) {
+	// A phrase whose tries all went to addresses that carried nothing was left
+	// for the next run, and nothing in this one asked it again. On the wingate
+	// list most addresses are dead at any moment, so at 300 threads a run left
+	// hundreds of them behind: the overview film's job 8 ended «не завершено»
+	// with threads idle, and a repeat of it left 1009 of 7773 phrases, every
+	// one of them after three tries that never reached Google. The user chose a
+	// second pass: once the queue is out, such phrases are asked again in the
+	// same run, as long as the run has had an answer since they were put aside.
+	o := newDeepOrigin(t, 1)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	f.downFor(3) // the road is out for exactly the tries of the first phrase (and the pool's own retry)
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	rep := r.Run(ctx, Job{Queries: []google.Query{usQuery("a"), usQuery("b")}, Pages: 1, Tries: 2})
+
+	if ctx.Err() != nil {
+		t.Fatal("the run did not end")
+	}
+	if rep.Done != 2 || rep.Untried != 0 || rep.Failed != 0 {
+		t.Errorf("the report says %d done, %d untried, %d failed, want both phrases done: %+v",
+			rep.Done, rep.Untried, rep.Failed, rep.Results)
+	}
+	if got := sink.records(); len(got) != 2 {
+		t.Errorf("the sink was told about %d queries, want both", len(got))
+	}
+}
+
+func TestRunner_LeavesThePhrasesPutAsideOnceAPassOfThemBringsNoAnswer(t *testing.T) {
+	// The other end of the second pass. A pass in which nothing at all reached
+	// Google says the road to the list is gone, and the user's rule for that
+	// stands: the phrases are left as the run found them, for a later run,
+	// rather than asked round and round or written down as failures.
+	o := newDeepOrigin(t, 1)
+	f := poolFacing(t, o.addr(), 1, inSessions)
+	f.downFor(3)
+	o.then = func(int) { f.blackout() } // the list goes down right after the second phrase is answered
+	sink := &recordingSink{}
+	r := &Runner{Pool: f.Pool, Threads: 1, Sink: sink, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: sessions.Want{Device: blanktrail.DeviceDesktop}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	rep := r.Run(ctx, Job{Queries: []google.Query{usQuery("a"), usQuery("b")}, Pages: 1, Tries: 2})
+
+	if ctx.Err() != nil {
+		t.Fatal("the run did not end: a pass that brought nothing was started again")
+	}
+	if rep.Done != 1 || rep.Untried != 1 || rep.Failed != 0 {
+		t.Errorf("the report says %d done, %d untried, %d failed, want one done and the other left untried: %+v",
+			rep.Done, rep.Untried, rep.Failed, rep.Results)
+	}
+	if rep.Results[0].Attempted || rep.Results[0].Err != nil {
+		t.Errorf("the first phrase is %+v, want it left as found", rep.Results[0])
+	}
+}
+
 func TestRunner_StillRecordsAPhraseGoogleItselfRefused(t *testing.T) {
 	// The other half of the rule. A refusal Google read and judged is an answer
 	// about the phrase, and leaving it unwritten would have the next run ask it

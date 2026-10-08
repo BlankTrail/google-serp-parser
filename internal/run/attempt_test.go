@@ -99,6 +99,9 @@ type facing struct {
 	// drops are the addresses that drop their next few requests and carry the
 	// ones after them, as an address that hiccups does.
 	drops map[string]int
+	// down is how many requests from here on, through any port, reach nothing:
+	// the road to the whole list gone for a while and then back.
+	down int
 	// stood is every address each port stood on as it carried a request, in
 	// order, so a test can see a session moved and how often.
 	stood map[int][]string
@@ -133,6 +136,10 @@ func (f *facing) reaches(port int) bool {
 	up := f.Fake.UpstreamOf(port)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.down > 0 {
+		f.down--
+		return false
+	}
 	if f.drops[up] > 0 {
 		f.drops[up]--
 		return false
@@ -146,6 +153,13 @@ func (f *facing) blackout() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.allDead = true
+}
+
+// downFor puts the road to the whole list out for the next n requests.
+func (f *facing) downFor(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = n
 }
 
 // carriedBy is how many requests a port carried, dead address or not.

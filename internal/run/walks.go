@@ -71,6 +71,15 @@ type walks struct {
 	// is that session's alone — the address of its next page was issued to it —
 	// and it ends where the session does.
 	waiting []*walk
+	// aside are walks whose every try went to addresses that carried nothing:
+	// phrases never put to Google. They are asked again in another pass once the
+	// queue is out, and only while the run is getting answers; see again and
+	// abandon. They are not this run's attempts while they sit here.
+	aside []*walk
+	// answers counts the pages Google answered in this run, and mark is what it
+	// stood at when the phrases put aside were last sent round again: a pass is
+	// worth starting only if something has been answered since.
+	answers, mark int
 	// live counts the walks that have begun and not ended, wherever they sit —
 	// carried, waiting, or in the hands of a thread between the two. A thread
 	// stops when the queue is drained and this is nought, so a walk counted only
@@ -133,6 +142,65 @@ func (w *walks) park(session int64) {
 	delete(w.carrying, session)
 	one.next = ""
 	w.waiting = append(w.waiting, one)
+}
+
+// putAside takes a walk off its session and keeps it for another pass: every
+// try it had went to addresses that carried nothing. It stays live, so the run
+// does not end with it unasked while another pass could still ask it.
+func (w *walks) putAside(session int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	one, ok := w.carrying[session]
+	if !ok {
+		return
+	}
+	delete(w.carrying, session)
+	one.next, one.tries = "", 0
+	w.aside = append(w.aside, one)
+}
+
+// answered counts a page Google answered.
+func (w *walks) answered() {
+	w.mu.Lock()
+	w.answers++
+	w.mu.Unlock()
+}
+
+// again sends the walks put aside round once more, if there are any and the
+// run has had an answer since they were last sent round. It says whether it
+// did.
+//
+// An answer since is the whole of the test. On the wingate list most addresses
+// are dead at any moment, and a phrase whose three tries all met dead ones is
+// asked again with good odds; a pass in which nothing at all reached Google is
+// the road to the list gone, and asking round again would be asking forever.
+func (w *walks) again() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.aside) == 0 || w.answers <= w.mark {
+		return false
+	}
+	w.mark = w.answers
+	w.waiting = append(w.waiting, w.aside...)
+	w.aside = nil
+	return true
+}
+
+// abandon lets go of the walks put aside once nothing else is in flight that
+// could still bring an answer: the last pass of them brought none. They leave
+// the run as it found them, for a later one to take up.
+func (w *walks) abandon() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// An answer since the last pass means another pass is due, not an end.
+	if len(w.aside) == 0 || w.live != len(w.aside) || w.answers > w.mark {
+		return
+	}
+	for _, one := range w.aside {
+		one.ended = true
+	}
+	w.live -= len(w.aside)
+	w.aside = nil
 }
 
 // waitFor puts a walk back among those waiting for a session. It is for a
@@ -247,6 +315,9 @@ func (w *walks) left() []*walk {
 		}
 	}
 	w.waiting = nil
+	// Walks put aside collected nothing and are not this run's attempts: they
+	// are left as the run found them.
+	w.aside = nil
 	w.live = 0
 	// In the order the queries were opened, so a run settles what it has the
 	// way it took it rather than in whatever order a map hands them over.

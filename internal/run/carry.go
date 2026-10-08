@@ -85,6 +85,11 @@ func (c *crew) carry(ctx context.Context) {
 			}
 			if one == nil && errors.Is(err, sessions.ErrNothingDue) {
 				lease.Release()
+				if drained {
+					// The last pass of the phrases put aside brought no answer
+					// and nothing else is in flight: they are let go.
+					c.walks.abandon()
+				}
 				if c.over(drained) {
 					return
 				}
@@ -193,9 +198,21 @@ func (c *crew) opening(ctx context.Context, drained *bool) *walk {
 	// than going back to the end of the queue: it has spent tries, and what
 	// refused it refused the session it was on.
 	if one, ok := c.walks.resume(); ok {
+		// A phrase put aside is this run's attempt again from the moment it is
+		// sent round; see never.
+		c.attempted(one.at)
 		return one
 	}
 	if *drained {
+		// The queue is out. Phrases whose tries all went to addresses that
+		// carried nothing are sent round again, while the run is getting
+		// answers.
+		if c.walks.again() {
+			if one, ok := c.walks.resume(); ok {
+				c.attempted(one.at)
+				return one
+			}
+		}
 		return nil
 	}
 	select {
@@ -363,6 +380,7 @@ func (c *crew) page(ctx context.Context, lease *blanktrail.Lease, held *sessions
 			c.keep(one, serp)
 		}
 	case err == nil:
+		c.walks.answered()
 		// The move may also have happened inside this request: the address it
 		// set out through carried nothing and it was sent to another. What
 		// answered is a session Google has not seen at that address either.
@@ -456,19 +474,23 @@ func (c *crew) stopped(ctx context.Context, one *walk, session int64, err error,
 	c.done(ctx, one, session, err)
 }
 
-// never takes a walk out of the register and leaves its query as the run found
-// it: nothing collected, nothing written down, and not marked as one this run
-// asked for.
+// never puts a walk aside and leaves its query as the run found it: nothing
+// collected, nothing written down, and not marked as one this run asked for.
 //
 // Not marking it is the whole of it. A query this run attempted and settled
 // with neither pages nor a reason is reported as done and written to the
 // history as done, and a job resumed afterwards never asks it again.
+//
+// Aside rather than out of the register: once the queue is out it is sent round
+// again, for as long as the run is getting answers (walks.again). Taken out, it
+// waited for the next run, and the run ended «не завершено» with its threads
+// idle — 1009 of 7773 phrases on a repeat of the overview film's job 8.
 func (c *crew) never(one *walk, session int64) {
 	if one.race != nil && c.aside(one) {
 		c.walks.end(session)
 		return
 	}
-	c.walks.end(session)
+	c.walks.putAside(session)
 	c.mu.Lock()
 	c.results[one.at].Attempted = false
 	c.results[one.at].Err = nil

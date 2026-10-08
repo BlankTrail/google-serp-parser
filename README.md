@@ -410,6 +410,18 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ## 📜 Recent changes
 
+### 0.4.12
+
+- **A phrase that never reached Google is asked again in the same run.** When
+  every try of a phrase went to addresses that carried nothing, the run left it
+  for the next start, and a big job on a list with many dead addresses ended
+  *not finished* with its threads idle — on a test of 7773 phrases at 300
+  threads and 3 tries, 1009 were left behind. Now, once the queue is out, such
+  phrases get another pass with fresh tries, again and again while the run is
+  getting answers. A pass in which nothing reached Google still leaves them for
+  a later run, as before, rather than writing them down as failures. The same
+  test now ends finished with none left.
+
 ### 0.4.11
 
 - **A meaning filter for search suggestions.** A model downloaded once from the
