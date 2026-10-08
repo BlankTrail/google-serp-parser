@@ -56,6 +56,20 @@ gserp-settings.json
 # whoever builds it.
 /docs/*
 !/docs/api.md
+# Public documentation only; keep investigations and working material ignored.
+!/docs/GUIDE.md
+!/docs/GUIDE.ru.md
+!/docs/media/
+/docs/media/*
+!/docs/media/build_readme_gifs.py
+!/docs/img/
+/docs/img/*
+!/docs/img/google-parser-overview-en.gif
+!/docs/img/google-parser-overview-ru.gif
+!/docs/img/google-parser-jobs-en.gif
+!/docs/img/google-parser-jobs-ru.gif
+!/docs/img/google-parser-proxies-en.gif
+!/docs/img/google-parser-proxies-ru.gif
 /.superpowers/
 /testdata-corpus/
 *.har

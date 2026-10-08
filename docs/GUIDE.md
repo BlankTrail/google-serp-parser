@@ -1,0 +1,912 @@
+# Google Parser by BlankTrail — full guide
+
+[← Overview](../README.md) · [Русский](GUIDE.ru.md) · [Changelog](../CHANGELOG.md)
+
+<a id="quick-start"></a>
+
+## 🚀 Quick start
+
+This is the whole road from nothing to a finished job. Everything below it is
+reference; this part is what you do.
+
+Two programs are involved and **only one of them is configured**.
+[BlankTrail Proxy](https://blanktrail.com) carries the sessions through Google's
+challenge; this parser drives it. Nothing is set up on the BlankTrail side — no
+proxy list, no ports, no profiles, no gateways chosen there. It has to be
+running, and it has to hand over one key. The address list, the identities, the
+threads, the jobs and the exports all live in this program's own screens.
+
+No Go, no build, no dependencies. One file to download and one to double-click.
+
+### 1. Start BlankTrail Proxy and copy its key
+
+Install [BlankTrail Proxy](https://blanktrail.com) with a licence that includes
+[Challenge Breaker](https://blanktrail.com/#features), and start it. Then take
+two things from it:
+
+- **the control API address** — `http://127.0.0.1:8891` unless you have moved
+  it;
+- **the API key** — *Settings → API key* in BlankTrail. Issue one if there is
+  none yet.
+
+That is all it is asked for. You do **not** create ports there, you do **not**
+paste your proxy list there, and you do **not** tick VPN configurations there:
+the parser opens and closes ports through the control API itself, points each
+one at the address or gateway it chose, and closes them again when the job ends.
+Its CA certificate is fetched by the parser without anybody having to export it.
+
+Leave BlankTrail running while you work. If it is stopped, the parser says so in
+as many words rather than failing quietly.
+
+> Why it cannot be done without it: Google serves no parsable results to a plain
+> HTTP client at all. This was measured, not assumed: seven client variants,
+> direct and proxied, all came back with a 91 KB JavaScript shell holding no
+> results. Results appear only after the solver has carried the session through
+> the challenge.
+
+### 2. Download the build for your system
+
+Every link here always points at the newest release.
+
+**Windows — one file, nothing to unpack:**
+
+| System | Download |
+|---|---|
+| Windows, ordinary PC | **[gserp.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp.exe)** |
+| Windows on ARM | **[gserp-arm64.exe](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-arm64.exe)** |
+
+Put it anywhere and double-click it. Everything the program needs is inside
+that file — the pages, the icon, the lot — and it writes its history into a
+`gserp.db` beside itself. Put it in a folder of its own: that database, and the
+settings file next to it, are the program's whole state.
+
+**Linux and macOS:**
+
+| System | Download |
+|---|---|
+| Linux, ordinary PC or server | [gserp-linux-amd64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-amd64.tar.gz) |
+| Linux on ARM | [gserp-linux-arm64.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-linux-arm64.tar.gz) |
+| Mac with Apple silicon (M1 and later) | [gserp-macos-apple-silicon.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-apple-silicon.tar.gz) |
+| Mac with an Intel processor | [gserp-macos-intel.tar.gz](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-macos-intel.tar.gz) |
+
+Each archive holds the program, a starter script, both READMEs and the licence.
+Windows zips are there as well — [amd64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-amd64.zip),
+[arm64](https://github.com/BlankTrail/google-serp-parser/releases/latest/download/gserp-windows-arm64.zip) — for whoever wants the READMEs
+beside the program.
+
+Which version a download is, is on the
+[release page](https://github.com/BlankTrail/google-serp-parser/releases/latest)
+and in `gserp version`.
+
+### 3. Start it
+
+- **Windows** — double-click `gserp.exe`. The console goes away, an icon
+  appears in the notification area, and your browser opens at
+  `http://127.0.0.1:8080`. The icon is how you close it again.
+- **Linux and macOS** — `./start.sh` in a terminal, or `./gserp serve`, then
+  open `http://127.0.0.1:8080` yourself.
+
+It listens on this machine only. Reaching it from another one is a setting, and
+it is off until you turn it on — see
+[Running it on a server](#-running-it-on-a-server).
+
+On a machine nothing has been run on yet it **walks you through the interface**:
+seven stops, each a note beside the thing it is talking about — the screens, the
+key, the exits, where a job is started, what a job asks for, and where to see
+that the machine can reach anything at all. One sentence a stop.
+
+It does not move the program for you. A stop on another screen outlines the
+press that leads there and waits; you press it, and the note follows you across
+and settles beside the next thing. Close it with the cross at any point; it is in
+the header afterwards for whenever it is wanted.
+
+### Windows says it protected your PC
+
+It will, and the builds here cannot stop it. SmartScreen judges a program by the
+reputation of whoever signed it, and these are unsigned: there is no certificate
+to have a reputation. Press *More info* → *Run anyway*.
+
+What you can do instead of taking that on trust is check that the file you have
+is the file that was published. Every release carries a `SHA256SUMS.txt`, and
+the sum of your copy should be in it:
+
+```
+Get-FileHash .\gserp.exe -Algorithm SHA256
+```
+
+Windows also marks anything downloaded, which is what raises the prompt. The
+mark can be cleared once, per file:
+
+```
+Unblock-File .\gserp.exe
+```
+
+> macOS keeps downloaded programs quarantined in the same way. If it refuses to
+> open the file, clear the mark once with `xattr -d com.apple.quarantine gserp`
+> in the unpacked folder. On Linux and macOS the sums are checked with
+> `sha256sum -c SHA256SUMS.txt` or `shasum -a 256 -c SHA256SUMS.txt`.
+
+### 4. Settings: point it at BlankTrail
+
+Open **Settings** — the link at the right-hand end of the strip of tabs. Fill in
+the two things from step 1:
+
+- **Control API address** — `http://127.0.0.1:8891`;
+- **API key** — paste it. It is kept on this machine and never shown again;
+  afterwards the screen shows only its last characters, so you can tell one key
+  from another without the key being readable over a shoulder.
+
+Then press **Check the connection**. It says what it found rather than only
+whether it worked, and each answer is a different thing to go and do:
+
+| What it says | What it means |
+|---|---|
+| *BlankTrail is not answering* | The service is not running, or not on that address |
+| *BlankTrail rejected the API key* | The key is wrong or has been reissued. Copy it again from *Settings → API key* |
+| *The BlankTrail licence is not activated* | The licence really is the problem — activate it in the dashboard |
+| *Challenge Breaker is not included in this tariff* | The plan has no solver, and without one Google answers with a challenge page instead of data |
+| *Challenge Breaker is entitled but switched off* | The plan includes it, but no solver processes are configured |
+| *More ports than Challenge Breaker processes* | The run will work and will be slower: challenges queue |
+| Nothing to report | The connection works |
+
+The rest of this screen can be left alone on a first run:
+
+| Setting | What it is |
+|---|---|
+| Identities kept warm | Ports held open between jobs, so the next job does not start cold. Nought keeps none |
+| Result page | Which kind those warm identities are opened for: desktop or mobile |
+| Reaching this from another machine | Off by default. Turning it on asks for a password |
+| Interface language | English or Russian. Chosen here and nowhere else |
+
+<a id="proxy-profiles"></a>
+
+### 5. Proxies: say where the exits come from
+
+Open **Proxies**. At the top are the **profiles**: a profile is a named set of
+exits — where the addresses come from and how the ports on them are used — and a
+job names one when it is set up. One profile is marked default: it is what a job
+that named none runs on, what the identities kept warm are raised on, and what
+the HTTP API's own search goes through.
+
+A machine being upgraded finds one profile already there, called `Default`,
+holding the settings it was set up with. Nothing about a run changes until you
+make a second one.
+
+Under the list is the form that edits the profile you have open, and under that
+the live state of the pool while a job runs. **Read from** chooses the source,
+and there are three:
+
+- **A file on this machine** — one address a line. All of these are read:
+
+  ```
+  host:port
+  host:port:user:password
+  user:password:host:port
+  user:password@host:port
+  ```
+
+  A scheme in front (`socks5://`, `http://`) is optional and `socks5` is
+  assumed. Blank lines, and lines starting with `#`, `//` or `;`, are skipped —
+  so a list can carry comments.
+
+- **An address** — the same list fetched from your provider over HTTP and
+  re-read on the interval you set, which is how a rotating list stays current
+  without anybody pasting it again.
+
+- **VPN gateways stored in BlankTrail** — the configurations your subscription
+  already carries. They appear grouped by subscription with the round trip last
+  measured to each, and you tick one, a whole subscription, or all of them at
+  once. This is where gateways are chosen; nothing is chosen on the BlankTrail
+  side. *Refresh* asks the service for the list again and re-measures.
+
+A list — a file or an address — also has **Connect through**: the road its ports
+take to the addresses. *Nothing* goes straight to each address. *SOCKS5 proxy*
+sends every port through that proxy first, written the way an address on a list
+is, login and password included. *VPN gateway* sends them through one of the
+gateways the service holds, chosen from its list; only the box belonging to the
+choice is shown. It is for a list this machine reaches badly: measured on a
+wingate list, straight from here the challenge solver could not open a connection
+through any address and every search came back as Google's JavaScript check;
+through a SOCKS5 proxy in front of them 46 searches in 48 were answered. The
+address stays the exit Google sees, so a session made on it stays the same
+session. A profile on gateways connects through nothing of its own — a gateway's
+own road is set on it in BlankTrail.
+
+The rest of the form is how that profile's pool behaves — each of these belongs
+to the profile, so two lists can be banned for different lengths and reached over
+different protocols:
+
+| Setting | What it does | Start with |
+|---|---|---|
+| Re-read every, minutes | How often a list at a URL is read again | 30 |
+| Ban for, minutes | How long an address that failed is left out. Nought leaves nobody out | 60 |
+| Threads per proxy | How many threads may share one address or one gateway at a time | 1 for a long list, more for a short one |
+| Connection to a port | SOCKS5 carries UDP, so QUIC and far-side DNS work. HTTP is the fallback | SOCKS5 |
+
+This screen keeps what belongs to the profile: requests, attempts on the wire,
+the share that failed, and failures broken down by kind, so an address that
+never answered is told apart from Google refusing. *Clear the counts* starts a
+fresh measurement; *Clear the ban* puts every address back into rotation after a
+restart or an outage that was not their fault. What the pool is doing this
+minute — addresses in the list, banned right now, ports open, warm and in
+quarantine — is on the page of the job it is doing it for: a pool is raised for
+one job and taken down when that job lets go.
+
+<a id="first-job"></a>
+
+### 6. New job: the first run
+
+Open **New job**. The form is one screen and it says what the run will cost
+before you start it.
+
+| Field | What to put in it |
+|---|---|
+| Name | Anything you will recognise in the history |
+| Kind of job | **Parsing** — collect the results. **Position check** — where one site stands for each phrase. **Index check** — whether Google holds an address at all. **Search suggestions** — every completion Google's search box offers for a key |
+| Site to look for | Only for a position check: the domain whose place you want |
+| Where the phrases come from | Paste them, one per line, or upload a `.txt` |
+| Query format | Parsing only: `{query}` where the phrase goes and anything around it, one format a line; **+** adds one. See below |
+| What to keep of each result | Organic results, ads, related queries — each can be kept or left |
+| Country, language | Two-letter codes, e.g. `de`, `en` |
+| Pages per query | Depth of pagination. One page is the first ten results |
+| Result page | Desktop or mobile |
+| Dropping duplicates | Keep everything, one row per URL, or one per host. A suggestions job keeps each suggestion once by its text, by default |
+| Browser, system, version | The fingerprint the job's sessions wear. Nothing chosen spreads them over every browser and system the program knows, at the newest releases |
+| Proxy profile | Which set of exits the job goes out through |
+| Threads | How many phrases are taken at once. Past a hundred they start five a second rather than all at once |
+| Tries per phrase | How many identities one phrase may be carried to before it is called failed. For search suggestions it is **Tries per request**: how many addresses one substitution is taken to when Google refuses it |
+| Session rest, seconds — from, to | How long one session rests between two of its requests, drawn afresh each time between the two. **Thirty to sixty** by default: on the same 8514 queries it was both faster and cheaper in checks than sixty to a hundred and twenty or fifteen to thirty. The thread does not wait with it — it carries another session meanwhile. Not asked for search suggestions, which keep no sessions |
+
+Threads decide how many sessions the run keeps in work at once; a session new to the run pays
+one check to Challenge Breaker, and the solver's processes are what your
+licence counts.
+
+![The new job form: kind of job, depth, country, what to keep, and the pool it runs on](../assets/screenshots/new-job-en.png)
+
+**Query formats.** A parsing job can make several queries of each line. A
+format is one line with `{query}` where the phrase goes (`{qery}` reads the
+same) and whatever is to be said around it: `site:{query}` searches one site,
+`"{query}"` the exact phrase, `{query} review` adds a word. Two macros stand
+for a run of values:
+
+- `{ABC:a:z:2}` — every word of one to two letters from a to z: `a … z`, then
+  `aa … zz`, 702 in all. Any range of characters and any number of rounds:
+  `{ABC:а:я:1}` for Russian letters.
+- `{num:1:1000}` — every number from 1 to 1000.
+
+Two macros in one format make every combination. **+** adds a format — the
+second starts as `{query} {ABC:a:z:2}`, the third as `{query} {num:1:1000}` —
+and **−** takes one away; what the macros do is under a fold on the form. Every
+format is applied to every line, typed in or uploaded, and what they make is
+put together and **kept once** before the job starts, so a line listed twice is
+searched once. A format with no `{query}`, a macro that cannot be read, or one
+making more than a million queries of a line is refused on the form. Position,
+index and suggestions jobs take their lines as they are.
+
+![The query format field: four formats, two of them with macros, and the fold that explains them](../assets/screenshots/new-job-format-en.png)
+
+<a id="suggestions"></a>
+
+**Search suggestions.** Choose that kind and each line is a key. The key is
+typed into Google's search box again and again — on its own, followed by a
+space, preceded by one, and with each letter of the job language's alphabet
+after it, joined to it, before it and joined in front — and every completion
+that comes back is kept, once. It is the operator's link generator
+(`run4linkgen.php`) built in: the same seven patterns, the same alphabets, the
+same cursor positions, generated as the job runs. **Multiword** also puts a
+letter between each two words of a key. A key is hundreds of requests, so the
+threads share them out, and one key keeps every thread busy; the box beside
+Multiword caps how many one key may cost. The depth, the site, the parts of a
+result and the session rest mean nothing to this kind and are put away.
+
+Google often hands a letter typed on its own straight back: for
+`кофе машина р дома` it offers `кофе машина р дома это`. That is the question,
+not a completion of the key, and it is left out — a completion that still has
+the letter standing alone where it was typed, between the words, after the key
+or before it. On 7773 Russian keys with Multiword it was nearly half of
+everything collected. A letter that is a word of the job's language (`в`, `с`,
+`и`; `a`, `i`) and a digit are kept: `кофе машина дома в москве` is a real
+completion.
+
+A suggestion with **no word of its key in it**, in any form, is marked as
+unrelated: what a letter typed after the key led Google to instead. A word
+counts in another form (`кофемашина`, `кофемашины`), a letter or two
+misspelled (`expresso` → `espresso`), in the other script (`kofemashina` →
+`кофемашина`) and joined or split (`coffee maker` → `coffeemaker`). On 7773
+Russian keys it marked 5.5% of what was collected. The marked ones are kept in
+the job; what the export does with them is the *Suggestions filter* on the
+export tab (below): *By meaning* by default where the job's suggestions have
+been scored, *By words* otherwise, and both leave the marked ones out; *No
+filter* keeps them. The **Related to the key** column says which is which, and
+the old `offtopic=1` link parameter still keeps everything. A translation or a
+synonym with no letters in common is marked too — about one suggestion in a
+hundred.
+
+**Meaning filter.** Words alone let through a suggestion that keeps one word of
+the key and goes somewhere else, so there is a second, optional check by
+meaning. **Settings** has a block *Meaning filter for search suggestions* with a
+**Download the model** button: about 132 MB (139 186 847 bytes) of
+`minishlab/potion-multilingual-128M`, a model2vec model distilled from
+`BAAI/bge-m3`, MIT licence. It is saved beside the database as
+`gserp-semantic-v1.bin` and checked by SHA-256; a damaged file is reported and
+can be downloaded again. With the model in place every suggestion collected gets
+a **closeness to its key**, from 0 to 1. Suggestions collected before the model
+was there can be scored from the job's page with **Score closeness to the key**:
+it runs in the background and is safe to interrupt. On the **export tab** of a
+suggestions job, *Suggestions filter* has three choices: *No filter*, *By words*
+(the check above) and *By meaning*, which leaves out a suggestion with no word
+of its key in any form **or** with a closeness below the threshold. It opens on
+*By meaning* when any of the job's suggestions are scored and on *By words*
+when none are. The threshold is a slider from 0.30 to 0.80, 0.54 by default (a
+link with a number outside that range is read as the nearer end), and *Left
+out: N / M (X%)* shows what it costs before the file is made; the **Closeness
+to the key** column can be added. A suggestion not scored yet is judged by
+words only, and the old `offtopic=1` link parameter still keeps everything.
+
+On one job of 7773 Russian keys, checked against 300 pairs labelled by Claude,
+about a fifth of what was collected was off topic. *By words* removed a quarter
+of that and lost 0.5% of the good ones; *by meaning* at 0.54 removed about
+two thirds (64%) and lost about 4% of the good ones. The model counts words
+without their order: it measures how close the topics are and understands
+nothing. A translation or a synonym with no letters in common is judged better
+than by words, but a suggestion that keeps one word of the key and changes the
+subject can still pass, and a good one can fall below the line. The threshold
+and these figures come from the same 300 pairs, so on other keys expect it to
+do slightly worse than they say.
+
+The alphabet is the job's **search language**: `ru` types Russian letters, `de`
+German, and so on. A job with none types a to z and nought to nine, as the link
+generator did, and the form says so under the language — set it for keys that
+are not in Latin script. Repeats are dropped across the whole job by default,
+**by the suggestion's text**, however many keys bring it; *Keep everything* is
+still a choice. The job's page and the status screen read **keys a minute** and
+**requests a minute** — every substitution answered — where a search reads
+queries and pages, and the export's columns are the **key** and the
+**suggestion**.
+
+![The new job form set to search suggestions: the keys, Multiword and the cap on requests per key](../assets/screenshots/new-job-suggest-en.png)
+
+**Press Start.**
+
+### 7. While it runs, and when it is done
+
+The **Status** screen follows the job: queries done and left, the current URL,
+queries and pages a minute — the average of the last five minutes — and the
+pool behind it.
+
+A job's own page carries its controls under the summary: **Stop**, which is
+answered at once (the job reads *stopping* until it has let go of its
+sessions), carrying on from where it stopped, and the **export**. Beside the
+counts it keeps the **captchas** the job has cost over all its runs; below them
+the run's **proxy and session statistics** — sessions working and resting,
+Google's checks per thousand pages, what the solver has in hand, and where the
+threads are standing.
+
+The first minutes are the slow ones. Every session that rested between jobs is
+checked again on its first request, so a run climbs for ten to twenty minutes
+and then settles — a run that starts slowly is not a run that is broken. At the
+end the last queries are finished without the rest, so a job does not linger on
+its tail.
+
+The **Export** tab lays the job's findings out field by field before they are
+downloaded: which parts, which columns in which order, separators and line
+ends, a byte-order mark for Excel — with a preview of how the file begins. A job
+that ended with failures can be told to try the failed phrases again rather than
+started over.
+
+![A job at a hundred threads: its counts, its sessions, captchas per thousand pages, the settings it runs with and the newest results](../assets/screenshots/job-en.png)
+
+Prefer to build it yourself? See [Building from source](#-building-from-source).
+
+
+---
+
+## 📚 Features
+
+### Core
+
+- Four kinds of job:
+  - **Parsing** — reads each line as a phrase and saves every result.
+  - **Position check** — searches the same phrases and records where a given
+    site stands, or that it was not found.
+  - **Index check** — reads each line as an address and asks whether Google
+    holds it.
+  - **Search suggestions** — reads each line as a key and collects every
+    completion Google's search box offers for it, typed with each letter of
+    the job language's alphabet around it.
+  - An optional **meaning filter** for suggestions: a downloadable model scores
+    how close each one is to its key, and the export can leave out the far ones.
+- **Query formats and macros** for parsing: `site:{query}`, `"{query}"`,
+  `{query} {ABC:a:z:2}`, `{query} {num:1:1000}` — several formats a job, what
+  they make kept once.
+- Organic results, ads and related queries, each exportable on its own.
+- Pagination to any depth; country and interface language per job.
+- Desktop and mobile result pages.
+- Jobs queue and run one at a time, on ports that stay open between them.
+- **Sessions of its own**: Google identities kept with their cookies, their
+  fingerprint and the address they go out through, rested between requests and
+  written down as they go. A query's pages are walked by the session that opened
+  it.
+- Hidden result addresses — Google's encrypted `/goto` links — read on ports of
+  their own, ten lookups to a port, while the search goes on.
+- A job stops on a button and **carries on from exactly where it stopped**.
+- Every result is written down as it lands, so a run that dies keeps everything
+  it had established.
+- History of every job, searchable and re-exportable at any time.
+
+### Interface
+
+- Browser interface — no command line needed for anything.
+- **Status** screen: the job in flight, elapsed against estimated, share
+  answered, what came back instead, identities free to hand out, threads waiting
+  for a free proxy, queue. What the pool is doing this minute is on the running
+  job's own page.
+- **Proxies** screen: requests, attempts, failure share, address changes, ports
+  opened again; failures broken down by kind, with counters you can zero at any
+  moment.
+- A running job's own page reads the identities under it: addresses in the list
+  and banned right now, ports open, warm and in quarantine, sessions — how many
+  there are, how many are in work, how many are resting and how many this job
+  had made for it — and whether it is still taking sessions on, running at its
+  own speed, or out of addresses to open one on. A thread makes a session only
+  when none of the ones there are is ready for it, so a run that has stopped
+  making them has as many as its threads can keep busy: the speed on the screen
+  is then the speed the job runs at rather than one it is still climbing to.
+- The same page reads Google's checks: how many this job has been made to pass,
+  how many the solver is working on, how many are waiting for it, and **how many
+  checks each thousand pages have cost** the run so far — right from its first
+  minute, the checks a fresh session pays to be let in included.
+- And it says **where its threads are standing**: every one of them is in
+  exactly one of six places at each instant — waiting for a port, taking a
+  session, held back by the brake, asking Google, giving the session back,
+  writing the result down, or waiting for something to be due — so the shares
+  are the whole of the run's time and can be read against each other. Asking is
+  the wait that is the work and everything else is a place to go and look at.
+  The last column is how long the thread that has been in a place longest has
+  been there, which tells a place threads pass through from one they are stuck
+  in. It is what a slow run is taken apart with: measured on a job doing a tenth
+  of its speed, the threads were not idle anywhere — they were asking, and every
+  ask ended in a refusal within fifteen seconds.
+- A profile's **list can be checked** from the profile's own screen, as many
+  addresses at once as the box says, along the road that profile's ports take.
+  The service is asked to reach each address itself, and where the profile names
+  a first hop both roads are reported: measured on a live list of fifteen
+  thousand, 75 of 80 addresses answered through the hop and 48 of 80 without it.
+  A check that took the road nobody uses would call a working list dead, which
+  is why there was no list check at all until there was one that could take the
+  right road. The sample is spread across the whole list and shuffled — the
+  first hundred of a list are the same hundred every time.
+- The gateway list is read once and held for a couple of minutes, with a
+  **Refresh** that asks the service again — for when a configuration has just
+  been added or the tunnels have just been measured.
+- A job that failed can be told to **try the failed queries again**, which is
+  not the same button as carrying on with what is left.
+- A **walk through the interface** for a machine nothing has been run on: seven
+  stops, each a note beside the thing it is about, on the screens themselves
+  rather than on a page describing them.
+- What this program last learned about **BlankTrail** in the header of every
+  screen, and a banner with one press where it is something to act on.
+- Live URL of the request going out right now.
+- **Light by default, dark by choice** — a switch in the header with a sun and a
+  moon on it, remembered per browser. It is a link, so it works with no script
+  running at all.
+- English and Russian: what the browser asks for, or whichever is chosen in the
+  settings.
+- The screens show numbers and draw no conclusions from them. They never call a
+  run slow — they do not know what you know about your list.
+
+### Proxies and identities
+
+- Address list from a **file or a URL**, re-read on an interval you set.
+- Formats accepted: `host:port`, `host:port:user:password`,
+  `user:password:host:port`, `user:password@host:port`. A scheme in front
+  (`socks5://`, `http://`) is optional; socks5 is assumed.
+- A **first hop** in front of every address of a list — a SOCKS5 proxy or a
+  BlankTrail gateway — for a list that can only be reached from somewhere in
+  particular.
+- **VDNS and the resolver** set per profile, offered as BlankTrail's own
+  interface offers them.
+- **VPN gateways held in BlankTrail** as a third source. The program asks the
+  service what it holds and lays the configurations out by the subscription
+  they arrived with; tick one, tick a whole subscription, or tick the lot. Each
+  shows what it answered when the service last measured it — a number, or the
+  word for a gateway that did not answer, or for one nobody has measured.
+- Identities are kept **warm between jobs**: a cold identity meets a challenge
+  and answers minutes later, a warm one answers in seconds.
+- A failed address is banned for a set time and comes back on its own; the ban
+  never covers more than three quarters of the list, so the pool cannot run out
+  of addresses to try.
+- Load is spread evenly: every address is used once before any is used twice.
+- **Less work for BlankTrail**: each port resumes its TLS sessions with the
+  service, and a suggestions job and the hidden-address lookups keep their
+  connections alive.
+- **Threads per proxy**, one by default — and worth raising to two or three on a
+  long address list, where the spare identities are asked less often and last
+  longer. On a short list of gateways it is the other way: more identities
+  behind one exit is more for that exit to answer for. A unique `ip:port` is one
+  upstream and so is one gateway, even where several ports sit on the same machine. Threads
+  that find no free upstream wait their turn rather than doubling up on one,
+  and the status screen says how many are waiting.
+- Failures counted apart, because the remedy differs — a dead address, a proxy
+  port that never answered, a relay refusal, a wall from Google, our own
+  timeout.
+- A port the proxy service is no longer listening on is opened again, and a
+  gateway whose tunnel has died is restarted on the same gateway before being
+  left: the service runs a gateway only while a port holds it.
+- Nothing is spent on an empty pool. A job with no identity to take queues for
+  one instead of writing the query down as failed, so a service that goes away
+  costs the time it is away and not the rest of the list.
+
+![The proxy screen: the profiles this machine has, which one is default, and one press each to open a profile or read what has been going through it](../assets/screenshots/proxies-en.png)
+
+*Three hundred identities on a fifteen-thousand-address list, a hundred of them
+warm: a fifth of the attempts fail and 99 per cent of those are addresses that
+carried nothing at all. That is what a datacentre list looks like from the
+inside, and it is why the failures are counted apart — nothing there is Google
+refusing, and nothing there would be mended by trying more politely.*
+
+Choosing the gateways instead puts the subscription's own configurations on the
+same screen, grouped by subscription, each with the round trip the service last
+measured to it:
+
+![The proxy screen reading VPN gateways: the configurations a subscription carries, by subscription, with what each last answered](../assets/screenshots/proxies-gateways-en.png)
+
+<a id="exports"></a>
+
+### Export and API
+
+- **CSV**, **JSON Lines**, **TXT** — results, ads and related queries.
+- An **export tab** that lays a job's file out field by field — parts, columns,
+  order, separators, line ends, a byte-order mark — with a preview. TXT writes a
+  single field one per line and nothing else.
+- Deduplication by URL or by host, or none; for search suggestions, by the
+  suggestion's text.
+- Search suggestions unrelated to their key marked, with a column that says
+  which is which; the filter below leaves them out unless set to none.
+- A suggestions filter on the export tab: none, by words or by meaning, with a
+  threshold, a count of what is left out and an optional closeness column.
+- HTTP API under `/api/v1/`: set a job going, watch it, stop it, resume it.
+- Streaming endpoints: a job's results and a site's history, one JSON object
+  per line, so a million rows read a line at a time.
+- **SerpApi-compatible** `GET /search`: a program written against that service
+  works after changing the base address and nothing else.
+- Access by key, issued with `gserp key new`; only a hash is stored.
+
+---
+
+<a id="settings"></a>
+
+## ⚙️ Settings
+
+### Connection
+
+| Setting | What it is |
+|---|---|
+| Control API address | Where BlankTrail answers, e.g. `http://127.0.0.1:8891` |
+| API key | Issued in BlankTrail. Stored on this machine, never shown again |
+| Identities kept warm | Ports held open between jobs. Nought keeps none |
+| Result page | Which kind the warm identities are opened for: desktop or mobile |
+| Answer the network | Off by default — see [Running it on a server](#-running-it-on-a-server) |
+| Password | What the pages ask for from another machine |
+| Interface language | English or Russian. Chosen here, and nowhere else |
+
+### Proxies
+
+| Setting | What it is |
+|---|---|
+| Read from | Nothing, a file, a URL, or the VPN gateways held in BlankTrail. The form takes the shape of the choice: a path and a browse link for a file, an address box for a URL, the list itself for the gateways |
+| File on this machine / Address of the list | Where the list is |
+| Re-read every, minutes | How often the list is read again. Nought reads it once |
+| Ban for, minutes | How long a failed address is left out. Nought leaves nobody out; sixty is where a fresh install starts |
+| Threads per proxy | How many threads share one address or one gateway. One by default |
+| Profile | Which named set of exits this is. A job names one; the default one is what a job naming none runs on |
+| Connection to a port | SOCKS5 (default) or HTTP |
+| Gateways | Which stored configurations to use, when the source is the gateways |
+
+### Per job
+
+| Setting | What it is |
+|---|---|
+| Proxy profile | Which set of exits the job goes out through. Changeable afterwards on the job's own page |
+| Threads | Queries taken at once. Past a hundred they start five a second |
+| Tries per phrase | How many identities one phrase may be taken to. For search suggestions, tries per request: how many addresses one substitution may be taken to |
+| Session rest, seconds — from, to | How long one session rests between two of its requests. Thirty to sixty by default. Not for search suggestions |
+| Browser, system, version | The fingerprint the job's sessions wear |
+| Pages per query | Depth of pagination |
+| Country, language | Two-letter codes, e.g. `de` |
+| Deduplication | Keep everything, one row per URL, or one per host; for search suggestions, one per suggestion text (the default) |
+| Query format | Parsing only: one or more formats with `{query}` and the macros `{ABC:a:z:2}`, `{num:1:1000}`. `{query}` by default |
+| Multiword | Search suggestions only: also put a letter between each two words of a key |
+| Requests per key, at most | Search suggestions only: the cap on what one key may cost. Nought is no cap |
+
+---
+
+<a id="server"></a>
+
+## 🌐 Running it on a server
+
+By default the interface answers **this machine only**: it listens on
+`127.0.0.1`, and nothing on the network can reach it. That is the right default
+because the pages carry no key of their own — they hold the settings, the queue
+and everything every job has collected, and they hand it to whoever opens them.
+
+To use the interface from another machine, open **Settings → Reaching this from
+another machine**, tick *Answer the network* and set a password. It takes effect
+at the next start, and from then on the program listens on every address this
+machine has and asks for the password before showing anything.
+
+- **It cannot be turned on without a password.** The settings refuse the switch
+  on its own, and a program started with a switch and no password stays on
+  loopback and says so in its first line.
+- **This machine is not asked.** A browser on the machine itself goes straight
+  in: a password there is a lock on a door you are already inside.
+- **The password is not encrypted in transit.** This program speaks plain HTTP,
+  so the password travels in every request and anything between can read it.
+  Use it on a network you trust, or reach the machine over a VPN or an SSH
+  tunnel.
+- What is written down is a salt and a PBKDF2-SHA256 derivation, never the
+  password. A settings file somebody photographs does not hand it over.
+
+`--addr` still wins over the setting, for the operator who wants a particular
+address:
+
+```
+gserp serve --addr 0.0.0.0:8080
+```
+
+That one opens the port without asking for anything, so put it behind something
+that does.
+
+---
+
+<a id="cli"></a>
+
+## 🖥 Command line
+
+The browser interface needs none of this, but everything is scriptable.
+
+```
+gserp run [flags]        work a list of queries, saving each one as it lands
+gserp serve [flags]      serve the browser interface and the API
+gserp key new [flags]    issue an API key and print it the once it can be seen
+gserp key list [flags]   list the keys that exist, without their secrets
+gserp key revoke --id N  stop one key working
+gserp doctor [flags]     check a BlankTrail instance against an intended run
+gserp version            print the version
+```
+
+### `gserp run`
+
+| Flag | Meaning |
+|---|---|
+| `--queries` | File with one query per line; blank lines and `#` are passed over |
+| `--db` | History database to write (default `gserp.db`) |
+| `--out`, `--format` | File to export into, and `csv` or `jsonl` |
+| `--pages` | Result pages per query (default 1) |
+| `--threads`, `--ports` | Queries at once, and ports each gets |
+| `--country`, `--language` | Two-letter codes |
+| `--name` | Name to file the job under |
+| `--resume` | Take up the last unfinished job of this name |
+| `--dry-run` | Print the estimate and send nothing |
+
+### `gserp serve`
+
+| Flag | Meaning |
+|---|---|
+| `--addr` | Address to listen on (default `127.0.0.1:8080`) |
+| `--db` | History database to open |
+| `--threads`, `--ports` | Defaults for a job that names no size |
+| `--trace` | Log every request an identity makes: where it waited, what came back |
+
+### Environment
+
+| Variable | Meaning |
+|---|---|
+| `BLANKTRAIL_URL` | Control API base URL (default `http://127.0.0.1:8891`) |
+| `BLANKTRAIL_API_KEY` | API key |
+| `GSERP_PROXY_LIST_URL` | Address list to egress through; direct when unset |
+
+The key and the address list are read from the environment and are not flags: a
+key on a command line is a key in the shell history.
+
+---
+
+<a id="http-api"></a>
+
+## 🔌 HTTP API
+
+Full reference: [`docs/api.md`](api.md).
+
+Issue a key first:
+
+```
+gserp key new --name my-script
+```
+
+A single search, in this program's own shape:
+
+```
+GET /api/v1/search?q=coffee+grinder&gl=us&hl=en&num=10
+Authorization: Bearer <key>
+```
+
+The same search in SerpApi's shape:
+
+```
+GET /search?q=coffee+grinder&gl=us&hl=en&api_key=<key>
+```
+
+Jobs and streams:
+
+```
+POST /api/v1/jobs                 set a job going
+GET  /api/v1/jobs/{id}            watch it
+GET  /api/v1/jobs/{id}/results    stream what it captured, one object per line
+GET  /api/v1/history              stream a site's history the same way
+```
+
+Three things worth knowing before writing against it:
+
+- **`google` is the only engine.** A request for another is refused with a 400
+  that names what was asked for and lists what there is.
+- **No advertising is handed over.** The answer says how many paid placements
+  were on the page and were not reported, so none go missing silently.
+- **A single search does not wait behind the job queue**, but it does compete
+  with a running job for ports and has a deadline of its own.
+
+There is no rate limiting, keys have no scopes, and a job is polled rather than
+announced.
+
+---
+
+<a id="building"></a>
+
+## 🏗 Building from source
+
+Go 1.26 or newer. No cgo, no build tags, no code generation:
+
+```
+git clone https://github.com/BlankTrail/google-serp-parser
+cd google-serp-parser
+go build ./cmd/gserp
+```
+
+Cross-compiling is the ordinary Go way:
+
+```
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o gserp ./cmd/gserp
+```
+
+Tests:
+
+```
+go test ./...
+```
+
+With [`just`](https://github.com/casey/just) installed, `just --list` shows the
+same things under shorter names: `just build`, `just test`, `just lint`.
+
+### Reproducing a release
+
+The published builds are made by [`scripts/dist.sh`](../scripts/dist.sh), which is
+what the release workflow runs — there is no separate recipe kept somewhere
+only CI can see. To build the same artefacts yourself:
+
+```
+git checkout v0.1.0
+./scripts/dist.sh 0.1.0
+cd dist && sha256sum -c SHA256SUMS.txt
+```
+
+The sums are checked from inside `dist/` because the file names in them carry
+no directory — which is what lets the same file check a release you downloaded
+into a folder of your own.
+
+Binaries are built with `-trimpath`, so they carry no trace of the machine that
+built them and two people building one tag get one file. The archives are not
+byte-for-byte reproducible — they record the moment they were packed — so
+compare the binaries inside them rather than the archives. Your build will
+differ from the published one in one way on purpose: it carries no integration
+key, which the next section explains.
+
+### Attribution
+
+BlankTrail credits a subscription to whoever's work brought the customer, and a
+program says which one it is by stamping an *integration key* into the running
+service — it travels in the body of the service's licence requests, never in a
+link, and it is not a secret.
+
+The downloads above are stamped with this project's key, so a subscription
+bought because of the parser is credited to it. A binary you build yourself
+carries no key and stamps nothing. Whichever key is in the build, three rules
+hold, and you can read them in [`cmd/gserp/integration.go`](../cmd/gserp/integration.go):
+
+- a build with no key of its own leaves the service alone;
+- a key already stamped by another integrator is never written over;
+- nothing about any of it can stop a run — if the service refuses, the parser
+  says so once and carries on.
+
+To stamp a build with your own key:
+
+```
+go build -ldflags "-X github.com/blanktrail/google-serp-parser/internal/version.integrationKey=dk_yours" ./cmd/gserp
+```
+
+`scripts/dist.sh` reads the same key from `GSERP_INTEGRATION_KEY`, and stamps
+nothing when it is unset — which is what a build made by anybody but this
+project does, here and in a fork's own release workflow.
+
+
+---
+
+<a id="performance"></a>
+
+## 📈 Performance
+
+### Video overview demonstration runs
+
+The team's video overview demonstrates suggestion collection at up to
+**150,000 requests per minute**, and SERP parsing at around
+**1,600 requests per minute already at 100 threads**. The thread count is a
+setting of that run, not a program limit. These measurements depend on the
+machine, exit pool, job settings and Challenge Breaker capacity.
+
+The screenshots accompanying this guide come from an earlier run. Its page
+rate below is a different metric from completed keyword queries per minute;
+neither measures the number of rows exported.
+
+### Earlier benchmark: pages per minute
+
+Measured on a live list of 15 000 addresses — ordinary datacentre proxies of
+middling quality, about one in twelve answering at any moment — through
+BlankTrail 1.4.987, on 8514 queries up to ten pages deep with the result
+addresses kept, at 100 threads:
+
+| | |
+|---|---|
+| Pages a minute, once the start has passed | **~1100** |
+| Pages a minute, the whole job | 890–950 |
+| Whole job, 8514 queries | 33–49 min |
+| Captchas per 1000 pages, the whole job | 30–38 |
+| Challenges solved | 98% |
+| Hidden addresses read, per page | ~9 |
+
+How long the whole job takes depends mostly on how deep Google lets the queries
+go: the same list came back at 3.7 pages a query on one run and 5.1 on another.
+
+The start is the slow part. Every session that rested between jobs is checked
+again on its first request, so a run climbs for ten to twenty minutes and then
+settles. The end is not: the last queries are finished without the rest.
+
+Beyond that, what these numbers depend on is your address list, your BlankTrail
+licence and the machine it runs on.
+
+---
+
+## 🛠 Feedback
+
+Bugs and feature requests: please open an issue on GitHub. Include what you
+did, what happened, and what you expected — and, if the run was slow, the
+figures from the **Proxies** screen, which is what that screen is for.
+
+`gserp serve --trace` logs every request an identity makes: where it waited and
+what came back. That log is the fastest way to a diagnosis.
+
+---
+
+## ❤️ About BlankTrail
+
+This parser is open source and free. It exists because Google no longer answers
+plain HTTP clients at all, and because the piece that solves that —
+[BlankTrail Proxy](https://blanktrail.com) — is worth showing at work rather
+than describing.
+
+---
+
+## 📄 Licence
+
+MIT. See [LICENSE](../LICENSE).
+
+The software is provided "as is", without warranty of any kind. You are
+responsible for how you use it, including for observing the terms of service of
+the sites you point it at and the law where you are.
