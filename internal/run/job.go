@@ -481,7 +481,7 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 
 				results[i].Attempted = true
 				asked := time.Now()
-				results[i].Pages, results[i].Err = take(ctx, attempt, j, j.Queries[i], pages)
+				results[i].Pages, results[i].Err = take(ctx, attempt, j, j.Queries[i], pages, r.readHidden)
 				if errors.Is(results[i].Err, blanktrail.ErrPoolExhausted) {
 					// There was nothing to ask through. That is the pool's
 					// condition and not this query's, so the query is left as it
@@ -610,13 +610,26 @@ sending:
 // that address and nothing else — lives in the engines and is applied there, so
 // there is one answer to "is this the site we were looking for" rather than one
 // per caller.
-func take(ctx context.Context, a *Attempt, j Job, q google.Query, pages int) ([]google.SERP, error) {
+func take(ctx context.Context, a *Attempt, j Job, q google.Query, pages int,
+	read func(context.Context, *google.SERP, []int)) ([]google.SERP, error) {
 	switch j.Kind {
 	case Index:
-		st, err := google.CheckIndexed(ctx, a, q, q.Text)
+		iq, err := google.IndexQuery(q, q.Text)
 		if err != nil {
 			return nil, err
 		}
+		serp, err := a.Search(ctx, iq)
+		if err != nil {
+			return nil, err
+		}
+		// An address can only be told by an address. Where the page hides them,
+		// the ones that could be the target are read before the verdict: a
+		// result with no address is never the address asked about, and a region
+		// that hides every address would otherwise hold nothing at all.
+		if at := google.IndexUnread(serp, q.Text); len(at) > 0 && read != nil {
+			read(ctx, &serp, at)
+		}
+		st := google.IndexVerdict(serp, q.Text)
 		return []google.SERP{{Query: q.Text, Results: st.Sample}}, nil
 	case Position:
 		pos, err := google.FindPosition(ctx, a, q, j.Target, pages)

@@ -42,6 +42,23 @@ func (r *Runner) ResolveLinks(ctx context.Context, rep *Report, workers int) goo
 	return total
 }
 
+// readHidden reads the addresses of the results at the given places of one
+// page, through the same lookups a walk's pages are completed with. It is what
+// an index check asks for before its verdict; see take.
+func (r *Runner) readHidden(ctx context.Context, serp *google.SERP, at []int) {
+	// The page's own address goes with its results: a hidden link is relative
+	// to the page that carried it.
+	one := google.SERP{Query: serp.Query, Origin: serp.Origin, Results: make([]google.Result, len(at))}
+	for k, i := range at {
+		one.Results[k] = serp.Results[i]
+	}
+	res := QueryResult{Pages: []google.SERP{one}}
+	r.resolveQuery(ctx, &res, resolveWorkers)
+	for k, i := range at {
+		serp.Results[i] = res.Pages[0].Results[k]
+	}
+}
+
 // spot names one result of one page: the address missing from it, and where to
 // write that address once it is had.
 type spot struct{ page, at int }

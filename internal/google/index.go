@@ -71,18 +71,33 @@ type IndexStatus struct {
 // answer every unreadable response with "not indexed", which is a wrong answer
 // a caller has no way to disbelieve.
 func CheckIndexed(ctx context.Context, s Searcher, q Query, target string) (IndexStatus, error) {
+	q, err := IndexQuery(q, target)
+	if err != nil {
+		return IndexStatus{}, err
+	}
+	serp, err := s.Search(ctx, q)
+	if err != nil {
+		return IndexStatus{Target: strings.TrimSpace(target)}, err
+	}
+	return IndexVerdict(serp, target), nil
+}
+
+// IndexQuery is the one query an index check of target asks: the caller's axes
+// with the operator for target as its text, on the first page.
+func IndexQuery(q Query, target string) (Query, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
-		return IndexStatus{}, ErrNoTarget
+		return q, ErrNoTarget
 	}
 	q.Text = siteQuery(target)
 	q.Page = 1
+	return q, nil
+}
 
-	serp, err := s.Search(ctx, q)
-	if err != nil {
-		return IndexStatus{Target: target}, err
-	}
-
+// IndexVerdict is what one page of an index check says about target. Only the
+// results that are the target count; see CheckIndexed.
+func IndexVerdict(serp SERP, target string) IndexStatus {
+	target = strings.TrimSpace(target)
 	wantURL, wantHost := splitSite(target)
 	st := IndexStatus{Target: target}
 	for _, r := range serp.Results {
@@ -99,7 +114,32 @@ func CheckIndexed(ctx context.Context, s Searcher, q Query, target string) (Inde
 		}
 	}
 	st.Indexed = st.Hits > 0
-	return st, nil
+	return st
+}
+
+// IndexUnread is the results of a page that could be target and cannot be
+// told, because the encrypted link form carries no address: the ones on
+// target's host, or whose host the page does not say. Their addresses have to
+// be read before IndexVerdict can answer about an address — without that, a
+// region whose results all come in that form answers "not indexed" for every
+// page there is (2026-10-08: 1000 of 1000 page addresses taken from Google's
+// own site: results). A question about a whole site needs none: the host is
+// what the form does carry.
+func IndexUnread(serp SERP, target string) []int {
+	wantURL, wantHost := splitSite(strings.TrimSpace(target))
+	if wantURL == "" {
+		return nil
+	}
+	var out []int
+	for i, r := range serp.Results {
+		if r.Resolved() || r.Link == "" {
+			continue
+		}
+		if r.Host == "" || hostBelongsTo(r.Host, wantHost) {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // isTarget reports whether one result is the thing that was asked about.

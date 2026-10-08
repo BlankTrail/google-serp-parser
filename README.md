@@ -410,6 +410,16 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ## 📜 Recent changes
 
+### 0.4.13
+
+- **An index check of a page address reads the address behind Google's hidden
+  links.** Where Google answers with encrypted links (`/goto`), a result carries
+  its site but not its address, and a check of an address answered "not
+  indexed" for every page there is — 1000 of 1000 addresses taken from Google's
+  own `site:` results. The results of the asked-about site are now read before
+  the verdict, through the same lookups a parse job uses; a check of a whole
+  site needs none.
+
 ### 0.4.12
 
 - **A phrase that never reached Google is asked again in the same run.** When

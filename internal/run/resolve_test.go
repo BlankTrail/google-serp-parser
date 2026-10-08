@@ -879,3 +879,99 @@ func TestRunner_TakesTheAddressOutOfGooglesTranslatorRatherThanBlamingThePort(t 
 		t.Errorf("%d identities were blamed for a redirect that named the page, want none", st.Rejections)
 	}
 }
+
+// citedHidingOrigin is hidingOrigin with the cite a live page carries — the
+// address's scheme, host and a breadcrumb — so a result arrives with its host
+// and without its address, which is what the encrypted link form gives.
+func citedHidingOrigin(t *testing.T, lookups *atomic.Int64) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/goto"):
+			lookups.Add(1)
+			w.Header().Set("Location", "https://example.com/page")
+			w.WriteHeader(http.StatusFound)
+		case strings.HasPrefix(r.URL.Path, "/search"):
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			_, _ = io.WriteString(w, `<!doctype html><html><body><div id="search"><div data-snc="x">`+
+				`<a href="/goto?url=CAESXAHuR6pN7OGc" data-ved="2"><h3>Title</h3></a>`+
+				`<cite>https://example.com › page</cite></div></div></body></html>`)
+		default:
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			_, _ = io.WriteString(w, `<!doctype html><html><body><div id="main"></div></body></html>`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// An index check of an address reads the addresses its page hides before it
+// gives its verdict. Measured on 2026-10-08: 1000 page addresses of one site,
+// taken from Google's own site: results, all answered "not indexed" — on the
+// region the run went out from, every result came as an encrypted link, and a
+// result with no address can never be the address asked about.
+func TestRunner_AnIndexJobReadsTheHiddenAddressBeforeItsVerdict(t *testing.T) {
+	var lookups atomic.Int64
+	o := citedHidingOrigin(t, &lookups)
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	rep := r.Run(context.Background(), Job{
+		Kind: Index, Queries: []google.Query{usQuery("example.com/page")}, Pages: 1})
+
+	if rep.Done != 1 {
+		t.Fatalf("Done=%d, want 1 (failed %d: %v)", rep.Done, rep.Failed, rep.Results[0].Err)
+	}
+	pages := rep.Results[0].Pages
+	if len(pages) != 1 || len(pages[0].Results) != 1 {
+		t.Fatalf("recorded %+v, want the one result that is the address: it is held", pages)
+	}
+	if got := pages[0].Results[0].URL; got != "https://example.com/page" {
+		t.Errorf("recorded %q, want the address read from behind the link", got)
+	}
+	if lookups.Load() == 0 {
+		t.Error("the hidden address was never asked for")
+	}
+}
+
+// Only a result on the site asked about can be the address, so only those are
+// read: a lookup is a request, and another site's hidden pages cannot change
+// the answer.
+func TestRunner_AnIndexJobReadsNoHiddenAddressOfAnotherSite(t *testing.T) {
+	var lookups atomic.Int64
+	o := citedHidingOrigin(t, &lookups)
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	rep := r.Run(context.Background(), Job{
+		Kind: Index, Queries: []google.Query{usQuery("other.test/page")}, Pages: 1})
+
+	if rep.Done != 1 {
+		t.Fatalf("Done=%d, want 1 (%v)", rep.Done, rep.Results[0].Err)
+	}
+	if n := len(rep.Results[0].Pages[0].Results); n != 0 {
+		t.Errorf("recorded %d results for an address nobody showed", n)
+	}
+	if n := lookups.Load(); n != 0 {
+		t.Errorf("%d lookups of another site's links, want none", n)
+	}
+}
+
+// A question about a whole site is answered by the host the link form does
+// carry, and costs no lookup.
+func TestRunner_AnIndexJobOfASiteNeedsNoHiddenAddress(t *testing.T) {
+	var lookups atomic.Int64
+	o := citedHidingOrigin(t, &lookups)
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+
+	r := &Runner{Pool: f.Pool, Threads: 1}
+	rep := r.Run(context.Background(), Job{
+		Kind: Index, Queries: []google.Query{usQuery("example.com")}, Pages: 1})
+
+	if rep.Done != 1 || len(rep.Results[0].Pages[0].Results) != 1 {
+		t.Fatalf("Done=%d, recorded %+v, want the site held", rep.Done, rep.Results[0].Pages)
+	}
+	if n := lookups.Load(); n != 0 {
+		t.Errorf("%d lookups for a question the host answers, want none", n)
+	}
+}
