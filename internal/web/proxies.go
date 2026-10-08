@@ -375,6 +375,11 @@ func (s *Server) proxies(w http.ResponseWriter, r *http.Request) {
 		view.Form.Where = chosen
 		view.Form.Source = sourceFile
 	}
+	// A profile being made that was on the gateways when its list was read
+	// again comes back on them; see afterGatewayRefresh.
+	if view.Form.ID == 0 && r.URL.Query().Get(sourceField) == sourceGateways {
+		view.Form.Source = sourceGateways
+	}
 	view.Sources = sourcesOffered(view.Form.Source)
 	view.VDNSModes = vdnsOffered()
 	view.Resolvers = resolversOffered()

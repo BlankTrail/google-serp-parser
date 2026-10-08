@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -362,5 +363,73 @@ func TestProxies_ReadsTheListAgainWhenAskedTo(t *testing.T) {
 	}
 	if page := get(t, s, at).Body.String(); !strings.Contains(page, "Sub.Two") {
 		t.Error("the list was not read again after the press")
+	}
+}
+
+// refreshServer is a screen against a service holding gateways, with a profile
+// on a list as the default and a second profile on the gateways.
+func refreshServer(t *testing.T) (*Server, int64) {
+	t.Helper()
+	f := fakebt.New(t)
+	f.SetGateways([]fakebt.Gateway{{Name: "Sub.One", Kind: "vless"}})
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := settings.Save(path, settings.Settings{ControlURL: f.URL(), APIKey: f.Key()}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	st := testStore(t)
+	if _, err := st.CreateProfile(t.Context(), store.Profile{Name: "Default", Kind: sourceURL, Default: true}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	vpn, err := st.CreateProfile(t.Context(), store.Profile{Name: "VPN", Kind: settings.ProxyGateways})
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	s, err := New(Config{Store: st, Logger: quiet(), SettingsPath: path})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s, vpn
+}
+
+// Pressing refresh inside a profile on the gateways comes back to that profile.
+// Reported 2026-10-08: the press went back to the bare screen, which shows the
+// default profile, so the profile being worked on closed instead of its list
+// being read again inside it.
+func TestProxies_RefreshingTheGatewaysStaysOnTheProfile(t *testing.T) {
+	s, vpn := refreshServer(t)
+	page := get(t, s, boxesOf(vpn)).Body.String()
+	if !strings.Contains(page, `name="profile" value="`+strconv.FormatInt(vpn, 10)+`" form="gateways-afresh"`) &&
+		!strings.Contains(page, `<form id="gateways-afresh" method="post" action="/proxies/gateways"><input type="hidden" name="profile" value="`+strconv.FormatInt(vpn, 10)+`">`) {
+		t.Error("the refresh form does not say which profile it was pressed in")
+	}
+	rec := postForm(t, s, gatewaysAt, url.Values{"profile": {strconv.FormatInt(vpn, 10)}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("pressing refresh answered %d, want a redirect", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != boxesOf(vpn) {
+		t.Errorf("refresh went to %q, want back to the profile %q", got, boxesOf(vpn))
+	}
+}
+
+// A profile being made has no number yet. It comes back as a profile being made,
+// still on the gateways, so their list is what it shows rather than the boxes of
+// a list of proxies.
+func TestProxies_RefreshingTheGatewaysOfANewProfileKeepsItOnTheGateways(t *testing.T) {
+	s, _ := refreshServer(t)
+	if page := get(t, s, proxiesAt+"?profile=new").Body.String(); !strings.Contains(page,
+		`<form id="gateways-afresh" method="post" action="/proxies/gateways"><input type="hidden" name="profile" value="new">`) {
+		t.Error("the refresh form of a profile being made does not say so")
+	}
+	rec := postForm(t, s, gatewaysAt, url.Values{"profile": {"new"}})
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, "profile=new") || !strings.Contains(loc, "source=gateways") {
+		t.Fatalf("refresh went to %q, want back to a new profile on the gateways", loc)
+	}
+	page := get(t, s, loc).Body.String()
+	if !strings.Contains(page, `<option value="gateways" selected>`) {
+		t.Error("the new profile came back on another source than the gateways")
+	}
+	if !strings.Contains(page, `<div class="band" data-source="gateways">`) || !strings.Contains(page, "Sub.One") {
+		t.Error("the new profile came back with the gateways' list hidden or missing")
 	}
 }

@@ -199,5 +199,18 @@ func (s *Server) refreshGateways(w http.ResponseWriter, r *http.Request) {
 		// asking again is not a thing that can fail differently from drawing.
 		_, _, _ = s.askForGateways(r.Context(), saved, true)
 	}
-	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
+	http.Redirect(w, r, afterGatewayRefresh(r), http.StatusSeeOther)
+}
+
+// afterGatewayRefresh is the screen a press of refresh comes back to: the
+// profile it was pressed in. The bare screen shows the default profile, so going
+// back there closed the profile being worked on instead of reading its list
+// again inside it (reported 2026-10-08). A profile being made has no number and
+// comes back as one being made, still on the gateways, so their list is what it
+// shows; what else was typed into it and not saved is not carried.
+func afterGatewayRefresh(r *http.Request) string {
+	if strings.TrimSpace(r.FormValue(profileField)) == "new" {
+		return proxiesAt + "?" + profileField + "=new&" + sourceField + "=" + sourceGateways
+	}
+	return profileAt(atoi64(r, profileField))
 }

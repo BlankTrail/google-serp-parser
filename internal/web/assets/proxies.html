@@ -158,7 +158,7 @@
 {{if .Editing}}
 <section class="card">
 <h2>{{if .Form.ID}}{{.T "proxies.profile.editing"}} {{.Form.Name}}{{else}}{{.T "proxies.profile.new"}}{{end}}</h2>
-<form id="gateways-afresh" method="post" action="/proxies/gateways"></form>
+<form id="gateways-afresh" method="post" action="/proxies/gateways"><input type="hidden" name="profile" value="{{if .Form.ID}}{{.Form.ID}}{{else}}new{{end}}"></form>
 {{/* The pick of a way of resolving names has a form of its own for the reason
      the refresh above does: a press inside the profile's form would send the
      profile. */}}

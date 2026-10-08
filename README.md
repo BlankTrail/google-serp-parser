@@ -410,6 +410,14 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ## 📜 Recent changes
 
+### 0.4.14
+
+- **Refreshing the VPN gateways stays in the profile.** Pressing *Refresh* on a
+  profile on the gateways went back to the bare proxies screen, which shows the
+  default profile, so the profile being edited closed instead of its list being
+  read again. It now comes back to that profile; a profile being made comes back
+  as one being made, still on the gateways.
+
 ### 0.4.13
 
 - **An index check of a page address reads the address behind Google's hidden
