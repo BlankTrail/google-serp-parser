@@ -55,7 +55,7 @@ func TestResultAddressesReadAsLettersAndLinkAsTheyCame(t *testing.T) {
 		t.Errorf("the job page shows the address as escapes, not letters:\n%s", job)
 	}
 	history := get(t, s, "/history?host=cyr.test").Body.String()
-	if !strings.Contains(history, "<td>https://cyr.test/песня/</td>") {
+	if !strings.Contains(history, `<td class="wraps addr">https://cyr.test/песня/</td>`) {
 		t.Errorf("the History shows the address as escapes, not letters:\n%s", history)
 	}
 }

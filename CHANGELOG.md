@@ -2,6 +2,15 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.16
+
+- **The History's columns keep their room.** The table gave nearly all its width
+  to the query and the address: the moment a position was taken broke into two
+  lines and a run's name into three a word wide ("Обзор — выдача 300 потоков").
+  The moment now stays on one line, the run's name, the query and the address
+  each keep a width of their own, and a query or an address breaks anywhere
+  rather than pushing the table past its card.
+
 ### 0.4.15
 
 - **Addresses read as letters.** The results table of a job and the History

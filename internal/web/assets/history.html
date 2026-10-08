@@ -24,11 +24,11 @@
 <tr>
 {{/* Shown on the clock the reader started the run by. The history keeps the
      instant, and an instant printed as itself is hours from the wall. */}}
-<td>{{.TakenAt.Local.Format "2006-01-02 15:04"}}</td>
-<td>{{.JobName}}</td>
-<td>{{.Query}}</td>
+<td class="when">{{.TakenAt.Local.Format "2006-01-02 15:04"}}</td>
+<td class="named">{{.JobName}}</td>
+<td class="wraps phrase">{{.Query}}</td>
 <td class="count">{{.Rank}}</td>
-<td>{{readable .URL}}</td>
+<td class="wraps addr">{{readable .URL}}</td>
 </tr>
 {{end}}
 </tbody>

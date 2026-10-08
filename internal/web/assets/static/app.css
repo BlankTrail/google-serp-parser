@@ -1033,6 +1033,29 @@ tbody tr:last-child td {
 	width: 1%;
 }
 
+/* A moment reads as one: a date broken from its time is two cells' worth of
+   height in every row. */
+.when {
+	white-space: nowrap;
+}
+
+/* The History's columns each keep a width of their own. Left to the table, the
+   longest content took the card: first the query squeezed the run's name into
+   three lines a word wide ("Обзор — выдача 300 потоков"), then, once queries
+   and addresses could break anywhere, whichever broke was left a word's width.
+   Together the widths fit a card at the page's width, date and rank included. */
+.named {
+	min-width: 12rem;
+}
+
+.phrase {
+	min-width: 12rem;
+}
+
+.addr {
+	min-width: 16rem;
+}
+
 /* Counts read down the column, so they are aligned on their last digit. */
 .count {
 	font-variant-numeric: tabular-nums;

@@ -869,3 +869,30 @@ func TestProfileList_KeepsARowsPressesOnOneLine(t *testing.T) {
 		t.Errorf("the presses' cell breaks its line: white-space %v", got)
 	}
 }
+
+func TestHistoryScreen_GivesTheRunItsRoomBesideALongQueryAndAddress(t *testing.T) {
+	// The table squeezed the moment and the run's name a word wide while the
+	// query and the address beside them took the card: "2026-10-07 20:50" in
+	// two lines and "Обзор — выдача 300 потоков" in three. The moment stays on
+	// one line, the name keeps a width of its own, and the address breaks
+	// rather than taking the room, yet keeps a readable line of its own. A query
+	// breaks anywhere too: an index check asks for a whole address.
+	s := testServer(t)
+	seedHistory(t, s, "example.com", 2)
+	body := get(t, s, historyAt+"?host=example.com").Body.String()
+	row := regexp.MustCompile(`(?s)<tbody>.*?</tr>`).FindString(body)
+	for _, want := range []string{`<td class="when">`, `<td class="named">run 1</td>`, `<td class="wraps phrase">iphone 13</td>`, `<td class="wraps addr">https://example.com/2</td>`} {
+		if !strings.Contains(row, want) {
+			t.Errorf("a row of the History has no %s:\n%s", want, row)
+		}
+	}
+	css := stylesheet(t)
+	if got := valuesIn(css, ".when", "white-space"); len(got) != 1 || got[0] != "nowrap" {
+		t.Errorf("the moment a position was taken may break across lines: white-space %v", got)
+	}
+	for sel, want := range map[string]string{".named": "12rem", ".phrase": "12rem", ".addr": "16rem"} {
+		if got := valuesIn(css, sel, "min-width"); len(got) != 1 || got[0] != want {
+			t.Errorf("%s keeps no width of its own: min-width %v, want %s", sel, got, want)
+		}
+	}
+}
