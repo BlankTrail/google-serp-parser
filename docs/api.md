@@ -85,16 +85,17 @@ Answer:
 
 ### Seven things that differ from the service this shape copies
 
-**1. `link` is sometimes a Google address rather than the site's.** Google writes
-a result's address three ways and chooses between them itself; two captures of
-one query minutes apart have differed. Two of the three carry the destination in
-the page, and `link` is then the destination. The third carries only ciphertext,
-and the exact destination behind it costs one extra request per result to learn —
-which this address will not spend, because it has a deadline to answer inside. So
-for those results `link` is **Google's own redirector for that result**, made
-absolute. It goes where a click goes, but **the host you read out of it is
-Google's**. If you need the destination host, read `displayed_link` — it is
-always the site — or set a job going, which resolves the links.
+**1. `link` is the site's address — read from behind Google's redirector where
+the page hides it.** Google writes a result's address three ways and chooses
+between them itself; two captures of one query minutes apart have differed. Two
+of the three carry the destination in the page. The third carries only Google's
+redirector (`/goto`), and since late 2026 that is most results. The server reads
+the destination behind each one before it answers, ten at a time through ports of
+its own (opened the first time a page hides an address), inside the same
+deadline: a warm server answered in 3–7 seconds. An address that could not be
+read in time is handed over as **Google's own redirector for that result**, made
+absolute — it goes where a click goes, but **the host you read out of it is
+Google's**; `displayed_link` is always the site.
 
 **2. Advertising is not returned at all.** Google draws three paid products and
 this program reads only a title from one of them; rendering them into paid
@@ -170,8 +171,9 @@ The same single search in this program's own shape. Same parameters `q`, `gl`,
 }
 ```
 
-**`resolved` is the named answer to the unresolved-link problem.** Where the
-captured page carried no destination, `url` is empty and `resolved` is `false`.
+**`resolved` is the named answer to the unresolved-link problem.** Where no
+destination could be had — the page carried none and the one behind the
+redirector could not be read in time — `url` is empty and `resolved` is `false`.
 It is carried as its own field rather than left to be inferred from an empty
 string, so a program cannot read "the page did not say" as "this capture
 failed". `host` and `displayed_path` are exact either way.

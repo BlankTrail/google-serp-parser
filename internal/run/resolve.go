@@ -59,6 +59,17 @@ func (r *Runner) readHidden(ctx context.Context, serp *google.SERP, at []int) {
 	}
 }
 
+// ReadHidden reads every address one page hides, through the run's lookup
+// ports, up to workers at once — what the synchronous search answers with in
+// place of Google's redirector. An address that could not be read before ctx
+// ended keeps its link, and the page is otherwise as it came.
+func (r *Runner) ReadHidden(ctx context.Context, serp *google.SERP, workers int) google.ResolveReport {
+	res := QueryResult{Pages: []google.SERP{*serp}}
+	rep := r.resolveQuery(ctx, &res, workers)
+	*serp = res.Pages[0]
+	return rep
+}
+
 // spot names one result of one page: the address missing from it, and where to
 // write that address once it is had.
 type spot struct{ page, at int }

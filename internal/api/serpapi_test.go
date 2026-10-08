@@ -626,3 +626,51 @@ func TestSerpAPI_SaysSoWhenTheServerWasStartedWithNothingToSearchFrom(t *testing
 		t.Errorf("a server with nothing to search from answered %d, want 503 (body %v)", code, body)
 	}
 }
+
+// 🔴 Google now hides nearly every address behind its redirector, and a SerpApi
+// client follows `link`: on 2026-10-09 all eleven results of one search pointed
+// at google.com. With a way to read the hidden addresses, the destination is
+// handed over instead — through both answers, inside the search's deadline.
+func TestSerpAPI_HandsOverTheAddressReadFromBehindTheRedirector(t *testing.T) {
+	revealed := 0
+	reveal := func(ctx context.Context, serp *google.SERP) {
+		revealed++
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("the addresses were read with no deadline")
+		}
+		for i := range serp.Results {
+			if serp.Results[i].Title == "Shop" {
+				serp.Results[i].URL = "https://shop.test/phones"
+			}
+		}
+	}
+	s, secret := searchServer(t, SearchConfig{Searcher: answering(serpAPIPage()), Reveal: reveal})
+
+	_, body := serpAPIAsk(t, s, secret, "/search?q=iphone+13")
+	middle := nthOf(t, listAt(t, body, "organic_results"), 1)
+	if got := textAt(t, middle, "link"); got != "https://shop.test/phones" {
+		t.Errorf("a hidden result came back with link %q, want the address read from behind the redirector", got)
+	}
+	rec := call(t, s, secret, http.MethodGet, "/api/v1/search?q=iphone+13", "")
+	var got searchBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Results) < 2 || got.Results[1].URL != "https://shop.test/phones" || !got.Results[1].Resolved {
+		t.Errorf("the API's own search answered %+v, want the read address", got.Results)
+	}
+	if revealed != 2 {
+		t.Errorf("the hidden addresses were read %d times for two searches", revealed)
+	}
+}
+
+// A search that failed has no page to read addresses on.
+func TestSerpAPI_ReadsNoAddressForASearchThatFailed(t *testing.T) {
+	revealed := false
+	s, secret := searchServer(t, SearchConfig{Searcher: failing(errors.New("refused")),
+		Reveal: func(context.Context, *google.SERP) { revealed = true }})
+	_, _ = serpAPIAsk(t, s, secret, "/search?q=iphone+13")
+	if revealed {
+		t.Error("addresses were read for a search that brought no page")
+	}
+}

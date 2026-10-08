@@ -975,3 +975,27 @@ func TestRunner_AnIndexJobOfASiteNeedsNoHiddenAddress(t *testing.T) {
 		t.Errorf("%d lookups for a question the host answers, want none", n)
 	}
 }
+
+// The synchronous search hands a page over in SerpApi's shape, where a link is
+// what a client follows: Google's redirector in its place reads as a result
+// pointing at Google. ReadHidden reads every address the page hides.
+func TestRunner_ReadHiddenReadsEveryAddressAPageHides(t *testing.T) {
+	var lookups atomic.Int64
+	o := citedHidingOrigin(t, &lookups)
+	f := poolFacing(t, o.Listener.Addr().String(), 2)
+	serp, err := (&Attempt{Pool: f.Pool}).Search(context.Background(), usQuery("anything"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(serp.Results) != 1 || serp.Results[0].Resolved() {
+		t.Fatalf("the page came back with %+v, want one hidden address", serp.Results)
+	}
+
+	rep := (&Runner{Pool: f.Pool}).ReadHidden(context.Background(), &serp, 10)
+	if got := serp.Results[0].URL; got != "https://example.com/page" {
+		t.Errorf("the result reads %q, want the address behind the link (%+v)", got, rep)
+	}
+	if lookups.Load() == 0 {
+		t.Error("the hidden address was never asked for")
+	}
+}

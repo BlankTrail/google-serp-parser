@@ -2,6 +2,17 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.18
+
+- **The search answered inside a request hands over the site's address.** Google
+  now hides most results behind its redirector, and `GET /search` handed that
+  redirector over as `link` — on a live search all eleven results pointed at
+  google.com, which a program written against SerpApi reads as the wrong site.
+  The server now reads the address behind each hidden result before it answers,
+  ten at a time through ports of its own and inside the same deadline (3–7
+  seconds on a warm server); `/api/v1/search` gets the same addresses. One that
+  could not be read in time keeps the redirector, as before.
+
 ### 0.4.17
 
 - **The last query of an index or position check no longer holds the job.**

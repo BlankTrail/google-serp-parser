@@ -22,6 +22,7 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/api"
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/run"
 	"github.com/blanktrail/google-serp-parser/internal/semantic"
 	"github.com/blanktrail/google-serp-parser/internal/sessions"
@@ -300,6 +301,7 @@ func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
 		cfg.Search = api.SearchConfig{
 			Searcher: &run.Attempt{Pool: pool, Keeper: o.Keeper, Want: sessions.Want{Device: warm.Device()}},
 			Ports:    pool.Stats().Ports,
+			Reveal:   warm.reveal,
 		}
 	}
 	return api.New(cfg)
@@ -384,12 +386,17 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 		if err != nil && !errors.Is(err, store.ErrNoProfile) {
 			return nil, 0, err
 		}
+		// With the ports its addresses are read through, as a job keeping
+		// addresses has: the search answered inside a request hands over the
+		// address rather than Google's redirector. Nothing of that set is
+		// opened until a page actually hides one.
 		got, err := o.dial(ctx, saved, web.Wanted{
-			Profile: prof, Threads: 1, Ports: want, Device: device,
+			Profile: prof, Threads: 1, Ports: want, Device: device, Addresses: true,
 		})
 		if err != nil {
 			return nil, 0, err
 		}
+		warm.setLookups(got.Addresses)
 		return got.Search, prof.ID, nil
 	}
 
@@ -1238,6 +1245,9 @@ type warmSet struct {
 	// keeper holds the sessions the standing ports are warmed through; nil
 	// warms the ports themselves.
 	keeper *sessions.Keeper
+	// lookups are the ports the synchronous search reads hidden addresses
+	// through; nil reads them through the set's own ports.
+	lookups *blanktrail.Growing
 }
 
 // standing is a number of identities of one kind: what the settings page last
@@ -1261,6 +1271,40 @@ func (w *warmSet) Device() string {
 	defer w.mu.Unlock()
 	return w.device
 }
+
+// setLookups puts in place the ports the set's hidden addresses are read
+// through, closing the ones it had.
+func (w *warmSet) setLookups(g *blanktrail.Growing) {
+	w.mu.Lock()
+	old := w.lookups
+	w.lookups = g
+	w.mu.Unlock()
+	if old != nil && old != g {
+		_ = old.Close()
+	}
+}
+
+// reveal reads the addresses a page of the synchronous search hides, through
+// the set's lookup ports — or through its own ports where it has none (a set
+// opened from the environment).
+func (w *warmSet) reveal(ctx context.Context, serp *google.SERP) {
+	w.mu.Lock()
+	pool, lookups := w.pool, w.lookups
+	w.mu.Unlock()
+	if pool == nil {
+		return
+	}
+	r := &run.Runner{Pool: pool}
+	if lookups != nil {
+		r.Addresses = lookups.Identities
+	}
+	r.ReadHidden(ctx, serp, searchLookupsAtOnce)
+}
+
+// searchLookupsAtOnce is how many of one page's hidden addresses the synchronous
+// search reads at once: a page's worth, so the answer waits for one lookup
+// rather than for three in turn.
+const searchLookupsAtOnce = 10
 
 // Pool is what the set holds, for the search that answers inside a request.
 func (w *warmSet) Pool() *blanktrail.Pool {
@@ -1341,6 +1385,7 @@ func (w *warmSet) bring(ctx context.Context, want int, device string) error {
 			// with nothing warming them.
 			_ = pool.Close()
 		}
+		w.setLookups(nil)
 		w.mu.Lock()
 		w.pool, w.device, w.profile, w.stop = nil, "", 0, nil
 		w.mu.Unlock()

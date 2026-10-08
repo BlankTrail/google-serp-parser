@@ -71,6 +71,15 @@ type SearchConfig struct {
 	// Deadline is how long one search may take before the caller is told it did
 	// not finish. Non-positive means defaultSearchDeadline.
 	Deadline time.Duration
+	// Reveal reads the addresses a page hides behind Google's redirector, inside
+	// the same deadline. Nil hands the redirector over, as it was before.
+	//
+	// 🔴 Google now hides the address of nearly every result (/goto), and a
+	// SerpApi client follows `link`: on 2026-10-09 all eleven results of one
+	// search came back pointing at google.com. An address that could not be read
+	// in time keeps its redirector, so a slow lookup costs an address rather than
+	// the whole answer.
+	Reveal func(ctx context.Context, serp *google.SERP)
 }
 
 // SearchLimit is how many searches may be under way at once.
@@ -132,6 +141,7 @@ func (l *SearchLimit) Take() (release func(), err error) {
 // running job with none.
 type directSearch struct {
 	finder   google.Searcher
+	reveal   func(ctx context.Context, serp *google.SERP)
 	limit    *SearchLimit
 	deadline time.Duration
 }
@@ -152,6 +162,7 @@ func newDirectSearch(cfg SearchConfig) directSearch {
 	}
 	return directSearch{
 		finder:   cfg.Searcher,
+		reveal:   cfg.Reveal,
 		limit:    NewSearchLimit(places),
 		deadline: deadline,
 	}
@@ -244,10 +255,13 @@ func (s *Server) searchNow(parent context.Context, q google.Query) (google.SERP,
 
 	began := time.Now()
 	serp, err := s.direct.finder.Search(ctx, q)
-	took := time.Since(began)
 	if err == nil {
-		return serp, took, nil
+		if s.direct.reveal != nil {
+			s.direct.reveal(ctx, &serp)
+		}
+		return serp, time.Since(began), nil
 	}
+	took := time.Since(began)
 	// The deadline is only this server's when the caller's own context is still
 	// good. A caller who has hung up ended the search themselves, and reporting
 	// that as this server running out of time would put a timeout in the log
