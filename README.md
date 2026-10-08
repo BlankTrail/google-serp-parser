@@ -410,6 +410,16 @@ Prefer to build it yourself? See [Building from source](#-building-from-source).
 
 ## 📜 Recent changes
 
+### 0.4.15
+
+- **Addresses read as letters.** The results table of a job and the History
+  showed an address with letters of other alphabets as percent escapes
+  (`/%D0%BD%D0%B5…`). They now show them as letters, the way a browser's
+  address bar does; the link, the database and every export keep the address
+  exactly as it came. Escapes that would change what the address says (`%2F`,
+  `%3F`, `%23`, `%25`, `%26`), spaces, and invisible or direction-changing
+  characters stay escaped.
+
 ### 0.4.14
 
 - **Refreshing the VPN gateways stays in the profile.** Pressing *Refresh* on a

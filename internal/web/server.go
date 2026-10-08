@@ -227,7 +227,7 @@ func parsePages() (map[string]*template.Template, error) {
 		}
 		// The layout comes first so the page's own body replaces the empty one
 		// the layout declares.
-		tpl, err := template.New(layoutFile).ParseFS(assets, "assets/"+layoutFile, name)
+		tpl, err := template.New(layoutFile).Funcs(template.FuncMap{"readable": readableURL}).ParseFS(assets, "assets/"+layoutFile, name)
 		if err != nil {
 			return nil, fmt.Errorf("web: parsing %s: %w", base, err)
 		}
