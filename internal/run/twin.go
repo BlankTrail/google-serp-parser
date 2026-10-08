@@ -217,8 +217,16 @@ func (c *crew) twin(drained bool, now time.Time) *walk {
 
 // twinWait is the run's twinAfter, which a test can shorten.
 func (c *crew) twinWait() time.Duration {
-	if c.r != nil && c.r.TwinAfter > 0 {
-		return c.r.TwinAfter
+	if c.r != nil {
+		return c.r.twinWait()
+	}
+	return twinAfter
+}
+
+// twinWait is twinAfter, or the run's own where a test has shortened it.
+func (r *Runner) twinWait() time.Duration {
+	if r.TwinAfter > 0 {
+		return r.TwinAfter
 	}
 	return twinAfter
 }

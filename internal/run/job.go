@@ -404,6 +404,9 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 	starved := make(chan struct{})
 	var starveOnce sync.Once
 	var wg sync.WaitGroup
+	// The queries an index or position check has in flight, for the twins at the
+	// end of the job; see flying.
+	var aloft flying
 	if j.Kind == Suggest {
 		// A completions job is worked question by question rather than query
 		// by query, by threads of its own; see completions. None of the
@@ -481,8 +484,14 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 
 				results[i].Attempted = true
 				asked := time.Now()
-				results[i].Pages, results[i].Err = take(ctx, attempt, j, j.Queries[i], pages, r.readHidden)
-				if errors.Is(results[i].Err, blanktrail.ErrPoolExhausted) {
+				// A request of its own to call off: a twin may settle the query
+				// while this one is still held at the far end; see flying.
+				qctx, cancel := context.WithCancel(ctx)
+				aloft.start(i, asked, cancel)
+				got, err := take(qctx, attempt, j, j.Queries[i], pages, r.readHidden)
+				cancel()
+				if errors.Is(err, blanktrail.ErrPoolExhausted) {
+					aloft.drop(i)
 					// There was nothing to ask through. That is the pool's
 					// condition and not this query's, so the query is left as it
 					// was found — untried, and pending in whatever is writing the
@@ -496,8 +505,39 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 					starveOnce.Do(func() { close(starved) })
 					return
 				}
-				r.step(thread, StageAsk, asked, text, results[i].Err)
+				r.step(thread, StageAsk, asked, text, err)
+				if !aloft.finish(i, err) {
+					// Its twin settled it, or is still asking past this failure.
+					continue
+				}
+				results[i].Pages, results[i].Err = got, err
 				settle(ctx, thread, i, began)
+			}
+			// The queue is out. A thread with nothing left to ask stays while any
+			// query is still in flight, and starts a twin beside one whose request
+			// has waited too long; see flying.
+			for ctx.Err() == nil {
+				at, ok := aloft.hedge(time.Now(), r.twinWait())
+				if !ok {
+					if aloft.open() == 0 {
+						return
+					}
+					if err := r.Pool.Sleep(ctx, min(r.twinWait()/4, idleAtMost)); err != nil {
+						return
+					}
+					continue
+				}
+				text := j.Queries[at].Text
+				asked := time.Now()
+				qctx, cancel := context.WithCancel(ctx)
+				aloft.joined(at, cancel)
+				got, err := take(qctx, attempt, j, j.Queries[at], pages, r.readHidden)
+				cancel()
+				r.step(thread, StageAsk, asked, text, err)
+				if aloft.finish(at, err) {
+					results[at].Pages, results[at].Err = got, err
+					settle(ctx, thread, at, aloft.began(at))
+				}
 			}
 		}(w)
 	}

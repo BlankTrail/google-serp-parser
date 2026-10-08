@@ -2,6 +2,17 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.17
+
+- **The last query of an index or position check no longer holds the job.**
+  An index check of a thousand addresses had 999 answered in seven minutes and
+  stood a quarter of an hour on the last one with every other thread idle: each
+  of its requests was held by the far end for the whole 450 seconds a request may
+  take, with tries still to go. A parse job already started such a query again
+  beside the stuck request at the end of a job; the two kinds that ask once per
+  query now do the same — once the queue is out, a request waiting over a minute
+  gets a twin through another identity, and whichever answers first settles it.
+
 ### 0.4.16
 
 - **The History's columns keep their room.** The table gave nearly all its width
