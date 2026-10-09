@@ -2135,6 +2135,15 @@ func (l *Lease) Renew(ctx context.Context) error {
 	if err := l.pool.rotateEgress(ctx, l.pt.num); err != nil {
 		return err
 	}
+	// A port the service had lost is to be opened again, and opening it gives
+	// it another fingerprint; asked for one now, the service would answer that
+	// it holds no such port.
+	l.pt.mu.Lock()
+	broken := l.pt.broken
+	l.pt.mu.Unlock()
+	if broken {
+		return nil
+	}
 	return l.pool.rotateProfile(ctx, l.pt.num)
 }
 
@@ -2326,7 +2335,26 @@ func (p *Pool) putEgress(ctx context.Context, pt *poolPort, next Egress) error {
 		return nil
 	}
 	if err := p.cl.SetUpstream(ctx, num, next.Upstream); err != nil {
-		return err
+		if !notOpen(err) {
+			return err
+		}
+		// The service does not hold the port any more — it was restarted under
+		// the run — so there was nothing to move. That is no failure of the
+		// address nor of the port, and answered as one it was the end of the
+		// port: the strike put it in quarantine, every revival asked the
+		// service to move it again and was told the same, and the position
+		// check of 2026-10-09 stood with all 150 threads waiting for a lookup
+		// port after a restart of the service, every one of them quarantined
+		// and none ever opened again. A port that is gone is opened again, on
+		// the address it was being moved to, by the next acquire; see
+		// renewIfDue.
+		pt.mu.Lock()
+		pt.broken = true
+		pt.repair = true
+		pt.mu.Unlock()
+		pt.base.CloseIdleConnections()
+		p.told(num, "reopening")
+		return nil
 	}
 	// Every connection this transport is holding open was a tunnel through the
 	// address just abandoned, and changing the upstream does not change where an

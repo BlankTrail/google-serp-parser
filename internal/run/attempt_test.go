@@ -105,6 +105,28 @@ type facing struct {
 	// stood is every address each port stood on as it carried a request, in
 	// order, so a test can see a session moved and how often.
 	stood map[int][]string
+	// heldOnly makes a port the service no longer holds carry nothing, as a
+	// port lost to a restart of the service does: its number is still here,
+	// and nothing behind it.
+	heldOnly bool
+	// conns is every connection a stand-in has accepted, so a restart can drop
+	// them all as the service's does.
+	conns []net.Conn
+}
+
+// restart is the service restarting: it forgets every port it held and every
+// connection through them is dropped, and from here on a port it does not hold
+// carries nothing.
+func (f *facing) restart() {
+	f.Fake.Restart()
+	f.mu.Lock()
+	f.heldOnly = true
+	conns := f.conns
+	f.conns = nil
+	f.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
 }
 
 func (f *facing) carried(port int) {
@@ -136,6 +158,9 @@ func (f *facing) reaches(port int) bool {
 	up := f.Fake.UpstreamOf(port)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.heldOnly && up == "" {
+		return false
+	}
 	if f.down > 0 {
 		f.down--
 		return false
@@ -325,6 +350,9 @@ func serveStandIn(ln net.Listener, originAddr string, port int, f *facing) {
 			return
 		}
 		f.carried(port)
+		f.mu.Lock()
+		f.conns = append(f.conns, c)
+		f.mu.Unlock()
 		if !f.reaches(port) {
 			_ = c.Close()
 			continue
