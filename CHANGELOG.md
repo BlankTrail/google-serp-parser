@@ -2,6 +2,16 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.23
+
+- **The lookup ports come back after a restart of the service.** A restart
+  takes every port the service holds, and the ports the hidden addresses are
+  read through were never opened again: each move asked of a port the service
+  no longer had was answered "not open", counted as the port failing, and the
+  port was set aside for good. A position check of 150 threads stood with
+  every thread waiting for a lookup port and nothing moving. Such a port is
+  now opened again on the next use, with nothing held against it.
+
 ### 0.4.22
 
 - **An export can keep one site.** The export tab has an "Only the site" box:
