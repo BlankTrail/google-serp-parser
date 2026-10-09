@@ -2,6 +2,18 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.19
+
+- **A long position check no longer stands with every thread idle.** A position
+  check of 10 000 titles answered 7 810 of them and then stood for good — and
+  another stood at 713 — with all 150 threads waiting for a port to read a hidden
+  address through. Each port taken out of service for failing cost the proxy
+  list a share of its standing, and nothing ever gave it back, so after the
+  fourth such port the list was treated as burned and no new port could be
+  opened for the rest of the job. An answer through the list now earns that
+  standing back. The same check of 2 000 titles that used to stop now runs to
+  the end at about 230 a minute.
+
 ### 0.4.18
 
 - **The search answered inside a request hands over the site's address.** Google

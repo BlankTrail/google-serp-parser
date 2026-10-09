@@ -2510,6 +2510,12 @@ func (p *Pool) attemptSucceeded(num int) {
 	// spend again the next time its tunnel dies.
 	pt.restarted = false
 	pt.mu.Unlock()
+	// And its channel has carried a request, which is what earns back the weight
+	// a quarantine took. Nothing gave it back before: a pool of one channel — the
+	// whole proxy list — was demoted for good after its fourth quarantine and
+	// never opened another port, and the position checks of 2026-10-09 stood with
+	// every thread waiting for a lookup port that could no longer be opened.
+	p.mixer.Reward(pt.ch)
 }
 
 // reviveIfDue takes a quarantined port back once it has waited long enough, and

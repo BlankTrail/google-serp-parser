@@ -477,7 +477,9 @@ func TestPoolRemedy_TransportErrorMarksTheEgressWithoutBurningTheChannel(t *test
 	if resp.StatusCode != 200 {
 		t.Fatalf("status=%d, want 200 after rotating away from the dead egress", resp.StatusCode)
 	}
-	if w := p.mixer.Weight(ch); w != weightBefore {
+	// Not spent. It may have grown: the request was answered in the end, and an
+	// answer is what earns a channel its weight back.
+	if w := p.mixer.Weight(ch); w < weightBefore {
 		t.Errorf("channel weight %d → %d; one request must not spend it", weightBefore, w)
 	}
 }
