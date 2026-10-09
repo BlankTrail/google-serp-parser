@@ -2,6 +2,16 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.21
+
+- **Position and index checks get up to speed.** Their threads slept the
+  session's rest — 30 seconds and more — between two queries of their own,
+  on top of the rest the sessions already keep. So 150 threads made about 230
+  queries a minute however many sessions stood rested, where a parse job on
+  the same threads reads well over a thousand pages. A thread now asks again
+  at once and is handed a rested session or a new one: the same 2 000-title
+  check took 5 minutes instead of 9 and was still gaining speed at the end.
+
 ### 0.4.20
 
 - **Built with Go 1.26.9 and golang.org/x/net 0.60.0.** Both fix flaws in the

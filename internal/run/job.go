@@ -468,7 +468,14 @@ func (r *Runner) Run(ctx context.Context, j Job) Report {
 			for i := range queue {
 				text := j.Queries[i].Text
 				began := time.Now()
-				if !first {
+				// In a run that keeps sessions the pause is not the thread's: the pool
+				// is paced at the session's rest, the keeper already holds every
+				// session to it, and a thread that slept it too asked once every half
+				// minute however many sessions stood rested — 150 threads made about
+				// 230 queries a minute on the position checks of 2026-10-09, where a
+				// parse job on the same sessions read 1 600 pages. The thread asks
+				// again at once, and the keeper hands it a rested session or a new one.
+				if !first && attempt.Keeper == nil {
 					// The pause this thread owes its own last request. Taking it
 					// before the query rather than after it means a job never
 					// ends on a pause it had no request to pace, and a cancelled
