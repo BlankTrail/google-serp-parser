@@ -2,6 +2,16 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.26
+
+- **Every port carries the parser's own label.** BlankTrail Proxy 1.4.1082
+  keeps a label with each port, through a restart that restores it. The
+  parser now puts a label of its own run on every port it opens, and after a
+  restart a port is its own exactly when it carries that label — whatever the
+  port was last set to, and whether or not the service restores ports. A port
+  with another label, or with none where the parser's was, is left alone. On
+  a service without labels it decides as 0.4.25 did.
+
 ### 0.4.25
 
 - **A port the service restored after a restart stays the parser's.** A

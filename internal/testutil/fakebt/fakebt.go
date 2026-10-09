@@ -104,6 +104,11 @@ type Server struct {
 	// restores is the service's "restore ports at start" setting: on, a
 	// restart opens every port again as it was, under a new creation time.
 	restores bool
+	// labels is each port's label, kept as it was given and through a
+	// restoring restart; noLabels is a service older than labels, which
+	// ignores them.
+	labels   map[int]string
+	noLabels bool
 	// deadGateways are the ones whose tunnel will not start.
 	deadGateways map[string]bool
 	profiles     map[int]Profile
@@ -154,6 +159,7 @@ func New(t *testing.T) *Server {
 		},
 		ports:    map[int]string{},
 		created:  map[int]string{},
+		labels:   map[int]string{},
 		profiles: map[int]Profile{},
 		rotates:  map[int]int{},
 		resets:   map[int]int{},
@@ -525,8 +531,12 @@ func (s *Server) serveList(w http.ResponseWriter) {
 		if up == "direct" {
 			up = ""
 		}
-		list = append(list, map[string]any{"port": p, "protocol": "http", "created_at": s.created[p],
-			"upstream": up, "keep_sessions": s.keep[p]})
+		entry := map[string]any{"port": p, "protocol": "http", "created_at": s.created[p],
+			"upstream": up, "keep_sessions": s.keep[p]}
+		if l := s.labels[p]; l != "" {
+			entry["label"] = l
+		}
+		list = append(list, entry)
 	}
 	elsewhere, ceiling := s.elsewhere, s.maxPorts
 	s.mu.Unlock()
@@ -603,6 +613,7 @@ func (s *Server) Restart() {
 	defer s.mu.Unlock()
 	s.ports = map[int]string{}
 	s.created = map[int]string{}
+	s.labels = map[int]string{}
 	s.profiles = map[int]Profile{}
 	s.tickets = map[int]string{}
 	s.keep = map[int]bool{}
@@ -627,6 +638,32 @@ func (s *Server) RestartRestoring() {
 	s.tickets = map[int]string{}
 }
 
+// SetNoLabels makes the service one older than port labels: it ignores them.
+func (s *Server) SetNoLabels(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noLabels = on
+}
+
+// LabelOf is the label the port carries, empty for none.
+func (s *Server) LabelOf(port int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.labels[port]
+}
+
+// SetLabel puts a label on a port, or takes it off with an empty one, as
+// PUT /port/{n}/config with a label does.
+func (s *Server) SetLabel(port int, label string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if label == "" {
+		delete(s.labels, port)
+		return
+	}
+	s.labels[port] = label
+}
+
 // TakePort opens the number for somebody else, as another program on the
 // service does once a restart has freed the numbers this caller held.
 func (s *Server) TakePort(port int) {
@@ -634,6 +671,7 @@ func (s *Server) TakePort(port int) {
 	defer s.mu.Unlock()
 	s.ports[port] = "somebody-else:1080"
 	s.created[port] = s.stampLocked()
+	delete(s.labels, port)
 	s.profiles[port] = Profile{Browser: "chrome", OS: "windows"}
 }
 
@@ -718,7 +756,8 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 		OS       string  `json:"os"`
 		// KeepSessions is remembered where it is said, so a test can see what a
 		// port was opened as.
-		KeepSessions *bool `json:"keep_sessions"`
+		KeepSessions *bool  `json:"keep_sessions"`
+		Label        string `json:"label"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil || req.Port == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -750,6 +789,9 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 	}
 	s.ports[req.Port] = up
 	s.created[req.Port] = s.stampLocked()
+	if !s.noLabels && req.Label != "" {
+		s.labels[req.Port] = req.Label
+	}
 	if req.KeepSessions != nil {
 		s.keep[req.Port] = *req.KeepSessions
 	}
@@ -791,6 +833,7 @@ func (s *Server) serveClose(w http.ResponseWriter, body []byte) {
 	}
 	delete(s.ports, req.Port)
 	delete(s.created, req.Port)
+	delete(s.labels, req.Port)
 	delete(s.profiles, req.Port)
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "status": "closed"})

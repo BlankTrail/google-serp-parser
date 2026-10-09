@@ -4,6 +4,8 @@ package blanktrail
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strconv"
@@ -53,15 +55,25 @@ type ledger struct {
 	reading sync.Mutex
 }
 
+// newLabel is a mark no other run of any program will put on a port.
+func newLabel() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "gserp-" + hex.EncodeToString(b[:])
+}
+
 // claim is one port this client opened. lost is a number found carrying
 // somebody else's port: it stays refused until this client opens a port on it
 // again, since every later call on it would be a call on theirs.
 type claim struct {
 	created string
 	// set is what the port was set to the last time the list showed it ours.
-	set  string
-	open int
-	lost bool
+	set string
+	// labelled says the list has shown the port carrying this client's label:
+	// the service keeps labels, and a port of ours will always carry it.
+	labelled bool
+	open     int
+	lost     bool
 }
 
 // seen is one port as the service's list shows it: when it was opened, and
@@ -69,6 +81,7 @@ type claim struct {
 type seen struct {
 	created string
 	set     string
+	label   string
 }
 
 func (c *Client) now() time.Time {
@@ -136,8 +149,24 @@ func (c *Client) Owns(ctx context.Context, port int) error {
 		// The first list read since the open says what was opened; every one
 		// after it, what the port is set to now.
 		mine.created, mine.set = now.created, now.set
+		if c.label != "" && now.label == c.label {
+			mine.labelled = true
+		}
 		c.own.mine[port] = mine
 		return nil
+	}
+	// Opened again since. A label settles it where the service keeps them:
+	// only a port this run opened carries this run's label, and the service
+	// gives it back with the port when it restores it.
+	if c.label != "" && (now.label != "" || mine.labelled) {
+		if now.label == c.label {
+			mine.created, mine.set = now.created, now.set
+			c.own.mine[port] = mine
+			return nil
+		}
+		mine.lost = true
+		c.own.mine[port] = mine
+		return ErrPortNotOurs
 	}
 	// Opened again since. Either the service restored it at a restart — it
 	// opens every port it held again, as it was, under a new creation time —
@@ -204,6 +233,7 @@ func (c *Client) readList(ctx context.Context, open int) error {
 			OS           string `json:"os_filter"`
 			JSSolver     bool   `json:"js_solver"`
 			KeepSessions bool   `json:"keep_sessions"`
+			Label        string `json:"label"`
 		} `json:"ports"`
 	}
 	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/ports", nil, &out); err != nil {
@@ -213,7 +243,7 @@ func (c *Client) readList(ctx context.Context, open int) error {
 	for _, p := range out.Ports {
 		listed[p.Port] = seen{created: p.Created, set: strings.Join([]string{p.Protocol, p.Upstream, p.Gateway,
 			p.ChainProxy, p.ChainGateway, p.Mode, p.Browser, p.OS,
-			strconv.FormatBool(p.JSSolver), strconv.FormatBool(p.KeepSessions)}, "|")}
+			strconv.FormatBool(p.JSSolver), strconv.FormatBool(p.KeepSessions)}, "|"), label: p.Label}
 	}
 	c.own.mu.Lock()
 	c.own.listed, c.own.listedAt, c.own.listedOpens = listed, at, opens

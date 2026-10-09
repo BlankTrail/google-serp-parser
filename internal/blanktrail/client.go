@@ -29,6 +29,10 @@ type Client struct {
 	// tests, and nil is the wall clock.
 	own   ledger
 	clock func() time.Time
+	// label is put on every port this client opens: a mark of this run that
+	// the service keeps with the port, through a restart that restores it,
+	// and that no other program's port carries. See Owns.
+	label string
 }
 
 // Option customises a Client.
@@ -52,7 +56,7 @@ func NewClient(baseURL, apiKey string, opts ...Option) (*Client, error) {
 	if u.Host == "" {
 		return nil, fmt.Errorf("blanktrail: base URL %q has no host", baseURL)
 	}
-	c := &Client{base: u, key: apiKey, hc: &http.Client{Timeout: 15 * time.Second}}
+	c := &Client{base: u, key: apiKey, hc: &http.Client{Timeout: 15 * time.Second}, label: newLabel()}
 	for _, o := range opts {
 		o(c)
 	}
@@ -381,6 +385,9 @@ type openPortRequest struct {
 	// its address directly.
 	ChainProxy   string `json:"chain_proxy,omitempty"`
 	ChainGateway string `json:"chain_gateway,omitempty"`
+	// Label is the opener's mark, kept with the port; see Client.label. A
+	// service older than labels ignores it.
+	Label string `json:"label,omitempty"`
 }
 
 // IsZero says this spec names nothing at all, which is how a caller asks for
@@ -471,7 +478,9 @@ func (c *Client) OpenPort(ctx context.Context, port int, spec PortSpec, eg Egres
 		Protocol string  `json:"protocol"`
 		Profile  Profile `json:"current_profile"`
 	}
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/ports/open", spec.request(port, eg), &out); err != nil {
+	req := spec.request(port, eg)
+	req.Label = c.label
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/ports/open", req, &out); err != nil {
 		return PortInfo{}, err
 	}
 	if out.Port == 0 {

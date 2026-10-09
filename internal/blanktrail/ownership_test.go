@@ -185,6 +185,7 @@ func TestPool_KeepsAPortTheServiceRestoredWithItsSettingsAfterARestart(t *testin
 	// parser's ports was left standing open and another opened beside it, on
 	// every restart.
 	fake := fakebt.New(t)
+	fake.SetNoLabels(true) // a service older than labels: the settings and the restore decide
 	fake.SetRestores(true)
 	p, clock := ownedPool(t, fake, 1)
 	ctx := context.Background()
@@ -215,6 +216,7 @@ func TestPool_TakesNoRestoredNumberWithOtherSettingsForItsOwn(t *testing.T) {
 	// Restoring is what lets a new creation time stand for our own port, and
 	// only where what the port was set to is still ours.
 	fake := fakebt.New(t)
+	fake.SetNoLabels(true) // a service older than labels: the settings and the restore decide
 	fake.SetRestores(true)
 	p, clock := ownedPool(t, fake, 1)
 	ctx := context.Background()
@@ -241,6 +243,7 @@ func TestPool_TakesASameLookingNumberForSomebodyElsesWhereTheServiceRestoresNoth
 	// are set exactly as a session port of ours. Only a service that restores
 	// its ports gives a number back to whoever held it.
 	fake := fakebt.New(t)
+	fake.SetNoLabels(true) // a service older than labels: the settings and the restore decide
 	p, clock := ownedPool(t, fake, 1)
 	ctx := context.Background()
 	num := fake.OpenPorts()[0]
@@ -261,6 +264,7 @@ func TestPool_KeepsARestoredPortItHadMovedToAnotherAddress(t *testing.T) {
 	// What a port is set to is what it was last seen set to, not what it was
 	// opened with: a port is moved to other addresses all through a run.
 	fake := fakebt.New(t)
+	fake.SetNoLabels(true) // a service older than labels: the settings and the restore decide
 	fake.SetRestores(true)
 	p, clock := ownedPool(t, fake, 1)
 	ctx := context.Background()
@@ -277,5 +281,86 @@ func TestPool_KeepsARestoredPortItHadMovedToAnotherAddress(t *testing.T) {
 	clock.Advance(ownFresh + time.Second)
 	if err := p.cl.Owns(ctx, num); err != nil {
 		t.Errorf("the restored port, moved before the restart, was not taken for ours: %v", err)
+	}
+}
+
+func TestClient_PutsItsRunsLabelOnEveryPortItOpens(t *testing.T) {
+	fake := fakebt.New(t)
+	ownedPool(t, fake, 2)
+	ports := fake.OpenPorts()
+	if len(ports) != 2 {
+		t.Fatalf("%d ports open, want 2", len(ports))
+	}
+	a, b := fake.LabelOf(ports[0]), fake.LabelOf(ports[1])
+	if a == "" || a != b {
+		t.Errorf("the ports carry labels %q and %q, want one label of this run on both", a, b)
+	}
+	if other := lookupLabelOfAnotherRun(t, fake); other == a {
+		t.Errorf("two runs put the same label %q on their ports", a)
+	}
+}
+
+// lookupLabelOfAnotherRun opens a port through a second client, as a second run
+// of the program would, and says what it was labelled.
+func lookupLabelOfAnotherRun(t *testing.T, fake *fakebt.Server) string {
+	t.Helper()
+	before := fake.OpenPorts()
+	ownedPool(t, fake, 1)
+	for _, p := range fake.OpenPorts() {
+		if !slices.Contains(before, p) {
+			return fake.LabelOf(p)
+		}
+	}
+	t.Fatal("the second run opened no port")
+	return ""
+}
+
+func TestPool_KeepsARestoredPortThatCarriesItsLabelWhateverElseChanged(t *testing.T) {
+	// The label is the run's own mark and the service gives it back with the
+	// port: nothing else has to agree — not the restore setting, not what the
+	// port was last seen set to (moved just before the restart).
+	fake := fakebt.New(t)
+	p, clock := ownedPool(t, fake, 1)
+	ctx := context.Background()
+	num := fake.OpenPorts()[0]
+	if err := p.cl.SetUpstream(ctx, num, "203.0.113.9:1080"); err != nil {
+		t.Fatalf("SetUpstream: %v", err)
+	}
+	fake.RestartRestoring() // before the move was seen, on a service that says it restores nothing
+	clock.Advance(ownFresh + time.Second)
+	if err := p.cl.Owns(ctx, num); err != nil {
+		t.Errorf("the restored port carrying this run's label: %v", err)
+	}
+}
+
+func TestPool_TakesANumberWithAnotherLabelForSomebodyElsesHoweverItIsSet(t *testing.T) {
+	fake := fakebt.New(t)
+	fake.SetRestores(true)
+	p, clock := ownedPool(t, fake, 1)
+	ctx := context.Background()
+	num := fake.OpenPorts()[0]
+
+	fake.RestartRestoring()
+	fake.SetLabel(num, "xrumer-pool")
+	clock.Advance(ownFresh + time.Second)
+	if err := p.cl.Owns(ctx, num); !errors.Is(err, ErrPortNotOurs) {
+		t.Errorf("a number set as ours with somebody else's label: %v, want ErrPortNotOurs", err)
+	}
+}
+
+func TestPool_TakesAnUnlabelledNumberWhereItsLabelWasForSomebodyElses(t *testing.T) {
+	// The service keeps labels: a port that carried ours and comes back with
+	// none is not the port that carried it.
+	fake := fakebt.New(t)
+	fake.SetRestores(true)
+	p, clock := ownedPool(t, fake, 1)
+	ctx := context.Background()
+	num := fake.OpenPorts()[0]
+
+	fake.RestartRestoring()
+	fake.SetLabel(num, "")
+	clock.Advance(ownFresh + time.Second)
+	if err := p.cl.Owns(ctx, num); !errors.Is(err, ErrPortNotOurs) {
+		t.Errorf("an unlabelled number where ours was: %v, want ErrPortNotOurs", err)
 	}
 }
