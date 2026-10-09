@@ -24,6 +24,11 @@ type Client struct {
 	base *url.URL
 	key  string
 	hc   *http.Client
+	// own is which ports this client opened, so a call on a number somebody
+	// else has opened since is never made; see Owns. clock is a seam for
+	// tests, and nil is the wall clock.
+	own   ledger
+	clock func() time.Time
 }
 
 // Option customises a Client.
@@ -472,22 +477,38 @@ func (c *Client) OpenPort(ctx context.Context, port int, spec PortSpec, eg Egres
 	if out.Port == 0 {
 		out.Port = port
 	}
+	c.claim(out.Port)
 	return PortInfo{Port: out.Port, Protocol: out.Protocol, Profile: out.Profile}, nil
 }
 
 // ClosePort closes a previously opened port.
+//
+// A number that carries somebody else's port by now is not closed: see Owns.
 func (c *Client) ClosePort(ctx context.Context, port int) error {
-	return c.doJSON(ctx, http.MethodPost, "/api/v1/ports/close", map[string]int{"port": port}, nil)
+	if err := c.Owns(ctx, port); err != nil && !notOpen(err) {
+		return err
+	}
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/ports/close", map[string]int{"port": port}, nil)
+	if err == nil || notOpen(err) {
+		c.unclaim(port)
+	}
+	return err
 }
 
 // SetUpstream swaps the egress proxy of a live port without closing it.
 func (c *Client) SetUpstream(ctx context.Context, port int, upstream string) error {
+	if err := c.Owns(ctx, port); err != nil {
+		return err
+	}
 	path := "/api/v1/port/" + strconv.Itoa(port) + "/upstream"
 	return c.doJSON(ctx, http.MethodPut, path, map[string]string{"upstream": upstream}, nil)
 }
 
 // RotateProfile picks a fresh fingerprint for a live port.
 func (c *Client) RotateProfile(ctx context.Context, port int) (Profile, error) {
+	if err := c.Owns(ctx, port); err != nil {
+		return Profile{}, err
+	}
 	var p Profile
 	path := "/api/v1/port/" + strconv.Itoa(port) + "/rotate"
 	if err := c.doJSON(ctx, http.MethodPost, path, nil, &p); err != nil {
@@ -672,6 +693,9 @@ func newAPIError(status int, path string, raw []byte) *APIError {
 // port is opened on an address, and an address that has answered is the scarce
 // thing.
 func (c *Client) WearSession(ctx context.Context, port int, profile string) (Profile, error) {
+	if err := c.Owns(ctx, port); err != nil {
+		return Profile{}, err
+	}
 	body := struct {
 		Mode            string `json:"mode,omitempty"`
 		SpecificProfile string `json:"specific_profile,omitempty"`
@@ -703,6 +727,9 @@ func (c *Client) WearSession(ctx context.Context, port int, profile string) (Pro
 // address known to work and a session known to be new asks once to prove the
 // address, then resets.
 func (c *Client) ResetSolverSessions(ctx context.Context, port int) error {
+	if err := c.Owns(ctx, port); err != nil {
+		return err
+	}
 	path := fmt.Sprintf("/api/v1/port/%d/reset_solver_sessions", port)
 	return c.doJSON(ctx, http.MethodPost, path, nil, nil)
 }
@@ -715,6 +742,9 @@ func (c *Client) ResetSolverSessions(ctx context.Context, port int) error {
 // What it is for is a session: a session is a name and a set of cookies, and
 // the name has to come from the service that holds it.
 func (c *Client) PortProfile(ctx context.Context, port int) (Profile, error) {
+	if err := c.Owns(ctx, port); err != nil {
+		return Profile{}, err
+	}
 	var out Profile
 	path := fmt.Sprintf("/api/v1/port/%d/profile", port)
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
@@ -738,6 +768,9 @@ type Exported struct {
 // down without them is put back on its next port as a visitor who has never
 // been there, under cookies that say otherwise.
 func (c *Client) ExportSession(ctx context.Context, port int) (Exported, error) {
+	if err := c.Owns(ctx, port); err != nil {
+		return Exported{}, err
+	}
 	var doc struct {
 		Identity struct {
 			Upstream string `json:"upstream"`
@@ -773,6 +806,9 @@ var ErrResumptionOff = errors.New("blanktrail: TLS session resumption is off on 
 // caller decides. It has to be the last of the three calls that put a session on
 // a port: a new fingerprint or a new address wipes the tickets.
 func (c *Client) ImportSession(ctx context.Context, port int, upstream string, tickets json.RawMessage) (Imported, error) {
+	if err := c.Owns(ctx, port); err != nil {
+		return Imported{}, err
+	}
 	var body struct {
 		Version  int `json:"version"`
 		Identity struct {
@@ -804,6 +840,9 @@ func (c *Client) ImportSession(ctx context.Context, port int, upstream string, t
 // the other one's fingerprint, and the spread over releases the templates exist
 // for would fold into whatever the first sessions happened to wear.
 func (c *Client) FreshProfile(ctx context.Context, port int, spec PortSpec) (Profile, error) {
+	if err := c.Owns(ctx, port); err != nil {
+		return Profile{}, err
+	}
 	body := struct {
 		Mode         string `json:"mode"`
 		Browser      string `json:"browser,omitempty"`

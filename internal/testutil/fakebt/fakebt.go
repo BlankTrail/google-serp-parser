@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // License is the entitlement snapshot GET /api/v1/license/status reports.
@@ -94,6 +95,12 @@ type Server struct {
 	gatewaysOff string
 	ca          []byte
 	ports       map[int]string // port -> upstream
+	// created is when each port was opened, as the service's listing reports
+	// it: a number opened again — by this caller or by somebody else after a
+	// restart — carries a different one. opened makes two opens in the same
+	// instant differ, as two opens a second apart do on the real service.
+	created map[int]string
+	opened  int
 	// deadGateways are the ones whose tunnel will not start.
 	deadGateways map[string]bool
 	profiles     map[int]Profile
@@ -143,6 +150,7 @@ func New(t *testing.T) *Server {
 			JsSolverLiveProcs: 0,
 		},
 		ports:    map[int]string{},
+		created:  map[int]string{},
 		profiles: map[int]Profile{},
 		rotates:  map[int]int{},
 		resets:   map[int]int{},
@@ -503,10 +511,10 @@ func freePort() int {
 func (s *Server) serveList(w http.ResponseWriter) {
 	ports := s.OpenPorts()
 	list := make([]map[string]any, 0, len(ports))
-	for _, p := range ports {
-		list = append(list, map[string]any{"port": p, "protocol": "http"})
-	}
 	s.mu.Lock()
+	for _, p := range ports {
+		list = append(list, map[string]any{"port": p, "protocol": "http", "created_at": s.created[p]})
+	}
 	elsewhere, ceiling := s.elsewhere, s.maxPorts
 	s.mu.Unlock()
 	if ceiling == 0 {
@@ -581,9 +589,26 @@ func (s *Server) Restart() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ports = map[int]string{}
+	s.created = map[int]string{}
 	s.profiles = map[int]Profile{}
 	s.tickets = map[int]string{}
 	s.keep = map[int]bool{}
+}
+
+// TakePort opens the number for somebody else, as another program on the
+// service does once a restart has freed the numbers this caller held.
+func (s *Server) TakePort(port int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ports[port] = "somebody-else:1080"
+	s.created[port] = s.stampLocked()
+	s.profiles[port] = Profile{Browser: "chrome", OS: "windows"}
+}
+
+// stampLocked is the creation time of a port opened now. The lock is held.
+func (s *Server) stampLocked() string {
+	s.opened++
+	return time.Now().UTC().Format(time.RFC3339Nano) + "#" + strconv.Itoa(s.opened)
 }
 
 // SetDown makes the service answer everything "not ready", as it does while it
@@ -692,6 +717,7 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 		up = "direct"
 	}
 	s.ports[req.Port] = up
+	s.created[req.Port] = s.stampLocked()
 	if req.KeepSessions != nil {
 		s.keep[req.Port] = *req.KeepSessions
 	}
@@ -732,6 +758,7 @@ func (s *Server) serveClose(w http.ResponseWriter, body []byte) {
 		return
 	}
 	delete(s.ports, req.Port)
+	delete(s.created, req.Port)
 	delete(s.profiles, req.Port)
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "status": "closed"})

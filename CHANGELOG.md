@@ -2,6 +2,18 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.24
+
+- **Nothing is done to a port somebody else opened.** A restart of the
+  service frees every port number, and other programs on it open their own
+  ports on those numbers within seconds. The parser went on using the numbers
+  it had held: on 2026-10-09 two idle parsers kept warming sessions through
+  ports another program had opened after a restart, and could move them to
+  other addresses. The parser now remembers when the service says each of its
+  ports was opened and checks that before it uses a port or asks anything of
+  it. A number that carries somebody else's port is left alone — not even
+  closed — and the parser opens a port of its own on another number.
+
 ### 0.4.23
 
 - **The lookup ports come back after a restart of the service.** A restart

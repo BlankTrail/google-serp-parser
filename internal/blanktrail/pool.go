@@ -541,6 +541,11 @@ type Stats struct {
 	// behind it, had stopped being there.
 	Reopenings int64
 
+	// Lost counts ports given up because their number carried somebody else's
+	// port by the time it was next used: the service was restarted and another
+	// program opened that number. Each was replaced by a port of a new number.
+	Lost int64
+
 	// Rejections counts answers a caller handed back as unusable even though the
 	// request carrying them succeeded. A run whose rejections climb while its
 	// requests do not is being refused, not failing.
@@ -777,6 +782,15 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 	if count <= 0 {
 		return nil
 	}
+	// What the service says each new port was opened at is read once for the
+	// whole batch, at once: read only on the port's first use, a restart in
+	// between would have the pool take somebody else's port for its own.
+	var opened []int
+	defer func() {
+		for _, num := range opened {
+			_ = p.cl.Owns(ctx, num)
+		}
+	}()
 	specNames, err := planSpecs(p.cfg.Specs, count)
 	if err != nil {
 		return err
@@ -873,6 +887,7 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 		p.ports = append(p.ports, pt)
 		p.byNum[num] = pt
 		p.mu.Unlock()
+		opened = append(opened, num)
 	}
 	return nil
 }
@@ -991,6 +1006,55 @@ func (p *Pool) dropPort(ctx context.Context, pt *poolPort) {
 	pt.base.CloseIdleConnections()
 }
 
+// stillOurs says whether a port just taken is still the one this pool opened,
+// and deals with it when it is not.
+//
+// The service frees every number when it restarts, and another program on it
+// opens its own ports there within seconds; see ErrPortNotOurs. A number that
+// is empty is opened again by the next acquire (see renewIfDue), and is handed
+// on to it. A number that carries somebody else's port is forgotten without a
+// word to the service — every call on it would be a call on their port — and
+// the pool opens another in its place.
+func (p *Pool) stillOurs(ctx context.Context, pt *poolPort) bool {
+	err := p.cl.Owns(ctx, pt.num)
+	switch {
+	case err == nil:
+		return true
+	case notOpen(err):
+		p.reopenPort(pt.num)
+		return true
+	case errors.Is(err, ErrPortNotOurs):
+		p.lose(ctx, pt)
+		return false
+	}
+	return true
+}
+
+// lose forgets a port whose number somebody else holds now, and opens another
+// in its place. Nothing is asked of the number itself: not even to close it.
+func (p *Pool) lose(ctx context.Context, pt *poolPort) {
+	p.mu.Lock()
+	if p.closed || p.byNum[pt.num] != pt {
+		p.mu.Unlock()
+		return
+	}
+	p.ports = slices.DeleteFunc(p.ports, func(o *poolPort) bool { return o == pt })
+	delete(p.byNum, pt.num)
+	p.stats.Lost++
+	hot := pt.hot
+	p.mu.Unlock()
+	pt.base.CloseIdleConnections()
+	p.told(pt.num, "lost to another owner")
+	// A failure to open the replacement is not this caller's failure: the pool
+	// is a port narrower, and the next grow asks again. A standing port is
+	// replaced by a standing one, or every restart of the service would leave
+	// fewer of them warm.
+	if p.isClosed() {
+		return
+	}
+	_ = p.openBatch(ctx, 1, hot)
+}
+
 // ceilingIsHere remembers that this pool could not grow past the size it was.
 func (p *Pool) ceilingIsHere(size int) {
 	p.mu.Lock()
@@ -1039,6 +1103,34 @@ func (p *Pool) Shrink(ctx context.Context) (int, error) {
 // used is not idle. Nothing waits here — a pool with nothing idle answers no
 // straight away, and the caller comes back later.
 func (p *Pool) AcquireIdleHot(idle time.Duration) (*Lease, bool) {
+	l, ok := p.acquireIdleHot(idle)
+	if !ok {
+		return nil, false
+	}
+	// A standing port is the one warmed between runs, and so the one still
+	// held when the service restarts under an idle program: the demo parsers
+	// of 2026-10-09 went on warming sessions through numbers the Xrumer pool
+	// had opened by then. The number is checked before anything goes through it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := p.cl.Owns(ctx, l.pt.num)
+	switch {
+	case errors.Is(err, ErrPortNotOurs):
+		p.giveBack(l.pt)
+		p.lose(ctx, l.pt)
+		return nil, false
+	case notOpen(err):
+		// Opened again by the next acquire that takes it; see renewIfDue.
+		p.reopenPort(l.pt.num)
+		p.giveBack(l.pt)
+		return nil, false
+	}
+	return l, true
+}
+
+// acquireIdleHot is the standing port that has rested longest, if one has
+// rested idle.
+func (p *Pool) acquireIdleHot(idle time.Duration) (*Lease, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -1672,6 +1764,11 @@ func (p *Pool) acquire(ctx context.Context, specName string, wait bool) (*Lease,
 			continue
 		}
 		if pt != nil {
+			if !p.stillOurs(ctx, pt) {
+				// Somebody else has the number now; what was ours is gone, and
+				// another port takes its place.
+				continue
+			}
 			if err := p.reviveIfDue(ctx, pt); err != nil {
 				// The port could not be given another egress, so it stays
 				// quarantined. Give it back and take another.
@@ -2631,9 +2728,19 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 
 	// Past this point the port is torn down, so every failure leaves it closed.
 	if err := p.cl.ClosePort(ctx, pt.num); err != nil && !notOpen(err) {
+		if errors.Is(err, ErrPortNotOurs) {
+			p.lose(ctx, pt)
+			return err
+		}
 		return p.renewFailed(pt, fmt.Errorf("blanktrail: renew port %d: close: %w", pt.num, err))
 	}
 	if _, err := p.cl.OpenPort(ctx, pt.num, pt.spec, eg); err != nil {
+		if numberTaken(err) && !egressRefused(err, eg) {
+			// Somebody else opened the number between the restart that freed
+			// it and this reopening.
+			p.lose(ctx, pt)
+			return fmt.Errorf("blanktrail: renew port %d: %w", pt.num, ErrPortNotOurs)
+		}
 		if egressRefused(err, eg) {
 			p.refusedEgress(eg, err)
 		}
@@ -2652,6 +2759,8 @@ func (p *Pool) renewIfDue(ctx context.Context, pt *poolPort) error {
 	}
 
 	p.carriedAPort(eg)
+	// The port is ours again under a new creation time; see openBatch.
+	_ = p.cl.Owns(ctx, pt.num)
 
 	// Rotating after reopening guarantees a different fingerprint even if the
 	// proxy handed back the same one on open.
