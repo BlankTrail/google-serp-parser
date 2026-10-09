@@ -2,6 +2,12 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.20
+
+- **Built with Go 1.26.9 and golang.org/x/net 0.60.0.** Both fix flaws in the
+  HTTP code the program carries (GO-2026-6617, GO-2026-6613 and others found by
+  govulncheck); 0.4.19 was built before those fixes. Nothing else changes.
+
 ### 0.4.19
 
 - **A long position check no longer stands with every thread idle.** A position

@@ -13,12 +13,12 @@ go 1.26.0
 // patch here is what makes "go build" produce a patched binary on a machine
 // that has never heard of this project. A newer local toolchain is used as it
 // is; this only sets the bottom.
-toolchain go1.26.7
+toolchain go1.26.9
 
 require (
 	github.com/PuerkitoBio/goquery v1.12.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/net v0.60.0
+	golang.org/x/sys v0.48.0
 	modernc.org/sqlite v1.57.0
 )
 
