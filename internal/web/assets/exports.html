@@ -54,6 +54,13 @@
 </div>
 <div class="field"><label><input type="checkbox" name="unique" value="1"{{if .Unique}} checked{{end}}> {{.T "exports.unique"}}</label></div>
 <div class="field"><label><input type="checkbox" name="bom" value="1"{{if .BOM}} checked{{end}}> {{.T "exports.bom"}}</label></div>
+{{if .Sited}}<div class="field">
+<label for="export-site">{{.T "exports.site"}}</label>
+<input id="export-site" name="site" value="{{.Site}}" placeholder="example.com" autocomplete="off" spellcheck="false">
+<details class="help">
+<summary>{{.T "help.what"}}</summary>
+<p class="empty">{{.T "exports.site.why"}}</p>
+</details></div>{{end}}
 {{if .Suggest}}<div class="field"><label>{{.T "exports.filter"}}
 <select name="filter">
 <option value="none"{{if eq .Filter "none"}} selected{{end}}>{{.T "exports.filter.none"}}</option>

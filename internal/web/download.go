@@ -93,6 +93,8 @@ const (
 	offtopicField = "offtopic"
 	filterField   = "filter"
 	minField      = "min"
+	// siteField names the one site whose results a file keeps; see siteOf.
+	siteField = "site"
 	// defaultMin is the threshold a meaning filter starts at. It was measured
 	// on a labelled sample of suggestions, each marked as junk or as good:
 	// leaving out what is below 0.54 or has no word of its key removed 64.1% of
@@ -108,6 +110,38 @@ const (
 	lowestMin  = 0.30
 	highestMin = 0.80
 )
+
+// siteOf reads the site a download keeps, however it was typed in: a pasted
+// address keeps its host, and the case, a www in front and a dot at the end
+// are not a different site. Nothing typed is no site, and every row is kept.
+func siteOf(typed string) string {
+	site := strings.ToLower(strings.TrimSpace(typed))
+	if _, rest, ok := strings.Cut(site, "://"); ok {
+		site = rest
+	}
+	if at := strings.IndexAny(site, "/?#:"); at >= 0 {
+		site = site[:at]
+	}
+	site = strings.TrimSuffix(site, ".")
+	return strings.TrimPrefix(site, "www.")
+}
+
+// onSite says whether a result belongs to the site or to one of its
+// subdomains. A search limited to a site still answers with others — a video
+// block, a dictionary — and a list of the site's own titles fed to a position
+// check is a list of phrases checked for nothing wherever a stranger's title
+// stands in it. A result Google drew with no host of its own is placed by its
+// address.
+func onSite(r export.Row, site string) bool {
+	host := r.Host
+	if host == "" {
+		if u, err := url.Parse(r.URL); err == nil {
+			host = u.Hostname()
+		}
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host == site || strings.HasSuffix(host, "."+site)
+}
 
 // suggestFilter is how a suggestions job's export leaves things out.
 type suggestFilter struct {
@@ -283,7 +317,7 @@ func (s *Server) askedExport(w http.ResponseWriter, r *http.Request) (exportAsk,
 		}
 		filter = filterOf(q, scored)
 	}
-	return exportAsk{job: job, part: part, layout: layout, filter: filter}, true
+	return exportAsk{job: job, part: part, layout: layout, filter: filter, site: siteAsked(job, part, q)}, true
 }
 
 // exportAsk is one file asked for: of which job, which part of it, and how it
@@ -294,6 +328,18 @@ type exportAsk struct {
 	layout export.Layout
 	// filter is how a suggestions job's completions are left out; see filterOf.
 	filter suggestFilter
+	// site is the one site whose results are kept, or nothing; see siteOf.
+	site string
+}
+
+// siteAsked is the site a file of this part keeps. Only results found on pages
+// have a site: a suggestion has none, and a verdict is about an address already
+// chosen.
+func siteAsked(job store.JobSummary, part string, q url.Values) string {
+	if part != partResults || job.Kind == store.KindSuggest || job.Kind == store.KindIndex {
+		return ""
+	}
+	return siteOf(q.Get(siteField))
 }
 
 // partsOf is what a job can be exported as, the first being what a download
@@ -413,6 +459,9 @@ func (s *Server) writePart(ctx context.Context, w io.Writer, ask exportAsk, prev
 	return feed(w, catalog, ask.layout, preview, func(fn func(export.Row) error) error {
 		return s.walkRows(ctx, id, func(r export.Row) error {
 			if leaveOut && ask.filter.leaves(r) {
+				return nil
+			}
+			if ask.site != "" && !onSite(r, ask.site) {
 				return nil
 			}
 			return fn(r)

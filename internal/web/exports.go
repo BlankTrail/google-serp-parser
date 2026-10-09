@@ -38,6 +38,10 @@ type exportsPage struct {
 	Header  bool
 	Unique  bool
 	BOM     bool
+	// Sited says the part has results found on pages, which alone can be kept
+	// to one site, and Site is the site typed in.
+	Sited bool
+	Site  string
 	// Suggest says the job is a search suggestions job, which alone offers a
 	// filter. Filter is its mode (none, words or meaning) and Min the threshold
 	// of a meaning filter, as two decimals. Scored says some suggestions were
@@ -255,6 +259,11 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 	view.Unique = q.Get(uniqueField) == "1"
 	view.BOM = q.Get(bomField) == "1"
 	view.Suggest = job.Kind == store.KindSuggest
+	view.Sited = part == partResults && !view.Suggest && job.Kind != store.KindIndex
+	site := siteAsked(job, part, q)
+	if view.Sited {
+		view.Site = strings.TrimSpace(q.Get(siteField))
+	}
 	var filter suggestFilter
 	if view.Suggest {
 		var err error
@@ -289,6 +298,9 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 	state.Set(headerField, yes(view.Header))
 	state.Set(uniqueField, yes(view.Unique))
 	state.Set(bomField, yes(view.BOM))
+	if view.Site != "" {
+		state.Set(siteField, view.Site)
+	}
 	if view.Suggest {
 		state.Set(filterField, view.Filter)
 		state.Set(minField, view.Min)
@@ -327,7 +339,7 @@ func (s *Server) exports(w http.ResponseWriter, r *http.Request) {
 		layout := export.Layout{Format: view.Format, Fields: fields, Header: view.Header,
 			EOL: eol, Sep: sep, Unique: view.Unique}
 		var buf bytes.Buffer
-		ask := exportAsk{job: job, part: part, layout: layout, filter: filter}
+		ask := exportAsk{job: job, part: part, layout: layout, filter: filter, site: site}
 		if err := s.writePart(r.Context(), &buf, ask, true); err != nil {
 			s.fail(w, r, err)
 			return

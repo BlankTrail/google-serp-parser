@@ -978,8 +978,12 @@
 		var remember = function () {
 			// Storage refused — a private window, a browser that keeps nothing —
 			// is a builder that forgets, not one that stops working.
+			// The site is not remembered: it belongs to one job, and a choice
+			// given back to the next job's screen would quietly empty its file.
+			var kept = choice();
+			kept.delete("site");
 			try {
-				window.localStorage.setItem("gserp.export." + part(), choice().toString());
+				window.localStorage.setItem("gserp.export." + part(), kept.toString());
 			} catch (e) {}
 		};
 		var timer = 0;
@@ -1078,7 +1082,7 @@
 					shown.textContent = Number(event.target.value).toFixed(2);
 				}
 			}
-			if (event.target.name === "sep" || event.target.name === "min") {
+			if (event.target.name === "sep" || event.target.name === "min" || event.target.name === "site") {
 				remember();
 				redraw();
 			}

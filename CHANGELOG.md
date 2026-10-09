@@ -2,6 +2,16 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.22
+
+- **An export can keep one site.** The export tab has an "Only the site" box:
+  type a site and the file keeps its results and its subdomains' — the rest of
+  what the search answered with is left out. A search limited to a site still
+  answers with others: of 30 455 results for `site:kling.ai` with a letter,
+  only 15 909 were the site's own, and a list of its titles fed to a position
+  check is a list of phrases checked for nothing wherever a stranger's title
+  stands in it. A pasted address works as well as a name.
+
 ### 0.4.21
 
 - **Position and index checks get up to speed.** Their threads slept the
