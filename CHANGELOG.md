@@ -2,6 +2,16 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.25
+
+- **A port the service restored after a restart stays the parser's.** A
+  service set to restore its ports opens every one again when it starts, as
+  it was, with a new creation time. 0.4.24 took that for somebody else's port:
+  on every restart it left each of its ports standing open and opened another
+  beside it. A port that comes back set as the parser last saw it, on a
+  service that says it restores its ports, is now kept; anything else on its
+  number is still left alone.
+
 ### 0.4.24
 
 - **Nothing is done to a port somebody else opened.** A restart of the

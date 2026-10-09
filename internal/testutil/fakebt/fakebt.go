@@ -101,6 +101,9 @@ type Server struct {
 	// instant differ, as two opens a second apart do on the real service.
 	created map[int]string
 	opened  int
+	// restores is the service's "restore ports at start" setting: on, a
+	// restart opens every port again as it was, under a new creation time.
+	restores bool
 	// deadGateways are the ones whose tunnel will not start.
 	deadGateways map[string]bool
 	profiles     map[int]Profile
@@ -362,6 +365,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.serveSuggest(w)
 	case "/api/v1/ports":
 		s.serveList(w)
+	case "/api/v1/presets/autosave":
+		s.mu.Lock()
+		on := s.restores
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": on})
 	case "/api/v1/profiles":
 		s.serveProfiles(w, r)
 	case "/api/v1/solver/queue":
@@ -513,7 +521,12 @@ func (s *Server) serveList(w http.ResponseWriter) {
 	list := make([]map[string]any, 0, len(ports))
 	s.mu.Lock()
 	for _, p := range ports {
-		list = append(list, map[string]any{"port": p, "protocol": "http", "created_at": s.created[p]})
+		up := s.ports[p]
+		if up == "direct" {
+			up = ""
+		}
+		list = append(list, map[string]any{"port": p, "protocol": "http", "created_at": s.created[p],
+			"upstream": up, "keep_sessions": s.keep[p]})
 	}
 	elsewhere, ceiling := s.elsewhere, s.maxPorts
 	s.mu.Unlock()
@@ -593,6 +606,25 @@ func (s *Server) Restart() {
 	s.profiles = map[int]Profile{}
 	s.tickets = map[int]string{}
 	s.keep = map[int]bool{}
+}
+
+// SetRestores turns the service's "restore ports at start" setting on or off.
+func (s *Server) SetRestores(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restores = on
+}
+
+// RestartRestoring is a restart with that setting on: every port is opened
+// again on its number with what it was set to, and a new creation time — and
+// what it held for a session (its tickets) is gone.
+func (s *Server) RestartRestoring() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for port := range s.ports {
+		s.created[port] = s.stampLocked()
+	}
+	s.tickets = map[int]string{}
 }
 
 // TakePort opens the number for somebody else, as another program on the

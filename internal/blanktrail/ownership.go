@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -41,7 +42,7 @@ type ledger struct {
 	mine map[int]claim
 	// listed is the service's last list: each port open on it and when it was
 	// opened; listedAt is when it was read.
-	listed   map[int]string
+	listed   map[int]seen
 	listedAt time.Time
 	// opens counts the ports this client has opened, and listedOpens is how
 	// many it had when the list was read. A list read before a port was opened
@@ -57,8 +58,17 @@ type ledger struct {
 // again, since every later call on it would be a call on theirs.
 type claim struct {
 	created string
-	open    int
-	lost    bool
+	// set is what the port was set to the last time the list showed it ours.
+	set  string
+	open int
+	lost bool
+}
+
+// seen is one port as the service's list shows it: when it was opened, and
+// what it is set to, in one string two ports compare by.
+type seen struct {
+	created string
+	set     string
 }
 
 func (c *Client) now() time.Time {
@@ -117,21 +127,53 @@ func (c *Client) Owns(ctx context.Context, port int) error {
 	if mine.lost {
 		return ErrPortNotOurs
 	}
-	created, open := c.own.listed[port]
+	now, open := c.own.listed[port]
 	switch {
 	case !open:
 		return &APIError{Status: http.StatusNotFound, Path: "/api/v1/ports",
 			Message: "port " + strconv.Itoa(port) + " is not on the service's list"}
-	case mine.created == "":
-		// The first list read since the open: what it says is what was opened.
-		mine.created = created
+	case mine.created == "" || now.created == mine.created:
+		// The first list read since the open says what was opened; every one
+		// after it, what the port is set to now.
+		mine.created, mine.set = now.created, now.set
 		c.own.mine[port] = mine
-	case created != mine.created:
-		mine.lost = true
-		c.own.mine[port] = mine
-		return ErrPortNotOurs
+		return nil
 	}
-	return nil
+	// Opened again since. Either the service restored it at a restart — it
+	// opens every port it held again, as it was, under a new creation time —
+	// or somebody else opened the number. The settings alone cannot tell them
+	// apart: 99 of the Xrumer pool's ports on 8893 were set exactly as a
+	// session port of ours. What can is the service's word that it restores:
+	// it writes down every port at each open and close and gives each number
+	// back to whoever held it, so a number that comes back set as ours is ours.
+	c.own.mu.Unlock()
+	restored := now.set == mine.set && c.restores(ctx)
+	c.own.mu.Lock()
+	mine, ok = c.own.mine[port]
+	if !ok {
+		return nil
+	}
+	if restored {
+		mine.created = now.created
+		c.own.mine[port] = mine
+		return nil
+	}
+	mine.lost = true
+	c.own.mine[port] = mine
+	return ErrPortNotOurs
+}
+
+// restores asks the service whether it opens its ports again when it starts.
+// Not knowing is no: a port taken for somebody else's is a port lost, and one
+// taken for ours that is not is somebody else's port used.
+func (c *Client) restores(ctx context.Context) bool {
+	var out struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/presets/autosave", nil, &out); err != nil {
+		return false
+	}
+	return out.Enabled
 }
 
 // readList reads the service's list of ports unless somebody has read it, since
@@ -151,14 +193,27 @@ func (c *Client) readList(ctx context.Context, open int) error {
 		Ports []struct {
 			Port    int    `json:"port"`
 			Created string `json:"created_at"`
+			// What the port is set to, as far as this program sets it.
+			Protocol     string `json:"protocol"`
+			Upstream     string `json:"upstream"`
+			Gateway      string `json:"upstream_gateway"`
+			ChainProxy   string `json:"chain_proxy"`
+			ChainGateway string `json:"chain_gateway"`
+			Mode         string `json:"mode"`
+			Browser      string `json:"browser_filter"`
+			OS           string `json:"os_filter"`
+			JSSolver     bool   `json:"js_solver"`
+			KeepSessions bool   `json:"keep_sessions"`
 		} `json:"ports"`
 	}
 	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/ports", nil, &out); err != nil {
 		return err
 	}
-	listed := make(map[int]string, len(out.Ports))
+	listed := make(map[int]seen, len(out.Ports))
 	for _, p := range out.Ports {
-		listed[p.Port] = p.Created
+		listed[p.Port] = seen{created: p.Created, set: strings.Join([]string{p.Protocol, p.Upstream, p.Gateway,
+			p.ChainProxy, p.ChainGateway, p.Mode, p.Browser, p.OS,
+			strconv.FormatBool(p.JSSolver), strconv.FormatBool(p.KeepSessions)}, "|")}
 	}
 	c.own.mu.Lock()
 	c.own.listed, c.own.listedAt, c.own.listedOpens = listed, at, opens

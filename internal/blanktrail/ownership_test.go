@@ -178,3 +178,104 @@ func TestPool_ReplacesAPortWhoseNumberWasTakenWhileItWasBeingOpenedAgain(t *test
 		t.Errorf("%d quarantines for a number somebody else took", got)
 	}
 }
+
+func TestPool_KeepsAPortTheServiceRestoredWithItsSettingsAfterARestart(t *testing.T) {
+	// The service of 8893 opens every port again when it restarts, as it was
+	// and under a new creation time. Taken for somebody else's, each of the
+	// parser's ports was left standing open and another opened beside it, on
+	// every restart.
+	fake := fakebt.New(t)
+	fake.SetRestores(true)
+	p, clock := ownedPool(t, fake, 1)
+	ctx := context.Background()
+	num := fake.OpenPorts()[0]
+
+	fake.RestartRestoring()
+	clock.Advance(ownFresh + time.Second)
+	l, err := p.TryAcquire(ctx)
+	if err != nil {
+		t.Fatalf("no port after the restart: %v", err)
+	}
+	defer l.Release()
+	if l.Port() != num {
+		t.Errorf("handed out %d, want the restored %d", l.Port(), num)
+	}
+	if got := p.Stats().Lost; got != 0 {
+		t.Errorf("Lost = %d, want the restored port kept", got)
+	}
+	if err := p.cl.SetUpstream(ctx, num, "203.0.113.9:1080"); err != nil {
+		t.Errorf("moving the restored port: %v", err)
+	}
+	if got := len(fake.OpenPorts()); got != 1 {
+		t.Errorf("the service holds %d ports, want the one restored", got)
+	}
+}
+
+func TestPool_TakesNoRestoredNumberWithOtherSettingsForItsOwn(t *testing.T) {
+	// Restoring is what lets a new creation time stand for our own port, and
+	// only where what the port was set to is still ours.
+	fake := fakebt.New(t)
+	fake.SetRestores(true)
+	p, clock := ownedPool(t, fake, 1)
+	ctx := context.Background()
+	num := fake.OpenPorts()[0]
+
+	fake.RestartRestoring()
+	fake.TakePort(num)
+	clock.Advance(ownFresh + time.Second)
+	l, err := p.TryAcquire(ctx)
+	if err != nil {
+		t.Fatalf("no port after the restart: %v", err)
+	}
+	defer l.Release()
+	if l.Port() == num {
+		t.Errorf("handed out %d, which carries somebody else's settings", num)
+	}
+	if got := fake.UpstreamOf(num); got != theirs {
+		t.Errorf("their port now goes to %q, want %q left alone", got, theirs)
+	}
+}
+
+func TestPool_TakesASameLookingNumberForSomebodyElsesWhereTheServiceRestoresNothing(t *testing.T) {
+	// Set as ours is not enough by itself: the Xrumer pool's ports on 8893
+	// are set exactly as a session port of ours. Only a service that restores
+	// its ports gives a number back to whoever held it.
+	fake := fakebt.New(t)
+	p, clock := ownedPool(t, fake, 1)
+	ctx := context.Background()
+	num := fake.OpenPorts()[0]
+
+	fake.RestartRestoring() // opened again as it was, by somebody, on a service that says it restores nothing
+	clock.Advance(ownFresh + time.Second)
+	l, err := p.TryAcquire(ctx)
+	if err != nil {
+		t.Fatalf("no port after the restart: %v", err)
+	}
+	defer l.Release()
+	if l.Port() == num {
+		t.Errorf("handed out %d on a service that does not restore its ports", num)
+	}
+}
+
+func TestPool_KeepsARestoredPortItHadMovedToAnotherAddress(t *testing.T) {
+	// What a port is set to is what it was last seen set to, not what it was
+	// opened with: a port is moved to other addresses all through a run.
+	fake := fakebt.New(t)
+	fake.SetRestores(true)
+	p, clock := ownedPool(t, fake, 1)
+	ctx := context.Background()
+	num := fake.OpenPorts()[0]
+	if err := p.cl.SetUpstream(ctx, num, "203.0.113.9:1080"); err != nil {
+		t.Fatalf("SetUpstream: %v", err)
+	}
+	clock.Advance(ownFresh + time.Second)
+	if err := p.cl.Owns(ctx, num); err != nil {
+		t.Fatalf("the moved port is not ours: %v", err)
+	}
+
+	fake.RestartRestoring()
+	clock.Advance(ownFresh + time.Second)
+	if err := p.cl.Owns(ctx, num); err != nil {
+		t.Errorf("the restored port, moved before the restart, was not taken for ours: %v", err)
+	}
+}
