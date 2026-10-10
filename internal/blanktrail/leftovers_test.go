@@ -24,8 +24,9 @@ func TestClient_LabelsItsPortsWithTheInstallationAndTheProcess(t *testing.T) {
 	if a.Label() != b.Label() {
 		t.Errorf("two clients of one process label %q and %q: a job's ports would be taken for leftovers of the standing set's", a.Label(), b.Label())
 	}
-	if OwnerOf("host", "/a/gserp.db") == OwnerOf("host", "/b/gserp.db") || OwnerOf("host", "/a/gserp.db") != OwnerOf("host", "/a/gserp.db") {
-		t.Error("OwnerOf does not tell two histories apart, or names one history two ways")
+	one, again, other := OwnerOf("host", "/a/gserp.db"), OwnerOf("host", "/a/gserp.db"), OwnerOf("host", "/b/gserp.db")
+	if one == other || one != again {
+		t.Errorf("OwnerOf names /a %q and %q and /b %q: want one name for one history, another for another", one, again, other)
 	}
 }
 
