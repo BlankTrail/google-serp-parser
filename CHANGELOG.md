@@ -2,6 +2,17 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.30
+
+- **Exits that terminate TLS themselves are no longer worked through.** Such
+  an exit presents a certificate of its own instead of the site's; on the
+  lists this parser is pointed at that is most of them, and the ports took them
+  so that a list would not look dead. In practice they give a lot of trouble
+  and Google rarely takes a search from one. Ports are now opened refusing
+  them, every existing proxy profile is switched to refuse them, and a new
+  profile starts that way. The switch is still on the profile, for a list
+  somebody trusts.
+
 ### 0.4.29
 
 - **A parser closes what its earlier run left open.** A run stopped without

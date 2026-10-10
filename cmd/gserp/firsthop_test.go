@@ -299,10 +299,9 @@ func TestJobs_OpenTheStandingIdentitiesOnTheDefaultProfileAndSaySo(t *testing.T)
 
 func TestDial_OpensAListsPortsWithWhatItsProfileSaysAboutNamesAndTLS(t *testing.T) {
 	// Two answers that live on the profile and are worth nothing until they
-	// reach the ports. Measured on a live list: seven addresses in ten
-	// terminate TLS themselves, and a port that refuses that answers 526 on
-	// every one of them while the service's own check walks straight through —
-	// which is how a working list read as a dead one for a night.
+	// reach the ports. One is whether an exit that terminates TLS itself is
+	// taken: off unless a profile turns it on (schema_v33.sql), and this profile
+	// turns it on, so the ports have to say so.
 	//
 	// The other is where the name is resolved. Delegating hands it to the proxy,
 	// so it is resolved by whatever the exit itself uses.
@@ -314,6 +313,7 @@ func TestDial_OpensAListsPortsWithWhatItsProfileSaysAboutNamesAndTLS(t *testing.
 	prof := listProfile(t, "")
 	prof.Resolver, prof.CustomResolvers = "custom", []string{"1.1.1.1:53"}
 	prof.StrictBypass = true
+	prof.AllowMITM = true
 	want, err := opts.dial(t.Context(), saved, web.Wanted{
 		Profile: prof, Threads: 2, Ports: 1, Device: blanktrail.DeviceDesktop, Addresses: true})
 	if err != nil {

@@ -237,16 +237,12 @@ type PortSpec struct {
 	// AllowMITMUpstream lets the port work through an upstream proxy that
 	// terminates TLS itself and presents its own certificate.
 	//
-	// Off, such an upstream is refused with a 526. That is the right default for
-	// a proxy nobody has vouched for — a machine that can read what it forwards
-	// is a machine that can change it. It is the wrong default for the lists
-	// this parser is pointed at: roughly seven addresses in ten on a large cheap
-	// list terminate TLS, and refusing them leaves the run with a third of what
-	// it paid for.
-	//
-	// It is a deliberate trade, and it is the same one the operator already made
-	// by choosing the list. What travels through is a search on a public engine,
-	// carried by an identity that exists to be spent.
+	// Off, such an upstream is refused with a 526, and off is the default. It
+	// was on for a while, because roughly seven addresses in ten on a large
+	// cheap list terminate TLS and refusing them left a run a third of what it
+	// paid for; the operator's call of 2026-10-10 is that such exits are trouble
+	// for little — Google rarely takes a search from one — and are not to be
+	// worked through. A profile can still turn it on for a list it trusts.
 	AllowMITMUpstream bool
 
 	// FirstHop is the leg the port's traffic takes before its address; see
@@ -322,12 +318,8 @@ func DefaultPortSpec() PortSpec {
 		// close idle tunnels after thirty seconds while its own transport kept
 		// them for ninety, and a request handed one in between died on a
 		// connection the proxy had already let go.
-		// Seven addresses in ten on the lists this is pointed at terminate TLS
-		// themselves, and a port that refuses them answers a 526 instead of a
-		// search. Refusing an upstream nobody vouched for is the right default
-		// for the proxy and the wrong one here: the list is the operator's own
-		// choice, and what travels through it is a public search.
-		AllowMITMUpstream:     true,
+		// An exit that terminates TLS itself is refused: see AllowMITMUpstream.
+		AllowMITMUpstream:     false,
 		ConnectTimeoutSeconds: 5,
 		RequestTimeoutSeconds: 30,
 		LeakGuard:             "warn",
@@ -433,10 +425,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 		v := true
 		req.UpstreamTLSInsecure = &v
 	}
-	if s.AllowMITMUpstream {
-		v := true
-		req.AllowMITMUpstream = &v
-	}
+	// Said either way rather than left to the service's own default: which
+	// exits a port works through is this program's decision.
+	mitm := s.AllowMITMUpstream
+	req.AllowMITMUpstream = &mitm
 	if s.VDNSStrictBypass {
 		v := true
 		req.VDNSStrictBypass = &v

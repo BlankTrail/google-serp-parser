@@ -419,6 +419,49 @@ func TestProfiles_WorkThroughExitsThatTerminateTLSAfterAnUpgrade(t *testing.T) {
 	}
 }
 
+func TestOpen_TurnsOffExitsThatTerminateTLSAfterTheUpgrade(t *testing.T) {
+	// The step that added the switch turned it on for every profile, and every
+	// profile still had it on; the operator found such exits trouble for
+	// little and rarely taken by Google, so every profile goes to off, and one
+	// that wants them turns it back on.
+	path := filepath.Join(t.TempDir(), "gserp.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	p := NewProfile()
+	p.Name, p.Kind, p.Location, p.AllowMITM = "on since the step that added it", "url", "https://example.test/list", true
+	if _, err := s.CreateProfile(t.Context(), p); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if _, err := s.db.ExecContext(t.Context(), `PRAGMA user_version = 32`); err != nil {
+		t.Fatalf("winding back to version 32: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a version-32 database: %v", err)
+	}
+	defer func() { _ = again.Close() }()
+	all, err := again.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	for _, one := range all {
+		if one.AllowMITM {
+			t.Errorf("profile %q still takes exits that terminate TLS after the upgrade", one.Name)
+		}
+	}
+}
+
+func TestNewProfile_RefusesExitsThatTerminateTLS(t *testing.T) {
+	if NewProfile().AllowMITM {
+		t.Error("a new profile takes exits that terminate TLS")
+	}
+}
+
 func TestOpen_LetsNamesThroughToTheProxyAgainAfterTheUpgrade(t *testing.T) {
 	// The step that added the switch turned it on for every profile; the
 	// operator chose the other way round — the service's own resolving with its

@@ -86,16 +86,11 @@ type Profile struct {
 	// AllowMITM lets this profile's ports work through an exit that terminates
 	// TLS itself and presents a certificate of its own.
 	//
-	// On by default, and off is what made a working list look dead: measured on
-	// the live wingate list, ten of fifteen addresses the service's own check
-	// reached answered a port with 526 — the exit substitutes the origin's TLS
-	// — and the same address answered in under three seconds with this on. The
-	// check disagreed with the port for a night because it does not look at the
-	// certificate at all.
-	//
-	// It is a trade, and the same one whoever chose the list already made: an
-	// exit that terminates TLS can read what it carries. What goes through is a
-	// search on a public engine under an identity that exists to be spent.
+	// Off by default since schema_v33.sql. It was on: on the live wingate list
+	// ten of fifteen addresses answered a port with 526 with it off. The
+	// operator's call of 2026-10-10 is that such exits are trouble for little —
+	// Google rarely takes a search from one — so a profile takes them only when
+	// it is turned on for a list somebody trusts.
 	AllowMITM bool
 	// Resolver is how this profile's ports resolve names once they resolve them
 	// at all, and CustomResolvers the ones named where that is the answer. See
@@ -137,7 +132,7 @@ func NewProfile() Profile {
 		VDNSMode:  "",
 		Solver:    true,
 		HTTP3:     false,
-		AllowMITM: true,
+		AllowMITM: false,
 		// Empty is the service's own ladder for resolving a name: it resolves
 		// the name itself and hands the proxy an address. Handing the proxy the
 		// name was the default until a provider was found refusing the one

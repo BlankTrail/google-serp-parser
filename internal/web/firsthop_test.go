@@ -295,19 +295,18 @@ func TestProxies_DrawsTheGatewaysOnAFormThatIsNotOnThem(t *testing.T) {
 	}
 }
 
-func TestProfile_OffersToWorkThroughExitsThatTerminateTLSFromTheStart(t *testing.T) {
-	// The setting that made a working list look dead. Ten of fifteen addresses
-	// the service itself could reach answered a port with a refusal, because
-	// the exit presents its own certificate and the port would not have it —
-	// and the service's own check never saw it, because that check does not
-	// look at the certificate at all. So the box a reader is shown for a fresh
-	// profile is already ticked: one who has to find a switch to make their
-	// list work is one who concludes the list is bad.
+func TestProfile_OffersExitsThatTerminateTLSRefusedFromTheStart(t *testing.T) {
+	// Such exits give a lot of trouble and Google rarely takes a search from
+	// one — the operator's call of 2026-10-10 — so the box a reader is shown
+	// for a fresh profile is unticked, and one who trusts a list ticks it.
 	s, _ := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
 
 	body := getBody(t, s, proxiesAt+"?"+profileField+"=new")
-	if !strings.Contains(body, `name="allow_mitm" type="checkbox" value="1" checked`) {
-		t.Error("a fresh profile is offered with exits that terminate TLS refused")
+	if strings.Contains(body, `name="allow_mitm" type="checkbox" value="1" checked`) {
+		t.Error("a fresh profile is offered taking exits that terminate TLS")
+	}
+	if !strings.Contains(body, `name="allow_mitm" type="checkbox" value="1"`) {
+		t.Error("a fresh profile offers no switch for exits that terminate TLS")
 	}
 	// The other switch the same blank form was getting wrong. A profile made on
 	// this screen came out with the challenge solver off, which is the one
