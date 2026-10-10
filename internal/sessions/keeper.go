@@ -108,6 +108,9 @@ type kept struct {
 	// own rest falls: nought is the least it may rest and one the most. Drawn
 	// again at every use, so no session is asked again on a metronome.
 	spread float64
+	// warmAfter is when warming may take this session again: a warming of it
+	// that never reached Google puts it off; see Held.PutBackFor.
+	warmAfter time.Time
 }
 
 // restSpread is how far above the floor a session's rest reaches when the taker
@@ -346,7 +349,7 @@ func (k *Keeper) coldest(p Port, device string, idle time.Duration) *kept {
 	for _, s := range k.known {
 		r := s.record
 		if s.held || r.Device != device || now.Sub(r.UsedAt) < idle || now.Sub(r.UsedAt) > KeptFor ||
-			!fitsPort(s, portExit, busy, limit, p) {
+			now.Before(s.warmAfter) || !fitsPort(s, portExit, busy, limit, p) {
 			continue
 		}
 		if best == nil || r.UsedAt.Before(best.record.UsedAt) {
@@ -724,6 +727,24 @@ func (h *Held) PutBack() {
 	if s, ok := k.known[h.ID]; ok {
 		s.held = false
 	}
+}
+
+// PutBackFor gives the session back as it was, and keeps warming from taking it
+// again for d.
+//
+// It is for a warming that never reached Google. Nothing is held against the
+// session for it, as nothing is in a job (see PutBack) — but put back as it was
+// it is still the coldest, and the next round takes it again: on 2026-10-10 the
+// demo parsers warmed into EOF about once a minute for hours. Jobs do not look
+// at this; it is warming's own turn that is put off.
+func (h *Held) PutBackFor(d time.Duration) {
+	k := h.keeper
+	k.mu.Lock()
+	if s, ok := k.known[h.ID]; ok && !h.done {
+		s.warmAfter = k.now().Add(d)
+	}
+	k.mu.Unlock()
+	h.PutBack()
 }
 
 func (k *Keeper) write(ctx context.Context, h *Held, p Port, giveBack bool) error {

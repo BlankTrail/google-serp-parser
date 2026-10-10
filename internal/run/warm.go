@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
@@ -130,6 +131,10 @@ type Warmer struct {
 	now       func() time.Time
 	// lastIdle is when a session was last warmed for want of one running out.
 	lastIdle time.Time
+	// done and failed count the session warmings since the last report, and
+	// reportedAt is when that was; see report.
+	done, failed atomic.Int64
+	reportedAt   time.Time
 }
 
 // idleWarmingEvery is how often, when no session is running out and nothing is
@@ -157,6 +162,7 @@ func (w *Warmer) Run(ctx context.Context) {
 	// is most worth doing.
 	for {
 		w.oneRound(ctx, idle)
+		w.report()
 		select {
 		case <-ctx.Done():
 			return
@@ -341,15 +347,49 @@ func (w *Warmer) warmSession(ctx context.Context, lease *blanktrail.Lease, held 
 	c := lease.Client()
 	sess := &google.Session{Client: &http.Client{Transport: c.Transport, Timeout: c.Timeout, Jar: held.Jar}}
 	if _, err := sess.Search(ctx, google.Query{Text: warmingPhrase()}); err != nil {
-		letGoAfter(ctx, held, lease, err)
-		if ctx.Err() == nil && w.Log != nil {
-			w.Log.Info("keeping a session warm did not get through", "port", lease.Port(), "error", err)
+		if _, judged := google.ClassOf(err); !judged && ctx.Err() == nil {
+			// It never reached Google: nothing against the session, and its
+			// turn is put off so the next round takes another.
+			held.PutBackFor(warmingPutOff)
+		} else {
+			letGoAfter(ctx, held, lease, err)
+		}
+		if ctx.Err() == nil {
+			w.failed.Add(1)
+			if w.Log != nil {
+				w.Log.Info("keeping a session warm did not get through", "port", lease.Port(), "session", held.ID, "error", err)
+			}
 		}
 		return
 	}
+	w.done.Add(1)
 	_ = held.Answered(ctx, leasePort{lease})
 	if w.warmed != nil {
 		w.warmed()
+	}
+}
+
+// warmingPutOff is how long a session whose warming never reached Google waits
+// before warming takes it again: the quarter of an hour warming leaves between
+// two cold sessions anyway.
+const warmingPutOff = 15 * time.Minute
+
+// report says, once an hour, how many warmings got through and how many did
+// not. A failure is written down as it happens and a success is not, so
+// without this the log of a warmer that works is silence, and the log of one
+// that fails four times in five reads the same as one that always fails.
+func (w *Warmer) report() {
+	now := w.clock()
+	if w.reportedAt.IsZero() {
+		w.reportedAt = now
+	}
+	if now.Sub(w.reportedAt) < time.Hour {
+		return
+	}
+	done, failed := w.done.Swap(0), w.failed.Swap(0)
+	w.reportedAt = now
+	if w.Log != nil && done+failed > 0 {
+		w.Log.Info("warming over the last hour", "warmed", done, "failed", failed)
 	}
 }
 

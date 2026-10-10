@@ -3,9 +3,12 @@
 package run
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -402,5 +405,86 @@ func TestWarmer_WarmsOneColdSessionAQuarterHourWhenNoneIsRunningOut(t *testing.T
 	w.oneRound(ctx, 0)
 	if got := warmed.Load(); got != 2 {
 		t.Errorf("%d warmed after the quarter of an hour, want a second one", got)
+	}
+}
+
+func TestWarmer_GoesToAnotherSessionAfterAWarmingThatNeverReachedGoogle(t *testing.T) {
+	// The coldest session's warming went nowhere and it was put back as it
+	// was, still the coldest: the demo parsers warmed into EOF about once a
+	// minute for hours. The next round takes another session.
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	f.Pool.KeepWarm()
+	h := sessions.NewMemory()
+	k := sessions.NewKeeper(h)
+	keptSessions(t, f, k, 2)
+	time.Sleep(50 * time.Millisecond)
+
+	var logged bytes.Buffer
+	w := &Warmer{Pool: f.Pool, Keeper: k, Want: sessions.Want{Device: "desktop"},
+		Log:       slog.New(slog.NewTextHandler(&logged, nil)),
+		warmAfter: time.Nanosecond, warmAtOnce: 1, spacing: time.Millisecond}
+	ctx := context.Background()
+
+	// One warming that gets through, so the other session is plainly the
+	// colder one.
+	w.oneRound(ctx, 0)
+	time.Sleep(50 * time.Millisecond)
+	before := usedAt(t, h)
+	var colder int64
+	for id, at := range before {
+		if colder == 0 || at.Before(before[colder]) {
+			colder = id
+		}
+	}
+
+	// Its warming goes nowhere: four requests in a row reach nothing, past
+	// what the port asks again on its own.
+	f.downFor(4)
+	w.oneRound(ctx, 0)
+	if !strings.Contains(logged.String(), "session="+strconv.FormatInt(colder, 10)) {
+		t.Fatalf("the warming that went nowhere was not the colder session %d's:\n%s", colder, logged.String())
+	}
+	time.Sleep(50 * time.Millisecond)
+	w.oneRound(ctx, 0)
+
+	after := usedAt(t, h)
+	if after[colder].After(before[colder]) {
+		t.Errorf("session %d, whose warming went nowhere a moment ago, was warmed again at once", colder)
+	}
+	for id := range before {
+		if id != colder && !after[id].After(before[id]) {
+			t.Errorf("the round after the failure warmed nothing; want the other session, %d", id)
+		}
+	}
+}
+
+func TestWarmer_SaysWhichSessionFailedAndHowAnHourWent(t *testing.T) {
+	o := newOrigin(t, func(*http.Request, int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 2, inSessions)
+	f.Pool.KeepWarm()
+	k := sessions.NewKeeper(sessions.NewMemory())
+	keptSessions(t, f, k, 2)
+	time.Sleep(50 * time.Millisecond)
+
+	var logged bytes.Buffer
+	at := time.Now()
+	w := &Warmer{Pool: f.Pool, Keeper: k, Want: sessions.Want{Device: "desktop"},
+		Log: slog.New(slog.NewTextHandler(&logged, nil)), now: func() time.Time { return at },
+		warmAfter: time.Nanosecond, warmAtOnce: 1, spacing: time.Millisecond}
+	ctx := context.Background()
+
+	w.report() // as Run does after each round: the hour is counted from here
+	f.downFor(1000)
+	w.oneRound(ctx, 0)
+	f.downFor(0)
+	w.oneRound(ctx, 0)
+	if !strings.Contains(logged.String(), "session=") {
+		t.Errorf("the failed warming does not name its session:\n%s", logged.String())
+	}
+	at = at.Add(time.Hour)
+	w.report()
+	if !strings.Contains(logged.String(), "warmed=1") || !strings.Contains(logged.String(), "failed=1") {
+		t.Errorf("no account of the hour, or a wrong one:\n%s", logged.String())
 	}
 }

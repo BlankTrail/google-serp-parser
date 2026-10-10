@@ -2,6 +2,20 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.28
+
+- **Warming does not go back to the same session after it went nowhere.** A
+  warming whose request never reached Google — the connection dropped, the
+  address could not be reached — holds nothing against the session, and the
+  session was put back exactly as it was: still the coldest, so the next round
+  took it again, and the two demo parsers warmed into EOF about once a minute
+  for hours. Such a session now waits a quarter of an hour before warming
+  takes it again, and the next round warms another.
+- **The warming log says more.** A failed warming names its session, and once
+  an hour the log says how many warmings got through and how many did not.
+  Successes were never written down, so a warmer that failed four times in
+  five read the same as one that always failed.
+
 ### 0.4.27
 
 - **Standing ports stay open, and a closed one is opened again before it is

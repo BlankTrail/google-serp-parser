@@ -1447,3 +1447,40 @@ func TestKeeper_ReadsTheHistoryOnceHoweverManyThreadsAskAtOnce(t *testing.T) {
 		t.Errorf("fifty threads asking at once read the history %d times, want once", got)
 	}
 }
+
+func TestKeeper_LeavesOutOfWarmingASessionPutBackForAWhile(t *testing.T) {
+	// A warming that never reached Google says nothing against the session,
+	// and it is put back as it was — so it stayed the coldest, and the next
+	// round took it again: one session, warmed into the same failure every
+	// minute for hours.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	pa, pb := listPort(1, "a", "a", "b"), listPort(2, "b", "a", "b")
+	first, _ := k.Take(ctx, pa, desktop)
+	second, _ := k.Take(ctx, pb, desktop)
+	_ = first.Answered(ctx, pa)
+	c.pass(time.Hour)
+	_ = second.Answered(ctx, pb)
+
+	got, err := k.TakeColdest(ctx, listPort(3, "a", "a", "b"), desktop, 0)
+	if err != nil || got.ID != first.ID {
+		t.Fatalf("TakeColdest = %v, %v; want the colder session %d", got, err, first.ID)
+	}
+	got.PutBackFor(15 * time.Minute)
+
+	next, err := k.TakeColdest(ctx, listPort(4, "a", "a", "b"), desktop, 0)
+	if err != nil {
+		t.Fatalf("TakeColdest after putting one back for a while: %v", err)
+	}
+	if next.ID == first.ID {
+		t.Fatalf("took %d again at once, though it was put back for a quarter of an hour", first.ID)
+	}
+	next.PutBack()
+
+	c.pass(16 * time.Minute)
+	again, err := k.TakeColdest(ctx, listPort(5, "a", "a", "b"), desktop, 0)
+	if err != nil || again.ID != first.ID {
+		t.Errorf("after the quarter of an hour TakeColdest = %v, %v; want %d, the coldest, again", again, err, first.ID)
+	}
+}
