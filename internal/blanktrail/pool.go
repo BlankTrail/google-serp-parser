@@ -407,6 +407,9 @@ type poolPort struct {
 	hot bool
 
 	mu sync.Mutex
+	// kept says the service has been told never to close this port for
+	// idling; see PortSpec.NeverIdle.
+	kept bool
 	// answered says this port has brought back an answer somebody accepted since
 	// its identity was last changed. It is the pool's own word for it, said by
 	// the caller through Lease.Answered, because only the caller knows whether
@@ -842,6 +845,9 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 		if specNames[i] != "" {
 			spec = specByName(p.cfg.Specs, specNames[i])
 		}
+		// A standing port is kept for the moment nothing uses it; see
+		// PortSpec.NeverIdle.
+		spec.NeverIdle = hot
 		// The egress can refuse the port, and then another number is no remedy:
 		// the remedy is another egress. Each one that refuses is left behind and
 		// remembered, so a channel that hands the same dead gateway back — which
@@ -876,6 +882,7 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 			specName: specNames[i],
 			spec:     spec,
 			hot:      hot,
+			kept:     hot,
 			base:     newBaseTransport(host, num, spec.Protocol, p.cfg.CA, p.cfg.Insecure, p.cfg.NoKeepAlives),
 		}
 		// lastUsed stays zero so a fresh port is immediately available.
@@ -1120,10 +1127,24 @@ func (p *Pool) AcquireIdleHot(idle time.Duration) (*Lease, bool) {
 		p.lose(ctx, l.pt)
 		return nil, false
 	case notOpen(err):
-		// Opened again by the next acquire that takes it; see renewIfDue.
+		// The service closed it — for idling, or at a restart that restored
+		// nothing. Warming is the only use an idle program makes of a standing
+		// port, and an acquire that would open it again never comes: 381
+		// warmings on the two demo parsers met a closed port between 02:45 and
+		// 11:03 on 2026-10-10. It is opened again here.
 		p.reopenPort(l.pt.num)
-		p.giveBack(l.pt)
+	}
+	if err := p.renewIfDue(ctx, l.pt); err != nil {
+		p.setAside(l.pt)
 		return nil, false
+	}
+	l.pt.mu.Lock()
+	kept := l.pt.kept
+	l.pt.mu.Unlock()
+	if !kept && p.cl.NeverIdle(ctx, l.pt.num) == nil {
+		l.pt.mu.Lock()
+		l.pt.kept = true
+		l.pt.mu.Unlock()
 	}
 	return l, true
 }
@@ -1191,7 +1212,12 @@ func (p *Pool) KeepWarm() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, pt := range p.ports {
+		pt.mu.Lock()
 		pt.hot = true
+		// Opened again, it is opened never to be closed for idling; the
+		// service is told so for the port as it stands at its first warming.
+		pt.spec.NeverIdle = true
+		pt.mu.Unlock()
 	}
 	return len(p.ports)
 }

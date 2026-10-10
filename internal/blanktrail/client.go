@@ -152,6 +152,10 @@ type PortSpec struct {
 	MaxConcurrent int // in-flight requests allowed on the port
 	RetryDelayMs  int // proxy-side retry delay
 	IdleSeconds   int // per-port idle timeout (0 = inherit the global one)
+	// NeverIdle tells the service never to close the port for standing idle
+	// (idle_seconds 0). A standing port is kept for when nothing uses it, and
+	// the service's own collector closes a port idle for half an hour.
+	NeverIdle bool
 
 	// The three spans the proxy keeps on this port's own traffic. Each bounds a
 	// different wait, and telling them apart is the whole point of having three:
@@ -449,6 +453,10 @@ func (s PortSpec) request(port int, eg Egress) openPortRequest {
 		n := s.IdleSeconds
 		req.IdleSeconds = &n
 	}
+	if s.NeverIdle {
+		n := 0
+		req.IdleSeconds = &n
+	}
 	if s.ConnectTimeoutSeconds > 0 {
 		n := s.ConnectTimeoutSeconds
 		req.ConnectTimeoutSeconds = &n
@@ -524,6 +532,15 @@ func (c *Client) RotateProfile(ctx context.Context, port int) (Profile, error) {
 		return Profile{}, err
 	}
 	return p, nil
+}
+
+// NeverIdle tells the service never to close a live port for standing idle.
+func (c *Client) NeverIdle(ctx context.Context, port int) error {
+	if err := c.Owns(ctx, port); err != nil {
+		return err
+	}
+	path := "/api/v1/port/" + strconv.Itoa(port) + "/config"
+	return c.doJSON(ctx, http.MethodPut, path, map[string]int{"idle_seconds": 0}, nil)
 }
 
 // SuggestPort asks the proxy for a free port number to open.

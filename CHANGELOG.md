@@ -2,6 +2,17 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.27
+
+- **Standing ports stay open, and a closed one is opened again before it is
+  warmed.** The service closes a port nothing has used for half an hour, and
+  the ports the parser keeps warm between jobs were closed that way: seven of
+  ten on the two idle demo parsers overnight, warm sessions with them. They
+  are now opened, and existing ones set, never to be closed for idling. And
+  warming no longer goes through a port the service has closed: it opens it
+  again first — the 381 warmings that met a closed port between 02:45 and
+  11:03 would each have opened it.
+
 ### 0.4.26
 
 - **Every port carries the parser's own label.** BlankTrail Proxy 1.4.1082

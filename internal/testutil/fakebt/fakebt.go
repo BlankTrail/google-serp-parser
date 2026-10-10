@@ -109,6 +109,9 @@ type Server struct {
 	// ignores them.
 	labels   map[int]string
 	noLabels bool
+	// idle is each port's own idle timeout where one was given: nought is
+	// never closed for standing idle. A port with none has the global one.
+	idle map[int]int
 	// deadGateways are the ones whose tunnel will not start.
 	deadGateways map[string]bool
 	profiles     map[int]Profile
@@ -160,6 +163,7 @@ func New(t *testing.T) *Server {
 		ports:    map[int]string{},
 		created:  map[int]string{},
 		labels:   map[int]string{},
+		idle:     map[int]int{},
 		profiles: map[int]Profile{},
 		rotates:  map[int]int{},
 		resets:   map[int]int{},
@@ -614,6 +618,7 @@ func (s *Server) Restart() {
 	s.ports = map[int]string{}
 	s.created = map[int]string{}
 	s.labels = map[int]string{}
+	s.idle = map[int]int{}
 	s.profiles = map[int]Profile{}
 	s.tickets = map[int]string{}
 	s.keep = map[int]bool{}
@@ -636,6 +641,26 @@ func (s *Server) RestartRestoring() {
 		s.created[port] = s.stampLocked()
 	}
 	s.tickets = map[int]string{}
+}
+
+// IdleOf is the port's own idle timeout, and whether it has one at all.
+func (s *Server) IdleOf(port int) (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.idle[port]
+	return n, ok
+}
+
+// CloseIdle closes a port the way the service's idle collector does: it is
+// gone, and its number free, with nobody told.
+func (s *Server) CloseIdle(port int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ports, port)
+	delete(s.created, port)
+	delete(s.labels, port)
+	delete(s.idle, port)
+	delete(s.profiles, port)
 }
 
 // SetNoLabels makes the service one older than port labels: it ignores them.
@@ -758,6 +783,7 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 		// port was opened as.
 		KeepSessions *bool  `json:"keep_sessions"`
 		Label        string `json:"label"`
+		IdleSeconds  *int   `json:"idle_seconds"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil || req.Port == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -791,6 +817,9 @@ func (s *Server) serveOpen(w http.ResponseWriter, body []byte) {
 	s.created[req.Port] = s.stampLocked()
 	if !s.noLabels && req.Label != "" {
 		s.labels[req.Port] = req.Label
+	}
+	if req.IdleSeconds != nil {
+		s.idle[req.Port] = *req.IdleSeconds
 	}
 	if req.KeepSessions != nil {
 		s.keep[req.Port] = *req.KeepSessions
@@ -834,6 +863,7 @@ func (s *Server) serveClose(w http.ResponseWriter, body []byte) {
 	delete(s.ports, req.Port)
 	delete(s.created, req.Port)
 	delete(s.labels, req.Port)
+	delete(s.idle, req.Port)
 	delete(s.profiles, req.Port)
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "status": "closed"})
@@ -892,12 +922,16 @@ func (s *Server) servePortScoped(w http.ResponseWriter, r *http.Request, body []
 			Browser         string `json:"browser"`
 			OS              string `json:"os"`
 			KeepSessions    *bool  `json:"keep_sessions"`
+			IdleSeconds     *int   `json:"idle_seconds"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 			return
 		}
 		s.mu.Lock()
+		if req.IdleSeconds != nil {
+			s.idle[port] = *req.IdleSeconds
+		}
 		prof := s.profiles[port]
 		was := prof.Name
 		switch {
