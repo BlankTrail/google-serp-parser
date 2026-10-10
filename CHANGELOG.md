@@ -2,6 +2,18 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.29
+
+- **A parser closes what its earlier run left open.** A run stopped without
+  closing its ports — killed for an update — leaves them on the service, and
+  since 0.4.27 standing ports are never closed for idling: after an update ten
+  ports of the run before stood open, unused, with ten more at every update.
+  Each port's label now names the installation (the machine and the history
+  it keeps) as well as the run, and `gserp serve` closes, as it starts, the
+  ports of its own installation that an earlier run left. Another parser's
+  ports, a port with no label, and labels of earlier versions are left alone.
+  All the clients of one run share its label.
+
 ### 0.4.28
 
 - **Warming does not go back to the same session after it went nowhere.** A

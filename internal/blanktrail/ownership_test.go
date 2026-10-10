@@ -286,33 +286,15 @@ func TestPool_KeepsARestoredPortItHadMovedToAnotherAddress(t *testing.T) {
 
 func TestClient_PutsItsRunsLabelOnEveryPortItOpens(t *testing.T) {
 	fake := fakebt.New(t)
-	ownedPool(t, fake, 2)
+	p, _ := ownedPool(t, fake, 2)
 	ports := fake.OpenPorts()
 	if len(ports) != 2 {
 		t.Fatalf("%d ports open, want 2", len(ports))
 	}
 	a, b := fake.LabelOf(ports[0]), fake.LabelOf(ports[1])
-	if a == "" || a != b {
-		t.Errorf("the ports carry labels %q and %q, want one label of this run on both", a, b)
+	if a == "" || a != b || a != p.cl.Label() {
+		t.Errorf("the ports carry labels %q and %q, want this run's label %q on both", a, b, p.cl.Label())
 	}
-	if other := lookupLabelOfAnotherRun(t, fake); other == a {
-		t.Errorf("two runs put the same label %q on their ports", a)
-	}
-}
-
-// lookupLabelOfAnotherRun opens a port through a second client, as a second run
-// of the program would, and says what it was labelled.
-func lookupLabelOfAnotherRun(t *testing.T, fake *fakebt.Server) string {
-	t.Helper()
-	before := fake.OpenPorts()
-	ownedPool(t, fake, 1)
-	for _, p := range fake.OpenPorts() {
-		if !slices.Contains(before, p) {
-			return fake.LabelOf(p)
-		}
-	}
-	t.Fatal("the second run opened no port")
-	return ""
 }
 
 func TestPool_KeepsARestoredPortThatCarriesItsLabelWhateverElseChanged(t *testing.T) {

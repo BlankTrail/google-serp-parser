@@ -150,6 +150,19 @@ func serveCommand(ctx context.Context, args []string, out io.Writer) error {
 	return serveInterface(ctx, out, opts)
 }
 
+// nameInstallation names this parser for the labels on its ports by the machine
+// and the full path of the history it keeps, and says the name.
+func nameInstallation(db string) string {
+	host, _ := os.Hostname()
+	where, err := filepath.Abs(db)
+	if err != nil {
+		where = db
+	}
+	name := blanktrail.OwnerOf(host, where)
+	blanktrail.SetOwner(name)
+	return name
+}
+
 // serveInterface opens the history, takes the address and serves until the
 // context ends.
 func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error {
@@ -161,6 +174,12 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	// still going out — so no request is ever left reading a history that has
 	// been shut underneath it.
 	defer func() { _ = st.Close() }()
+
+	// This installation, named for the labels on its ports: the machine and the
+	// history it keeps, so two parsers on one service never take each other's
+	// ports for their own leftovers. Named before any client is made, since a
+	// client labels its ports with what it finds here.
+	nameInstallation(opts.DB)
 
 	// The address is taken here rather than inside the server so that the line
 	// printed below names the port the system actually gave. A caller who asked
@@ -195,6 +214,17 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 				ctx, cancel := context.WithTimeout(context.Background(), stampPatience)
 				defer cancel()
 				stampIntegration(ctx, client, opts.logger(os.Stderr))
+			}()
+			// What an earlier run of this parser left open — one killed for
+			// an update closes nothing — is closed now; see ReclaimLeftovers.
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), stampPatience)
+				defer cancel()
+				if n, err := client.ReclaimLeftovers(ctx); err != nil {
+					opts.logger(os.Stderr).Info("the ports an earlier run left could not be closed", "closed", n, "error", opts.clean(err.Error()))
+				} else if n > 0 {
+					opts.logger(os.Stderr).Info("closed the ports an earlier run left", "ports", n)
+				}
 			}()
 		}
 	}

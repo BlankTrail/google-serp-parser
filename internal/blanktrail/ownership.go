@@ -5,6 +5,7 @@ package blanktrail
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -55,11 +56,93 @@ type ledger struct {
 	reading sync.Mutex
 }
 
-// newLabel is a mark no other run of any program will put on a port.
-func newLabel() string {
+// processMark names this process among every run of any program: one for
+// every client the process makes, so the ports of its jobs and of its standing
+// set carry the same mark.
+var processMark = func() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
-	return "gserp-" + hex.EncodeToString(b[:])
+	return hex.EncodeToString(b[:])
+}()
+
+// owner names this installation — one parser, one history — across its runs;
+// see SetOwner. Empty is a program that does not reclaim what it leaves.
+var (
+	ownerMu sync.Mutex
+	owner   string
+)
+
+// SetOwner names the installation every client made from here on labels its
+// ports with. It is for the long-running server, which owns what an earlier
+// run of itself left on the service; see ReclaimLeftovers.
+func SetOwner(id string) {
+	ownerMu.Lock()
+	defer ownerMu.Unlock()
+	owner = id
+}
+
+// OwnerOf is an installation's name made from what tells it apart: the
+// machine, and the history it keeps.
+func OwnerOf(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:6])
+}
+
+// newLabel is the mark this process puts on every port it opens: its
+// installation, if one was named, and the process itself.
+func newLabel() string {
+	ownerMu.Lock()
+	o := owner
+	ownerMu.Unlock()
+	if o == "" {
+		return "gserp-" + processMark
+	}
+	return "gserp-" + o + "-" + processMark
+}
+
+// Label is the mark this client puts on every port it opens.
+func (c *Client) Label() string { return c.label }
+
+// ReclaimLeftovers closes the ports an earlier run of this installation left
+// on the service, and says how many.
+//
+// A run stopped without closing its pools — killed for an update — leaves its
+// ports open. The service used to close them for idling within half an hour;
+// a standing port is opened never to be (see PortSpec.NeverIdle), and on
+// 2026-10-10 ten ports of the run before stood open, unused, after an update,
+// with ten more to follow at every one. Only a label of this installation and
+// another process is closed: not this process's, not another installation's,
+// and not a label of a version that named no installation.
+func (c *Client) ReclaimLeftovers(ctx context.Context) (int, error) {
+	ownerMu.Lock()
+	o := owner
+	ownerMu.Unlock()
+	if o == "" {
+		return 0, nil
+	}
+	mine := "gserp-" + o + "-"
+	var out struct {
+		Ports []struct {
+			Port  int    `json:"port"`
+			Label string `json:"label"`
+		} `json:"ports"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/ports", nil, &out); err != nil {
+		return 0, err
+	}
+	closed := 0
+	for _, p := range out.Ports {
+		if !strings.HasPrefix(p.Label, mine) || p.Label == c.label {
+			continue
+		}
+		err := c.doJSON(ctx, http.MethodPost, "/api/v1/ports/close", map[string]int{"port": p.Port}, nil)
+		if err == nil {
+			closed++
+		} else if !notOpen(err) {
+			return closed, err
+		}
+	}
+	return closed, nil
 }
 
 // claim is one port this client opened. lost is a number found carrying
