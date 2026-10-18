@@ -139,6 +139,13 @@ type Server struct {
 	seen         []Recorded
 	nextPort     int
 
+	// conns is what each port carries as the service counts it: connections
+	// from the client and from the port to the proxy. The fake carries no traffic
+	// to count, so a test sets them. noConnsList is a service from before the
+	// light listing, which answers it 404 (every service on 2026-10-18).
+	conns       map[int][2]int
+	noConnsList bool
+
 	// solverQueue is what the service reports the challenge solver has in hand.
 	solverQueue SolverQueue
 
@@ -172,6 +179,7 @@ func New(t *testing.T) *Server {
 		tickets:      map[int]string{},
 		noResumption: map[int]bool{},
 		keep:         map[int]bool{},
+		conns:        map[int][2]int{},
 		nextPort:     freePort(),
 	}
 	s.ts = httptest.NewServer(http.HandlerFunc(s.route))
@@ -229,6 +237,22 @@ func (s *Server) FailNext(path string, status int, body string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fails[path] = append(s.fails[path], failure{status: status, body: body})
+}
+
+// SetConns sets what the service counts on port: connections from the client
+// and from the port to its proxy. Both listings carry them.
+func (s *Server) SetConns(port, client, upstream int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conns[port] = [2]int{client, upstream}
+}
+
+// SetNoConnsList makes the light listing answer 404, as a service from before
+// it does. The whole listing carries the numbers either way.
+func (s *Server) SetNoConnsList(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.noConnsList = on
 }
 
 // OpenPorts lists the currently open port numbers, ascending.
@@ -375,6 +399,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.serveSuggest(w)
 	case "/api/v1/ports":
 		s.serveList(w)
+	case "/api/v1/ports/conns":
+		s.serveConns(w)
 	case "/api/v1/presets/autosave":
 		s.mu.Lock()
 		on := s.restores
@@ -537,6 +563,7 @@ func (s *Server) serveList(w http.ResponseWriter) {
 		}
 		entry := map[string]any{"port": p, "protocol": "http", "created_at": s.created[p],
 			"upstream": up, "keep_sessions": s.keep[p]}
+		entry["client_conns"], entry["upstream_conns"] = s.conns[p][0], s.conns[p][1]
 		if l := s.labels[p]; l != "" {
 			entry["label"] = l
 		}
@@ -550,6 +577,24 @@ func (s *Server) serveList(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ports": list, "total_open": len(list) + elsewhere, "max_ports": ceiling,
 	})
+}
+
+// serveConns answers the light listing: three numbers a port, for the ports
+// open. A service from before it answers 404.
+func (s *Server) serveConns(w http.ResponseWriter) {
+	ports := s.OpenPorts()
+	s.mu.Lock()
+	if s.noConnsList {
+		s.mu.Unlock()
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	list := make([]map[string]any, 0, len(ports))
+	for _, p := range ports {
+		list = append(list, map[string]any{"port": p, "client_conns": s.conns[p][0], "upstream_conns": s.conns[p][1]})
+	}
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ports": list})
 }
 
 // serveProfiles answers the fingerprint listing, filtered by browser the way the
@@ -865,6 +910,7 @@ func (s *Server) serveClose(w http.ResponseWriter, body []byte) {
 	delete(s.labels, req.Port)
 	delete(s.idle, req.Port)
 	delete(s.profiles, req.Port)
+	delete(s.conns, req.Port)
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "status": "closed"})
 }

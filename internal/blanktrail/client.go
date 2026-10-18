@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,6 +34,10 @@ type Client struct {
 	// the service keeps with the port, through a restart that restores it,
 	// and that no other program's port carries. See Owns.
 	label string
+	// noConnsList is set once the service has answered the light listing of
+	// connections 404. A service does not grow one while this process runs, and
+	// asking again on every reading would be a refused request each time.
+	noConnsList atomic.Bool
 }
 
 // Option customises a Client.
@@ -596,6 +601,75 @@ func (c *Client) Ports(ctx context.Context) ([]int, PortRoom, error) {
 		open = len(ports)
 	}
 	return ports, PortRoom{Open: open, Ceiling: out.MaxPorts}, nil
+}
+
+// portConnsPath is the light listing: three numbers a port. The whole listing
+// is 283 KB for 251 ports and 9-36 ms on the live service (2026-10-18), and a
+// megabyte at a thousand ports, for the two numbers a budget reads. The service
+// ignores ?fields= and ?port=, so the only way to a smaller answer is a path of
+// its own. It is expected in the next release of BlankTrail; until then every
+// reading falls back to the whole listing.
+const portConnsPath = "/api/v1/ports/conns"
+
+// errNoConnsList is the service having no light listing.
+var errNoConnsList = errors.New("blanktrail: the service has no light listing of connections")
+
+// PortLoad is what one port is carrying this instant, as the service counts it:
+// connections from this program to the port, and from the port to the proxy.
+//
+// The second is the one a proxy provider's tariff counts, and it is more than
+// the first: the service retries, keeps connections, and its challenge solver
+// opens three to five of its own (measured on port 20690, 2026-10-18). A
+// service older than these fields reads as carrying nothing.
+type PortLoad struct {
+	Client   int
+	Upstream int
+}
+
+// portLoadList is the part of either listing a reading needs. Nothing else is
+// decoded: encoding/json skips the rest of the whole listing, which is mostly
+// fields no budget reads, instead of building a map of every entry.
+type portLoadList struct {
+	Ports []struct {
+		Port          int `json:"port"`
+		ClientConns   int `json:"client_conns"`
+		UpstreamConns int `json:"upstream_conns"`
+	} `json:"ports"`
+}
+
+// PortLoads is what every port open on the service is carrying, by number. It
+// is every port and not only this program's; a caller sums the ones it holds.
+//
+// The light listing is asked first. Only a 404 says it is not there, and that
+// is remembered for the life of the process; a 503 while the service restarts,
+// or any other failure, says nothing about the path and is returned as the
+// error it is, with the light listing asked again next time.
+func (c *Client) PortLoads(ctx context.Context) (map[int]PortLoad, error) {
+	var out portLoadList
+	err := errNoConnsList
+	if !c.noConnsList.Load() {
+		err = c.doJSON(ctx, http.MethodGet, portConnsPath, nil, &out)
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			c.noConnsList.Store(true)
+			err = errNoConnsList
+		}
+	}
+	if errors.Is(err, errNoConnsList) {
+		out = portLoadList{}
+		err = c.doJSON(ctx, http.MethodGet, "/api/v1/ports", nil, &out)
+	}
+	if err != nil {
+		return nil, err
+	}
+	loads := make(map[int]PortLoad, len(out.Ports))
+	for _, p := range out.Ports {
+		if p.Port == 0 {
+			continue
+		}
+		loads[p.Port] = PortLoad{Client: p.ClientConns, Upstream: p.UpstreamConns}
+	}
+	return loads, nil
 }
 
 // FetchCAPool downloads the proxy's MITM CA and returns a pool trusting it.

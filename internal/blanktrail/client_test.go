@@ -671,3 +671,128 @@ func TestClient_GivesAPortAFreshFingerprintFromItsTemplate(t *testing.T) {
 		t.Error("putting the port back on its template did not keep keep_sessions off")
 	}
 }
+
+// asked counts what the fake was asked at one path.
+func asked(fake *fakebt.Server, path string) int {
+	n := 0
+	for _, r := range fake.Requests() {
+		if r.Method == http.MethodGet && r.Path == path {
+			n++
+		}
+	}
+	return n
+}
+
+func openTwo(t *testing.T, fake *fakebt.Server) (*Client, int, int) {
+	t.Helper()
+	c, err := NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	var nums []int
+	for i := 0; i < 2; i++ {
+		p, err := c.SuggestPort(t.Context())
+		if err != nil {
+			t.Fatalf("SuggestPort: %v", err)
+		}
+		info, err := c.OpenPort(t.Context(), p, DefaultPortSpec(), Egress{})
+		if err != nil {
+			t.Fatalf("OpenPort: %v", err)
+		}
+		nums = append(nums, info.Port)
+	}
+	return c, nums[0], nums[1]
+}
+
+func TestPortLoads_ReadsTheLightListingWhereTheServiceHasOne(t *testing.T) {
+	// The whole listing is 283 KB for 251 ports (2026-10-18) and grows with
+	// every port; the light one carries three numbers a port.
+	fake := fakebt.New(t)
+	c, a, b := openTwo(t, fake)
+	fake.SetConns(a, 4, 6)
+	before := asked(fake, "/api/v1/ports")
+	loads, err := c.PortLoads(t.Context())
+	if err != nil {
+		t.Fatalf("PortLoads: %v", err)
+	}
+	if got := loads[a]; got != (PortLoad{Client: 4, Upstream: 6}) {
+		t.Errorf("port a carries %+v, want 4 from the client and 6 to the proxy", got)
+	}
+	if got, ok := loads[b]; !ok || got != (PortLoad{}) {
+		t.Errorf("port b reads %+v (listed %v), want listed and carrying nothing", got, ok)
+	}
+	if got := asked(fake, "/api/v1/ports") - before; got != 0 {
+		t.Errorf("the whole listing was read %d times beside the light one, want never", got)
+	}
+}
+
+func TestPortLoads_FallsBackToTheWholeListingAndRemembersTheLightOneIsNotThere(t *testing.T) {
+	// Every service today answers the light listing 404. Asking it again on
+	// every reading would be a refused request each time for the life of the
+	// process; once is enough to know.
+	fake := fakebt.New(t)
+	fake.SetNoConnsList(true)
+	c, a, _ := openTwo(t, fake)
+	fake.SetConns(a, 1, 3)
+	for i := 0; i < 2; i++ {
+		loads, err := c.PortLoads(t.Context())
+		if err != nil {
+			t.Fatalf("PortLoads %d: %v", i+1, err)
+		}
+		if got := loads[a]; got != (PortLoad{Client: 1, Upstream: 3}) {
+			t.Errorf("reading %d: port a carries %+v, want 1 and 3 from the whole listing", i+1, got)
+		}
+	}
+	if got := asked(fake, "/api/v1/ports/conns"); got != 1 {
+		t.Errorf("the light listing was asked %d times over two readings, want once", got)
+	}
+}
+
+func TestPortLoads_KeepsAskingTheLightListingAfterAFailureThatIsNotAbsence(t *testing.T) {
+	// A 503 while the service restarts says nothing about the path, and it is
+	// not answered by reading the whole listing either: the caller gets the error.
+	fake := fakebt.New(t)
+	c, _, _ := openTwo(t, fake)
+	fake.FailNext("/api/v1/ports/conns", http.StatusServiceUnavailable, `{"error":"starting"}`)
+	before := asked(fake, "/api/v1/ports")
+	if _, err := c.PortLoads(t.Context()); err == nil {
+		t.Fatal("a reading the service refused came back as one")
+	}
+	if got := asked(fake, "/api/v1/ports") - before; got != 0 {
+		t.Errorf("the whole listing was read %d times after a 503, want never", got)
+	}
+	if _, err := c.PortLoads(t.Context()); err != nil {
+		t.Fatalf("PortLoads after the service came back: %v", err)
+	}
+	if got := asked(fake, "/api/v1/ports/conns"); got != 2 {
+		t.Errorf("the light listing was asked %d times, want twice: a 503 is not a missing path", got)
+	}
+}
+
+func TestPortLoads_ReturnsTheWholeListingsFailureAsItIs(t *testing.T) {
+	// On the fallback path an error from the whole listing is the caller's error
+	// too, not a reading of nothing.
+	fake := fakebt.New(t)
+	fake.SetNoConnsList(true)
+	c, _, _ := openTwo(t, fake)
+	fake.FailNext("/api/v1/ports", http.StatusServiceUnavailable, `{"error":"starting"}`)
+	loads, err := c.PortLoads(t.Context())
+	if err == nil || loads != nil {
+		t.Fatalf("PortLoads = %v, %v; want the refusal", loads, err)
+	}
+}
+
+func TestPortLoads_KeepsOnlyEntriesThatNameAPort(t *testing.T) {
+	// An entry without a number is not port 0's reading; it is not a reading.
+	// The fake serves the body it is told to, as a service from the future might.
+	c, fake := newTestClient(t)
+	fake.FailNext("/api/v1/ports/conns", http.StatusOK,
+		`{"ports":[{"client_conns":9,"upstream_conns":9},{"port":20700,"client_conns":1,"upstream_conns":2}]}`)
+	loads, err := c.PortLoads(t.Context())
+	if err != nil {
+		t.Fatalf("PortLoads: %v", err)
+	}
+	if len(loads) != 1 || loads[20700] != (PortLoad{Client: 1, Upstream: 2}) {
+		t.Errorf("loads = %+v, want only port 20700 with 1 and 2", loads)
+	}
+}
