@@ -639,6 +639,8 @@ type newPage struct {
 	// where the reader learns that the choice exists at all, and that the exits
 	// are set on the proxies screen rather than here.
 	Profiles []profileChoice
+	// ConnWarn is the line under the threads about the chosen profile's limit.
+	ConnWarn connWarn
 	// Browsers and Systems are the identity the ports are opened under, and the
 	// lists are the matrix itself: a screen cannot offer a browser no port
 	// would ever be opened for. Each has an empty first entry, which is the
@@ -659,6 +661,33 @@ type profileChoice struct {
 	Name    string
 	Default bool
 	Current bool
+	// ConnLimit and Reserve are the profile's connection limit and the part of
+	// it kept for a solve, which the form hands to the script so the warning can
+	// follow the choice without asking the server.
+	ConnLimit, Reserve int
+}
+
+// connWarn is the line under the threads that says a profile will hold the
+// searches below them. It is a warning and not a refusal: the job runs, and
+// the searches past the limit wait for room rather than failing.
+type connWarn struct {
+	Show           bool
+	Limit, Threads int
+}
+
+// connWarning is that line for the profile the form has chosen: shown when the
+// profile has a limit and the threads are more than the limit less the reserve
+// a solve is kept, which is how many searches can be out at once with a
+// challenge being solved beside them.
+func connWarning(offered []profileChoice, threads int) connWarn {
+	for _, p := range offered {
+		if !p.Current {
+			continue
+		}
+		most := p.ConnLimit - p.Reserve
+		return connWarn{Show: p.ConnLimit > 0 && threads > most, Limit: p.ConnLimit, Threads: most}
+	}
+	return connWarn{}
 }
 
 // atoi64 reads a number a form sent, and nought for anything it cannot read. A
@@ -677,7 +706,8 @@ func profilesOffered(all []store.Profile, named int64) []profileChoice {
 	for _, p := range all {
 		out = append(out, profileChoice{
 			ID: p.ID, Name: p.Name, Default: p.Default,
-			Current: p.ID == named || (named == 0 && p.Default),
+			Current:   p.ID == named || (named == 0 && p.Default),
+			ConnLimit: p.ConnLimit, Reserve: p.SolverReserve,
 		})
 	}
 	return out
@@ -742,6 +772,7 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 			s.log.Error("the proxy profiles could not be read for the form", "error", err)
 		}
 	}
+	offeredChoices := profilesOffered(offered, form.Profile)
 	s.render(w, r, "new.html", newPage{
 		page:              s.frame(r, lang, "new.title", jobsAt),
 		Form:              form,
@@ -757,7 +788,8 @@ func (s *Server) showNew(w http.ResponseWriter, r *http.Request, lang Lang,
 		Countries:         google.Countries(),
 		Languages:         google.Languages(),
 		Chose:             choseField,
-		Profiles:          profilesOffered(offered, form.Profile),
+		Profiles:          offeredChoices,
+		ConnWarn:          connWarning(offeredChoices, form.Threads),
 	})
 }
 

@@ -430,6 +430,20 @@
 			// A suggestions job has no sessions to rest, and retries each
 			// substitution rather than a phrase.
 			mark(root, "cooldown", kind.value === "suggest");
+			// A profile with a limit holds the searches below its limit less
+			// the reserve kept for a solve; the line says so while the threads
+			// asked for are more than that. A warning, never a refusal.
+			var warn = root.querySelector("#conn-warning");
+			var profile = root.querySelector("[name=profile]");
+			var threads = root.querySelector("[name=threads]");
+			if (warn && profile && threads && profile.selectedOptions.length) {
+				var chosen = profile.selectedOptions[0];
+				var limit = Number(chosen.getAttribute("data-limit")) || 0;
+				var most = limit - (Number(chosen.getAttribute("data-reserve")) || 0);
+				warn.hidden = !(limit > 0 && Number(threads.value) > most);
+				warn.querySelector("#conn-limit").textContent = limit;
+				warn.querySelector("#conn-threads").textContent = most;
+			}
 			var parts = root.querySelectorAll("[data-kind]");
 			for (var p = 0; p < parts.length; p++) {
 				var mine = parts[p].getAttribute("data-kind") === "suggest";
@@ -468,6 +482,14 @@
 			apply();
 		});
 		from.addEventListener("change", apply);
+		var chosenProfile = root.querySelector("[name=profile]");
+		if (chosenProfile) {
+			chosenProfile.addEventListener("change", apply);
+		}
+		var typedThreads = root.querySelector("[name=threads]");
+		if (typedThreads) {
+			typedThreads.addEventListener("input", apply);
+		}
 		var typed = root.querySelector("[name=language]");
 		if (typed) {
 			typed.addEventListener("input", apply);

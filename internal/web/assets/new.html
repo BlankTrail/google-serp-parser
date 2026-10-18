@@ -151,10 +151,13 @@
 <div class="field">
 <label for="profile">{{.T "form.profile"}}</label>
 <select id="profile" name="profile">
-{{range .Profiles}}<option value="{{.ID}}"{{if .Current}} selected{{end}}>{{.Name}}{{if .Default}} — {{$.T "proxies.profile.default"}}{{end}}</option>
+{{range .Profiles}}<option value="{{.ID}}"{{if .Current}} selected{{end}} data-limit="{{.ConnLimit}}" data-reserve="{{.Reserve}}">{{.Name}}{{if .Default}} — {{$.T "proxies.profile.default"}}{{end}}</option>
 {{end}}</select>
 </div>
 </div>{{end}}
+{{/* A warning and not a refusal: searches past the profile's limit wait for
+     room. The script redraws it as the profile or the threads change. */}}
+<p class="empty" id="conn-warning"{{if not .ConnWarn.Show}} hidden{{end}}>{{.T "form.connlimit.allows"}} <span id="conn-limit">{{.ConnWarn.Limit}}</span> {{.T "form.connlimit.connections"}} <span id="conn-threads">{{.ConnWarn.Threads}}</span> {{.T "form.connlimit.threads"}}</p>
 <div class="row">
 <div class="field">
 <label for="threads">{{.T "form.threads"}}</label>

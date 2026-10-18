@@ -1108,3 +1108,46 @@ func TestCreateJob_RefusesARestSpanFilledInTheWrongOrder(t *testing.T) {
 		t.Errorf("a job naming the near end only was refused with %d: %s", rec.Code, rec.Body)
 	}
 }
+
+// newFormWith posts a form the server sends back — testServer has no runner,
+// so every send is answered with the form again — on a profile with this limit.
+func newFormWith(t *testing.T, limit, reserve, threads int) string {
+	t.Helper()
+	s := testServer(t)
+	p := store.NewProfile()
+	p.Name, p.ConnLimit, p.SolverReserve = "limited", limit, reserve
+	id, err := s.store.CreateProfile(t.Context(), p)
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	return postForm(t, s, newAt, url.Values{
+		"name": {"nightly"}, "kind": {"search"}, "queries": {"coffee maker"},
+		"threads": {strconv.Itoa(threads)}, "profile": {strconv.FormatInt(id, 10)},
+	}).Body.String()
+}
+
+func TestNewJob_WarnsWhenTheThreadsAreMoreThanTheProfileCarries(t *testing.T) {
+	// Not a refusal: the job runs, the searches wait for room. What the reader
+	// learns here is that forty threads will search as twenty-five.
+	body := newFormWith(t, 30, 5, 40)
+	if !strings.Contains(body, `id="conn-warning">`) {
+		t.Fatal("forty threads on a profile of thirty connections are not warned about")
+	}
+	if got := shown(t, body, "conn-limit"); got != "30" {
+		t.Errorf("the warning names %s connections, want 30", got)
+	}
+	if got := shown(t, body, "conn-threads"); got != "25" {
+		t.Errorf("the warning names %s threads, want 25", got)
+	}
+	if !strings.Contains(body, `data-limit="30" data-reserve="5"`) {
+		t.Error("the profile on the list does not carry its limit for the script")
+	}
+}
+
+func TestNewJob_SaysNothingWhereTheThreadsFit(t *testing.T) {
+	for _, c := range []struct{ limit, reserve, threads int }{{30, 5, 25}, {0, 5, 400}} {
+		if body := newFormWith(t, c.limit, c.reserve, c.threads); !strings.Contains(body, `id="conn-warning" hidden`) {
+			t.Errorf("%d threads on a limit of %d with %d kept are warned about", c.threads, c.limit, c.reserve)
+		}
+	}
+}
