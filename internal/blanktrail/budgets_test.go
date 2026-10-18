@@ -65,6 +65,66 @@ func TestBudgets_CountWhatTheServiceSaysOfTheProfilesOwnPortsAndNoOneElses(t *te
 	}
 }
 
+func TestBudgets_LearnTheAmplificationFromTheProfilesOwnPorts(t *testing.T) {
+	// The service's connections to the proxy over this program's to the ports,
+	// summed over the profile's ports alone: (6+4) over (4+1) is two, and the
+	// stranger's forty on one would make it anything but.
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 2)
+	bs := NewBudgets(time.Hour, time.Hour)
+	cfg.Budget = bs.For(cfg.Client, 1, 30, 5)
+	mine, err := NewPool(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer mine.Close()
+	stranger, err := NewPool(t.Context(), testPoolConfig(t, fake, clock, 1, 1))
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer stranger.Close()
+	own := mine.portNumbers()
+	fake.SetConns(own[0], 4, 6)
+	fake.SetConns(own[1], 1, 4)
+	fake.SetConns(stranger.portNumbers()[0], 1, 40)
+	bs.pollOnce(t.Context())
+	if r := cfg.Budget.Reading(); r.Amplification != 2 || !r.Sampled {
+		t.Errorf("the profile reads %+v, want k 2 from its own two ports", r)
+	}
+	// A reading that fails leaves k as the good ones made it.
+	fake.FailNext("/api/v1/ports/conns", http.StatusServiceUnavailable, `{"error":"starting"}`)
+	bs.pollOnce(t.Context())
+	if r := cfg.Budget.Reading(); r.Amplification != 2 || r.Known {
+		t.Errorf("after a failed reading the profile reads %+v, want k still 2 and the count unknown", r)
+	}
+}
+
+func TestBudgets_AskFastWhileAProfileHasAttemptsInFlightAndHasNotBeenSampled(t *testing.T) {
+	// The job starts just after a reading found the profile idle. Twenty of
+	// thirty is below seventy per cent at the k of 1 nothing has taught yet, but
+	// on the stand those twenty were forty connections: the next reading comes
+	// at the fast rate, and once it has been taken the rate is the usual one.
+	fake, clock, bs, b, _ := rateWorld(t)
+	bs.pollOnce(t.Context())
+	take(t, b, ClassSearch, 20)
+	before := portsAsked(fake)
+	for range 2 { // at 0 and 2 s
+		bs.step(t.Context())
+		clock.Advance(2 * time.Second)
+	}
+	if got := portsAsked(fake) - before; got != 1 {
+		t.Errorf("an unsampled profile with twenty in flight was read %d times in the first two seconds, want once (at 2 s)", got)
+	}
+	for range 4 { // at 4, 6, 8 and 10 s
+		bs.step(t.Context())
+		clock.Advance(2 * time.Second)
+	}
+	if got := portsAsked(fake) - before; got != 1 {
+		t.Errorf("a sampled profile at twenty of thirty was read %d times by 10 s, want only the one at 2 s (next at 12 s)", got)
+	}
+}
+
 func TestBudgets_AskTheServiceOnceForEveryProfile(t *testing.T) {
 	fake := fakebt.New(t)
 	clock := newFakeClock()
@@ -335,6 +395,17 @@ func TestBudgets_GoFastWhenAnyOneProfileIsBusyAndTheOthersAreNot(t *testing.T) {
 	bs.For(nil, 2, 30, 5)
 	if got := stepsFor(t, fake, clock, bs); got != 11 {
 		t.Errorf("one profile at 21 of 30 and one idle asked %d times in twenty seconds, want 11", got)
+	}
+}
+
+func TestBudgets_GoFastOnTheAmplifiedCount(t *testing.T) {
+	// Eleven attempts at two connections each are twenty-two of thirty: busy,
+	// though eleven requests alone would be a third of the limit.
+	fake, clock, bs, b, _ := rateWorld(t)
+	setAmp(b, 2)
+	take(t, b, ClassSearch, 11)
+	if got := stepsFor(t, fake, clock, bs); got != 11 {
+		t.Errorf("eleven attempts at k 2 against thirty asked %d times in twenty seconds, want 11 (every 2 s)", got)
 	}
 }
 

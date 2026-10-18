@@ -13,8 +13,10 @@ import (
 // are carrying, and when the faster of the two applies.
 //
 // The reading is a correction and not the count: what a profile holds is this
-// program's own count of its attempts and solves, which costs nothing. The
-// service is asked only for what it opens on its own — retries, connections it
+// program's own count of its attempts and solves, which costs nothing, and
+// which each reading makes a better prediction of the service's by teaching it
+// how many connections the service opens per request (Budget's amplification).
+// The service is asked for what it opens on its own — retries, connections it
 // keeps, the solver's — and the asking is not free: the whole listing
 // (/api/v1/ports) is about 283 KB for 251 ports and 9-36 ms on the live
 // service (2026-10-18), a megabyte at a thousand. The light listing
@@ -111,10 +113,21 @@ func (bs *Budgets) step(ctx context.Context) {
 	busy := false
 	for _, b := range bs.byProfile {
 		r := b.Reading()
-		// Busy by the larger of this program's count and the service's last
+		// Busy by the larger of this program's count — k connections per
+		// attempt, the prediction of the service's — and the service's last
 		// reading: a service that opened many connections on its own is the
 		// case the fast rate is for, and the own count cannot see it.
 		if r.Limit > 0 && r.InUse()*100 >= budgetBusyPercent*r.Limit {
+			busy = true
+		}
+		// Busy, too, while a profile has attempts in flight and the service
+		// has not yet been read with any of them on its ports: until then k is
+		// the 1 it starts at, the prediction can be short by the whole
+		// amplification (two on the stand: twenty attempts, read as 67% of
+		// thirty and so slow, were forty connections), and ten seconds of that
+		// is ten seconds over the limit before anything is learned. It lasts
+		// one reading: the first one taken with attempts in flight ends it.
+		if r.Limit > 0 && !r.Sampled && r.InFlight > 0 {
 			busy = true
 		}
 	}
@@ -157,17 +170,19 @@ func (bs *Budgets) pollOnce(ctx context.Context) {
 	}
 	bs.noteOutcome(err)
 	for _, b := range limited {
-		sum := 0
+		upstream, client := 0, 0
 		if err == nil {
 			for _, port := range b.ports() {
-				sum += loads[port].Upstream
+				upstream += loads[port].Upstream
+				client += loads[port].Client
 			}
 		}
 		// A count that cannot be read is not kept: nought and unknown, so a
 		// number above the limit read before a restart of the service does
-		// not hold the profile's lookups for good.
+		// not hold the profile's searches and lookups for good. Nor is it
+		// learned from: k stays what the last good readings made it.
 		// holders is empty unless the count is over the limit.
-		_, holders := b.observe(sum, err == nil)
+		_, holders := b.observeLoad(upstream, client, err == nil)
 		for _, h := range holders {
 			h.overLimit()
 		}

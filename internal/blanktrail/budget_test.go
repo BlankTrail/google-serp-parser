@@ -288,19 +288,26 @@ func TestBudget_ASolveThatCostsNothingMoreLetsTheWaitingIn(t *testing.T) {
 	letIn(t, search, "the search once a place turned into a solve that holds nothing")
 }
 
-func TestBudget_WhatTheServiceCountsHoldsTheLookupsButNotTheSearches(t *testing.T) {
+// TestBudget_WhatTheServiceCountsHoldsTheSearchesAsWellAsTheLookups is the fix
+// of 2026-10-19 (ruling R4). It replaces two tests that pinned the opposite —
+// "what the service counts holds the lookups but not the searches" and "a
+// search goes by its own count whatever the service says" — which the stand
+// proved wrong: twenty searches counted as twenty against a limit of thirty
+// were forty connections to the proxy, the service's reading said so every two
+// seconds, and nothing listened, because only lookups answered to it.
+func TestBudget_WhatTheServiceCountsHoldsTheSearchesAsWellAsTheLookups(t *testing.T) {
 	// The service opens connections the parser never asked for — retries, kept
-	// connections, the solver's own — and the tariff counts those too. Its
-	// count is read rarely (ten seconds apart while there is room), so it is a
-	// correction and not the gate: a count over the limit holds new lookups
-	// until a reading shows room again, and the searches go on by this
-	// program's own count, which keeps them within the limit meanwhile.
+	// connections, the solver's own — and the tariff counts those too. A
+	// reading over the limit holds every new attempt, search or lookup, until a
+	// reading shows room again, however little this program counts itself.
 	b := NewBudget(10, 0)
 	b.observe(12, true)
+	search := waiting(t.Context(), t, b, ClassSearch, "a search while the service counts twelve against ten and this program nothing")
 	lookup := waiting(t.Context(), t, b, ClassLookup, "a lookup while the service counts twelve against ten")
-	stillWaiting(t, b, ClassLookup, lookup, "a lookup while the service counts twelve against ten")
-	take(t, b, ClassSearch, 1)
+	stillWaiting(t, b, ClassSearch, search, "the search while the service counts twelve against ten")
+	stillWaiting(t, b, ClassLookup, lookup, "the lookup while the service counts twelve against ten")
 	b.observe(3, true)
+	letIn(t, search, "the search once the service counted three")
 	letIn(t, lookup, "the lookup once the service counted three")
 	if r := b.Reading(); r.InUse() != 3 || r.Computed() != 2 || !r.Known {
 		t.Errorf("reads %+v (in use %d, counted here %d), want the service's three over the two counted here",
@@ -308,13 +315,20 @@ func TestBudget_WhatTheServiceCountsHoldsTheLookupsButNotTheSearches(t *testing.
 	}
 }
 
-func TestBudget_ASearchGoesByItsOwnCountWhateverTheServiceSays(t *testing.T) {
+func TestBudget_ASearchGoesWhileBothCountsHaveRoomForIt(t *testing.T) {
+	// The larger of the two counts, plus the search's own, within the limit:
+	// nine read and nothing counted here leaves room for one on a limit of ten,
+	// ten read leaves none — and so does nine counted here with nothing read.
 	b := NewBudget(10, 0)
-	b.observe(40, true)
-	take(t, b, ClassSearch, 10)
-	if got := b.Free(ClassSearch); got != 0 {
-		t.Errorf("%d free for searches after ten of ten, want none", got)
-	}
+	b.observe(9, true)
+	held := take(t, b, ClassSearch, 1)
+	b.observe(10, true)
+	search := waiting(t.Context(), t, b, ClassSearch, "a search with the service at ten of ten")
+	b.observe(0, true)
+	letIn(t, search, "the search once the service counted nothing")
+	held[0].Release()
+	take(t, b, ClassSearch, 9)
+	waiting(t.Context(), t, b, ClassSearch, "an eleventh search with ten counted here and nothing read")
 }
 
 func TestBudget_AWaitCalledOffLeavesNothingBehind(t *testing.T) {
@@ -435,8 +449,179 @@ func TestBudget_FreeSaysHowManyMoreOfEachMayGoNow(t *testing.T) {
 		t.Errorf("free reads %d for searches and %d for lookups, want 16 and 11", s, l)
 	}
 	b.observe(18, true)
-	if s, l := b.Free(ClassSearch), b.Free(ClassLookup); s != 16 || l != 0 {
-		t.Errorf("with the service at 18, free reads %d and %d, want 16 by this program's count and none", s, l)
+	if s, l := b.Free(ClassSearch), b.Free(ClassLookup); s != 2 || l != 0 {
+		t.Errorf("with the service at 18, free reads %d and %d, want 2 by the service's count and none", s, l)
+	}
+	// Each place costs k: at two connections per request, the twenty of a
+	// limit of twenty-one less the reserve of five go eight at a time for
+	// lookups and ten for searches.
+	k2 := NewBudget(21, 5)
+	setAmp(k2, 2)
+	if s, l := k2.Free(ClassSearch), k2.Free(ClassLookup); s != 10 || l != 8 {
+		t.Errorf("at k 2 with nothing held, free reads %d for searches and %d for lookups on 21 with 5 kept, want 10 and 8", s, l)
+	}
+}
+
+// setAmp sets a budget's amplification by hand, as if readings had taught it.
+func setAmp(b *Budget, k float64) {
+	b.mu.Lock()
+	b.amp, b.learned = k, true
+	b.mu.Unlock()
+}
+
+// ampOf reads a budget's amplification.
+func ampOf(b *Budget) float64 { return b.Reading().Amplification }
+
+func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+
+func TestBudget_LearnsHowManyConnectionsTheServiceOpensPerRequest(t *testing.T) {
+	b := NewBudget(30, 5)
+	if k := ampOf(b); k != 1 {
+		t.Fatalf("a budget that has read nothing counts %v connections per request, want 1", k)
+	}
+	// The first reading is taken as it is: forty to the proxy on twenty
+	// requests is two.
+	b.observeLoad(40, 20, true)
+	if k := ampOf(b); !near(k, 2) {
+		t.Errorf("after reading forty on twenty, k is %v, want 2", k)
+	}
+	// Later ones are mixed in at three tenths: three on one moves two to 2.3.
+	b.observeLoad(30, 10, true)
+	if k := ampOf(b); !near(k, 2.3) {
+		t.Errorf("after reading thirty on ten, k is %v, want 2.3", k)
+	}
+	if r := b.Reading(); r.Amplification != ampOf(b) || !r.Sampled {
+		t.Errorf("the reading says %+v, want the amplification learned and the profile sampled", r)
+	}
+}
+
+func TestBudget_KeepsTheAmplificationBetweenOneAndFour(t *testing.T) {
+	// A reading caught in a solve (the solver's three to five connections on
+	// one request) is clamped before it is mixed in, and so moves k no further
+	// than a reading of four would; nothing ever takes k past four.
+	b := NewBudget(30, 5)
+	b.observeLoad(2, 1, true)
+	b.observeLoad(40, 1, true)
+	if k := ampOf(b); !near(k, 2.6) {
+		t.Errorf("forty on one after a two moved k to %v, want 2.6 (as a four would)", k)
+	}
+	for range 50 {
+		b.observeLoad(100, 1, true)
+		if k := ampOf(b); k > 4 {
+			t.Fatalf("k went to %v, past the ceiling of four", k)
+		}
+	}
+	if k := ampOf(b); k < 3.999 {
+		t.Errorf("fifty readings of a hundred on one left k at %v, want it at the ceiling", k)
+	}
+	// Below one is one: connections to a port kept alive with nothing behind
+	// them do not let the budget count less than it sends.
+	low := NewBudget(30, 5)
+	low.observeLoad(5, 10, true)
+	if k := ampOf(low); k != 1 {
+		t.Errorf("five on ten taught k %v, want the floor of one", k)
+	}
+	three := NewBudget(30, 5)
+	three.observeLoad(30, 10, true)
+	three.observeLoad(0, 10, true)
+	if k := ampOf(three); !near(k, 2.4) {
+		t.Errorf("nothing on ten after a three moved k to %v, want 2.4 (as a one would)", k)
+	}
+}
+
+func TestBudget_LearnsNothingFromAReadingWithNoRequestsOrNoAnswer(t *testing.T) {
+	b := NewBudget(30, 5)
+	b.observeLoad(12, 0, true)
+	if k := ampOf(b); k != 1 {
+		t.Errorf("twelve with no request on the ports taught k %v, want it untouched at 1", k)
+	}
+	if b.Reading().Sampled {
+		t.Error("a reading with nothing in flight and nothing on the ports counts as a sample")
+	}
+	b.observeLoad(40, 20, false)
+	if k := ampOf(b); k != 1 {
+		t.Errorf("a failed reading taught k %v, want it untouched at 1", k)
+	}
+	if b.Reading().Sampled {
+		t.Error("a failed reading counts as a sample")
+	}
+	// Once learned, k is kept through both.
+	b.observeLoad(40, 20, true)
+	b.observeLoad(90, 0, true)
+	b.observeLoad(90, 10, false)
+	if k := ampOf(b); !near(k, 2) {
+		t.Errorf("k is %v after a reading with no requests and a failed one, want the 2 learned before", k)
+	}
+	// A reading with this program's attempts in flight is the first chance to
+	// learn, whatever it finds on the ports.
+	s := NewBudget(30, 5)
+	take(t, s, ClassSearch, 1)
+	s.observeLoad(0, 0, true)
+	if !s.Reading().Sampled {
+		t.Error("a reading taken with an attempt in flight does not count as a sample")
+	}
+}
+
+func TestBudget_CountsEveryAttemptAsKAndASolveAsTheReserve(t *testing.T) {
+	// k is what the service opens per request; the reserve is the user's own
+	// figure for a solve in the service's terms already, and is not scaled.
+	b := NewBudget(30, 5)
+	setAmp(b, 2)
+	held := take(t, b, ClassSearch, 3)
+	held[0].Solving(20101)
+	if r := b.Reading(); r.Computed() != 9 || r.InUse() != 9 {
+		t.Errorf("two attempts and a solve at k 2 read %+v (counted %d), want 2x2 + 5 = 9", r, r.Computed())
+	}
+	// The same count is what admission goes by: twenty-one left of thirty is
+	// ten more searches at two each.
+	if got := b.Free(ClassSearch); got != 10 {
+		t.Errorf("two attempts and a solve at k 2 on thirty leave %d free for searches, want 10", got)
+	}
+	// Fractions are summed and rounded up once: three at 1.5 are five, not six.
+	f := NewBudget(30, 5)
+	setAmp(f, 1.5)
+	take(t, f, ClassSearch, 3)
+	if got := f.Reading().Computed(); got != 5 {
+		t.Errorf("three attempts at k 1.5 count %d, want 5 (4.5 rounded up once)", got)
+	}
+	// Admission charges the attempt its k too: at k 2 on a limit of eleven,
+	// five attempts are ten and a sixth would be twelve.
+	g := NewBudget(11, 0)
+	setAmp(g, 2)
+	take(t, g, ClassSearch, 5)
+	waiting(t.Context(), t, g, ClassSearch, "a sixth search at k 2 on a limit of eleven")
+	l := NewBudget(13, 2)
+	setAmp(l, 2)
+	take(t, l, ClassLookup, 5)
+	waiting(t.Context(), t, l, ClassLookup, "a sixth lookup at k 2 on a limit of thirteen with two kept for a solve")
+}
+
+func TestBudget_ALowerAmplificationLetsAWaitingSearchIn(t *testing.T) {
+	// A lower k shrinks what every attempt in flight counts for, and that is
+	// room: a search waiting for it must hear, with no attempt given back.
+	b := NewBudget(10, 0)
+	setAmp(b, 4)
+	take(t, b, ClassSearch, 2)
+	search := waiting(t.Context(), t, b, ClassSearch, "a third search at k 4 on a limit of ten")
+	b.observeLoad(2, 2, true)
+	letIn(t, search, "the search once a reading of one per request brought k down to 3.1")
+}
+
+func TestBudget_ForgetsTheAmplificationWhenTheLimitIsTakenOff(t *testing.T) {
+	b := NewBudget(30, 5)
+	b.observeLoad(60, 20, true)
+	b.Set(0, 5)
+	if r := b.Reading(); r.Amplification != 1 || r.Sampled {
+		t.Errorf("a budget whose limit was taken off reads %+v, want k back at 1 and nothing sampled", r)
+	}
+	b.observeLoad(60, 20, true)
+	if k := ampOf(b); k != 1 {
+		t.Errorf("a budget without a limit learned k %v from a reading, want none", k)
+	}
+	b.Set(30, 5)
+	b.observeLoad(40, 20, true)
+	if k := ampOf(b); !near(k, 2) {
+		t.Errorf("a limit set again learned k %v from its first reading of two, want 2 as a first sample", k)
 	}
 }
 
