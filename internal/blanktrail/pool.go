@@ -348,6 +348,13 @@ type PoolConfig struct {
 	// and the first thing that notices is something other than the job.
 	PortsHeldBack int
 
+	// Budget is the profile's connections to the proxy, shared by every pool
+	// of that profile in this process; nil is no limit. BudgetClass is what
+	// this pool's attempts count as: ClassLookup for the ports hidden addresses
+	// are read through, ClassSearch — the zero value — for everything else.
+	Budget      *Budget
+	BudgetClass Class
+
 	// Now and Sleep are clock seams for tests. Both default to the real clock.
 	Now   func() time.Time
 	Sleep func(context.Context, time.Duration) error
@@ -505,6 +512,10 @@ type Pool struct {
 	// something says otherwise, and triedToGrow is when it last looked for room.
 	ceiling     int
 	triedToGrow time.Time
+
+	// closeIdle is what giving back a port's idle connections is. It is a seam
+	// because a test cannot see the idle pool of a transport.
+	closeIdle func(*poolPort)
 }
 
 // SpecStats is per-template port accounting, so a progress screen can say
@@ -761,12 +772,15 @@ func NewPool(ctx context.Context, cfg PoolConfig) (*Pool, error) {
 		host:  host,
 		cool:  cool,
 		byNum: map[int]*poolPort{},
+
+		closeIdle: func(pt *poolPort) { pt.base.CloseIdleConnections() },
 	}
 
 	if err := p.openBatch(ctx, cfg.Size(), false); err != nil {
 		_ = p.Close()
 		return nil, err
 	}
+	cfg.Budget.join(p)
 	return p, nil
 }
 
@@ -886,9 +900,10 @@ func (p *Pool) openBatch(ctx context.Context, count int, hot bool) error {
 			base:     newBaseTransport(host, num, spec.Protocol, p.cfg.CA, p.cfg.Insecure, p.cfg.NoKeepAlives),
 		}
 		// lastUsed stays zero so a fresh port is immediately available.
+		lad := &ladder{rt: pt.base, port: num, rem: p, trace: p.cfg.Trace, budget: p.cfg.Budget, class: p.cfg.BudgetClass}
 		pt.client = &http.Client{
 			Timeout:   p.cfg.RequestTimeout,
-			Transport: &ladder{rt: pt.base, port: num, rem: p, trace: p.cfg.Trace},
+			Transport: lad,
 		}
 		p.mu.Lock()
 		p.ports = append(p.ports, pt)
@@ -2140,6 +2155,7 @@ func (p *Pool) closePorts(ports []*poolPort, each func() (context.Context, conte
 func (p *Pool) Close() error {
 	var firstErr error
 	p.closeOnce.Do(func() {
+		p.cfg.Budget.leave(p)
 		p.mu.Lock()
 		ports := append([]*poolPort(nil), p.ports...)
 		p.ports = nil
@@ -2153,6 +2169,47 @@ func (p *Pool) Close() error {
 		p.mixer.Close()
 	})
 	return firstErr
+}
+
+// Budget is the profile's budget this pool counts into, nil where none.
+func (p *Pool) Budget() *Budget { return p.cfg.Budget }
+
+// portNumbers is every port the pool holds now, for the budget to sum what the
+// service says they carry.
+func (p *Pool) portNumbers() []int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]int, 0, len(p.ports))
+	for _, pt := range p.ports {
+		out = append(out, pt.num)
+	}
+	return out
+}
+
+// overLimit is the budget saying the service counts more connections to the
+// proxy on this profile than it allows. A pool of lookup ports gives back the
+// connections it keeps idle between two lookups, on every port with no solve
+// on it; a searching pool does nothing — its connections are searches and
+// solves, the two things the limit exists to keep. Nothing is asked of the
+// service: a Refresh or a move would cost a port its warm road to Google for a
+// count that is over by a connection or two for a second.
+//
+// The pool's lock is let go before the budget is asked about a port: the
+// budget never calls into a pool under its own lock, and a pool must not call
+// into the budget under its.
+func (p *Pool) overLimit() {
+	if p.cfg.BudgetClass != ClassLookup {
+		return
+	}
+	p.mu.Lock()
+	ports := append([]*poolPort(nil), p.ports...)
+	p.mu.Unlock()
+	for _, pt := range ports {
+		if p.cfg.Budget.solvingOn(pt.num) {
+			continue
+		}
+		p.closeIdle(pt)
+	}
 }
 
 // isClosed reports whether Close has run. Renewal checks it because it reopens a

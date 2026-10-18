@@ -162,6 +162,12 @@ type ladder struct {
 	// asked for it: the timing hooks it installs cost a little on every request,
 	// and a program nobody is debugging should not pay for them.
 	trace func(RequestTrace)
+	// budget, when set, is the profile's connections to the proxy; class is what
+	// this port's attempts count as in it. Each attempt takes a place before it
+	// is sent and holds it until its answer has been read or closed. A nil budget
+	// is no limit, and costs the hot path nothing but a nil check.
+	budget *Budget
+	class  Class
 }
 
 func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -179,11 +185,34 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 	// works; attempt counts the times a refused answer was asked for again, and
 	// is spent waiting out something at the other end.
 	hunted := 0
+	// The place in the profile's budget this attempt holds. It is given back
+	// before every pause, unless the attempt met a challenge the solver is
+	// still working on: then it is held as a solve, through the pauses and the
+	// asks after them, until the request ends — those connections are the
+	// solver's and are open the whole time.
+	var unit *Unit
+	handed := false
+	defer func() {
+		if !handed {
+			unit.Release()
+		}
+	}()
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
+			if !unit.waitsOnASolve() {
+				unit.Release()
+				unit = nil
+			}
 			if err := t.rem.wait(req.Context(), delay); err != nil {
 				return nil, err
 			}
+		}
+		if unit == nil {
+			got, err := t.budget.Acquire(req.Context(), t.class)
+			if err != nil {
+				return nil, err
+			}
+			unit = got
 		}
 
 		sent := req.Clone(req.Context())
@@ -286,6 +315,9 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				continue
 
 			case errors.Is(refusal, ErrSolverWorking), errors.Is(refusal, ErrSolverBusy):
+				if errors.Is(refusal, ErrSolverWorking) {
+					unit.Solving(t.port)
+				}
 				// The challenge, not the road. A solve that outran this request
 				// is still going and pins itself to this port, so the warm place
 				// to ask from is the one we are standing on: leaving it throws
@@ -315,7 +347,8 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		if answered(resp.StatusCode) {
 			t.rem.attemptSucceeded(t.port)
-			return resp, nil
+			handed = true
+			return holdUntilRead(req.Context(), resp, unit), nil
 		}
 
 		t.rem.failed(failureOf(nil, resp.StatusCode))
@@ -329,11 +362,13 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 
 		if !Retryable(resp.StatusCode) {
-			return resp, nil
+			handed = true
+			return holdUntilRead(req.Context(), resp, unit), nil
 		}
 		if attempt >= retryBudget {
 			t.rem.exhausted(t.port)
-			return resp, nil
+			handed = true
+			return holdUntilRead(req.Context(), resp, unit), nil
 		}
 
 		delay = backoff(attempt + 1)
@@ -372,6 +407,57 @@ func answered(status int) bool {
 func drainAndClose(resp *http.Response) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	_ = resp.Body.Close()
+}
+
+// holdUntilRead hands an answer on with the attempt's place in the budget still
+// held, and gives the place back when the answer has been read to its end or
+// closed, whichever comes first. A connection is open to the proxy until then.
+//
+// A caller that neither reads nor closes the body would hold the place for
+// good, so it is also given back when the request's context is done: every
+// caller here runs its requests under a context that ends with the request, the
+// job or the program, and net/http itself keeps the connection no longer than
+// that. Without a place to hand on (no budget, or a limit of nought) the answer
+// goes out untouched, unwrapped.
+func holdUntilRead(ctx context.Context, resp *http.Response, u *Unit) *http.Response {
+	if u == nil || resp.Body == nil {
+		u.Release()
+		return resp
+	}
+	b := &unitBody{ReadCloser: resp.Body, unit: u}
+	if ctx.Done() != nil {
+		b.stop = context.AfterFunc(ctx, u.Release)
+	}
+	resp.Body = b
+	return resp
+}
+
+// unitBody is an answer's body that lets its place in the budget go.
+type unitBody struct {
+	io.ReadCloser
+	unit *Unit
+	stop func() bool
+}
+
+func (b *unitBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.let()
+	}
+	return n, err
+}
+
+func (b *unitBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.let()
+	return err
+}
+
+func (b *unitBody) let() {
+	b.unit.Release()
+	if b.stop != nil {
+		b.stop()
+	}
 }
 
 // backoff returns an exponential delay with jitter for retry attempt n (n >= 1),

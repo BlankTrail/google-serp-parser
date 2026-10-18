@@ -77,6 +77,9 @@ type fakeRemedy struct {
 	markedBad      int
 	exhaustedCalls int
 	waits          []time.Duration
+	// atWait, when set, is called as the ladder starts a pause, before it is
+	// recorded.
+	atWait func()
 
 	reopened   int
 	markedDead int
@@ -127,6 +130,9 @@ func (r *fakeRemedy) hunt(int) int {
 func (r *fakeRemedy) stays(int) bool { return r.staying }
 
 func (r *fakeRemedy) wait(_ context.Context, d time.Duration) error {
+	if r.atWait != nil {
+		r.atWait()
+	}
 	r.waits = append(r.waits, d)
 	return nil
 }
@@ -1088,5 +1094,243 @@ func TestLadder_AsksOnceMoreThroughTheSamePortWhenTheHandshakeWithTheSiteFailed(
 	}
 	if rt2.calls != 2 || rem2.markedDead != 0 || rem2.rotations != 0 {
 		t.Errorf("went out %d times, marked dead %d, moved %d; want twice and neither", rt2.calls, rem2.markedDead, rem2.rotations)
+	}
+}
+
+func TestLadder_HoldsAPlaceForAnAttemptUntilItsAnswerIsRead(t *testing.T) {
+	// An answer still being read is a connection to the proxy still open, and
+	// a search page is read for a while after its headers came back.
+	b := NewBudget(5, 2)
+	during := -1
+	rt := &fakeRT{steps: []func() (*http.Response, error){func() (*http.Response, error) {
+		during = b.Reading().InFlight
+		return respond(200, nil, "the page")()
+	}}}
+	l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 3}, budget: b, class: ClassSearch}
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if during != 1 {
+		t.Errorf("%d places held while the attempt was out, want one", during)
+	}
+	if got := b.Reading().InFlight; got != 1 {
+		t.Errorf("%d places held while the answer is unread, want one", got)
+	}
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("reading the answer: %v", err)
+	}
+	if got := b.Reading().InFlight; got != 0 {
+		t.Errorf("%d places held after the answer was read to its end, want none", got)
+	}
+	_ = resp.Body.Close()
+	if got := b.Reading().InFlight; got != 0 {
+		t.Errorf("%d places held after the answer was closed as well, want none", got)
+	}
+}
+
+func TestLadder_GivesThePlaceBackWhenTheAnswerIsClosedUnread(t *testing.T) {
+	b := NewBudget(5, 2)
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(200, nil, "the page")}}
+	l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 3}, budget: b, class: ClassSearch}
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp.Body.Close()
+	if got := b.Reading().InFlight; got != 0 {
+		t.Errorf("%d places held after the answer was closed, want none", got)
+	}
+}
+
+func TestLadder_TakesANewPlaceForEveryAttempt(t *testing.T) {
+	// A retry is a new connection; the pause before it holds nothing open.
+	b := NewBudget(5, 2)
+	atWait, second := -1, -1
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		respond(503, nil, "busy"),
+		func() (*http.Response, error) { second = b.Reading().InFlight; return respond(200, nil, "the page")() },
+	}}
+	rem := &fakeRemedy{retries: 3}
+	rem.atWait = func() { atWait = b.Reading().InFlight }
+	l := &ladder{rt: rt, port: 20101, rem: rem, budget: b, class: ClassSearch}
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if atWait != 0 || second != 1 {
+		t.Errorf("held %d during the pause and %d on the retry, want none and one", atWait, second)
+	}
+}
+
+func TestLadder_KeepsItsPlaceAsASolveWhileTheSolverWorks(t *testing.T) {
+	// The solve pins itself to this port and the request asks again every
+	// three seconds; its connections must not be counted as one, nor given up
+	// between two asks, or the budget lets in what the solve is already using.
+	b := NewBudget(10, 4)
+	var solves, inFlight int
+	var pinned bool
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(503, "solver_timeout"),
+		respond(200, nil, "the page"),
+	}}
+	rem := &fakeRemedy{retries: 3}
+	rem.atWait = func() {
+		r := b.Reading()
+		solves, inFlight, pinned = r.Solves, r.InFlight, b.solvingOn(20101)
+	}
+	l := &ladder{rt: rt, port: 20101, rem: rem, budget: b, class: ClassSearch}
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if solves != 1 || inFlight != 0 || !pinned {
+		t.Errorf("while the solver worked: %d solves, %d in flight, port solving %v; want one solve on the port",
+			solves, inFlight, pinned)
+	}
+	_ = resp.Body.Close()
+	if r := b.Reading(); r.Solves != 0 || r.InFlight != 0 {
+		t.Errorf("after the request %+v is still held, want nothing", r)
+	}
+}
+
+func TestLadder_ASolverWithNothingFreeIsNoSolve(t *testing.T) {
+	b := NewBudget(10, 4)
+	solves := -1
+	rt := &fakeRT{steps: []func() (*http.Response, error){
+		serviceSays(503, "solver_capacity"),
+		respond(200, nil, "the page"),
+	}}
+	rem := &fakeRemedy{retries: 3}
+	rem.atWait = func() { solves = b.Reading().Solves }
+	l := &ladder{rt: rt, port: 20101, rem: rem, budget: b, class: ClassSearch}
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp.Body.Close()
+	if solves != 0 {
+		t.Errorf("a solver with nothing free was counted as %d solves, want none", solves)
+	}
+}
+
+func TestLadder_WaitsForAPlaceBeforeItSendsAnything(t *testing.T) {
+	b := NewBudget(1, 0)
+	held, err := b.Acquire(t.Context(), ClassSearch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(200, nil, "the page")}}
+	l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 3}, budget: b, class: ClassSearch}
+	req := newReq(t, http.MethodGet, "") // made here: t.Fatalf belongs to the test's goroutine
+	done := make(chan error, 1)
+	go func() {
+		resp, err := l.RoundTrip(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		done <- err
+	}()
+	select {
+	case <-done:
+		t.Fatal("the request went out with no place in the budget")
+	case <-time.After(30 * time.Millisecond):
+	}
+	held.Release()
+	select {
+	case err := <-done:
+		if err != nil || rt.calls != 1 {
+			t.Errorf("once a place came free: %v after %d sends, want the page after one", err, rt.calls)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the request is still waiting after a place came free")
+	}
+}
+
+func TestLadder_GivesUpWaitingForAPlaceWhenTheRequestIsCalledOff(t *testing.T) {
+	b := NewBudget(1, 0)
+	if _, err := b.Acquire(t.Context(), ClassSearch); err != nil {
+		t.Fatal(err)
+	}
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(200, nil, "the page")}}
+	l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 3}, budget: b, class: ClassSearch}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := l.RoundTrip(newReq(t, http.MethodGet, "").WithContext(ctx))
+	if !errors.Is(err, context.Canceled) || rt.calls != 0 {
+		t.Errorf("a called-off request answered %v after %d sends, want the cancellation and none", err, rt.calls)
+	}
+	if got := b.Reading().InFlight; got != 1 {
+		t.Errorf("%d places held, want only the one taken before", got)
+	}
+}
+
+func TestLadder_GivesThePlaceBackWhenTheAttemptFails(t *testing.T) {
+	b := NewBudget(5, 0)
+	rt := &fakeRT{steps: []func() (*http.Response, error){failWith(errors.New("connection reset by peer"))}}
+	l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 0, addresses: 1}, budget: b, class: ClassSearch}
+	if _, err := l.RoundTrip(newReq(t, http.MethodGet, "")); err == nil {
+		t.Fatal("a failed attempt came back as an answer")
+	}
+	if got := b.Reading().InFlight; got != 0 {
+		t.Errorf("%d places held after the request failed, want none", got)
+	}
+}
+
+func TestLadder_GivesThePlaceBackWhenTheCallerNeverReadsOrClosesTheAnswer(t *testing.T) {
+	// A body nobody reads or closes must not hold a place for good: the
+	// request's context ending lets it go.
+	b := NewBudget(5, 2)
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(200, nil, "the page")}}
+	l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 3}, budget: b, class: ClassSearch}
+	ctx, cancel := context.WithCancel(t.Context())
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, "").WithContext(ctx))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	_ = resp
+	if got := b.Reading().InFlight; got != 1 {
+		t.Fatalf("%d places held while the answer is unread, want one", got)
+	}
+	cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for b.Reading().InFlight != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := b.Reading().InFlight; got != 0 {
+		t.Errorf("%d places still held after the request's context ended, want none", got)
+	}
+}
+
+func TestLadder_LeavesTheAnswerAloneWhenThereIsNoLimit(t *testing.T) {
+	for _, b := range []*Budget{nil, NewBudget(0, 5)} {
+		rt := &fakeRT{steps: []func() (*http.Response, error){respond(200, nil, "the page")}}
+		l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 3}, budget: b, class: ClassSearch}
+		resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+		if err != nil {
+			t.Fatalf("RoundTrip: %v", err)
+		}
+		if _, wrapped := resp.Body.(*unitBody); wrapped {
+			t.Errorf("an answer with no limit in force came back wrapped")
+		}
+		_ = resp.Body.Close()
+	}
+}
+
+func TestLadder_GivesThePlaceBackWhenTheRetriesAreSpentAndTheAnswerIsStillRefused(t *testing.T) {
+	b := NewBudget(5, 2)
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(503, nil, "busy")}}
+	l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 1}, budget: b, class: ClassSearch}
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, ""))
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if got := b.Reading().InFlight; got != 1 {
+		t.Errorf("%d places held while the last refusal is unread, want one", got)
+	}
+	_ = resp.Body.Close()
+	if got := b.Reading().InFlight; got != 0 {
+		t.Errorf("%d places held after it was closed, want none", got)
 	}
 }
