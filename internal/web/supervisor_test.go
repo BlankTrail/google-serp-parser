@@ -1557,6 +1557,35 @@ func TestPoolEngine_ReadsWhatTheRunIsUpAgainst(t *testing.T) {
 	}
 }
 
+func TestPoolEngine_ReadsTheProfilesBudgetAndTheLookupPorts(t *testing.T) {
+	fake := fakebt.New(t)
+	cl, err := blanktrail.NewClient(fake.URL(), fake.Key())
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	budget := blanktrail.NewBudget(30, 5)
+	open := func(ctx context.Context, n int) (*blanktrail.Pool, error) {
+		return blanktrail.NewPool(ctx, blanktrail.PoolConfig{Client: cl, Threads: n, PortsPerThread: 1,
+			Spec: blanktrail.DefaultPortSpec(), Insecure: true, Budget: budget})
+	}
+	pool, err := open(t.Context(), 2)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = pool.Close() })
+	lookups := blanktrail.NewGrowing(4, open)
+	t.Cleanup(func() { _ = lookups.Close() })
+	if _, err := lookups.Identities(t.Context()); err != nil {
+		t.Fatalf("Identities: %v", err)
+	}
+	facts := (&poolEngine{pool: pool, addresses: lookups, threads: 1,
+		brake: blanktrail.BrakeOn(cl), checks: run.NewChallenges(), where: run.NewWhere()}).Pool()
+	if facts.Budget.Limit != 30 || facts.LookupPorts != 1 || facts.Stats.Ports != 2 {
+		t.Errorf("the engine reads limit %d, %d lookup ports and %d search ports; want 30, 1 and 2",
+			facts.Budget.Limit, facts.LookupPorts, facts.Stats.Ports)
+	}
+}
+
 func TestSupervisor_SaysAJobToldToStopIsStoppingUntilItHasLetGo(t *testing.T) {
 	// A stop returns as soon as the job has been told, and the job goes on
 	// counting as running until it has put itself away: what its threads

@@ -128,6 +128,20 @@ type jobPool struct {
 	// every job.
 	Ports       int
 	Quarantined int
+	// Limited says the profile has a limit on its connections to the proxy.
+	// Without one the service is never asked how many there are, so there is
+	// no figure to draw and the line is left out.
+	Limited bool
+	// Conns is the connections to the proxy set against ConnLimit: the
+	// service's own count where it has been read, since that is what the
+	// provider's tariff counts, and this program's count where it has not.
+	// ConnsOwn says it is the latter, so the page does not pass one off as the
+	// other. ConnSolves is the captchas being solved, which the reserve is kept
+	// for.
+	Conns      int
+	ConnsOwn   bool
+	ConnLimit  int
+	ConnSolves int
 	// Sessions is how many sessions the program holds of this job's kind, Working
 	// how many are in a thread's hands this instant, and Asleep how many of the
 	// others are resting between two of their own requests. They are the
@@ -447,7 +461,9 @@ func (s *Server) poolOf(job int64) *jobPool {
 	facts := s.sup.pool()
 	out := &jobPool{
 		Addresses: facts.Addresses, Resting: facts.Banned,
-		Ports: facts.Stats.Ports, Quarantined: facts.Stats.Quarantined,
+		Ports: facts.Stats.Ports + facts.LookupPorts, Quarantined: facts.Stats.Quarantined,
+		Limited: facts.Budget.Limit > 0, Conns: facts.Budget.Observed,
+		ConnsOwn: !facts.Budget.Known, ConnLimit: facts.Budget.Limit, ConnSolves: facts.Budget.Solves,
 		Sessions: facts.Sessions, Working: facts.SessionsHeld, Asleep: facts.SessionsResting,
 		Made: facts.Ramp.Made, Ramp: rampWord(facts.Ramp),
 		Met: facts.Checks.Met, Solving: facts.Queue.Running, Queued: facts.Queue.Queued,
@@ -459,6 +475,9 @@ func (s *Server) poolOf(job int64) *jobPool {
 		// again too soon — and a longer rest, which makes more sessions, would
 		// make more of those.
 		Crowded: facts.Checks.Crowded && facts.Ramp.AtSpeed,
+	}
+	if out.ConnsOwn {
+		out.Conns = facts.Budget.Computed()
 	}
 	if facts.Checks.Answered > 0 {
 		out.PerThousand = strconv.FormatFloat(facts.Checks.PerThousand, 'f', 1, 64)

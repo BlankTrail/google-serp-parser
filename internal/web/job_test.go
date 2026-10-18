@@ -1535,3 +1535,66 @@ func TestJobPage_CountsTheCaptchasTheJobCostOverAllItsRuns(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 }
+
+func TestJobPage_ShowsTheConnectionsToTheProxyAgainstTheProfilesLimit(t *testing.T) {
+	// What the provider counts is the service's connections to the proxy, so
+	// that is the figure set against the limit; the solves are this program's
+	// own count, since a solve is what the reserve is kept for.
+	// Seven counted by the service against ten by this program's own count
+	// (two solves of five): the page shows the service's figure.
+	s, _, id := runningWith(t, poolFacts{Budget: blanktrail.BudgetReading{
+		Limit: 30, Reserve: 5, Solves: 2, Observed: 7, Known: true}})
+	body := get(t, s, jobPath(id)).Body.String()
+	for cell, want := range map[string]string{"conns-used": "7", "conns-limit": "30", "conns-solving": "2"} {
+		if got := shown(t, body, cell); got != want {
+			t.Errorf("the job's page says %s is %q, want %q", cell, got, want)
+		}
+	}
+	if strings.Contains(body, `id="conns-own"`) {
+		t.Error("a count the service gave is marked as this program's own")
+	}
+}
+
+func TestJobPage_ShowsThisProgramsCountAndSaysSoWhileTheServiceIsNotRead(t *testing.T) {
+	// Nothing read from the service yet: two solves of five and three attempts
+	// in flight make thirteen by this program's count, and the line says whose
+	// figure that is.
+	s, _, id := runningWith(t, poolFacts{Budget: blanktrail.BudgetReading{
+		Limit: 30, Reserve: 5, Solves: 2, InFlight: 3}})
+	body := get(t, s, jobPath(id)).Body.String()
+	if got := shown(t, body, "conns-used"); got != "13" {
+		t.Errorf("the job's page says %q connections, want this program's 13", got)
+	}
+	if !strings.Contains(body, `id="conns-own"`) {
+		t.Error("this program's own count is shown as if the service had given it")
+	}
+}
+
+func TestJobPage_SaysNothingOfConnectionsOnAProfileWithNoLimit(t *testing.T) {
+	s, _, id := runningWith(t, poolFacts{Stats: blanktrail.Stats{Ports: 3}})
+	if body := get(t, s, jobPath(id)).Body.String(); strings.Contains(body, `id="conns"`) {
+		t.Error("a job on a profile with no limit is shown a count of connections nobody read")
+	}
+}
+
+func TestJobPage_CountsThePortsTheAddressesAreReadThroughAmongThePortsOpen(t *testing.T) {
+	// Twenty ports open read on the page while the service held twenty-seven:
+	// the seven the hidden addresses were read through were left out.
+	s, _, id := runningWith(t, poolFacts{Stats: blanktrail.Stats{Ports: 20}, LookupPorts: 7})
+	if got := shown(t, get(t, s, jobPath(id)).Body.String(), "ports"); got != "27" {
+		t.Errorf("the job's page says %s ports are open, want the 27 of both sets", got)
+	}
+}
+
+func TestJobPage_KeepsTheConnectionsLineInTheScreenThatRefreshesItself(t *testing.T) {
+	// The page follows a run by asking for the whole screen again; the line is
+	// part of that screen, so it is as fresh as the rest and not a figure
+	// drawn once.
+	s, _, id := runningWith(t, poolFacts{Budget: blanktrail.BudgetReading{Limit: 30, Observed: 4, Known: true}})
+	body := get(t, s, jobPath(id)).Body.String()
+	main := strings.Index(body, `<main id="page"`)
+	line := strings.Index(body, `id="conns"`)
+	if main < 0 || line < main || !strings.Contains(body[main:line], "data-refresh=") {
+		t.Error("the connections line is not inside the screen the page asks for again")
+	}
+}

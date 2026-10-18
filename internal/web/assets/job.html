@@ -138,6 +138,12 @@
 <div class="metric"><dt class="label">{{$.T "job.ramp"}}</dt><dd class="state" id="ramp">{{$.T .Ramp}}</dd></div>
 {{end}}
 </dl>
+{{/* The provider's tariff counts the service's connections to the proxy, so
+     that is the figure set against the profile's limit; the solves are what
+     the reserve is kept for. Drawn only where the profile has a limit: with
+     none the service is never asked. Before the service has been read the
+     figure is this program's own count, and the line says so. */}}
+{{if .Limited}}<p class="empty" id="conns">{{$.T "job.conns"}}: <span id="conns-used">{{.Conns}}</span> {{$.T "job.conns.of"}} <span id="conns-limit">{{.ConnLimit}}</span>{{if .ConnsOwn}} <span id="conns-own">({{$.T "job.conns.own"}})</span>{{end}}, {{$.T "job.conns.solving"}}: <span id="conns-solving">{{.ConnSolves}}</span></p>{{end}}
 {{if not $.IsSuggest}}
 <details class="help">
 <summary>{{$.T "help.what"}}</summary>

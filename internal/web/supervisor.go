@@ -114,6 +114,15 @@ type poolFacts struct {
 	Sessions        int
 	SessionsHeld    int
 	SessionsResting int
+	// Budget is the profile's connections to the proxy as this process counts
+	// them, and the figures the service last gave of them. It is the profile's,
+	// not the job's: the standing set and every job of the profile draw on one
+	// budget, so a job's page shows the whole of what the tariff counts.
+	Budget blanktrail.BudgetReading
+	// LookupPorts is how many ports the hidden addresses are read through, and
+	// nought where none was opened. They are a second set beside the search
+	// pool and hold connections of their own, so the ports open are both.
+	LookupPorts int
 }
 
 // poolEngine takes one job through one pool of identities.
@@ -194,6 +203,12 @@ func (e *poolEngine) Pool() poolFacts {
 		Pool: e.pool, Queue: e.brake.Queue(), Checks: e.checks.Rhythm(), Ramp: e.ramp.Ramping(),
 		Standing: e.where.Reading()}
 	facts.Addresses, facts.Banned = e.pool.Addresses()
+	facts.Budget = e.pool.Budget().Reading()
+	if e.addresses != nil {
+		if lp := e.addresses.Opened(); lp != nil {
+			facts.LookupPorts = lp.Stats().Ports
+		}
+	}
 	if e.keeper != nil {
 		facts.Sessions, facts.SessionsHeld, facts.SessionsResting = e.keeper.Standing(e.want)
 	}
