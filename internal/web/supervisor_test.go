@@ -1674,3 +1674,31 @@ func TestSupervisor_WritesDownTheChecksEachRunOfAJobPaidFor(t *testing.T) {
 		}
 	}
 }
+
+func TestSupervisor_AJobWithNoProfileAtAllCarriesTheDefaultSolverReserveAndNoLimit(t *testing.T) {
+	// A store holding no profile gives a job the zero one. Its solver reserve is
+	// the default's and not nought, or a solve in it would be counted as holding
+	// no connection at all; and it has no limit, because nobody set one.
+	st := testStore(t)
+	pools := &raisedPools{}
+	var got Wanted
+	src := source{raise: func(ctx context.Context, want Wanted) (engine, error) {
+		got = want
+		return pools.raise(ctx, want)
+	}}
+	v := start(st, src, 1, 1)
+	t.Cleanup(func() { _ = v.Close() })
+	eng, err := v.raise(t.Context(), src,
+		store.JobSummary{ProfileID: 9999, Ports: 1, Threads: 1, Device: blanktrail.DeviceDesktop})
+	if err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	_ = eng.Close()
+	if got.Profile.ID != 0 {
+		t.Skipf("the store has a default profile (%d); the fallback is not reached", got.Profile.ID)
+	}
+	if got.Profile.SolverReserve != store.DefaultSolverReserve || got.Profile.ConnLimit != 0 {
+		t.Errorf("the fallback profile has reserve %d and limit %d, want %d and 0",
+			got.Profile.SolverReserve, got.Profile.ConnLimit, store.DefaultSolverReserve)
+	}
+}

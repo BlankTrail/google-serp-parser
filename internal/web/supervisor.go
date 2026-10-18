@@ -917,6 +917,9 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 		// without the solver that carries it through a challenge.
 		defaults := store.NewProfile()
 		prof.VDNSMode, prof.Solver, prof.HTTP3 = defaults.VDNSMode, defaults.Solver, defaults.HTTP3
+		// The reserve too, with the limit left at nought: a fallback has no
+		// limit to protect, but a solve in it must never be counted as free.
+		prof.SolverReserve = defaults.SolverReserve
 	}
 	eng, err := src.raise(ctx, Wanted{
 		Profile:   prof,

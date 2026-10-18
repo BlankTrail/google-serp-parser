@@ -109,6 +109,11 @@ type serveOptions struct {
 	// not walk back into every one of them. Nil keeps no such record, which is
 	// what a command exercised without a history has.
 	Rests rests
+	// Budgets is one budget of connections to the proxy for every profile, for
+	// the whole process: the standing set, the jobs and the lookups of one
+	// profile spend one tariff, so they wait in one line. Nil is the command
+	// line and the tests that set none, which run with no limit.
+	Budgets *blanktrail.Budgets
 	// onListen is told the address the system actually gave, once it is bound
 	// and before anything is served on it. It is how the tray icon knows where
 	// to send a browser: a caller who asked for port zero has no other way to
@@ -253,6 +258,12 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 
 	// Closed before the history, because a job it ends is written down as it
 	// lets go of it. Close waits for that.
+	// One budget a profile for everything this server opens. The service is
+	// asked how many connections its ports carry only while some profile has a
+	// limit: every ten seconds, every two near the limit (see
+	// blanktrail.BudgetPollSlow). It is started before the first pool is opened
+	// and stops with the server.
+	opts.Budgets = startBudgets(ctx, blanktrail.NewBudgets(blanktrail.BudgetPollSlow, blanktrail.BudgetPollFast))
 	sup, warm := opts.jobs(ctx, out, st)
 	// What the standing set could not know when it was built: whether a job is
 	// working through it. Everything that takes identities away waits on this
@@ -649,6 +660,10 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	cfg.Spec.VDNSStrictBypass = prof.StrictBypass
 	cfg.Spec.FirstHop = hop
 	cfg.MaxPerUpstream = prof.ThreadsPerUpstream
+	// The standing set, every job and its lookups of this profile wait in one
+	// line, because the provider counts one tariff. A limit edited on the screen
+	// reaches the budget here, the next time a pool of the profile is opened.
+	cfg.Budget = o.Budgets.For(client, prof.ID, prof.ConnLimit, prof.SolverReserve)
 	// What the ports of this job are made of: every browser and system this
 	// program knows, at the newest ten releases of each the service holds,
 	// narrowed by whatever of the three the job named.
@@ -766,13 +781,24 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	if most < 1 {
 		most = 1
 	}
+	g := blanktrail.NewGrowing(most,
+		func(ctx context.Context, n int) (*blanktrail.Pool, error) {
+			one := plain
+			one.Threads, one.PortsPerThread = n, 1
+			return blanktrail.NewPool(ctx, one)
+		})
+	// The set widens only while the profile's budget has room for a lookup
+	// port's worth, so the lookups never crowd the searches out of the tariff.
+	g.HoldTo(cfg.Budget, run.LookupsAtOnce)
 	return web.Identities{Search: pool, Brake: brake, Keeper: o.Keeper, Want: sessionsFor(want),
-		Addresses: blanktrail.NewGrowing(most,
-			func(ctx context.Context, n int) (*blanktrail.Pool, error) {
-				one := plain
-				one.Threads, one.PortsPerThread = n, 1
-				return blanktrail.NewPool(ctx, one)
-			})}, nil
+		Addresses: g}, nil
+}
+
+// startBudgets starts the one poll of the service for the whole process and
+// returns the registry. It ends with ctx, which is the server's.
+func startBudgets(ctx context.Context, bs *blanktrail.Budgets) *blanktrail.Budgets {
+	go bs.Run(ctx)
+	return bs
 }
 
 // lookupPortsOf is what the ports the hidden addresses are read through are
@@ -798,6 +824,9 @@ func lookupPortsOf(cfg blanktrail.PoolConfig) blanktrail.PoolConfig {
 	// drops its connections whenever it is moved or renewed. A connection a
 	// lookup was a full TLS handshake on the service for every hidden address.
 	plain.NoKeepAlives = false
+	// Lookups go on what the searches and the solves leave of the budget (see
+	// blanktrail.Budget), never ahead of them.
+	plain.BudgetClass = blanktrail.ClassLookup
 	return plain
 }
 
