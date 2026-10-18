@@ -89,7 +89,7 @@ func TestBudgets_LearnTheAmplificationFromTheProfilesOwnPorts(t *testing.T) {
 	fake.SetConns(own[1], 1, 4)
 	fake.SetConns(stranger.portNumbers()[0], 1, 40)
 	bs.pollOnce(t.Context())
-	if r := cfg.Budget.Reading(); r.Amplification != 2 || !r.Sampled {
+	if r := cfg.Budget.Reading(); r.Amplification != 2 || r.Samples != 1 {
 		t.Errorf("the profile reads %+v, want k 2 from its own two ports", r)
 	}
 	// A reading that fails leaves k as the good ones made it.
@@ -100,28 +100,37 @@ func TestBudgets_LearnTheAmplificationFromTheProfilesOwnPorts(t *testing.T) {
 	}
 }
 
-func TestBudgets_AskFastWhileAProfileHasAttemptsInFlightAndHasNotBeenSampled(t *testing.T) {
-	// The job starts just after a reading found the profile idle. Twenty of
-	// thirty is below seventy per cent at the k of 1 nothing has taught yet, but
-	// on the stand those twenty were forty connections: the next reading comes
-	// at the fast rate, and once it has been taken the rate is the usual one.
-	fake, clock, bs, b, _ := rateWorld(t)
+func TestBudgets_AskFastUntilTheAmplificationHasLearnedFromTwoReadings(t *testing.T) {
+	// The job starts just after a reading found the profile idle. Five of
+	// thirty is far below seventy per cent, but nothing has taught k yet: the
+	// first reading catches the five requests on the ports before the service
+	// has dialled out for them and teaches nothing, and the profile is read
+	// fast until two readings of two per request have taught k; then, at ten
+	// of thirty, at the usual slow rate.
+	fake, clock, bs, b, p := rateWorld(t)
+	port := p.portNumbers()[0]
 	bs.pollOnce(t.Context())
-	take(t, b, ClassSearch, 20)
+	take(t, b, ClassSearch, 5)
+	fake.SetConns(port, 5, 0)
 	before := portsAsked(fake)
-	for range 2 { // at 0 and 2 s
-		bs.step(t.Context())
-		clock.Advance(2 * time.Second)
+	at := func(steps int) {
+		for range steps {
+			bs.step(t.Context())
+			clock.Advance(2 * time.Second)
+		}
 	}
-	if got := portsAsked(fake) - before; got != 1 {
-		t.Errorf("an unsampled profile with twenty in flight was read %d times in the first two seconds, want once (at 2 s)", got)
+	at(2) // 0 s (not due), 2 s (nothing upstream yet)
+	if r := b.Reading(); r.Samples != 0 || portsAsked(fake)-before != 1 {
+		t.Fatalf("after the reading at 2 s the budget reads %+v with %d readings, want one reading and no sample",
+			r, portsAsked(fake)-before)
 	}
-	for range 4 { // at 4, 6, 8 and 10 s
-		bs.step(t.Context())
-		clock.Advance(2 * time.Second)
+	fake.SetConns(port, 5, 10)
+	at(5) // 4 s and 6 s teach two; 8, 10 and 12 s are slow
+	if r := b.Reading(); !near(r.Amplification, 2) || r.Samples != 2 {
+		t.Errorf("after the readings at 4 and 6 s the budget reads %+v, want k 2 from two samples", r)
 	}
-	if got := portsAsked(fake) - before; got != 1 {
-		t.Errorf("a sampled profile at twenty of thirty was read %d times by 10 s, want only the one at 2 s (next at 12 s)", got)
+	if got := portsAsked(fake) - before; got != 3 {
+		t.Errorf("the profile was read %d times by 12 s, want 3 (2, 4 and 6 s; the next at 16 s)", got)
 	}
 }
 
@@ -223,6 +232,8 @@ func pollsOver(t *testing.T, held int) int {
 		t.Fatalf("NewPool: %v", err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
+	// k learned already (at 1), so the rate goes by the count alone.
+	setAmp(cfg.Budget, 1)
 	take(t, cfg.Budget, ClassSearch, held)
 	before := portsAsked(fake)
 	for i := 0; i <= 10; i++ {
@@ -317,6 +328,7 @@ func TestBudgets_KeepTheRateOnTheWholeListingWhereTheLightOneIsNotThere(t *testi
 		t.Fatalf("NewPool: %v", err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
+	setAmp(cfg.Budget, 1)
 	take(t, cfg.Budget, ClassSearch, 20)
 	whole, light := asked(fake, "/api/v1/ports"), portsAsked(fake)
 	for i := 0; i <= 10; i++ {
@@ -380,6 +392,7 @@ func TestBudgets_LeaveOutAProfileWithoutALimitWhenDecidingTheRate(t *testing.T) 
 	// A profile whose limit was taken off may still hold what it held; its
 	// count against a limit of nought is not "busy".
 	fake, clock, bs, b, _ := rateWorld(t)
+	setAmp(b, 1)
 	take(t, b, ClassSearch, 20)
 	other := bs.For(nil, 2, 30, 5)
 	take(t, other, ClassSearch, 25)

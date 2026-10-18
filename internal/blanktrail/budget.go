@@ -31,7 +31,19 @@ const (
 // Two counts decide. This program's own is free and always at hand; the
 // service's (read now and then from its listing) also sees what the service
 // opened on its own: retries, kept connections, the solver's own. "In use" is
-// the larger of the two, and both classes are admitted by it.
+// the own count plus the excess the last reading found over it, and both
+// classes are admitted by it.
+//
+// The excess and not the raw reading is what is kept, because a reading is a
+// snapshot that goes stale while the own count moves on. Kept raw (the first
+// fix, R4) a reading of twenty-nine went on counting as twenty-nine for the
+// two seconds to the next one, however many requests were answered meanwhile,
+// and every search stood still for that time at every reading near the limit:
+// the simulation of the stand answered about 660 requests in two minutes of an
+// ideal 900. What the reading adds that the own count cannot know is how far
+// the service was above the prediction at that instant — connections the
+// solver opened, retries, kept connections — and that is the part carried
+// forward until the next reading measures it again (ruling R5).
 //
 // The own count is a prediction of the service's, not a count of requests. The
 // first version counted one connection per attempt and let searches go by that
@@ -43,10 +55,10 @@ const (
 // time while the reading — which only held the lookups — said so every two
 // seconds. So the budget learns from each reading how many connections the
 // service opens per request on this profile's ports (the amplification, k),
-// counts every attempt as k, and holds searches as well as lookups on the
-// larger of that prediction and the last reading. Between two readings the
-// prediction keeps the count inside the limit; a reading that shows more than
-// was predicted holds everything new until a later one shows room.
+// counts every attempt as k, and holds searches as well as lookups on that
+// prediction plus the excess. Between two readings the prediction keeps the
+// count inside the limit; a reading that shows more than was predicted holds
+// that much more room until a later one shows the excess gone.
 //
 // A limit of nought is how every profile ran before there was a limit: nothing
 // waits and nothing is counted.
@@ -56,19 +68,23 @@ type Budget struct {
 	reserve  int
 	inFlight int
 	solves   int
+	// observed is the service's last reading as it was read, for the job page
+	// and for telling the pools the profile is over; admission does not use
+	// it but excess.
 	observed int
 	known    bool
+	// excess is how far the last good reading was above the own count at the
+	// moment it was taken, priced with the k that reading taught; nought when
+	// the reading agreed with the prediction, failed, or was never taken.
+	excess float64
 	// amp is k, the connections to the proxy the service opens for each
 	// connection this program makes to a port of the profile, learned from
 	// the readings (see learnLocked); 1 until a reading teaches otherwise.
 	amp float64
-	// learned is whether amp has had a sample yet; the first is taken as it
-	// is (see learnLocked).
-	learned bool
-	// sampled is whether a reading has been taken while this profile had
-	// attempts in flight, which is when amp can first be learned. Until then
-	// the registry reads the service at the fast rate (see Budgets.step).
-	sampled bool
+	// samples is how many readings amp has learned from. Until two have, the
+	// registry reads the service at the fast rate while the profile has
+	// attempts in flight (see Budgets.step and ampWarmup).
+	samples int
 	// searchWaiting is how many searches wait for room; while any does, no
 	// lookup is let in. lookupWaiting only tells the tests when a waiter has
 	// settled to wait.
@@ -100,33 +116,49 @@ func NewBudget(limit, reserve int) *Budget {
 // The amplification's learning.
 //
 // A reading's sample is the profile's connections to the proxy over its
-// connections to the ports. It is smoothed (an exponentially weighted mean,
-// each reading weighing ampAlpha) because one reading is one instant: a solve
-// caught in it has the solver's three to five connections on a single request,
-// a reading taken as a burst of requests arrives has them counted before the
-// service has dialled out for them. Three tenths lets a change in the service's
-// ways be followed within half a dozen readings — twelve seconds at the fast
-// rate — while one odd reading moves k by less than a third of its oddness.
+// connections to the ports, with the solves taken out of both: a solve is one
+// connection to a port and, on the proxy side, the solver's own three to five,
+// which the budget already counts as the reserve. Left in, a reading with two
+// solves among twenty requests would teach a k that counted the solver's
+// connections a second time on every request. So the sample is (upstream −
+// reserve × solves) / (client − solves), the divisor kept at one or more.
 //
-// The first sample is not smoothed but taken as it is. The 1 that k starts at
-// is a guess, not a reading, and mixed in at seven tenths it would take those
-// half-dozen readings to wash out: a simulation of the stand (two connections
+// Samples are smoothed (an exponentially weighted mean, each reading weighing
+// ampAlpha) because one reading is one instant: a reading taken as a burst of
+// requests arrives has them counted before the service has dialled out for
+// them, one taken as many end has the service's connections still closing.
+// Three tenths lets a change in the service's ways be followed within half a
+// dozen readings — twelve seconds at the fast rate — while one odd reading
+// moves k by less than a third of its oddness.
+//
+// The first samples are not smoothed against the 1 that k starts at: that is a
+// guess, not a reading, and mixed in at seven tenths it would take those
+// half-dozen readings to wash out; a simulation of the stand (two connections
 // per request, limit 30, twenty threads; budget_sim_test.go) went over the
-// limit again and again for the first fourteen seconds that way, and only once,
-// in the stretch before the first reading, with the first sample taken whole.
+// limit again and again for the first fourteen seconds that way. The first
+// sample is taken whole and the second makes k the plain mean of the two, so
+// one badly timed reading weighs half and not all. A first sample below the
+// floor is not taken at all: it is a reading of requests the service has not
+// dialled out for yet (client connections and nothing upstream), and taken it
+// would teach the k of 1 that the budget already assumes and end the fast
+// reading meant to learn the real one (ampWarmup).
 //
 // The floor is one: the service cannot carry a request to the proxy on less than
 // one connection, and a sample below one (connections to the port kept alive
 // between requests, with nothing upstream) would let the budget count less than
-// it sends. The ceiling is four: past it the reading is a solve or a burst and
-// not the service's way with requests, and a k that high already holds a limit
-// of thirty to seven searches. Each sample is clamped before it is mixed in, so
+// it sends. The ceiling is four: past it the reading is a burst and not the
+// service's way with requests, and a k that high already holds a limit of
+// thirty to seven searches. Each sample is clamped before it is mixed in, so
 // one later reading of forty connections on one request moves k as far as a
 // reading of four would, not to the ceiling at once.
 const (
 	ampAlpha   = 0.3
 	ampFloor   = 1.0
 	ampCeiling = 4.0
+	// ampWarmup is how many samples k must have learned from before the
+	// registry stops reading a profile with attempts in flight at the fast
+	// rate for that reason alone.
+	ampWarmup = 2
 	// budgetSlack absorbs the rounding of k times a count, so a sum that is the
 	// limit in exact arithmetic is not refused for being a hair above it.
 	budgetSlack = 1e-9
@@ -143,8 +175,8 @@ func (b *Budget) Set(limit, reserve int) {
 	if b.limit == 0 {
 		// With no limit the service is not read, so what was learned from it
 		// would only grow stale; a limit set again starts from scratch.
-		b.observed, b.known = 0, false
-		b.amp, b.learned, b.sampled = ampFloor, false, false
+		b.observed, b.known, b.excess = 0, false, 0
+		b.amp, b.samples = ampFloor, 0
 	}
 	b.wakeLocked()
 	b.mu.Unlock()
@@ -168,28 +200,30 @@ func (b *Budget) wakeLocked() {
 //
 // A solve counts the reserve and not the reserve times k: the reserve is the
 // user's own figure for what a solve opens to the proxy (the solver's three to
-// five connections, measured), already counted in the service's terms. That
-// is also why a reading taken during a solve can push a sample high (the
-// solver's connections over one request) and why samples are clamped.
+// five connections, measured), already counted in the service's terms; for the
+// same reason the solves are taken out of a reading's sample (learnLocked).
 func (b *Budget) computedLocked() float64 {
 	return b.amp*float64(b.inFlight) + float64(b.reserve*b.solves)
 }
 
-// inUseLocked is the prediction corrected by the service's last reading.
+// inUseLocked is the prediction plus what the last reading found the service
+// carrying beyond it. The prediction moves with every attempt let in or given
+// back; the excess stays as the reading left it until the next reading.
 func (b *Budget) inUseLocked() float64 {
-	return max(b.computedLocked(), float64(b.observed))
+	return b.computedLocked() + b.excess
 }
 
 // admitsLocked is whether one more attempt of the class fits now: in use, plus
 // the k connections the attempt will cost, within the limit — and for a lookup
 // with the room for one more solve left over, and no search waiting.
 //
-// A search answers to the service's reading as well. That reading can be up to
-// two seconds old at the rate a busy profile is read, and a search held on it
-// may stand still until the next one shows room; but a search let in past it
-// is a connection the tariff counts and the service may cut, a solve's among
-// them, and the stand showed the own count alone letting a profile run a third
-// over its limit for most of a minute.
+// A search answers to the service's reading as well, through the excess. A
+// search let in past what the service opened on its own is a connection the
+// tariff counts and the service may cut, a solve's among them, and the stand
+// showed the own count alone letting a profile run a third over its limit for
+// most of a minute. Only the excess is held against it, not the reading as it
+// was: a reading the prediction agreed with holds nothing once requests it saw
+// have been answered.
 func (b *Budget) admitsLocked(c Class) bool {
 	if b.limit <= 0 {
 		return true
@@ -341,9 +375,12 @@ type BudgetReading struct {
 	// each connection to a port of the profile, as learned from the readings;
 	// 1 until one has taught otherwise. Every attempt in flight counts k.
 	Amplification float64
-	// Sampled is whether a reading has been taken while the profile had
-	// attempts in flight, the first chance to learn the amplification.
-	Sampled bool
+	// Samples is how many readings the amplification has learned from.
+	Samples int
+	// Excess is how far the last good reading was above this program's count
+	// when it was taken: what the service carries that the prediction does not
+	// see, held against admission until the next reading.
+	Excess float64
 }
 
 // Computed is this program's own count, as a prediction of the service's:
@@ -355,8 +392,12 @@ func (r BudgetReading) Computed() int {
 	return int(math.Ceil(k*float64(r.InFlight)-budgetSlack)) + r.Reserve*r.Solves
 }
 
-// InUse is the larger of this program's count and the service's.
-func (r BudgetReading) InUse() int { return max(r.Computed(), r.Observed) }
+// InUse is what admission goes by: this program's count plus the excess the
+// last reading found over it, rounded up once.
+func (r BudgetReading) InUse() int {
+	k := max(r.Amplification, ampFloor)
+	return int(math.Ceil(k*float64(r.InFlight)+r.Excess-budgetSlack)) + r.Reserve*r.Solves
+}
 
 // Reading copies the budget's figures; a nil budget reads as zeros.
 func (b *Budget) Reading() BudgetReading {
@@ -368,7 +409,7 @@ func (b *Budget) Reading() BudgetReading {
 	return BudgetReading{
 		Limit: b.limit, Reserve: b.reserve, InFlight: b.inFlight,
 		Solves: b.solves, Observed: b.observed, Known: b.known,
-		Amplification: b.amp, Sampled: b.sampled,
+		Amplification: b.amp, Samples: b.samples, Excess: b.excess,
 	}
 }
 
@@ -434,8 +475,15 @@ func (b *Budget) observe(n int, known bool) (over bool, holders []budgetHolder) 
 
 // observeLoad records a reading of the profile's ports — upstream connections
 // to the proxy, client connections from this program — learns the
-// amplification from it, and lets the waiting look again. over is whether the
-// count is above the limit; then holders are the pools to tell.
+// amplification from it, keeps how far it was above the prediction (the
+// excess), and lets the waiting look again. over is whether the count is above
+// the limit; then holders are the pools to tell.
+//
+// The excess is measured against the prediction priced with the k this very
+// reading taught, so a reading that only shows the service's usual two per
+// request leaves no excess behind once k has learned the two. A reading that
+// failed leaves none either: an unknown count is not a count (see
+// Budgets.pollOnce).
 //
 // Every reading wakes the waiting, whatever it says: a lower count is room, and
 // so is a lower k, which shrinks what every attempt in flight is counted as. A
@@ -453,12 +501,12 @@ func (b *Budget) observeLoad(upstream, client int, known bool) (over bool, holde
 	if b.limit <= 0 {
 		return false, nil
 	}
-	b.observed, b.known = upstream, known
-	if known && (client > 0 || b.inFlight > 0) {
-		b.sampled = true
-	}
+	b.observed, b.known, b.excess = upstream, known, 0
 	if known && client > 0 {
-		b.learnLocked(float64(upstream) / float64(client))
+		b.learnLocked(float64(upstream-b.reserve*b.solves) / float64(max(client-b.solves, 1)))
+	}
+	if known {
+		b.excess = max(float64(upstream)-b.computedLocked(), 0)
 	}
 	b.wakeLocked()
 	over = b.limit > 0 && known && upstream > b.limit
@@ -468,19 +516,26 @@ func (b *Budget) observeLoad(upstream, client int, known bool) (over bool, holde
 	return over, holders
 }
 
-// learnLocked mixes one reading's sample of the amplification into k, or
-// takes it as k if it is the first (see ampAlpha). Samples are clamped to
-// [ampFloor, ampCeiling], which keeps k there too: it starts at the floor and
-// is only ever a mean of clamped samples. A
-// reading that failed, or one with no connection from this program on the
-// profile's ports (nothing to divide by: the upstream count then is the
-// service's leftovers, not its way with requests), is never a sample; the
-// caller leaves k as it was.
+// learnLocked mixes one reading's sample of the amplification into k (see
+// ampAlpha): the first taken whole unless it is below the floor, the second
+// averaged with it, the rest smoothed. Samples are clamped to [ampFloor,
+// ampCeiling], which keeps k there too: it starts at the floor and is only
+// ever a mean of clamped samples. A reading that failed, or one with no
+// connection from this program on the profile's ports (nothing to divide by:
+// the upstream count then is the service's leftovers, not its way with
+// requests), is never a sample; the caller leaves k as it was.
 func (b *Budget) learnLocked(sample float64) {
-	sample = min(max(sample, ampFloor), ampCeiling)
-	if !b.learned {
-		b.amp, b.learned = sample, true
+	if b.samples == 0 && sample < ampFloor {
 		return
 	}
-	b.amp += ampAlpha * (sample - b.amp)
+	sample = min(max(sample, ampFloor), ampCeiling)
+	switch b.samples {
+	case 0:
+		b.amp = sample
+	case 1:
+		b.amp = (b.amp + sample) / 2
+	default:
+		b.amp += ampAlpha * (sample - b.amp)
+	}
+	b.samples++
 }

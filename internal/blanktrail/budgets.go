@@ -113,21 +113,24 @@ func (bs *Budgets) step(ctx context.Context) {
 	busy := false
 	for _, b := range bs.byProfile {
 		r := b.Reading()
-		// Busy by the larger of this program's count — k connections per
-		// attempt, the prediction of the service's — and the service's last
-		// reading: a service that opened many connections on its own is the
-		// case the fast rate is for, and the own count cannot see it.
+		// Busy by what admission goes by: this program's count — k
+		// connections per attempt, the prediction of the service's — plus the
+		// excess the last reading found over it. A service that opened many
+		// connections on its own is the case the fast rate is for, and the
+		// prediction alone cannot see it.
 		if r.Limit > 0 && r.InUse()*100 >= budgetBusyPercent*r.Limit {
 			busy = true
 		}
-		// Busy, too, while a profile has attempts in flight and the service
-		// has not yet been read with any of them on its ports: until then k is
-		// the 1 it starts at, the prediction can be short by the whole
-		// amplification (two on the stand: twenty attempts, read as 67% of
-		// thirty and so slow, were forty connections), and ten seconds of that
-		// is ten seconds over the limit before anything is learned. It lasts
-		// one reading: the first one taken with attempts in flight ends it.
-		if r.Limit > 0 && !r.Sampled && r.InFlight > 0 {
+		// Busy, too, while a profile has attempts in flight and k has not yet
+		// learned from ampWarmup readings: until then the prediction can be
+		// short by the whole amplification (two on the stand: twenty attempts,
+		// read as 67% of thirty and so slow, were forty connections), and ten
+		// seconds of that is ten seconds over the limit. One reading is not
+		// enough to end it: taken as the requests arrive, before the service
+		// has dialled out for them, it would teach the 1 the budget starts at.
+		// A service too old to report client connections never teaches k, and
+		// a profile on it is read fast whenever it has attempts in flight.
+		if r.Limit > 0 && r.Samples < ampWarmup && r.InFlight > 0 {
 			busy = true
 		}
 	}

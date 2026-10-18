@@ -309,8 +309,10 @@ func TestBudget_WhatTheServiceCountsHoldsTheSearchesAsWellAsTheLookups(t *testin
 	b.observe(3, true)
 	letIn(t, search, "the search once the service counted three")
 	letIn(t, lookup, "the lookup once the service counted three")
-	if r := b.Reading(); r.InUse() != 3 || r.Computed() != 2 || !r.Known {
-		t.Errorf("reads %+v (in use %d, counted here %d), want the service's three over the two counted here",
+	// The three were read with nothing counted here, so all three are the
+	// service's own, and they stay on top of the two let in since.
+	if r := b.Reading(); r.InUse() != 5 || r.Computed() != 2 || r.Observed != 3 || !r.Known {
+		t.Errorf("reads %+v (in use %d, counted here %d), want the service's own three on top of the two counted here",
 			r, r.InUse(), r.Computed())
 	}
 }
@@ -465,7 +467,7 @@ func TestBudget_FreeSaysHowManyMoreOfEachMayGoNow(t *testing.T) {
 // setAmp sets a budget's amplification by hand, as if readings had taught it.
 func setAmp(b *Budget, k float64) {
 	b.mu.Lock()
-	b.amp, b.learned = k, true
+	b.amp, b.samples = k, ampWarmup
 	b.mu.Unlock()
 }
 
@@ -485,13 +487,19 @@ func TestBudget_LearnsHowManyConnectionsTheServiceOpensPerRequest(t *testing.T) 
 	if k := ampOf(b); !near(k, 2) {
 		t.Errorf("after reading forty on twenty, k is %v, want 2", k)
 	}
-	// Later ones are mixed in at three tenths: three on one moves two to 2.3.
+	// The second makes k the plain mean of the two: three on one and two make
+	// 2.5 (smoothed it would be 2.3).
 	b.observeLoad(30, 10, true)
-	if k := ampOf(b); !near(k, 2.3) {
-		t.Errorf("after reading thirty on ten, k is %v, want 2.3", k)
+	if k := ampOf(b); !near(k, 2.5) {
+		t.Errorf("after reading thirty on ten, k is %v, want 2.5", k)
 	}
-	if r := b.Reading(); r.Amplification != ampOf(b) || !r.Sampled {
-		t.Errorf("the reading says %+v, want the amplification learned and the profile sampled", r)
+	// From the third on they are mixed in at three tenths: 2.5 to 2.65.
+	b.observeLoad(30, 10, true)
+	if k := ampOf(b); !near(k, 2.65) {
+		t.Errorf("after reading thirty on ten again, k is %v, want 2.65", k)
+	}
+	if r := b.Reading(); r.Amplification != ampOf(b) || r.Samples != 3 {
+		t.Errorf("the reading says %+v, want the amplification learned from three samples", r)
 	}
 }
 
@@ -502,8 +510,8 @@ func TestBudget_KeepsTheAmplificationBetweenOneAndFour(t *testing.T) {
 	b := NewBudget(30, 5)
 	b.observeLoad(2, 1, true)
 	b.observeLoad(40, 1, true)
-	if k := ampOf(b); !near(k, 2.6) {
-		t.Errorf("forty on one after a two moved k to %v, want 2.6 (as a four would)", k)
+	if k := ampOf(b); !near(k, 3) {
+		t.Errorf("forty on one after a two moved k to %v, want 3 (as a four would)", k)
 	}
 	for range 50 {
 		b.observeLoad(100, 1, true)
@@ -516,16 +524,11 @@ func TestBudget_KeepsTheAmplificationBetweenOneAndFour(t *testing.T) {
 	}
 	// Below one is one: connections to a port kept alive with nothing behind
 	// them do not let the budget count less than it sends.
-	low := NewBudget(30, 5)
-	low.observeLoad(5, 10, true)
-	if k := ampOf(low); k != 1 {
-		t.Errorf("five on ten taught k %v, want the floor of one", k)
-	}
 	three := NewBudget(30, 5)
 	three.observeLoad(30, 10, true)
 	three.observeLoad(0, 10, true)
-	if k := ampOf(three); !near(k, 2.4) {
-		t.Errorf("nothing on ten after a three moved k to %v, want 2.4 (as a one would)", k)
+	if k := ampOf(three); !near(k, 2) {
+		t.Errorf("nothing on ten after a three moved k to %v, want 2 (as a one would)", k)
 	}
 }
 
@@ -535,31 +538,115 @@ func TestBudget_LearnsNothingFromAReadingWithNoRequestsOrNoAnswer(t *testing.T) 
 	if k := ampOf(b); k != 1 {
 		t.Errorf("twelve with no request on the ports taught k %v, want it untouched at 1", k)
 	}
-	if b.Reading().Sampled {
-		t.Error("a reading with nothing in flight and nothing on the ports counts as a sample")
-	}
 	b.observeLoad(40, 20, false)
 	if k := ampOf(b); k != 1 {
 		t.Errorf("a failed reading taught k %v, want it untouched at 1", k)
 	}
-	if b.Reading().Sampled {
-		t.Error("a failed reading counts as a sample")
+	// An attempt in flight that has not reached the ports yet is no sample
+	// either: there is nothing to divide by.
+	take(t, b, ClassSearch, 1)
+	b.observeLoad(0, 0, true)
+	if r := b.Reading(); r.Samples != 0 {
+		t.Errorf("readings with no client connections or no answer read %+v, want no sample counted", r)
 	}
 	// Once learned, k is kept through both.
 	b.observeLoad(40, 20, true)
 	b.observeLoad(90, 0, true)
 	b.observeLoad(90, 10, false)
+	if r := b.Reading(); !near(r.Amplification, 2) || r.Samples != 1 {
+		t.Errorf("after a reading with no requests and a failed one the budget reads %+v, want the 2 learned before from one sample", r)
+	}
+}
+
+func TestBudget_DoesNotTakeAFirstReadingBeforeTheServiceDialledOut(t *testing.T) {
+	// Twenty requests on the ports and nothing upstream yet: the service has
+	// not dialled out for them. Taken, that would teach the 1 the budget
+	// already assumes and count as a sample; it is dropped, and the next two
+	// readings, of two per request, teach two.
+	b := NewBudget(30, 5)
+	b.observeLoad(0, 20, true)
+	if r := b.Reading(); r.Amplification != 1 || r.Samples != 0 {
+		t.Errorf("a first reading of nothing on twenty reads %+v, want it dropped", r)
+	}
+	b.observeLoad(40, 20, true)
+	b.observeLoad(40, 20, true)
+	if r := b.Reading(); !near(r.Amplification, 2) || r.Samples != 2 {
+		t.Errorf("two readings of forty on twenty after it read %+v, want k 2 from two samples", r)
+	}
+	// Past the first, a sample below the floor is a sample of one.
+	b.observeLoad(0, 20, true)
+	if r := b.Reading(); !near(r.Amplification, 1.7) || r.Samples != 3 {
+		t.Errorf("a later reading of nothing on twenty read %+v, want it mixed in as one (1.7)", r)
+	}
+}
+
+func TestBudget_TakesTheSolvesOutOfASample(t *testing.T) {
+	// Twenty requests, two of them solves with the solver's five each: 18 x 2
+	// + 2 x 5 = 46 to the proxy. The solves are the reserve already, so the
+	// sample is (46 - 10) / 18 = 2, not 46 / 20 = 2.3.
+	b := NewBudget(60, 5)
+	held := take(t, b, ClassSearch, 20)
+	held[0].Solving(20101)
+	held[1].Solving(20102)
+	b.observeLoad(46, 20, true)
 	if k := ampOf(b); !near(k, 2) {
-		t.Errorf("k is %v after a reading with no requests and a failed one, want the 2 learned before", k)
+		t.Errorf("forty-six on twenty with two solves of five taught k %v, want 2", k)
 	}
-	// A reading with this program's attempts in flight is the first chance to
-	// learn, whatever it finds on the ports.
-	s := NewBudget(30, 5)
-	take(t, s, ClassSearch, 1)
-	s.observeLoad(0, 0, true)
-	if !s.Reading().Sampled {
-		t.Error("a reading taken with an attempt in flight does not count as a sample")
+	// Then the prediction is the reading: 18 x 2 + 2 x 5 = 46, no excess.
+	if r := b.Reading(); r.InUse() != 46 || r.Excess != 0 {
+		t.Errorf("reads %+v (in use %d), want 46 and no excess", r, r.InUse())
 	}
+	// More solves than client connections on the ports: the divisor stays one
+	// and the sample at the floor or above.
+	c := NewBudget(60, 5)
+	two := take(t, c, ClassSearch, 2)
+	two[0].Solving(20101)
+	two[1].Solving(20102)
+	c.observeLoad(13, 1, true)
+	if k := ampOf(c); !near(k, 3) {
+		t.Errorf("thirteen on one with two solves of five taught k %v, want (13-10)/1 = 3", k)
+	}
+}
+
+func TestBudget_HoldsWhatTheServiceOpensBeyondThePrediction(t *testing.T) {
+	// Three attempts counted, nine read with no client connections to learn
+	// from (as an old service reports): six are the service's own — a solver's,
+	// retries — and stay on top of whatever this program counts until the
+	// next reading.
+	b := NewBudget(10, 0)
+	held := take(t, b, ClassSearch, 3)
+	b.observeLoad(9, 0, true)
+	if r := b.Reading(); !near(r.Excess, 6) || r.InUse() != 9 {
+		t.Fatalf("reads %+v (in use %d), want an excess of six and nine in use", r, r.InUse())
+	}
+	take(t, b, ClassSearch, 1)
+	fifth := waiting(t.Context(), t, b, ClassSearch, "a fifth search with four counted and six more read on a limit of ten")
+	held[0].Release()
+	letIn(t, fifth, "the fifth search once one of the four was answered")
+	// The next reading that agrees with the prediction takes the excess away.
+	b.observeLoad(4, 0, true)
+	if r := b.Reading(); r.Excess != 0 || r.InUse() != 4 {
+		t.Errorf("after a reading equal to the prediction the budget reads %+v (in use %d), want no excess", r, r.InUse())
+	}
+	// And a failed one leaves none.
+	b.observeLoad(9, 0, true)
+	b.observeLoad(0, 0, false)
+	if r := b.Reading(); r.Excess != 0 {
+		t.Errorf("after a failed reading the budget reads %+v, want no excess", r)
+	}
+}
+
+func TestBudget_AReadingThatAgreesWithThePredictionHoldsNothing(t *testing.T) {
+	// Ten of ten counted and ten read: the service carries exactly what was
+	// predicted. A search waiting then goes as soon as one of the ten is
+	// answered — not two seconds later, when the next reading would say so.
+	b := NewBudget(10, 0)
+	held := take(t, b, ClassSearch, 10)
+	search := waiting(t.Context(), t, b, ClassSearch, "an eleventh search on a limit of ten")
+	b.observeLoad(10, 10, true)
+	stillWaiting(t, b, ClassSearch, search, "the eleventh search with ten read")
+	held[0].Release()
+	letIn(t, search, "the eleventh search once one of the ten was answered, with no new reading")
 }
 
 func TestBudget_CountsEveryAttemptAsKAndASolveAsTheReserve(t *testing.T) {
@@ -611,8 +698,8 @@ func TestBudget_ForgetsTheAmplificationWhenTheLimitIsTakenOff(t *testing.T) {
 	b := NewBudget(30, 5)
 	b.observeLoad(60, 20, true)
 	b.Set(0, 5)
-	if r := b.Reading(); r.Amplification != 1 || r.Sampled {
-		t.Errorf("a budget whose limit was taken off reads %+v, want k back at 1 and nothing sampled", r)
+	if r := b.Reading(); r.Amplification != 1 || r.Samples != 0 || r.Excess != 0 {
+		t.Errorf("a budget whose limit was taken off reads %+v, want k back at 1, no samples, no excess", r)
 	}
 	b.observeLoad(60, 20, true)
 	if k := ampOf(b); k != 1 {

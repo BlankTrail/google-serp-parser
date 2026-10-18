@@ -154,12 +154,13 @@ func simulateStand(t *testing.T, limit, reserve, threads, perRequest int, span t
 // job's requests on its ports nothing is known of the amplification, the
 // twenty requests counted as twenty are forty, and the parser cannot take back
 // a request it has sent. So the job's first moments are over the limit, for at
-// most one fast poll period (the first reading, which an unlearned profile asks
-// for at the fast rate) plus the time the requests already sent take to be
-// answered — three seconds at the longest here. That reading teaches k; from
+// most one fast poll period (the first reading, which a profile whose k has not
+// been learned asks for at the fast rate) plus the time the requests already
+// sent take to be answered — three seconds at the longest here. That reading teaches k; from
 // then on the prediction holds the threads to fifteen requests, thirty
 // connections, and the profile is never over again. The searches keep going
-// throughout: the limit costs a quarter of the threads, not the job.
+// throughout at the pace the limit allows: the limit costs a quarter of the
+// threads, and a reading that agrees with the prediction costs nothing.
 func TestBudget_HoldsAServiceThatOpensTwoConnectionsPerRequestToItsLimit(t *testing.T) {
 	const longestRequest = 3 * time.Second
 	res := simulateStand(t, 30, 5, 20, 2, 2*time.Minute)
@@ -178,10 +179,14 @@ func TestBudget_HoldsAServiceThatOpensTwoConnectionsPerRequestToItsLimit(t *test
 	if res.amp < 1.99 || res.amp > 2.01 {
 		t.Errorf("the budget learned an amplification of %.3f from a service that opens two connections per request, want 2", res.amp)
 	}
-	// Fifteen requests of two seconds on average over two minutes is about
-	// nine hundred; the waits on a stale reading cost some. Far fewer would be
-	// a budget that holds the job rather than its connections.
-	if res.served < 600 {
-		t.Errorf("%d requests were answered in two minutes, want at least 600", res.served)
+	// Fifteen requests at once (thirty connections at two each) of two
+	// seconds on average for two minutes is an ideal of about 900. Measured
+	// (2026-10-19): 911 with the excess carried between readings (R5) — the
+	// twenty of the first two seconds make up for the waits — against 658
+	// when the raw reading was carried and every reading near the limit
+	// stopped the searches until the next one (R4). Far fewer would be a
+	// budget that holds the job rather than its connections.
+	if res.served < 870 {
+		t.Errorf("%d requests were answered in two minutes, want at least 870 of an ideal of about 900", res.served)
 	}
 }
