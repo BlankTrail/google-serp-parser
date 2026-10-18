@@ -960,6 +960,9 @@ func theFirstProfile(saved settings.Settings, hadSettings bool) store.Profile {
 		VDNSMode: first.VDNSMode,
 		Solver:   first.Solver,
 		HTTP3:    first.HTTP3,
+		// Written whole rather than over NewProfile, so the reserve has to be
+		// carried: a zero here counts a solve as costing nothing.
+		SolverReserve: first.SolverReserve,
 	}
 }
 

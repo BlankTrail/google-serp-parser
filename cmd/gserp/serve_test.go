@@ -1757,3 +1757,14 @@ func TestRaise_HandsAJobOnTheStandingPortsTheProgramsSessions(t *testing.T) {
 			got.Keeper, got.Want)
 	}
 }
+
+func TestTheFirstProfile_KeepsAReserveForASolve(t *testing.T) {
+	// The first profile is written whole rather than over NewProfile, and a
+	// zero there would count a solve as costing nothing the day somebody gives
+	// the profile a limit.
+	for _, had := range []bool{false, true} {
+		if got := theFirstProfile(settings.Settings{}, had).SolverReserve; got != store.DefaultSolverReserve {
+			t.Errorf("the first profile (settings file %v) keeps %d for a solve, want %d", had, got, store.DefaultSolverReserve)
+		}
+	}
+}

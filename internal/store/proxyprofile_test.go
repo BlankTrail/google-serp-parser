@@ -26,6 +26,87 @@ func aProfile(name string) Profile {
 	}
 }
 
+func TestProfiles_KeepTheirConnectionLimitAndReserve(t *testing.T) {
+	// The limit is what the provider's tariff allows and the reserve is what a
+	// solve takes on top of a request; a profile that lost either on the way
+	// through the history would run a job past what was paid for.
+	s := testStore(t)
+	ctx := context.Background()
+	p := aProfile("limited")
+	p.ConnLimit, p.SolverReserve = 30, 7
+	id, err := s.CreateProfile(ctx, p)
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	got, err := s.Profile(ctx, id)
+	if err != nil || got.ConnLimit != 30 || got.SolverReserve != 7 {
+		t.Fatalf("written with 30 and 7, read back %d and %d (%v)", got.ConnLimit, got.SolverReserve, err)
+	}
+	got.ConnLimit, got.SolverReserve = 45, 3
+	if err := s.SaveProfile(ctx, got); err != nil {
+		t.Fatalf("SaveProfile: %v", err)
+	}
+	again, err := s.Profile(ctx, id)
+	if err != nil || again.ConnLimit != 45 || again.SolverReserve != 3 {
+		t.Errorf("saved with 45 and 3, read back %d and %d (%v)", again.ConnLimit, again.SolverReserve, err)
+	}
+}
+
+func TestProfiles_RefuseANegativeLimitOrReserve(t *testing.T) {
+	// Nought is "no limit" and a reserve of nought is "a solve costs nothing";
+	// below nought is neither, and the column says so rather than every reader.
+	s := testStore(t)
+	id, err := s.CreateProfile(t.Context(), aProfile("limited"))
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	for _, column := range []string{"conn_limit", "solver_reserve"} {
+		if _, err := s.db.ExecContext(t.Context(),
+			`UPDATE proxy_profiles SET `+column+` = -1 WHERE id = ?`, id); err == nil {
+			t.Errorf("the history took %s = -1", column)
+		}
+	}
+}
+
+func TestNewProfile_KeepsFiveConnectionsForASolveAndHasNoLimit(t *testing.T) {
+	// Five is what a solve was seen to open on the stand: three to five of the
+	// solver's own on top of the request (2026-10-18, port 20690).
+	p := NewProfile()
+	if p.ConnLimit != 0 || p.SolverReserve != 5 {
+		t.Errorf("a new profile has limit %d and reserve %d, want none and five", p.ConnLimit, p.SolverReserve)
+	}
+}
+
+func TestOpen_GivesEveryProfileNoLimitAndAReserveOfFiveAfterTheUpgrade(t *testing.T) {
+	// A machine upgrading into this build runs exactly as it did: no profile
+	// waits for anything until somebody gives it a limit.
+	path := filepath.Join(t.TempDir(), "gserp.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := s.CreateProfile(t.Context(), aProfile("from before")); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	windBackToVersion33(t, s)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a version-33 database: %v", err)
+	}
+	defer func() { _ = again.Close() }()
+	all, err := again.Profiles(t.Context())
+	if err != nil || len(all) != 1 {
+		t.Fatalf("Profiles: %v, %d", err, len(all))
+	}
+	if all[0].ConnLimit != 0 || all[0].SolverReserve != 5 {
+		t.Errorf("after the upgrade the profile has limit %d and reserve %d, want none and five",
+			all[0].ConnLimit, all[0].SolverReserve)
+	}
+}
+
 func TestCreateProfile_ReadsBackEverythingItWasGiven(t *testing.T) {
 	// Every field, because a profile is the whole of what a job runs through: a
 	// column that quietly did not survive the round trip is a setting the
@@ -434,6 +515,7 @@ func TestOpen_TurnsOffExitsThatTerminateTLSAfterTheUpgrade(t *testing.T) {
 	if _, err := s.CreateProfile(t.Context(), p); err != nil {
 		t.Fatalf("CreateProfile: %v", err)
 	}
+	windBackToVersion33(t, s)
 	if _, err := s.db.ExecContext(t.Context(), `PRAGMA user_version = 32`); err != nil {
 		t.Fatalf("winding back to version 32: %v", err)
 	}
@@ -576,6 +658,21 @@ func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *test
 	}
 }
 
+// windBackToVersion33 undoes the thirty-fourth step: the connection limit of a
+// profile and the reserve it keeps for a solve.
+func windBackToVersion33(t *testing.T, s *Store) {
+	t.Helper()
+	for _, statement := range []string{
+		`ALTER TABLE proxy_profiles DROP COLUMN solver_reserve`,
+		`ALTER TABLE proxy_profiles DROP COLUMN conn_limit`,
+		`PRAGMA user_version = 33`,
+	} {
+		if _, err := s.db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatalf("winding back to version 33: %v", err)
+		}
+	}
+}
+
 // windBackToVersion27 undoes the twenty-eighth step: the count of the checks a
 // job has paid for.
 //
@@ -584,6 +681,8 @@ func TestOpen_MovesAProfileOnTheOldDefaultResolverToTheServicesOwnLadder(t *test
 // opened again and stops on a duplicate name.
 func windBackToVersion27(t *testing.T, s *Store) {
 	t.Helper()
+	// The thirty-third step changed rows only, so there is nothing of it to undo.
+	windBackToVersion33(t, s)
 	for _, statement := range []string{
 		// The closeness of a suggestion to its key, which the thirty-second step brought.
 		`DROP INDEX results_unscored`,

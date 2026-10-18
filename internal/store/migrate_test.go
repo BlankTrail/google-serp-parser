@@ -109,6 +109,9 @@ func windBackToVersionThreeOnly(t *testing.T, s *Store) {
 func windBackToVersionSix(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		// The connection limit and the solve's reserve, which the thirty-fourth step brought.
+		`ALTER TABLE proxy_profiles DROP COLUMN solver_reserve`,
+		`ALTER TABLE proxy_profiles DROP COLUMN conn_limit`,
 		// The closeness of a suggestion to its key, which the thirty-second step brought.
 		`DROP INDEX results_unscored`,
 		`ALTER TABLE results DROP COLUMN similarity`,

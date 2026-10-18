@@ -114,7 +114,23 @@ type Profile struct {
 	// It belongs to a profile whose addresses come from a list. A profile on
 	// gateways has its road set on the gateway itself, in the service.
 	FirstHop string
+	// ConnLimit is how many connections to the proxy this profile's ports may
+	// hold at once, across every pool of it in this process: the searches, the
+	// ports the hidden addresses are read through, and the standing set. Nought
+	// is no limit, which is how every profile ran before there was one.
+	ConnLimit int
+	// SolverReserve is how many of those a challenge being solved is counted
+	// as, in place of the one its request holds: the solver opens connections
+	// of its own, three to five on the stand. See blanktrail.Budget.
+	SolverReserve int
 }
+
+// DefaultSolverReserve is how many connections a solve is counted as holding
+// until a profile says otherwise: five, which is the most a solve was seen to
+// open on the stand (three to five of the solver's own on top of the request,
+// 2026-10-18, port 20690). Counting too few lets a job past its tariff; too
+// many only makes it wait a little longer.
+const DefaultSolverReserve = 5
 
 // NewProfile is a profile with nothing named and everything else as it ships.
 //
@@ -139,6 +155,10 @@ func NewProfile() Profile {
 		// name a challenge cannot be passed without — see schema_v25.sql.
 		Resolver:     "",
 		StrictBypass: false,
+		// No limit until somebody sets one, and a solve counted at what it was
+		// seen to take for the day somebody does.
+		ConnLimit:     0,
+		SolverReserve: DefaultSolverReserve,
 	}
 }
 
@@ -174,7 +194,7 @@ func (p Profile) Empty() bool {
 const profileColumns = `id, name, kind, location, refresh_ms, ban_ms,
 	threads_per_upstream, protocol, gateways, is_default,
 	vdns_mode, js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers,
-	vdns_strict_bypass`
+	vdns_strict_bypass, conn_limit, solver_reserve`
 
 // scanProfile reads one row in the order profileColumns names.
 func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
@@ -184,7 +204,7 @@ func scanProfile(row interface{ Scan(...any) error }) (Profile, error) {
 	if err := row.Scan(&p.ID, &p.Name, &p.Kind, &p.Location, &refreshMS, &banMS,
 		&p.ThreadsPerUpstream, &p.Protocol, &gateways, &p.Default,
 		&p.VDNSMode, &p.Solver, &p.HTTP3, &p.FirstHop, &p.AllowMITM,
-		&p.Resolver, &resolvers, &p.StrictBypass); err != nil {
+		&p.Resolver, &resolvers, &p.StrictBypass, &p.ConnLimit, &p.SolverReserve); err != nil {
 		return Profile{}, err
 	}
 	p.Refresh = time.Duration(refreshMS) * time.Millisecond
@@ -324,13 +344,14 @@ func (s *Store) CreateProfile(ctx context.Context, p Profile) (int64, error) {
 		INSERT INTO proxy_profiles(name, kind, location, refresh_ms, ban_ms,
 			threads_per_upstream, protocol, gateways, is_default,
 			vdns_mode, js_solver, http3, first_hop, allow_mitm, resolver, custom_resolvers,
-			vdns_strict_bypass)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			vdns_strict_bypass, conn_limit, solver_reserve)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
 		p.Protocol, gatewayLines(p.Gateways), p.Default,
 		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.AllowMITM,
-		p.Resolver, gatewayLines(p.CustomResolvers), p.StrictBypass)
+		p.Resolver, gatewayLines(p.CustomResolvers), p.StrictBypass,
+		p.ConnLimit, p.SolverReserve)
 	if err != nil {
 		return 0, nameOr(err, "store: writing a proxy profile")
 	}
@@ -401,13 +422,15 @@ func (s *Store) SaveProfile(ctx context.Context, p Profile) error {
 		   SET name = ?, kind = ?, location = ?, refresh_ms = ?, ban_ms = ?,
 		       threads_per_upstream = ?, protocol = ?, gateways = ?,
 		       is_default = ?, vdns_mode = ?, js_solver = ?, http3 = ?, first_hop = ?,
-		       allow_mitm = ?, resolver = ?, custom_resolvers = ?, vdns_strict_bypass = ?
+		       allow_mitm = ?, resolver = ?, custom_resolvers = ?, vdns_strict_bypass = ?,
+		       conn_limit = ?, solver_reserve = ?
 		 WHERE id = ?`,
 		strings.TrimSpace(p.Name), p.Kind, strings.TrimSpace(p.Location),
 		p.Refresh.Milliseconds(), p.Ban.Milliseconds(), p.ThreadsPerUpstream,
 		p.Protocol, gatewayLines(p.Gateways), p.Default,
 		p.VDNSMode, p.Solver, p.HTTP3, strings.TrimSpace(p.FirstHop), p.AllowMITM,
-		p.Resolver, gatewayLines(p.CustomResolvers), p.StrictBypass, p.ID)
+		p.Resolver, gatewayLines(p.CustomResolvers), p.StrictBypass,
+		p.ConnLimit, p.SolverReserve, p.ID)
 	if err != nil {
 		return nameOr(err, fmt.Sprintf("store: saving proxy profile %d", p.ID))
 	}
