@@ -4,7 +4,10 @@ package blanktrail
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -282,4 +285,179 @@ func TestBudgets_StopTheOneGoroutineWhenStopped(t *testing.T) {
 	}
 	var none *Budgets
 	none.Run(t.Context()) // a nil registry has nothing to run
+}
+
+// rateWorld is a registry on a clock in the test's hand, one pool of profile 1
+// with a limit of thirty, and the fake behind them.
+func rateWorld(t *testing.T) (*fakebt.Server, *fakeClock, *Budgets, *Budget, *Pool) {
+	t.Helper()
+	fake := fakebt.New(t)
+	clock := newFakeClock()
+	cfg := testPoolConfig(t, fake, clock, 1, 1)
+	bs := NewBudgets(10*time.Second, 2*time.Second)
+	bs.now = clock.Now
+	cfg.Budget = bs.For(cfg.Client, 1, 30, 5)
+	p, err := NewPool(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	return fake, clock, bs, cfg.Budget, p
+}
+
+// stepsFor runs eleven steps two seconds apart and counts the light readings.
+func stepsFor(t *testing.T, fake *fakebt.Server, clock *fakeClock, bs *Budgets) int {
+	t.Helper()
+	before := portsAsked(fake)
+	for i := 0; i <= 10; i++ {
+		bs.step(t.Context())
+		clock.Advance(2 * time.Second)
+	}
+	return portsAsked(fake) - before
+}
+
+func TestBudgets_LeaveOutAProfileWithoutALimitWhenDecidingTheRate(t *testing.T) {
+	// A profile whose limit was taken off may still hold what it held; its
+	// count against a limit of nought is not "busy".
+	fake, clock, bs, b, _ := rateWorld(t)
+	take(t, b, ClassSearch, 20)
+	other := bs.For(nil, 2, 30, 5)
+	take(t, other, ClassSearch, 25)
+	bs.For(nil, 2, 0, 5)
+	if got := stepsFor(t, fake, clock, bs); got != 3 {
+		t.Errorf("an unlimited profile at 25 beside a limited one at 20 of 30 asked %d times in twenty seconds, want 3", got)
+	}
+}
+
+func TestBudgets_GoFastWhenAnyOneProfileIsBusyAndTheOthersAreNot(t *testing.T) {
+	fake, clock, bs, b, _ := rateWorld(t)
+	take(t, b, ClassSearch, 21)
+	bs.For(nil, 2, 30, 5)
+	if got := stepsFor(t, fake, clock, bs); got != 11 {
+		t.Errorf("one profile at 21 of 30 and one idle asked %d times in twenty seconds, want 11", got)
+	}
+}
+
+func TestBudgets_GoFastWhenTheServiceCountsFarMoreThanThisProgramDoes(t *testing.T) {
+	// The service opens connections on its own; this program's count of five
+	// cannot see them, the reading of twenty-eight can.
+	fake, clock, bs, b, p := rateWorld(t)
+	take(t, b, ClassSearch, 5)
+	fake.SetConns(p.portNumbers()[0], 1, 28)
+	bs.pollOnce(t.Context())
+	if r := b.Reading(); r.Observed != 28 || !r.Known {
+		t.Fatalf("the budget reads %+v, want 28 known", r)
+	}
+	// The reading just taken counts as the last: eleven steps see readings at
+	// 2, 4, ... 20 s at the fast rate and at 10 and 20 s at the slow one.
+	if got := stepsFor(t, fake, clock, bs); got != 10 {
+		t.Errorf("computed 5 and observed 28 of 30 asked %d times in twenty seconds, want 10", got)
+	}
+}
+
+func TestBudgets_CountAFailedReadingAsAnAttempt(t *testing.T) {
+	// A service that is down is not asked on every tick.
+	fake, clock, bs, _, _ := rateWorld(t)
+	fake.SetDown(true)
+	if got := stepsFor(t, fake, clock, bs); got != 3 {
+		t.Errorf("a service that answers nothing was asked %d times in twenty seconds, want 3", got)
+	}
+}
+
+// logCapture is the default logger for a test: every record, as text.
+type logCapture struct {
+	mu   sync.Mutex
+	recs []string
+	lvls []slog.Level
+}
+
+func (l *logCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (l *logCapture) WithAttrs([]slog.Attr) slog.Handler       { return l }
+func (l *logCapture) WithGroup(string) slog.Handler            { return l }
+func (l *logCapture) Handle(_ context.Context, r slog.Record) error {
+	var sb strings.Builder
+	sb.WriteString(r.Message)
+	r.Attrs(func(a slog.Attr) bool { sb.WriteString(" " + a.String()); return true })
+	l.mu.Lock()
+	l.recs, l.lvls = append(l.recs, sb.String()), append(l.lvls, r.Level)
+	l.mu.Unlock()
+	return nil
+}
+
+func captureLog(t *testing.T) *logCapture {
+	t.Helper()
+	l := &logCapture{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(l))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return l
+}
+
+func TestBudgets_LogOncePerFailureStreakAndNeverTheError(t *testing.T) {
+	logs := captureLog(t)
+	fake, _, bs, _, _ := rateWorld(t)
+	fake.SetDown(true)
+	bs.pollOnce(t.Context())
+	bs.pollOnce(t.Context())
+	if len(logs.recs) != 1 || logs.lvls[0] != slog.LevelWarn {
+		t.Fatalf("two failures logged %v at %v, want one warning", logs.recs, logs.lvls)
+	}
+	fake.SetDown(false)
+	bs.pollOnce(t.Context())
+	bs.pollOnce(t.Context())
+	if len(logs.recs) != 2 || logs.lvls[1] != slog.LevelInfo {
+		t.Fatalf("a recovery logged %v at %v, want one info after the warning", logs.recs, logs.lvls)
+	}
+	for _, r := range logs.recs {
+		if strings.Contains(r, "starting") || strings.Contains(r, fake.URL()) || strings.Contains(r, "http") {
+			t.Errorf("a log line carries the error or an address: %q", r)
+		}
+	}
+}
+
+func TestBudgets_KeepTheLastReadingWhenStoppedMidReading(t *testing.T) {
+	logs := captureLog(t)
+	fake, _, bs, b, p := rateWorld(t)
+	fake.SetConns(p.portNumbers()[0], 1, 7)
+	bs.pollOnce(t.Context())
+	ctx, stop := context.WithCancel(t.Context())
+	stop()
+	bs.pollOnce(ctx)
+	if r := b.Reading(); r.Observed != 7 || !r.Known {
+		t.Errorf("a reading cut short by a stop left the budget at %+v, want the 7 it had", r)
+	}
+	if len(logs.recs) != 0 {
+		t.Errorf("a stop logged %v, want nothing", logs.recs)
+	}
+}
+
+func TestBudgets_IgnoreAReadingForAProfileWhoseLimitWasTakenOff(t *testing.T) {
+	b := NewBudget(30, 5)
+	b.Set(0, 5)
+	if over, holders := b.observe(99, true); over || holders != nil {
+		t.Errorf("a budget without a limit was over: %v %v", over, holders)
+	}
+	if r := b.Reading(); r.Observed != 0 || r.Known {
+		t.Errorf("a budget without a limit stored a reading: %+v", r)
+	}
+}
+
+func TestBudgets_LeaveTheWaitingAloneWhenAProfileIsOpenedAgainUnchanged(t *testing.T) {
+	bs := NewBudgets(time.Hour, time.Hour)
+	b := bs.For(nil, 1, 30, 5)
+	woken := func() <-chan struct{} { b.mu.Lock(); defer b.mu.Unlock(); return b.changed }
+	before := woken()
+	bs.For(nil, 1, 30, 5)
+	if woken() != before {
+		t.Error("opening a pool with the same limit and reserve woke the waiting")
+	}
+	bs.For(nil, 1, 31, 5)
+	if woken() == before {
+		t.Error("a changed limit did not wake the waiting")
+	}
+	before = woken()
+	bs.For(nil, 1, 31, 6)
+	if woken() == before {
+		t.Error("a changed reserve did not wake the waiting")
+	}
 }

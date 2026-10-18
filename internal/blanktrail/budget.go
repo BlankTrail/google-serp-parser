@@ -338,6 +338,12 @@ func (b *Budget) observe(n int, known bool) (over bool, holders []budgetHolder) 
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// A reading that lands after the limit was taken off (between a caller
+	// collecting the limited budgets and observing) is not stored: Set(0)
+	// cleared the count, and an old number would come back with it.
+	if b.limit <= 0 {
+		return false, nil
+	}
 	b.observed, b.known = n, known
 	b.wakeLocked()
 	over = b.limit > 0 && known && n > b.limit

@@ -72,7 +72,9 @@ func (bs *Budgets) For(cl *Client, profile int64, limit, reserve int) *Budget {
 	if !ok {
 		b = NewBudget(limit, reserve)
 		bs.byProfile[profile] = b
-	} else {
+	} else if r := b.Reading(); r.Limit != max(limit, 0) || r.Reserve != max(reserve, 0) {
+		// Only a change is set: Set wakes every waiter, and opening another
+		// pool of the profile is no reason to.
 		b.Set(limit, reserve)
 	}
 	// Every client in the process looks at the same service.
@@ -109,7 +111,10 @@ func (bs *Budgets) step(ctx context.Context) {
 	busy := false
 	for _, b := range bs.byProfile {
 		r := b.Reading()
-		if r.Limit > 0 && r.Computed()*100 >= budgetBusyPercent*r.Limit {
+		// Busy by the larger of this program's count and the service's last
+		// reading: a service that opened many connections on its own is the
+		// case the fast rate is for, and the own count cannot see it.
+		if r.Limit > 0 && r.InUse()*100 >= budgetBusyPercent*r.Limit {
 			busy = true
 		}
 	}
@@ -161,11 +166,10 @@ func (bs *Budgets) pollOnce(ctx context.Context) {
 		// A count that cannot be read is not kept: nought and unknown, so a
 		// number above the limit read before a restart of the service does
 		// not hold the profile's lookups for good.
-		over, holders := b.observe(sum, err == nil)
-		if over {
-			for _, h := range holders {
-				h.overLimit()
-			}
+		// holders is empty unless the count is over the limit.
+		_, holders := b.observe(sum, err == nil)
+		for _, h := range holders {
+			h.overLimit()
 		}
 	}
 }
