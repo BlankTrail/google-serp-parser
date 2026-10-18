@@ -38,7 +38,12 @@ type Growing struct {
 	// now is a clock seam for tests.
 	now func() time.Time
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// budget and room hold the set to its profile's connection budget: it widens
+	// only while the budget has room for room lookups, the number one new port
+	// is worth. Nil is no budget, and the set widens as it always did.
+	budget   *Budget
+	room     int
 	pool     *Pool
 	grewAt   time.Time
 	closed   bool
@@ -95,7 +100,14 @@ func (g *Growing) Identities(ctx context.Context) (*Pool, error) {
 		return pool, nil
 	}
 
-	if g.pool.Size() < g.most && g.now().Sub(g.grewAt) >= g.gap {
+	// A new port is a place for room lookups at once. Opened where the budget has
+	// room for fewer, it is a port standing open for lookups that will wait
+	// anyway, and a port taken from the searches' tariff (spec, section 4). Only
+	// the widening asks: the first port opens whatever the budget says, or the
+	// reading of an address would get no port at all while the budget by itself
+	// holds the lookups back on it. Without a budget, or with no limit, Free is
+	// without end and the check never stops anything.
+	if g.pool.Size() < g.most && g.now().Sub(g.grewAt) >= g.gap && g.budget.Free(ClassLookup) >= g.room {
 		// Taken counts as well as a queue does. The lookups share the ports they
 		// read through, and one that joins a busy port stands in no queue: a set
 		// that widened only for a queue would pile them onto the address it
@@ -109,6 +121,21 @@ func (g *Growing) Identities(ctx context.Context) (*Pool, error) {
 		}
 	}
 	return g.pool, nil
+}
+
+// HoldTo holds the set's widening to a budget: a new port opens only while the
+// budget has room for room lookups.
+func (g *Growing) HoldTo(b *Budget, room int) {
+	g.mu.Lock()
+	g.budget, g.room = b, room
+	g.mu.Unlock()
+}
+
+// HeldTo is the budget and the room the set was held to by HoldTo.
+func (g *Growing) HeldTo() (*Budget, int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.budget, g.room
 }
 
 // Ceiling is how many ports the set may widen to.

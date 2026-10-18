@@ -302,6 +302,11 @@ func (r *Runner) lookupLanes() *lanes {
 // another address.
 const lookupsAtOnce = 10
 
+// LookupsAtOnce is lookupsAtOnce for the command that opens the lookup ports:
+// a new one is worth opening only while the profile's budget has room for this
+// many lookups on it.
+const LookupsAtOnce = lookupsAtOnce
+
 // renewAfterLookups and renewAfterTime are how often a lookup port is moved to
 // another address and given another fingerprint when nothing has failed on it:
 // the user's rule for these ports, in place of any rest — after a failure, and

@@ -244,3 +244,67 @@ func TestGrowing_ClosesNothingItNeverOpened(t *testing.T) {
 		t.Errorf("%d ports are open after closing a set nothing asked for", got)
 	}
 }
+
+func TestGrowing_WidensOnlyWhileTheBudgetHasRoomForAPortsWorthOfLookups(t *testing.T) {
+	// A new lookup port is a place for ten lookups at once; opened where the
+	// budget has room for fewer, it is a port standing open for lookups that
+	// will wait anyway, and a port taken from the searches' tariff.
+	f := fakebt.New(t)
+	g, _ := growingOver(t, f, 8)
+	b := NewBudget(20, 5)
+	g.HoldTo(b, 10)
+	pool, err := g.Identities(t.Context())
+	if err != nil {
+		t.Fatalf("Identities: %v", err)
+	}
+	lease, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer lease.Release()
+	held := take(t, b, ClassSearch, 6) // 20 - 6 - 5 = 9 free for lookups
+	if again, _ := g.Identities(t.Context()); again.Size() != 1 {
+		t.Errorf("the set widened to %d ports with room for nine lookups, want it to stay at one", again.Size())
+	}
+	held[0].Release() // ten free
+	if again, _ := g.Identities(t.Context()); again.Size() != 2 {
+		t.Errorf("the set holds %d ports with room for ten lookups, want two", again.Size())
+	}
+}
+
+func TestGrowing_OpensItsFirstPortWhateverTheBudget(t *testing.T) {
+	f := fakebt.New(t)
+	g, _ := growingOver(t, f, 8)
+	g.HoldTo(NewBudget(6, 5), 10)
+	pool, err := g.Identities(t.Context())
+	if err != nil || pool.Size() != 1 {
+		t.Fatalf("the first ask opened %v (%v), want one port", pool, err)
+	}
+	if b, room := g.HeldTo(); b == nil || room != 10 {
+		t.Errorf("the set says it is held to %v with room %d", b, room)
+	}
+}
+
+func TestGrowing_WidensAsBeforeWhereTheBudgetHasNoLimit(t *testing.T) {
+	// Held to a budget of no limit, or to none, the check must not stop the
+	// widening: that is how every profile ran before there was a limit.
+	for name, b := range map[string]*Budget{"no limit": NewBudget(0, 5), "no budget": nil} {
+		t.Run(name, func(t *testing.T) {
+			f := fakebt.New(t)
+			g, _ := growingOver(t, f, 8)
+			g.HoldTo(b, 10)
+			pool, err := g.Identities(t.Context())
+			if err != nil {
+				t.Fatalf("Identities: %v", err)
+			}
+			lease, err := pool.Acquire(t.Context())
+			if err != nil {
+				t.Fatalf("Acquire: %v", err)
+			}
+			defer lease.Release()
+			if again, _ := g.Identities(t.Context()); again.Size() != 2 {
+				t.Errorf("the set holds %d ports, want it to widen to two", again.Size())
+			}
+		})
+	}
+}
