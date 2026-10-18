@@ -36,6 +36,10 @@ type profileForm struct {
 	// http.
 	PerUpstream string
 	Wire        string
+	// ConnLimit and Reserve are the connection limit of the profile and the
+	// reserve a solve is counted as, as typed, in pieces.
+	ConnLimit string
+	Reserve   string
 	// Gateways are the configuration names ticked, when the source is the
 	// gateways.
 	Gateways []string
@@ -97,6 +101,8 @@ func profileShowing(p store.Profile) profileForm {
 		Refresh:      spellUnits(p.Refresh, refreshUnit),
 		Ban:          spellUnits(p.Ban, banUnit),
 		PerUpstream:  strconv.Itoa(atLeastOne(p.ThreadsPerUpstream)),
+		ConnLimit:    strconv.Itoa(p.ConnLimit),
+		Reserve:      strconv.Itoa(p.SolverReserve),
 		Wire:         blanktrail.ProtocolOr(p.Protocol),
 		Gateways:     p.Gateways,
 		VDNS:         vdnsShown(p.VDNSMode),
@@ -138,6 +144,8 @@ func profileFrom(r former) profileForm {
 		Ban:         strings.TrimSpace(r.FormValue(banField)),
 		PerUpstream: strings.TrimSpace(r.FormValue(perUpField)),
 		Wire:        strings.TrimSpace(r.FormValue(wireField)),
+		ConnLimit:   strings.TrimSpace(r.FormValue(connLimitField)),
+		Reserve:     strings.TrimSpace(r.FormValue(reserveField)),
 		// These three are on the form whenever it is shown, so a box that sent
 		// nothing is a box somebody unticked rather than one that was not there.
 		VDNS:         strings.TrimSpace(r.FormValue(vdnsField)),
@@ -195,6 +203,17 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 	// One is the floor rather than the default alone: nought identities through
 	// an egress is a pool that hands out nothing at all.
 	next.ThreadsPerUpstream = atLeastOne(b.none(f.PerUpstream, p.ThreadsPerUpstream, "settings.perupstream.count"))
+	// Nought is an answer for both: no limit, and a solve counted as nothing on
+	// top of its request. Only a negative is a mistake.
+	next.ConnLimit = b.none(f.ConnLimit, p.ConnLimit, "proxies.connlimit.count")
+	next.SolverReserve = b.none(f.Reserve, p.SolverReserve, "proxies.reserve.count")
+	// A lookup is let through only while a solve still fits beside it (see
+	// blanktrail.Budget), so a limit at or below the reserve is a profile on
+	// which no hidden address is ever read. Refused here, where it was typed,
+	// rather than found an hour into a job that stands still.
+	if next.ConnLimit > 0 && next.ConnLimit <= next.SolverReserve {
+		b.complaints = append(b.complaints, "proxies.connlimit.small")
+	}
 
 	// The list is switched off by choosing no source, which is why the source is
 	// a choice and not a box: a blank box would have to mean both "leave it" and

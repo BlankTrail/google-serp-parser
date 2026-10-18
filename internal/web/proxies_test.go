@@ -1013,3 +1013,61 @@ func TestProfileForm_OffersTheResolversInTheOrderAndWordsOfBlankTrail(t *testing
 		}
 	}
 }
+
+func TestSaveProxies_WritesDownTheProfilesConnectionLimitAndItsReserve(t *testing.T) {
+	s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
+		"source": {"file"}, "source_at": {"C:/list.txt"},
+		"conn_limit": {"30"}, "solver_reserve": {"5"},
+	}))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
+	}
+	after, err := s.store.Profile(t.Context(), prof)
+	if err != nil || after.ConnLimit != 30 || after.SolverReserve != 5 {
+		t.Errorf("saved limit %d and reserve %d (%v), want 30 and 5", after.ConnLimit, after.SolverReserve, err)
+	}
+}
+
+func TestSaveProxies_RefusesALimitNoAddressCouldEverBeReadUnder(t *testing.T) {
+	// A lookup goes only while a solve still fits beside it, so a limit at or
+	// below the reserve is a profile that never reads a hidden address - and
+	// that would be found an hour into a job rather than here. Below nought is
+	// not a number of connections at all.
+	s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	for _, boxes := range []url.Values{
+		{"conn_limit": {"5"}, "solver_reserve": {"5"}},
+		{"conn_limit": {"-1"}, "solver_reserve": {"5"}},
+		{"conn_limit": {"30"}, "solver_reserve": {"-2"}},
+	} {
+		boxes.Set("source", "file")
+		boxes.Set("source_at", "C:/list.txt")
+		rec := postForm(t, s, proxiesAt, profileValues(prof, boxes))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%v: status=%d, want the screen back with the complaint", boxes, rec.Code)
+		}
+		after, err := s.store.Profile(t.Context(), prof)
+		if err != nil || after.ConnLimit != 0 || after.Kind != "" {
+			t.Errorf("%v was written down as %+v (%v)", boxes, after, err)
+		}
+	}
+}
+
+func TestProfileForm_OffersTheConnectionLimitAndTheReserve(t *testing.T) {
+	s := testServer(t)
+	fresh := store.NewProfile()
+	fresh.Name = "exits"
+	id, err := s.store.CreateProfile(t.Context(), fresh)
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	body := get(t, s, proxiesAt+"?"+profileField+"="+strconv.FormatInt(id, 10)).Body.String()
+	for _, want := range []string{
+		`name="conn_limit" type="number" min="0" value="0"`,
+		`name="solver_reserve" type="number" min="0" value="5"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the profile form has no %s", want)
+		}
+	}
+}

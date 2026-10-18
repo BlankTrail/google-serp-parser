@@ -34,10 +34,14 @@ const (
 	lanField     = "lan_access"
 	lanKeyField  = "lan_password"
 	perUpField   = "threads_per_upstream"
-	gatewayField = "gateway"
-	sourceField  = "source"
-	whereField   = "source_at"
-	refreshField = "source_refresh"
+	// How many connections to the proxy a profile's ports may hold at once,
+	// and how many of them a challenge being solved is counted as.
+	connLimitField = "conn_limit"
+	reserveField   = "solver_reserve"
+	gatewayField   = "gateway"
+	sourceField    = "source"
+	whereField     = "source_at"
+	refreshField   = "source_refresh"
 	// What the ports of a profile are made of, beyond where they go out.
 	vdnsField   = "vdns_mode"
 	solverField = "js_solver"

@@ -334,11 +334,22 @@
 </select>
 </div>
 </div>
+<div class="row">
+<div class="field">
+<label for="conn_limit">{{.T "proxies.connlimit"}}</label>
+<input id="conn_limit" name="conn_limit" type="number" min="0" value="{{.Form.ConnLimit}}">
+</div>
+<div class="field">
+<label for="solver_reserve">{{.T "proxies.reserve"}}</label>
+<input id="solver_reserve" name="solver_reserve" type="number" min="0" value="{{.Form.Reserve}}">
+</div>
+</div>
 <details class="help">
 <summary>{{.T "help.what"}}</summary>
 <ul class="notes">
 <li>{{.T "settings.ban.why"}}</li>
 <li>{{.T "settings.perupstream.why"}}</li>
+<li>{{.T "proxies.connlimit.why"}}</li>
 <li>{{.T "settings.wire.why"}}</li>
 </ul>
 </details>
