@@ -1561,3 +1561,59 @@ func TestKeeper_AsksTheServiceNothingWhenAKeptSessionHasNowhereToGo(t *testing.T
 		t.Fatalf("after a rested: got %v, %v, want session %d back", got, err, onA.ID)
 	}
 }
+
+func TestKeeper_GivesBackTheAddressItHeldWhenTheServiceRefusesTheFingerprint(t *testing.T) {
+	// The address is reserved before the service is asked for anything, so a
+	// fingerprint the service refuses leaves a reservation behind it. It has to
+	// be let go: kept, it holds a place on the address for a session that was
+	// never made, and on a list of one address with room for one session the
+	// next thread is told there is nowhere to go — for good, since nothing else
+	// ever lets it go.
+	ctx := context.Background()
+	refused := errors.New("the service is refusing")
+
+	t.Run("a new session", func(t *testing.T) {
+		k := keeperAt(NewMemory(), startClock())
+		p := listPort(1, "a", "a")
+		p.refuse = refused
+		if _, err := k.Take(ctx, p, desktop); !errors.Is(err, refused) {
+			t.Fatalf("Take with the service refusing: %v, want its refusal", err)
+		}
+		p.refuse = nil
+		got, err := k.Take(ctx, p, desktop)
+		if err != nil {
+			t.Fatalf("Take once the service answers: %v, want a session on a — the refused one still holds its place", err)
+		}
+		if !got.Fresh || p.Exit() != "addr:a" {
+			t.Errorf("got a session (fresh %v) on %q, want a new one on a", got.Fresh, p.Exit())
+		}
+	})
+
+	t.Run("a kept session", func(t *testing.T) {
+		// A session that never answered, whose address is resting, is moved to
+		// the other one — which is reserved before its fingerprint goes on.
+		c, h := startClock(), NewMemory()
+		k := keeperAt(h, c)
+		kept, err := k.Take(ctx, listPort(1, "a", "a"), desktop)
+		if err != nil {
+			t.Fatalf("Take on a: %v", err)
+		}
+		kept.PutBack()
+		c.pass(time.Minute)
+
+		p := listPort(2, "a", "a", "b")
+		p.resting["a"] = true
+		p.refuse = refused
+		if _, err := k.Take(ctx, p, desktop); !errors.Is(err, refused) {
+			t.Fatalf("Take with the service refusing: %v, want its refusal", err)
+		}
+		p.refuse = nil
+		got, err := k.Take(ctx, p, desktop)
+		if err != nil {
+			t.Fatalf("Take once the service answers: %v, want the kept session on b — the refused move still holds its place", err)
+		}
+		if got.ID != kept.ID || p.Exit() != "addr:b" {
+			t.Errorf("got session %d on %q, want %d moved to b", got.ID, p.Exit(), kept.ID)
+		}
+	})
+}
