@@ -1071,3 +1071,97 @@ func TestProfileForm_OffersTheConnectionLimitAndTheReserve(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileForm_ShowsWhatWasSavedAndKeepsItWhenTheBoxesComeBackEmpty(t *testing.T) {
+	// A non-default pair, so a form that shows the defaults, or a save that
+	// ignores what was typed, cannot pass for one that round-trips.
+	s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	if rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
+		"source": {"file"}, "source_at": {"C:/list.txt"},
+		"conn_limit": {"30"}, "solver_reserve": {"7"},
+	})); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
+	}
+	at := proxiesAt + "?" + profileField + "=" + strconv.FormatInt(prof, 10)
+	body := get(t, s, at).Body.String()
+	for _, want := range []string{`name="conn_limit" type="number" min="0" value="30"`, `name="solver_reserve" type="number" min="0" value="7"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the saved profile is not shown with %s", want)
+		}
+	}
+	// A form that never carried the two boxes leaves them as they were.
+	if rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
+		"source": {"file"}, "source_at": {"C:/list.txt"},
+	})); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want a redirect back to the screen", rec.Code)
+	}
+	after, err := s.store.Profile(t.Context(), prof)
+	if err != nil || after.ConnLimit != 30 || after.SolverReserve != 7 {
+		t.Errorf("kept limit %d and reserve %d (%v), want 30 and 7", after.ConnLimit, after.SolverReserve, err)
+	}
+}
+
+func TestSaveProxies_SaysWhichConnectionBoxItRefused(t *testing.T) {
+	s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+	// A saved reserve of 7 is what a typed limit of 6 would be held against if
+	// the reserve box were not itself the mistake.
+	if rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
+		"source": {"file"}, "source_at": {"C:/list.txt"},
+		"conn_limit": {"30"}, "solver_reserve": {"7"},
+	})); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status=%d, want the starting pair saved", rec.Code)
+	}
+	count, reserve, small := LangEN.T("proxies.connlimit.count"), LangEN.T("proxies.reserve.count"), LangEN.T("proxies.connlimit.small")
+	for _, c := range []struct {
+		boxes     url.Values
+		want, not []string
+	}{
+		{url.Values{"conn_limit": {"abc"}, "solver_reserve": {"5"}}, []string{count}, []string{reserve, small}},
+		{url.Values{"conn_limit": {"-1"}, "solver_reserve": {"5"}}, []string{count}, []string{reserve, small}},
+		{url.Values{"conn_limit": {"30"}, "solver_reserve": {"abc"}}, []string{reserve}, []string{count, small}},
+		{url.Values{"conn_limit": {"30"}, "solver_reserve": {"-2"}}, []string{reserve}, []string{count, small}},
+		// Neither parsed: nothing was typed that the two could be compared on.
+		{url.Values{"conn_limit": {"x"}, "solver_reserve": {"y"}}, []string{count, reserve}, []string{small}},
+		{url.Values{"conn_limit": {"6"}, "solver_reserve": {"abc"}}, []string{reserve}, []string{count, small}},
+		{url.Values{"conn_limit": {"5"}, "solver_reserve": {"5"}}, []string{small}, []string{count, reserve}},
+		{url.Values{"conn_limit": {"3"}, "solver_reserve": {"5"}}, []string{small}, []string{count, reserve}},
+	} {
+		c.boxes.Set("source", "file")
+		c.boxes.Set("source_at", "C:/list.txt")
+		rec := postForm(t, s, proxiesAt, profileValues(prof, c.boxes))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%v: status=%d, want the screen back with the complaint", c.boxes, rec.Code)
+		}
+		page := rec.Body.String()
+		for _, w := range c.want {
+			if !strings.Contains(page, html.EscapeString(w)) {
+				t.Errorf("%v: the page does not say %q", c.boxes, w)
+			}
+		}
+		for _, n := range c.not {
+			if strings.Contains(page, html.EscapeString(n)) {
+				t.Errorf("%v: the page complains of %q, which was not the mistake", c.boxes, n)
+			}
+		}
+	}
+}
+
+func TestSaveProxies_TakesNoLimitAndNoReserveAsAnswers(t *testing.T) {
+	// Nought and nought is a profile with no limit and a solve counted as
+	// nothing extra; nought limit against any reserve is no limit at all.
+	for _, pair := range [][2]string{{"0", "0"}, {"0", "5"}} {
+		s, prof := proxyProfileServer(t, settings.Settings{ControlURL: "http://127.0.0.1:1"})
+		rec := postForm(t, s, proxiesAt, profileValues(prof, url.Values{
+			"source": {"file"}, "source_at": {"C:/list.txt"},
+			"conn_limit": {pair[0]}, "solver_reserve": {pair[1]},
+		}))
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("%v: status=%d, want a redirect back to the screen", pair, rec.Code)
+		}
+		after, err := s.store.Profile(t.Context(), prof)
+		want, _ := strconv.Atoi(pair[1])
+		if err != nil || after.ConnLimit != 0 || after.SolverReserve != want {
+			t.Errorf("%v saved as limit %d reserve %d (%v)", pair, after.ConnLimit, after.SolverReserve, err)
+		}
+	}
+}

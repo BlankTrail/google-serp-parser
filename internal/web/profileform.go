@@ -205,13 +205,17 @@ func (f profileForm) onto(p store.Profile) (store.Profile, []string) {
 	next.ThreadsPerUpstream = atLeastOne(b.none(f.PerUpstream, p.ThreadsPerUpstream, "settings.perupstream.count"))
 	// Nought is an answer for both: no limit, and a solve counted as nothing on
 	// top of its request. Only a negative is a mistake.
+	before := len(b.complaints)
 	next.ConnLimit = b.none(f.ConnLimit, p.ConnLimit, "proxies.connlimit.count")
 	next.SolverReserve = b.none(f.Reserve, p.SolverReserve, "proxies.reserve.count")
+	bothRead := len(b.complaints) == before
 	// A lookup is let through only while a solve still fits beside it (see
 	// blanktrail.Budget), so a limit at or below the reserve is a profile on
 	// which no hidden address is ever read. Refused here, where it was typed,
-	// rather than found an hour into a job that stands still.
-	if next.ConnLimit > 0 && next.ConnLimit <= next.SolverReserve {
+	// rather than found an hour into a job that stands still. Only when both
+	// boxes were read: a box that did not parse has already been complained of,
+	// and the saved value standing in for it is not something the reader typed.
+	if bothRead && next.ConnLimit > 0 && next.ConnLimit <= next.SolverReserve {
 		b.complaints = append(b.complaints, "proxies.connlimit.small")
 	}
 
