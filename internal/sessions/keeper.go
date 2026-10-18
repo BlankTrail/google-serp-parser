@@ -384,13 +384,13 @@ func (k *Keeper) busyLocked() map[string]int {
 // away moves a session that has answered off its own address when that address
 // is resting, which only TakeStranded asks for.
 func (k *Keeper) put(ctx context.Context, p Port, s *kept, away bool) (*Held, error) {
-	if err := p.Wear(ctx, s.record.Profile); err != nil {
-		k.release(s)
-		return nil, fmt.Errorf("sessions: putting session %d's fingerprint on port %d: %w", s.record.ID, p.Number(), err)
-	}
+	// Where the session is going is settled before anything is asked of the
+	// service; see fresh for what asking first cost. The calls themselves still
+	// go fingerprint first, address second.
 	address := ""
 	pinned := hasAnswered(s.record)
-	if !onGateway(s.record.Exit) {
+	onAddress := !onGateway(s.record.Exit)
+	if onAddress {
 		a, ok := addressOf(s.record.Exit)
 		// A session goes out through its own address, listed or not, until the
 		// address stops carrying its requests. One that has never answered and
@@ -406,8 +406,15 @@ func (k *Keeper) put(ctx context.Context, p Port, s *kept, away bool) (*Held, er
 			}
 			defer k.unreserve(a)
 		}
-		if p.Exit() != addrExit+a {
-			if err := p.MoveTo(ctx, a); err != nil {
+		address = a
+	}
+	if err := p.Wear(ctx, s.record.Profile); err != nil {
+		k.release(s)
+		return nil, fmt.Errorf("sessions: putting session %d's fingerprint on port %d: %w", s.record.ID, p.Number(), err)
+	}
+	if onAddress {
+		if p.Exit() != addrExit+address {
+			if err := p.MoveTo(ctx, address); err != nil {
 				k.release(s)
 				return nil, fmt.Errorf("sessions: moving port %d to session %d's address: %w", p.Number(), s.record.ID, err)
 			}
@@ -415,10 +422,9 @@ func (k *Keeper) put(ctx context.Context, p Port, s *kept, away bool) (*Held, er
 		k.mu.Lock()
 		// Somewhere other than where it last answered from: a stranger at this
 		// address until it answers from it.
-		s.moved = addrExit+a != s.record.Exit
-		s.record.Exit = addrExit + a
+		s.moved = addrExit+address != s.record.Exit
+		s.record.Exit = addrExit + address
 		k.mu.Unlock()
-		address = a
 	}
 	// A session that has answered keeps its port on its address for the length
 	// of the lease; one that never has lets its requests go where they can.
@@ -438,6 +444,34 @@ func (k *Keeper) put(ctx context.Context, p Port, s *kept, away bool) (*Held, er
 // fresh makes a new session on the port: a fresh fingerprint from the port's
 // template, an address by the rule — or the port's gateway — and no tickets.
 func (k *Keeper) fresh(ctx context.Context, p Port, w Want) (*Held, error) {
+	// The address is settled before the fingerprint is asked for, and that
+	// order is the whole of what keeps a thread with nowhere to go off the
+	// service.
+	//
+	// It was the other way round. A fresh fingerprint is two calls to the
+	// control API — the template put back, then a rotation — and they were
+	// made before anything asked whether there was an address to put the new
+	// session on. When there was not, the caller was told ErrNoAddress, which
+	// it rightly reads as "wait a moment and ask again", and asked again
+	// twenty-five milliseconds later, paying both calls every time. Seen on
+	// 2026-10-19: a job of twenty threads raised on a profile whose list had
+	// never been set up — its ports go out directly, so there is no address
+	// for a session at all — sent the service about fifteen thousand
+	// rotations and as many configurations in two minutes, until it was
+	// stopped. A list whose every address is already carrying as many
+	// sessions as it may did the same at the same rate: the wait was there,
+	// it was simply paid for in calls. Asked first, nowhere to go costs
+	// nothing but the wait.
+	exit := p.Exit()
+	address := ""
+	if !onGateway(exit) {
+		a, ok := k.reserve(candidatesOf(p), p.Limit())
+		if !ok {
+			return nil, ErrNoAddress
+		}
+		defer k.unreserve(a)
+		address = a
+	}
 	fp, err := p.Freshen(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("sessions: a fresh fingerprint on port %d: %w", p.Number(), err)
@@ -445,19 +479,13 @@ func (k *Keeper) fresh(ctx context.Context, p Port, w Want) (*Held, error) {
 	if fp.Profile == "" {
 		return nil, fmt.Errorf("sessions: port %d does not say which fingerprint it wears", p.Number())
 	}
-	exit, address := p.Exit(), ""
 	if !onGateway(exit) {
-		a, ok := k.reserve(candidatesOf(p), p.Limit())
-		if !ok {
-			return nil, ErrNoAddress
-		}
-		defer k.unreserve(a)
-		if exit != addrExit+a {
-			if err := p.MoveTo(ctx, a); err != nil {
+		if exit != addrExit+address {
+			if err := p.MoveTo(ctx, address); err != nil {
 				return nil, fmt.Errorf("sessions: moving port %d to a new session's address: %w", p.Number(), err)
 			}
 		}
-		exit, address = addrExit+a, a
+		exit = addrExit + address
 	}
 	// A new session has nothing to lose: its first request goes wherever an
 	// address will carry it.

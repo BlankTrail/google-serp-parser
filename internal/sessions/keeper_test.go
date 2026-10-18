@@ -1484,3 +1484,80 @@ func TestKeeper_LeavesOutOfWarmingASessionPutBackForAWhile(t *testing.T) {
 		t.Errorf("after the quarter of an hour TakeColdest = %v, %v; want %d, the coldest, again", again, err, first.ID)
 	}
 }
+
+func TestKeeper_AsksTheServiceNothingWhenThereIsNoAddressForANewSession(t *testing.T) {
+	// ErrNoAddress is a wait: the caller asks again a moment later, and goes on
+	// asking for as long as there is nowhere to go. Each of those askings has to
+	// be free. A fresh fingerprint asked for before the address was looked for
+	// was two calls to the service every time — on 2026-10-19 a job of twenty
+	// threads on ports with no exit at all sent about fifteen thousand of each
+	// in two minutes.
+	ctx := context.Background()
+	t.Run("a port with no exit", func(t *testing.T) {
+		// A profile whose list was never set up: its ports go out directly, and
+		// there is no address to put a session on.
+		k := keeperAt(NewMemory(), startClock())
+		p := &port{num: 1, resting: map[string]bool{},
+			fresh: Fingerprint{Profile: "Chrome_153_win", Browser: "chrome", OS: "windows", Release: 153}}
+		for i := 0; i < 50; i++ {
+			if _, err := k.Take(ctx, p, desktop); !errors.Is(err, ErrNoAddress) {
+				t.Fatalf("Take %d: %v, want ErrNoAddress", i, err)
+			}
+		}
+		if len(p.calls) != 0 {
+			t.Errorf("fifty refusals asked the port %d times (%v), want none", len(p.calls), p.calls[:min(len(p.calls), 4)])
+		}
+	})
+	t.Run("every address at its limit", func(t *testing.T) {
+		k := keeperAt(NewMemory(), startClock())
+		if _, err := k.Take(ctx, listPort(1, "a", "a"), desktop); err != nil {
+			t.Fatalf("Take: %v", err)
+		}
+		// The session on a is still held, and a takes one at a time.
+		p := listPort(2, "a", "a")
+		for i := 0; i < 50; i++ {
+			if _, err := k.Take(ctx, p, desktop); !errors.Is(err, ErrNoAddress) {
+				t.Fatalf("Take %d: %v, want ErrNoAddress", i, err)
+			}
+		}
+		if len(p.calls) != 0 {
+			t.Errorf("fifty refusals asked the port %d times (%v), want none", len(p.calls), p.calls[:min(len(p.calls), 4)])
+		}
+	})
+}
+
+func TestKeeper_AsksTheServiceNothingWhenAKeptSessionHasNowhereToGo(t *testing.T) {
+	// The same for a session already made: one that never answered, whose
+	// address is resting, with the only other address carrying as many sessions
+	// as it may. It has nowhere to go, and putting its fingerprint on the port
+	// first was a call to the service for every time a thread asked.
+	c, h := startClock(), NewMemory()
+	k := keeperAt(h, c)
+	ctx := context.Background()
+	onA, err := k.Take(ctx, listPort(1, "a", "a"), desktop)
+	if err != nil {
+		t.Fatalf("Take on a: %v", err)
+	}
+	if _, err := k.Take(ctx, listPort(2, "b", "b"), desktop); err != nil {
+		t.Fatalf("Take on b: %v", err)
+	}
+	onA.PutBack()
+	c.pass(time.Minute)
+
+	p := listPort(3, "a", "a", "b")
+	p.resting["a"] = true
+	for i := 0; i < 50; i++ {
+		if _, err := k.Take(ctx, p, desktop); !errors.Is(err, ErrNoAddress) {
+			t.Fatalf("Take %d: %v, want ErrNoAddress", i, err)
+		}
+	}
+	if len(p.calls) != 0 {
+		t.Errorf("fifty refusals asked the port %d times (%v), want none", len(p.calls), p.calls[:min(len(p.calls), 4)])
+	}
+	// And the session is not lost by it: it is free again for the next caller.
+	p.resting["a"] = false
+	got, err := k.Take(ctx, p, desktop)
+	if err != nil || got.ID != onA.ID {
+		t.Fatalf("after a rested: got %v, %v, want session %d back", got, err, onA.ID)
+	}
+}
