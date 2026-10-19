@@ -42,7 +42,7 @@ Full size: [status dashboard](assets/screenshots/status-en.png) · [job and resu
 | Your task | What the parser does | Input |
 |---|---|---|
 | **Collect Google results** | Saves positions, titles, URLs and snippets; ads and related searches are separate datasets | Keywords, one per line |
-| **Collect search suggestions** | Expands keywords with alphabet substitutions and removes duplicates; Multiword adds substitutions between words | Seed keywords |
+| **Collect search suggestions** | Expands keywords with alphabet substitutions and removes duplicates; Multiword adds substitutions between words; off-topic suggestions are filtered out at export by words or by meaning | Seed keywords |
 | **Check website rankings** | Finds your target domain for each keyword within the chosen search depth | Keywords + target domain |
 | **Check page indexing** | Checks whether Google returns a specific URL | Page URLs |
 | **Prepare data for SEO and analysis** | Lets you select fields, column order, filters and file format, with a preview | Results of any job |
@@ -134,7 +134,9 @@ Choose **Index check** and upload page URLs, one per line. A successful check wi
 
 Choose **Search suggestions**, enter seed keywords and select a language. **Multiword** adds alphabet substitutions between words. **Requests per key, at most** limits expansion; `0` removes that limit.
 
-Suggestions are deduplicated by text. At export, choose **No filter**, **By words** or **By meaning**. For the meaning filter, download the model in Settings; it runs locally on the CPU. The similarity threshold and preview help you check which suggestions will remain in the file.
+Suggestions are deduplicated by text. A completion that only hands back the letter typed alone, still standing in its place, is not a suggestion and is left out as it is collected; a one-letter word of the job's language (`a` or `i` in English) and a digit are kept. Each suggestion is marked by whether it has any word of its key in it, in any form.
+
+At export, the **Suggestions filter** is **No filter**, **By words** or **By meaning**. *By words* leaves out suggestions with no word of their key. *By meaning* also leaves out those whose closeness to the key is below **Closeness at least** (0.54 by default, 0.30–0.80). For it, open Settings → *Meaning filter for search suggestions* and press **Download the model** once (about 132 MB); it runs locally on the CPU and sends nothing anywhere. New suggestions are then scored as they are collected; a job collected earlier is scored from its page with **Score closeness to the key**, and until then is filtered by words. The tab shows how many suggestions the filter leaves out, and the *Related to the key* and *Closeness to the key* columns can be added to the file.
 
 [Suggestions, Multiword and the meaning filter →](docs/GUIDE.md#suggestions) · [Form in PNG](assets/screenshots/new-job-suggest-en.png)
 
@@ -152,11 +154,15 @@ Suggestions are deduplicated by text. At export, choose **No filter**, **By word
 | **URL** | Enter the list URL and refresh interval | A provider's regularly updated list |
 | **BlankTrail VPN gateways** | Load configurations into BlankTrail, then select gateways in the parser profile | VPN subscriptions or individual configurations |
 
-Each profile has its own failure ban, threads per proxy and port connection protocol. A proxy list can use a first hop: a SOCKS5 proxy or a VPN gateway. VPN configurations are grouped by subscription, with their last measured latency.
+Each profile has its own failure ban, threads per proxy and port connection protocol. A proxy list can use a first hop: a SOCKS5 proxy or a VPN gateway. VPN configurations are grouped by subscription, with their last measured latency. Exits that terminate TLS themselves (they show their own certificate instead of the site's) are refused by default; tick *Work through exits that terminate TLS themselves* only for a list you trust.
 
-**A profile can have a connection limit for the proxy.** Set *Connections to the proxy (0 — no limit)* a little below what your provider's tariff allows (say 30) and keep the *Reserve for solving a captcha* (3 by default). Every job and the identities kept warm on that profile share the limit. Once it is reached, the parser holds new requests back: searches and captchas being solved go first, hidden addresses are read on what is left, and a search waits for room rather than failing. The start of a job is gentler: a session's first request in a job, or its first from a new address, may meet a captcha (Google checks again a session that rested between jobs), so it is counted as the reserve until it is answered, and sessions start a few at a time (ten on a limit of 30 with a reserve of 3) while the first ones pass their checks. The parser keeps its own count and corrects it from BlankTrail's count of connections — every two seconds while the profile carries traffic, every ten when it is idle (on a BlankTrail without the light listing `/api/v1/ports/conns`, every ten until the profile nears its limit). Connections the service holds by itself (retries, the solver's own, idle ones) are counted too and hold new searches and address reads back, but the parser cannot close them, so the count can briefly go over the limit until BlankTrail lets them go; a BlankTrail that closes idle connections to the proxy keeps those overshoots short. The job page shows *Connections to the proxy: U of L, captchas being solved: S*; the new-job form warns when the threads asked for are more than the limit leaves room for. Nought is no limit.
+**A profile with no exits does not run search jobs.** Its jobs wait in the queue as *waiting for exits*, can be stopped or deleted meanwhile, and start by themselves once exits are added on the Proxies screen. Search suggestion jobs go out directly and do not wait.
 
-**There is no need to assign proxies to BlankTrail ports manually.** The parser opens ports through the control API and keeps sessions with their cookies and fingerprints. The job page shows sessions working, resting or passing a Google challenge; profile statistics distinguish network failures from Google refusals.
+**A profile can have a connection limit for the proxy.** Set *Connections to the proxy (0 — no limit)* a little below what your provider's tariff allows (say 30) and keep the *Reserve for solving a captcha* at 3, the default. Every job and the identities kept warm on that profile share the limit. Once it is reached, the parser holds new requests back instead of failing them: searches and captchas being solved go first, and hidden addresses are read on what is left. A solve is counted as the reserve, because the solver opens connections of its own. So is a session's first request in a job, or its first from a new address, until Google answers it, since it is likely to meet a captcha: a job on a limited profile starts its sessions a few at a time (about ten on a limit of 30 with a reserve of 3) while the first ones pass their checks. If your solver opens more connections per captcha, raise the reserve.
+
+**It is a soft limit.** The parser corrects its own count from BlankTrail's — every two seconds while the profile carries traffic, every ten when it is idle. Connections the service holds by itself (retries, the solver's own, idle ones) are counted and hold new requests back, but the parser cannot close them, so the count can briefly go over the limit until BlankTrail lets them go. **Use BlankTrail 1.3.24 or newer**: it serves the light connection listing the parser reads and closes idle connections to the proxy, which keeps such overshoots short. The job page shows *Connections to the proxy: U of L, captchas being solved: S*; the new-job form warns when the threads asked for are more than the limit leaves room for. Nought is no limit, and a profile without one behaves as before.
+
+**There is no need to assign proxies to BlankTrail ports manually.** The parser opens ports through the control API and keeps sessions with their cookies and fingerprints. If BlankTrail restarts, it opens its ports again and leaves alone ports other programs opened. The job page shows sessions working, resting or passing a Google challenge; profile statistics distinguish network failures from Google refusals.
 
 [Profiles and first-hop setup →](docs/GUIDE.md#proxy-profiles) · [Full VPN screen](assets/screenshots/proxies-gateways-en.png)
 
@@ -172,7 +178,7 @@ Open **Export → select a job → configure the file**. Preview result parts, c
 | **JSONL** | Large datasets: one JSON object per line |
 | **TXT** | One selected field per line, such as a URL or suggestion |
 
-Deduplicate search results by URL or host, and suggestions by text. Suggestion filters are applied at export, so the saved results remain available without filtering too.
+Deduplicate search results by URL or host, and suggestions by text. **Only the site** keeps the results of one site and its subdomains and leaves out every other site the search answered with; a pasted address works as well as a name. Suggestion filters (*By meaning* when the job is scored, *By words* otherwise, [see above](#collect-and-clean-keyword-suggestions)) are applied at export, so the saved results remain available without filtering too. Addresses with non-Latin letters read as letters in the results table and the History; files keep them exactly as they came.
 
 [Export and API →](docs/GUIDE.md#exports)
 
@@ -187,7 +193,7 @@ In the team's demonstration runs for the video overview:
 | **Suggestions** | Up to **150,000 requests/min** |
 | **SERP parsing** | Around **1,600 requests/min already at 100 threads** |
 
-**100 threads was that run's setting, not a program limit.** Speed depends on the machine, quality and number of exits, job settings and Challenge Breaker capacity. A short job may finish before reaching steady speed; compare long runs after session warm-up. Requests, result pages and captured rows are different counters.
+**100 threads was that run's setting, not a program limit.** Speed depends on the machine, quality and number of exits, job settings and Challenge Breaker capacity. A short job may finish before reaching steady speed; compare long runs after session warm-up. A connection limit on the profile caps speed by design and slows the start, while new sessions pass their checks a few at a time. Requests, result pages and captured rows are different counters.
 
 **BlankTrail solves reCAPTCHA locally, without requiring a GPU.** In a separate documented run of 8,514 keywords, it solved 1,899 of 1,936 challenges — **98%**. Sessions continue working after solving. The job page shows challenges passed, being solved or queued, and captchas per thousand pages.
 
@@ -201,11 +207,11 @@ In the team's demonstration runs for the video overview:
 
 **Can I use a Linux server?** Yes. The dashboard listens on localhost by default. Enable access from other machines in Settings and set a password. [Server setup →](docs/GUIDE.md#server)
 
-**What about a slow start or errors?** Check the BlankTrail connection, profile and its statistics. Fresh sessions pass challenges before reaching steady speed. The job shows whether threads are waiting for an exit, a session or the solver. [Diagnostics and settings →](docs/GUIDE.md#settings)
+**What about a slow start or errors?** Check the BlankTrail connection, profile and its statistics. Fresh sessions pass challenges before reaching steady speed; on a profile with a connection limit they start a few at a time. The job shows whether threads are waiting for an exit, a session or the solver, and a job whose profile names no exits waits in the queue until exits are added. [Diagnostics and settings →](docs/GUIDE.md#settings)
 
 ## For developers
 
-Written in **Go**, with **SQLite** storage, **REST API `/api/v1/`** and a SerpApi-compatible **`GET /search`**. Issue an access key with `gserp key new`; only its hash is stored. The API starts, stops and resumes jobs, streams results and exposes site history as JSONL.
+Written in **Go**, with **SQLite** storage, **REST API `/api/v1/`** and a SerpApi-compatible **`GET /search`**, whose `link` is the site's own address, read behind Google's redirector within the request's deadline. Issue an access key with `gserp key new`; only its hash is stored. The API starts, stops and resumes jobs, streams results and exposes site history as JSONL.
 
 [API reference](docs/api.md) · [CLI](docs/GUIDE.md#cli) · [Building and reproducible releases](docs/GUIDE.md#building) · [MIT licence](LICENSE)
 
