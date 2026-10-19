@@ -231,6 +231,9 @@ func (bs *Budgets) pollOnce(ctx context.Context) {
 				r.client += l.Client
 				if l.Solving > 0 {
 					r.solving += l.Solving
+					// The solves with a request still waiting on the port: no
+					// more of them than the port has client connections.
+					r.clientSolving += min(l.Solving, l.Client)
 					// Each budget gets a set of its own, made here: the
 					// budget keeps it until the next reading.
 					if r.solvingPorts == nil {

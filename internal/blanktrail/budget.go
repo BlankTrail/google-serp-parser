@@ -169,7 +169,8 @@ func NewBudget(limit, reserve int) *Budget {
 // which the budget already counts as the reserve. Left in, a reading with two
 // solves among twenty requests would teach a k that counted the solver's
 // connections a second time on every request. So the sample is (upstream −
-// reserve × solves) / (client − solves), the divisor kept at one or more.
+// reserve × solves) / (client − solves with a request still waiting), the
+// divisor kept at one or more (see observeProfile for which solves those are).
 //
 // Samples are smoothed (an exponentially weighted mean, each reading weighing
 // ampAlpha) because one reading is one instant: a reading taken as a burst of
@@ -724,6 +725,11 @@ type profileLoad struct {
 	// upstream is the connections to the proxy, client the connections from
 	// this program, solving the solves the service is running (PortLoad).
 	upstream, client, solving int
+	// clientSolving is the service's solves that still have a client: per
+	// port the smaller of its solves and its client connections, summed. A
+	// solve whose request still waits on the port has its connection there;
+	// one whose request has gone has none. See observeProfile.
+	clientSolving int
 	// solvingPorts is the ports with a solve on them; nil when none is.
 	solvingPorts map[int]bool
 }
@@ -783,10 +789,25 @@ func (b *Budget) observeProfile(r profileLoad, known bool) (over bool, holders [
 	}
 	if known && client > 0 {
 		// The solves counted come out of the upstream — the service's own
-		// among them — but only this program's out of the client connections:
-		// a solve of its own is a request still waiting on its port, while
-		// one the service runs on its own has no client left there.
-		b.learnLocked(float64(upstream-b.reserve*b.solvesLocked()) / float64(max(client-b.solves, 1)))
+		// among them — and the solves that still have a request waiting on
+		// their port come out of the client connections: a solve whose
+		// request has gone has no client left there.
+		//
+		// Which solves still have a request is the reading's to say, port by
+		// port (profileLoad.clientSolving), and not this program's alone. The
+		// ladder knows of a solve only once the service says it outran the
+		// request — half a minute after it began — and at the start of a job
+		// nearly every solve is a fresh session's that the ladder does not
+		// know of yet (Budget's slow start): its reserve came out of the
+		// upstream as the service's, while its request stayed in the divisor
+		// as an ordinary one, and k's sample was low by as much as a third
+		// for as long as the solves lasted. This program's own count is kept
+		// as the floor, the larger of the two as with the solves themselves
+		// (solvesLocked): a service from before PortLoad.Solving reports no
+		// solve at all, and there the own solves are all that can be taken
+		// out.
+		waiting := max(b.solves, r.clientSolving)
+		b.learnLocked(float64(upstream-b.reserve*b.solvesLocked()) / float64(max(client-waiting, 1)))
 	}
 	if known {
 		b.excess = max(float64(upstream)-b.computedLocked(), 0)
