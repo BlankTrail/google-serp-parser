@@ -116,6 +116,14 @@ type Attempt struct {
 	// Want is what the sessions this attempt takes have to be. Read only with
 	// Keeper.
 	Want sessions.Want
+	// Answered, when set, is where this attempt writes down and looks up the
+	// sessions Google has answered (see askingAs) instead of a record of its
+	// own. One Attempt is one job, and its own record is "this job"; a caller
+	// that makes a new Attempt for every request — the /search interface
+	// does — shares one record across them, or every one of its requests
+	// would be counted as a possible solve and the profile's limit would let
+	// a sixth of the requests through.
+	Answered *Answered
 
 	mu       sync.Mutex
 	sessions map[int]heldSession
@@ -126,8 +134,42 @@ type Attempt struct {
 	searches map[int64]*google.Session
 	// answered is the kept sessions Google has answered with a page in this
 	// attempt — in this job — on a profile with a limit, each with the exit it
-	// was last answered through; see askingAs.
-	answered map[int64]string
+	// was last answered through; see askingAs. Used where Answered is nil.
+	answered Answered
+}
+
+// Answered is a record of the kept sessions Google has answered with a page,
+// each with the exit it was last answered through, for the attempts that share
+// it (Attempt.Answered). The zero value is an empty record.
+type Answered struct {
+	mu sync.Mutex
+	by map[int64]string
+}
+
+// at is the exit the session was last answered through, and whether it was.
+func (r *Answered) at(id int64) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	exit, ok := r.by[id]
+	return exit, ok
+}
+
+// put writes down that the session was answered through the exit.
+func (r *Answered) put(id int64, exit string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.by == nil {
+		r.by = map[int64]string{}
+	}
+	r.by[id] = exit
+}
+
+// record is the record this attempt keeps its answered sessions in.
+func (a *Attempt) record() *Answered {
+	if a.Answered != nil {
+		return a.Answered
+	}
+	return &a.answered
 }
 
 // heldSession is one port's search session, tagged with the identity it was
@@ -552,9 +594,7 @@ func (a *Attempt) askingAs(ctx context.Context, lease *blanktrail.Lease, held *s
 	if held == nil || !lease.Limited() {
 		return ctx
 	}
-	a.mu.Lock()
-	at, seen := a.answered[held.ID]
-	a.mu.Unlock()
+	at, seen := a.record().at(held.ID)
 	if seen && at == lease.Exit() {
 		return ctx
 	}
@@ -569,13 +609,7 @@ func (a *Attempt) answeredHere(lease *blanktrail.Lease, held *sessions.Held, err
 	if err != nil || held == nil || !lease.Limited() {
 		return
 	}
-	exit := lease.Exit()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.answered == nil {
-		a.answered = map[int64]string{}
-	}
-	a.answered[held.ID] = exit
+	a.record().put(held.ID, lease.Exit())
 }
 
 // searchFor is a kept session's search state, bound for this request to the port

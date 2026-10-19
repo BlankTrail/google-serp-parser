@@ -349,7 +349,7 @@ func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
 		ports = pool.Stats().Ports
 	}
 	cfg.Search = api.SearchConfig{
-		Searcher: warmSearch{warm: warm, keeper: o.Keeper},
+		Searcher: warmSearch{warm: warm, keeper: o.Keeper, answered: &warmAnswered{}},
 		Ports:    ports,
 		Reveal:   warm.reveal,
 	}
@@ -359,8 +359,9 @@ func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
 // warmSearch searches through the identities kept warm as they stand at the
 // moment of the search, and answers api.ErrNoSearcher while there are none.
 type warmSearch struct {
-	warm   *warmSet
-	keeper *sessions.Keeper
+	warm     *warmSet
+	keeper   *sessions.Keeper
+	answered *warmAnswered
 }
 
 func (s warmSearch) Search(ctx context.Context, q google.Query) (google.SERP, error) {
@@ -368,7 +369,41 @@ func (s warmSearch) Search(ctx context.Context, q google.Query) (google.SERP, er
 	if pool == nil {
 		return google.SERP{}, api.ErrNoSearcher
 	}
-	return (&run.Attempt{Pool: pool, Keeper: s.keeper, Want: sessions.Want{Device: s.warm.Device()}}).Search(ctx, q)
+	return s.attempt(pool).Search(ctx, q)
+}
+
+// attempt is the Attempt one request is asked through: on the set as it
+// stands, with the set's record of answered sessions.
+func (s warmSearch) attempt(pool *blanktrail.Pool) *run.Attempt {
+	return &run.Attempt{Pool: pool, Keeper: s.keeper, Want: sessions.Want{Device: s.warm.Device()},
+		Answered: s.answered.of(pool)}
+}
+
+// warmAnswered is the sessions Google has answered through the identities kept
+// warm, for as long as one set of them stands: what a job's Attempt keeps for
+// the job (run.Attempt.Answered). Every /search request is an Attempt of its
+// own, and without one record across them every request on a profile with a
+// limit would be counted as a possible solve — the reserve, not one request —
+// and the interface would run at a fraction of the limit. A new set is a new
+// record, as a new job is: its sessions were put on ports afresh.
+type warmAnswered struct {
+	mu   sync.Mutex
+	pool *blanktrail.Pool
+	rec  *run.Answered
+}
+
+// of is the record for the set the pool stands for; nil where there is no
+// warmAnswered, which leaves each Attempt a record of its own.
+func (w *warmAnswered) of(pool *blanktrail.Pool) *run.Answered {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pool != pool || w.rec == nil {
+		w.pool, w.rec = pool, &run.Answered{}
+	}
+	return w.rec
 }
 
 // mount puts the two interfaces on one address: the pages at the root, and the

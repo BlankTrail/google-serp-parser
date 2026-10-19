@@ -256,8 +256,8 @@ func TestAttempt_WritesDownNoAnswersWithoutALimit(t *testing.T) {
 	if _, err := a.Search(context.Background(), usQuery("x")); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(a.answered) != 0 {
-		t.Errorf("a profile with no limit wrote down %d answered sessions, want none", len(a.answered))
+	if len(a.answered.by) != 0 {
+		t.Errorf("a profile with no limit wrote down %d answered sessions, want none", len(a.answered.by))
 	}
 }
 
@@ -292,5 +292,35 @@ func TestAskingAs_LeavesTheContextAloneWithoutALimitOrASessionToTellApart(t *tes
 	defer lease.Release()
 	if ctx := context.Background(); (&Attempt{Pool: f.Pool}).askingAs(ctx, lease, nil) != ctx {
 		t.Error("a request with no held session was marked as a fresh session's")
+	}
+}
+
+func TestAttempt_ASharedRecordCarriesAnswersFromOneAttemptToTheNext(t *testing.T) {
+	// The /search interface makes an Attempt for every request. Sharing one
+	// record, the second request on a session the first one got answered is
+	// an ordinary one; an attempt with a record of its own still takes it for
+	// a stranger.
+	o := newCookieOrigin(t, nil)
+	f := poolFacing(t, o.addr(), 1, inSessions, func(c *blanktrail.PoolConfig) { c.Budget = blanktrail.NewBudget(30, 5) })
+	keeper := sessions.NewKeeper(sessions.NewMemory())
+	ctx := context.Background()
+	lease, err := f.Pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer lease.Release()
+	held, err := keeper.Take(ctx, leasePort{lease}, searchDesktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	defer held.PutBack()
+
+	shared := &Answered{}
+	(&Attempt{Pool: f.Pool, Answered: shared}).answeredHere(lease, held, nil)
+	if (&Attempt{Pool: f.Pool, Answered: shared}).askingAs(ctx, lease, held) != ctx {
+		t.Error("a session answered through a shared record was counted as fresh by the next attempt sharing it")
+	}
+	if (&Attempt{Pool: f.Pool}).askingAs(ctx, lease, held) == ctx {
+		t.Error("an attempt with a record of its own took a session it never saw answered for an ordinary one")
 	}
 }
