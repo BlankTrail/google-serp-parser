@@ -141,11 +141,15 @@ func TestSupervisor_KeepsAJobWhoseProfileNamesNoExitsInTheQueueAndAsksAgainCalml
 
 	// The list is filled in where it lives. Nobody presses anything, and the
 	// next asking raises it.
+	// The job is the one running from the moment it is taken to be asked for
+	// again, before its pool is up, so it is waited for until the pool has gone
+	// up and the mark is taken off; a mark that never goes is the failure.
 	x.exits.Store(true)
-	waitUntilRunning(t, v, id)
-	if _, ok := v.WaitingForExits(id); ok {
-		t.Error("a job whose pool went up is still reported as waiting for exits")
-	}
+	waitUntil(t, "the job's pool went up and it no longer waits for exits", func() bool {
+		got, running := v.Running()
+		_, waiting := v.WaitingForExits(id)
+		return running && got == id && !waiting
+	})
 	x.pools.let(t, 2)
 	waitUntil(t, "the job is done", func() bool { return progress(t, st, id).Finished })
 }
