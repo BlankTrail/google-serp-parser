@@ -30,8 +30,9 @@ import (
 // it began. So on the light listing a profile is read at the fast rate
 // whenever it has attempts in flight, or the last good reading found the
 // service carrying anything on its ports (upstream connections or an excess
-// over the prediction), which is the connections that outlive the requests; and
-// at the slow rate only when it is idle in both senses.
+// over the prediction) or solving on them, which is the connections that
+// outlive the requests; and at the slow rate only when it is idle in both
+// senses.
 //
 // The whole listing (/api/v1/ports) is about 283 KB for 251 ports and 9-36 ms
 // on the live service (2026-10-18), a megabyte at a thousand, and it is what a
@@ -143,9 +144,17 @@ func (bs *Budgets) step(ctx context.Context) {
 			// the 70% rule missed on the stand: connections that outlive
 			// their requests and are counted by the service alone, and a
 			// profile that has gone idle but still holds them is the one
-			// whose count has yet to be seen to fall. A reading that failed
-			// stored nought and unknown, so it keeps nothing fast.
-			if r.InFlight > 0 || r.Observed > 0 || r.Excess > 0 {
+			// whose count has yet to be seen to fall. So is a profile on whose
+			// ports the service was solving at the last reading: each such
+			// solve holds the reserve until a reading says it is over, and a
+			// solve the ladder gave up on ends with nothing in this program to
+			// see it end — read slowly, its reserve would be held for up to
+			// ten seconds after the service let it go. (A solve holds
+			// connections, so the reading's upstream is mostly above nought
+			// too; the solve is asked about on its own because the two need
+			// not land in the same instant.) A reading that failed stored
+			// nought and unknown, so it keeps nothing fast.
+			if r.InFlight > 0 || r.Observed > 0 || r.Excess > 0 || r.ServiceSolves > 0 {
 				busy = true
 			}
 			continue
@@ -183,7 +192,8 @@ func (bs *Budgets) step(ctx context.Context) {
 }
 
 // pollOnce reads the service once for every profile with a limit and hands
-// each its own sum. With no limit anywhere it asks nothing.
+// each its own sum: the connections, the solves the service is running, and
+// the ports those solves are on. With no limit anywhere it asks nothing.
 func (bs *Budgets) pollOnce(ctx context.Context) {
 	bs.mu.Lock()
 	cl := bs.client
@@ -210,19 +220,30 @@ func (bs *Budgets) pollOnce(ctx context.Context) {
 	}
 	bs.noteOutcome(err)
 	for _, b := range limited {
-		upstream, client := 0, 0
+		var r profileLoad
 		if err == nil {
 			for _, port := range b.ports() {
-				upstream += loads[port].Upstream
-				client += loads[port].Client
+				l := loads[port]
+				r.upstream += l.Upstream
+				r.client += l.Client
+				if l.Solving > 0 {
+					r.solving += l.Solving
+					// Each budget gets a set of its own, made here: the
+					// budget keeps it until the next reading.
+					if r.solvingPorts == nil {
+						r.solvingPorts = map[int]bool{}
+					}
+					r.solvingPorts[port] = true
+				}
 			}
 		}
 		// A count that cannot be read is not kept: nought and unknown, so a
 		// number above the limit read before a restart of the service does
 		// not hold the profile's searches and lookups for good. Nor is it
-		// learned from: k stays what the last good readings made it.
+		// learned from: k stays what the last good readings made it. The
+		// service's solves go with it, for the same reason.
 		// holders is empty unless the count is over the limit.
-		_, holders := b.observeLoad(upstream, client, err == nil)
+		_, holders := b.observeProfile(r, err == nil)
 		for _, h := range holders {
 			h.overLimit()
 		}

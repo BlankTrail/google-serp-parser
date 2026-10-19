@@ -60,6 +60,21 @@ const (
 // count inside the limit; a reading that shows more than was predicted holds
 // that much more room until a later one shows the excess gone.
 //
+// The solves are counted from both sides too. This program knows of a solve
+// from the request that met the challenge, and stops knowing when that request
+// gives up; the service goes on solving, with the solver's three to five
+// connections to the proxy on a port that no longer has a client. The third
+// re-measure on the stand (2026-10-19) found two thirds of the connections over
+// the limit on ports with no client, solves the ladder had given up on among
+// them. Read as an excess they held the room all the same, but they also went
+// into k's sample as connections a request had opened, and they did not keep
+// the lookup pools from closing the idle connections of a port the service was
+// solving on. So a reading also brings the service's own count of its solves
+// and the ports they are on (PortLoad.Solving), and the budget counts the
+// larger of its own solves and the service's: in the prediction, in k's
+// sample, and in the excess, so a solve nobody waits for any more is held as
+// the reserve it is.
+//
 // A limit of nought is how every profile ran before there was a limit: nothing
 // waits and nothing is counted.
 type Budget struct {
@@ -85,6 +100,14 @@ type Budget struct {
 	// registry reads the service at the fast rate while the profile has
 	// attempts in flight (see Budgets.step and ampWarmup).
 	samples int
+	// svcSolves is how many solves the last good reading found the service
+	// running on the profile's ports, and svcSolving the ports they were on;
+	// nought and empty when the reading failed, was never taken, or came from a
+	// service too old to say. They stay as the reading left them until the
+	// next, like the excess: a solve the service runs on its own ends when the
+	// service says so, and nothing in this program sees it end.
+	svcSolves  int
+	svcSolving map[int]bool
 	// searchWaiting is how many searches wait for room; while any does, no
 	// lookup is let in. lookupWaiting only tells the tests when a waiter has
 	// settled to wait.
@@ -177,6 +200,7 @@ func (b *Budget) Set(limit, reserve int) {
 		// would only grow stale; a limit set again starts from scratch.
 		b.observed, b.known, b.excess = 0, false, 0
 		b.amp, b.samples = ampFloor, 0
+		b.svcSolves, b.svcSolving = 0, nil
 	}
 	b.wakeLocked()
 	b.mu.Unlock()
@@ -202,8 +226,28 @@ func (b *Budget) wakeLocked() {
 // user's own figure for what a solve opens to the proxy (the solver's three to
 // five connections, measured), already counted in the service's terms; for the
 // same reason the solves are taken out of a reading's sample (learnLocked).
+//
+// The solves are the counted ones (solvesLocked): this program's own, or the
+// service's at the last reading where it ran more.
 func (b *Budget) computedLocked() float64 {
-	return b.amp*float64(b.inFlight) + float64(b.reserve*b.solves)
+	return b.amp*float64(b.inFlight) + float64(b.reserve*b.solvesLocked())
+}
+
+// solvesLocked is the solves the budget counts: the larger of the ones this
+// program has seen begin and not end, and the ones the service said at the
+// last good reading it was running on the profile's ports.
+//
+// The larger and not the sum, because the two are mostly the same solves: a
+// solve this program waits on is one the service is running, and summed every
+// such solve would hold the reserve twice. Where the service runs more, the
+// rest are solves whose requests have gone — the ladder gave up on them — and
+// the service still holds the solver's connections for them. Where this
+// program has more, the service has not yet reported a solve that has just
+// begun, or a reading is older than it. Which ports the solves are on is not
+// compared: a reading is a snapshot and the own count moves on, and the count
+// is what admission needs.
+func (b *Budget) solvesLocked() int {
+	return max(b.solves, b.svcSolves)
 }
 
 // inUseLocked is the prediction plus what the last reading found the service
@@ -225,13 +269,17 @@ func (b *Budget) inUseLocked() float64 {
 // was: a reading the prediction agreed with holds nothing once requests it saw
 // have been answered.
 //
-// On an empty budget — nothing in flight, nothing being solved — the attempt
-// costs one, not k. k is learned up to four, so a small limit the form lets
+// On an empty budget — nothing in flight, nothing being solved by this
+// program — the attempt costs one, not k. k is learned up to four, so a small limit the form lets
 // through (seven with the reserve of five, k two) would otherwise refuse every
 // lookup with nothing running at all; no reading would then ever teach k down
 // again, and the job would stand still with no word of why. What the service
 // carries beyond the prediction still holds it: those are connections the
-// tariff counts, and the service lets them go by itself.
+// tariff counts, and the service lets them go by itself. So do the solves the
+// service runs on its own (svcSolves): they hold their reserve in the
+// prediction, but they are not this program's attempts and do not make an
+// attempt cost k — they are the service's leftovers like the excess, and
+// counted as an attempt's company they would stall a small limit the same way.
 func (b *Budget) admitsLocked(c Class) bool {
 	if b.limit <= 0 {
 		return true
@@ -391,7 +439,10 @@ func (b *Budget) Free(c Class) int {
 
 // BudgetReading is a budget's figures at one moment.
 type BudgetReading struct {
-	Limit, Reserve, InFlight, Solves, Observed int
+	// Solves is the solves counted: this program's own, or the service's at
+	// the last reading where it ran more (see Budget.solvesLocked).
+	// ServiceSolves is the service's alone, as the last good reading found it.
+	Limit, Reserve, InFlight, Solves, ServiceSolves, Observed int
 	// Known is whether the service's count has been read.
 	Known bool
 	// Amplification is k: the connections to the proxy the service opens for
@@ -431,7 +482,7 @@ func (b *Budget) Reading() BudgetReading {
 	defer b.mu.Unlock()
 	return BudgetReading{
 		Limit: b.limit, Reserve: b.reserve, InFlight: b.inFlight,
-		Solves: b.solves, Observed: b.observed, Known: b.known,
+		Solves: b.solvesLocked(), ServiceSolves: b.svcSolves, Observed: b.observed, Known: b.known,
 		Amplification: b.amp, Samples: b.samples, Excess: b.excess,
 	}
 }
@@ -480,42 +531,70 @@ func (b *Budget) ports() []int {
 	return out
 }
 
-// solvingOn reports whether a solve in progress is on the port.
+// solvingOn reports whether a solve in progress is on the port: one this
+// program waits on, or one the service said at the last reading it was running
+// there. The second matters to a lookup pool told the profile is over its
+// limit (Pool.overLimit): it closes the idle connections of every port not
+// solving, and a solve whose request has gone leaves the port looking idle to
+// this program while the solver still works through it.
 func (b *Budget) solvingOn(port int) bool {
 	if b == nil {
 		return false
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.solving[port] > 0
+	return b.solving[port] > 0 || b.svcSolving[port]
+}
+
+// profileLoad is one reading of the service summed over a profile's ports.
+type profileLoad struct {
+	// upstream is the connections to the proxy, client the connections from
+	// this program, solving the solves the service is running (PortLoad).
+	upstream, client, solving int
+	// solvingPorts is the ports with a solve on them; nil when none is.
+	solvingPorts map[int]bool
 }
 
 // observe records the service's count of connections to the proxy alone, with
-// nothing to learn the amplification from. See observeLoad.
+// nothing to learn the amplification from. See observeProfile.
 func (b *Budget) observe(n int, known bool) (over bool, holders []budgetHolder) {
 	return b.observeLoad(n, 0, known)
 }
 
-// observeLoad records a reading of the profile's ports — upstream connections
-// to the proxy, client connections from this program — learns the
-// amplification from it, keeps how far it was above the prediction (the
-// excess), and lets the waiting look again. over is whether the count is above
+// observeLoad records a reading with no solves of the service's in it, as a
+// service from before PortLoad.Solving gives. See observeProfile.
+func (b *Budget) observeLoad(upstream, client int, known bool) (over bool, holders []budgetHolder) {
+	return b.observeProfile(profileLoad{upstream: upstream, client: client}, known)
+}
+
+// observeProfile records a reading of the profile's ports — upstream
+// connections to the proxy, client connections from this program, the
+// service's solves — learns the amplification from it, keeps how far it was
+// above the prediction (the excess), and lets the waiting look again. over is whether the count is above
 // the limit; then holders are the pools to tell.
 //
 // The excess is measured against the prediction priced with the k this very
 // reading taught, so a reading that only shows the service's usual two per
 // request leaves no excess behind once k has learned the two. A reading that
 // failed leaves none either: an unknown count is not a count (see
-// Budgets.pollOnce).
+// Budgets.pollOnce). Nor does it leave the service's solves: kept, a solve
+// read before the service restarted would hold its reserve, and pin its port
+// against overLimit, for as long as the service could not be read.
+//
+// The service's solves are stored before k learns and before the excess is
+// taken, so both see the solves this very reading counted: a solve whose
+// request has gone is the reserve in the sample and in the prediction, not
+// connections the sample teaches every request to open and not an excess.
 //
 // Every reading wakes the waiting, whatever it says: a lower count is room, and
 // so is a lower k, which shrinks what every attempt in flight is counted as. A
 // higher one needs no wake, but telling the two apart buys nothing — a waiter
 // woken for nothing looks once and sleeps again.
-func (b *Budget) observeLoad(upstream, client int, known bool) (over bool, holders []budgetHolder) {
+func (b *Budget) observeProfile(r profileLoad, known bool) (over bool, holders []budgetHolder) {
 	if b == nil {
 		return false, nil
 	}
+	upstream, client := r.upstream, r.client
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	// A reading that lands after the limit was taken off (between a caller
@@ -525,8 +604,13 @@ func (b *Budget) observeLoad(upstream, client int, known bool) (over bool, holde
 		return false, nil
 	}
 	b.observed, b.known, b.excess = upstream, known, 0
+	b.svcSolves, b.svcSolving = 0, nil
+	if known {
+		b.svcSolves, b.svcSolving = r.solving, r.solvingPorts
+	}
 	if known && client > 0 {
-		b.learnLocked(float64(upstream-b.reserve*b.solves) / float64(max(client-b.solves, 1)))
+		solves := b.solvesLocked()
+		b.learnLocked(float64(upstream-b.reserve*solves) / float64(max(client-solves, 1)))
 	}
 	if known {
 		b.excess = max(float64(upstream)-b.computedLocked(), 0)

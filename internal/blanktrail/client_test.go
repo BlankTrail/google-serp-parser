@@ -839,3 +839,53 @@ func TestLightLoads_IsTrueUntilTheLightListingAnswers404(t *testing.T) {
 		t.Error("a client that met the 404 still reports the light listing as there")
 	}
 }
+
+func TestPortLoads_ReadsTheServicesSolvesFromTheLightListing(t *testing.T) {
+	// The service counts its own solves on a port, the ones whose client has
+	// gone among them; the budget holds the reserve for each.
+	fake := fakebt.New(t)
+	c, a, b := openTwo(t, fake)
+	fake.SetConns(a, 0, 5)
+	fake.SetSolving(a, 1)
+	fake.SetSolving(b, 0)
+	loads, err := c.PortLoads(t.Context())
+	if err != nil {
+		t.Fatalf("PortLoads: %v", err)
+	}
+	if got := loads[a]; got != (PortLoad{Client: 0, Upstream: 5, Solving: 1}) {
+		t.Errorf("port a carries %+v, want 5 to the proxy and one solve", got)
+	}
+	if got := loads[b]; got != (PortLoad{}) {
+		t.Errorf("port b carries %+v, want nothing and no solve", got)
+	}
+}
+
+func TestPortLoads_ReadsTheServicesSolvesFromTheWholeListing(t *testing.T) {
+	fake := fakebt.New(t)
+	fake.SetNoConnsList(true)
+	c, a, _ := openTwo(t, fake)
+	fake.SetConns(a, 1, 12)
+	fake.SetSolving(a, 2)
+	loads, err := c.PortLoads(t.Context())
+	if err != nil {
+		t.Fatalf("PortLoads: %v", err)
+	}
+	if got := loads[a]; got != (PortLoad{Client: 1, Upstream: 12, Solving: 2}) {
+		t.Errorf("port a carries %+v from the whole listing, want 1, 12 and two solves", got)
+	}
+}
+
+func TestPortLoads_ReadsNoSolvesFromAServiceThatDoesNotReportThem(t *testing.T) {
+	// A service from before the field lists a port without it: no solve, and
+	// the budget counts only the solves this program saw begin, as it did.
+	c, fake := newTestClient(t)
+	fake.FailNext("/api/v1/ports/conns", http.StatusOK,
+		`{"ports":[{"port":20700,"client_conns":1,"upstream_conns":7}]}`)
+	loads, err := c.PortLoads(t.Context())
+	if err != nil {
+		t.Fatalf("PortLoads: %v", err)
+	}
+	if got := loads[20700]; got != (PortLoad{Client: 1, Upstream: 7}) {
+		t.Errorf("port 20700 carries %+v, want 1 and 7 and no solve", got)
+	}
+}

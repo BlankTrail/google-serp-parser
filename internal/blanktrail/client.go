@@ -603,7 +603,7 @@ func (c *Client) Ports(ctx context.Context) ([]int, PortRoom, error) {
 	return ports, PortRoom{Open: open, Ceiling: out.MaxPorts}, nil
 }
 
-// portConnsPath is the light listing: three numbers a port. The whole listing
+// portConnsPath is the light listing: a few numbers a port. The whole listing
 // is 283 KB for 251 ports and 9-36 ms on the live service (2026-10-18), and a
 // megabyte at a thousand ports, for the two numbers a budget reads. The service
 // ignores ?fields= and ?port=, so the only way to a smaller answer is a path of
@@ -621,9 +621,21 @@ var errNoConnsList = errors.New("blanktrail: the service has no light listing of
 // the first: the service retries, keeps connections, and its challenge solver
 // opens three to five of its own (measured on port 20690, 2026-10-18). A
 // service older than these fields reads as carrying nothing.
+//
+// Solving is the challenges the service is solving on the port this instant,
+// counted by the service and not by any request: a solve goes on after the
+// client that met it has gone (the parser's ladder gives up on a solve that
+// takes too long, and the service finishes it anyway), and its three to five
+// connections to the proxy are then on a port with no client at all. The
+// stand's third re-measure (2026-10-19) found two thirds of the connections
+// over the limit on such ports, so the budget holds the reserve for each of
+// these solves too, instead of reading them as an excess no request explains.
+// A service from before the field reads as solving nothing, and the budget
+// then counts only the solves this program saw begin, as it always did.
 type PortLoad struct {
 	Client   int
 	Upstream int
+	Solving  int
 }
 
 // portLoadList is the part of either listing a reading needs. Nothing else is
@@ -634,6 +646,7 @@ type portLoadList struct {
 		Port          int `json:"port"`
 		ClientConns   int `json:"client_conns"`
 		UpstreamConns int `json:"upstream_conns"`
+		Solving       int `json:"solving"`
 	} `json:"ports"`
 }
 
@@ -674,7 +687,7 @@ func (c *Client) PortLoads(ctx context.Context) (map[int]PortLoad, error) {
 		if p.Port == 0 {
 			continue
 		}
-		loads[p.Port] = PortLoad{Client: p.ClientConns, Upstream: p.UpstreamConns}
+		loads[p.Port] = PortLoad{Client: p.ClientConns, Upstream: p.UpstreamConns, Solving: p.Solving}
 	}
 	return loads, nil
 }

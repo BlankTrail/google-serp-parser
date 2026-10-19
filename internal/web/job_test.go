@@ -1538,8 +1538,9 @@ func TestJobPage_CountsTheCaptchasTheJobCostOverAllItsRuns(t *testing.T) {
 
 func TestJobPage_ShowsTheConnectionsToTheProxyAgainstTheProfilesLimit(t *testing.T) {
 	// What the provider counts is the service's connections to the proxy, so
-	// that is the figure set against the limit; the solves are this program's
-	// own count, since a solve is what the reserve is kept for.
+	// that is the figure set against the limit; the solves are the ones the
+	// budget counts (the larger of this program's and the service's), since a
+	// solve is what the reserve is kept for.
 	// Seven counted by the service against ten by this program's own count
 	// (two solves of five): the page shows the service's figure.
 	s, _, id := runningWith(t, poolFacts{Budget: blanktrail.BudgetReading{

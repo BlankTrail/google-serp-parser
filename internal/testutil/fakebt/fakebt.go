@@ -145,6 +145,10 @@ type Server struct {
 	// light listing, which answers it 404 (every service on 2026-10-18).
 	conns       map[int][2]int
 	noConnsList bool
+	// solving is the challenges the service reports solving on a port. A port
+	// with no entry is listed without the field, as a service from before it
+	// lists every port, so a test of an older service needs nothing set.
+	solving map[int]int
 
 	// solverQueue is what the service reports the challenge solver has in hand.
 	solverQueue SolverQueue
@@ -180,6 +184,7 @@ func New(t *testing.T) *Server {
 		noResumption: map[int]bool{},
 		keep:         map[int]bool{},
 		conns:        map[int][2]int{},
+		solving:      map[int]int{},
 		nextPort:     freePort(),
 	}
 	s.ts = httptest.NewServer(http.HandlerFunc(s.route))
@@ -245,6 +250,15 @@ func (s *Server) SetConns(port, client, upstream int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.conns[port] = [2]int{client, upstream}
+}
+
+// SetSolving sets how many challenges the service reports solving on port, in
+// the solving field of both listings. Until it is called for a port, the port
+// is listed without the field, as a service from before it lists it.
+func (s *Server) SetSolving(port, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.solving[port] = n
 }
 
 // SetNoConnsList makes the light listing answer 404, as a service from before
@@ -564,6 +578,9 @@ func (s *Server) serveList(w http.ResponseWriter) {
 		entry := map[string]any{"port": p, "protocol": "http", "created_at": s.created[p],
 			"upstream": up, "keep_sessions": s.keep[p]}
 		entry["client_conns"], entry["upstream_conns"] = s.conns[p][0], s.conns[p][1]
+		if n, ok := s.solving[p]; ok {
+			entry["solving"] = n
+		}
 		if l := s.labels[p]; l != "" {
 			entry["label"] = l
 		}
@@ -579,7 +596,7 @@ func (s *Server) serveList(w http.ResponseWriter) {
 	})
 }
 
-// serveConns answers the light listing: three numbers a port, for the ports
+// serveConns answers the light listing: a few numbers a port, for the ports
 // open. A service from before it answers 404.
 func (s *Server) serveConns(w http.ResponseWriter) {
 	ports := s.OpenPorts()
@@ -591,7 +608,11 @@ func (s *Server) serveConns(w http.ResponseWriter) {
 	}
 	list := make([]map[string]any, 0, len(ports))
 	for _, p := range ports {
-		list = append(list, map[string]any{"port": p, "client_conns": s.conns[p][0], "upstream_conns": s.conns[p][1]})
+		entry := map[string]any{"port": p, "client_conns": s.conns[p][0], "upstream_conns": s.conns[p][1]}
+		if n, ok := s.solving[p]; ok {
+			entry["solving"] = n
+		}
+		list = append(list, entry)
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ports": list})
@@ -911,6 +932,7 @@ func (s *Server) serveClose(w http.ResponseWriter, body []byte) {
 	delete(s.idle, req.Port)
 	delete(s.profiles, req.Port)
 	delete(s.conns, req.Port)
+	delete(s.solving, req.Port)
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"port": req.Port, "status": "closed"})
 }
