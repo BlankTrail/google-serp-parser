@@ -242,7 +242,8 @@ type PoolConfig struct {
 	Choose func(candidates []string, limit int) (string, bool)
 
 	// AddressesPerRequest is how many addresses one request may be carried to
-	// when they fail to carry it at all (default 15).
+	// when they fail to carry it at all (default 1: the looking is done across
+	// ports, one address a request — see internal/run/hunt_live_test.go).
 	//
 	// It is a separate budget from the retries above, because the two are spent
 	// on different things: a refused answer is waited out, and a dead address is
