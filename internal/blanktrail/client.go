@@ -607,8 +607,8 @@ func (c *Client) Ports(ctx context.Context) ([]int, PortRoom, error) {
 // is 283 KB for 251 ports and 9-36 ms on the live service (2026-10-18), and a
 // megabyte at a thousand ports, for the two numbers a budget reads. The service
 // ignores ?fields= and ?port=, so the only way to a smaller answer is a path of
-// its own. It is expected in the next release of BlankTrail; until then every
-// reading falls back to the whole listing.
+// its own. A BlankTrail from before it answers 404, and every reading then
+// falls back to the whole listing.
 const portConnsPath = "/api/v1/ports/conns"
 
 // errNoConnsList is the service having no light listing.

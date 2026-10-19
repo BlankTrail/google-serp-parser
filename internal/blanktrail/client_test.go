@@ -728,7 +728,7 @@ func TestPortLoads_ReadsTheLightListingWhereTheServiceHasOne(t *testing.T) {
 }
 
 func TestPortLoads_FallsBackToTheWholeListingAndRemembersTheLightOneIsNotThere(t *testing.T) {
-	// Every service today answers the light listing 404. Asking it again on
+	// A BlankTrail from before the light listing answers it 404. Asking it again on
 	// every reading would be a refused request each time for the life of the
 	// process; once is enough to know.
 	fake := fakebt.New(t)

@@ -256,14 +256,14 @@ func serveInterface(ctx context.Context, out io.Writer, opts serveOptions) error
 	// left.
 	opts.Keeper = sessions.NewKeeper(st)
 
-	// Closed before the history, because a job it ends is written down as it
-	// lets go of it. Close waits for that.
 	// One budget a profile for everything this server opens. The service is
 	// asked how many connections its ports carry only while some profile has a
-	// limit: every ten seconds, every two near the limit (see
-	// blanktrail.BudgetPollSlow). It is started before the first pool is opened
-	// and stops with the server.
+	// limit: every two seconds while a limited profile carries traffic, every
+	// ten when it is idle (see blanktrail.Budgets). It is started before the
+	// first pool is opened and stops with the server.
 	opts.Budgets = startBudgets(ctx, blanktrail.NewBudgets(blanktrail.BudgetPollSlow, blanktrail.BudgetPollFast))
+	// Closed before the history, because a job it ends is written down as it
+	// lets go of it. Close waits for that.
 	sup, warm := opts.jobs(ctx, out, st)
 	// What the standing set could not know when it was built: whether a job is
 	// working through it. Everything that takes identities away waits on this
