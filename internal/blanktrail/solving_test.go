@@ -76,15 +76,16 @@ func TestBudget_CountsTheLargerOfItsOwnSolvesAndTheServicesNotTheSum(t *testing.
 }
 
 func TestBudget_TakesTheServicesSolvesOutOfASample(t *testing.T) {
-	// Ten connections from this program, two of them on ports the service is
-	// solving on for requests that already gave up here: 8 x 2 + 2 x 5 = 26
-	// upstream. The sample is (26 - 10) / (10 - 2) = 2, not 26 / 10 = 2.6:
-	// counted as requests, the solver's connections would teach k a third
-	// more for every request after.
+	// Ten requests from this program, none of them a solve, and two solves the
+	// service runs on for requests that already gave up here — so on ports
+	// with no client: 10 x 2 + 2 x 5 = 30 upstream. The solver's connections
+	// come out of the upstream, but not out of the client connections, which
+	// they have none of: (30 - 10) / 10 = 2. Counted as requests they would
+	// teach k 30 / 10 = 3; taken out of both, (30 - 10) / (10 - 2) = 2.5.
 	b := NewBudget(60, 5)
-	readSolves(b, 26, 10, 20101, 20102)
+	readSolves(b, 30, 10, 20101, 20102)
 	if k := ampOf(b); !near(k, 2) {
-		t.Errorf("twenty-six on ten with the service solving twice taught k %v, want 2", k)
+		t.Errorf("thirty on ten with the service solving twice on its own taught k %v, want 2", k)
 	}
 }
 

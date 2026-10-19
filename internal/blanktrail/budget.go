@@ -270,10 +270,11 @@ func (b *Budget) inUseLocked() float64 {
 // have been answered.
 //
 // On an empty budget — nothing in flight, nothing being solved by this
-// program — the attempt costs one, not k. k is learned up to four, so a small limit the form lets
-// through (seven with the reserve of five, k two) would otherwise refuse every
-// lookup with nothing running at all; no reading would then ever teach k down
-// again, and the job would stand still with no word of why. What the service
+// program — the attempt costs one, not k. k is learned up to four, so a small
+// limit the form lets through (seven with the reserve of five, k two) would
+// otherwise refuse every lookup with nothing running at all; no reading would
+// then ever teach k down again, and the job would stand still with no word of
+// why. What the service
 // carries beyond the prediction still holds it: those are connections the
 // tariff counts, and the service lets them go by itself. So do the solves the
 // service runs on its own (svcSolves): they hold their reserve in the
@@ -609,8 +610,11 @@ func (b *Budget) observeProfile(r profileLoad, known bool) (over bool, holders [
 		b.svcSolves, b.svcSolving = r.solving, r.solvingPorts
 	}
 	if known && client > 0 {
-		solves := b.solvesLocked()
-		b.learnLocked(float64(upstream-b.reserve*solves) / float64(max(client-solves, 1)))
+		// The solves counted come out of the upstream — the service's own
+		// among them — but only this program's out of the client connections:
+		// a solve of its own is a request still waiting on its port, while
+		// one the service runs on its own has no client left there.
+		b.learnLocked(float64(upstream-b.reserve*b.solvesLocked()) / float64(max(client-b.solves, 1)))
 	}
 	if known {
 		b.excess = max(float64(upstream)-b.computedLocked(), 0)
