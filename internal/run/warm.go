@@ -346,7 +346,7 @@ func (w *Warmer) warmSession(ctx context.Context, lease *blanktrail.Lease, held 
 	}
 	c := lease.Client()
 	sess := &google.Session{Client: &http.Client{Transport: c.Transport, Timeout: c.Timeout, Jar: held.Jar}}
-	if _, err := sess.Search(ctx, google.Query{Text: warmingPhrase()}); err != nil {
+	if _, err := sess.Search(warmingAs(ctx, lease), google.Query{Text: warmingPhrase()}); err != nil {
 		if _, judged := google.ClassOf(err); !judged && ctx.Err() == nil {
 			// It never reached Google: nothing against the session, and its
 			// turn is put off so the next round takes another.
@@ -367,6 +367,31 @@ func (w *Warmer) warmSession(ctx context.Context, lease *blanktrail.Lease, held 
 	if w.warmed != nil {
 		w.warmed()
 	}
+}
+
+// warmingAs is the context a warming search goes out under: on a profile with
+// a limit, marked as a fresh session's (blanktrail.FreshSession), so the
+// budget counts it as the solve it may turn into (see Attempt.askingAs).
+//
+// Always, with no record asked. What the warmer takes are the sessions about
+// to run out (sessions.WarmAfter: rested for hours) or, with none of those,
+// the coldest one in the history — the sessions most likely of all to be
+// checked again, since Google checks a session that rested on its next
+// request (docs/GUIDE.md), and a warming is that request. A record of answers
+// would say nothing of them: the warmer runs while no job does (oneRound), so
+// no job's record is open, and the /search interface's forgets a session in
+// ten minutes, which a session hours past its last use is far beyond. Counted
+// as an ordinary attempt, half a set warmed at once from cold (atOnce) would
+// meet its checks together and take the profile over its limit for as long
+// as the solves lasted, the start-up the slow start is there to prevent, with
+// no job to see it.
+//
+// No limit, no mark: the lease says so first and nothing is made for it.
+func warmingAs(ctx context.Context, lease *blanktrail.Lease) context.Context {
+	if !lease.Limited() {
+		return ctx
+	}
+	return blanktrail.FreshSession(ctx)
 }
 
 // warmingPutOff is how long a session whose warming never reached Google waits
