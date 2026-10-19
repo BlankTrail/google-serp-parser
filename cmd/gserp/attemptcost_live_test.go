@@ -50,6 +50,7 @@ func TestAttemptCost_LiveWhereTheMinutesGo(t *testing.T) {
 	const ports, threads, each = 12, 6, 5
 	want, err := o.dial(ctx, saved, web.Wanted{Profile: theFirstProfile(saved, true), Threads: 1, Ports: ports, Device: blanktrail.DeviceDesktop})
 	if err != nil {
+		skipWithoutExits(t, err)
 		t.Fatalf("opening %d identities: %v", ports, o.clean(err.Error()))
 	}
 	pool := want.Search

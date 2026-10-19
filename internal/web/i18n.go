@@ -479,9 +479,11 @@ var catalogue = map[Lang]map[string]string{
 		// not go out from the address the operator is sitting at — that is what
 		// this line said once, and it stopped being true when a job came to run
 		// on sessions, which need an address: it waits in the queue, and starts
-		// on its own once the profile names somewhere to go out through.
+		// on its own once the profile names somewhere to go out through. A
+		// search suggestions job keeps no sessions and still goes out directly,
+		// so the line says which jobs wait.
 		"notice.profile.none":  "There is no proxy profile, so a job has nothing to go out through.",
-		"notice.profile.empty": "The default proxy profile names no exits, so its jobs wait in the queue and do not run until exits are added to it on the Proxies screen.",
+		"notice.profile.empty": "The default proxy profile names no exits, so its search jobs wait in the queue and do not run until exits are added to it on the Proxies screen; search suggestion jobs go out directly.",
 		"notice.profile.press": "Set the exits up",
 
 		// The lights. The switch draws two marks and no words, so this is the name
@@ -1108,7 +1110,7 @@ var catalogue = map[Lang]map[string]string{
 		"notice.settings": "Открыть настройки",
 
 		"notice.profile.none":  "Профилей прокси нет — заданию не через что выходить.",
-		"notice.profile.empty": "В профиле по умолчанию не указаны выходы — его задания ждут в очереди и не запустятся, пока на экране «Прокси» в него не добавят выходы.",
+		"notice.profile.empty": "В профиле по умолчанию не указаны выходы — его поисковые задания ждут в очереди и не запустятся, пока на экране «Прокси» в него не добавят выходы; задания подсказок идут напрямую.",
 		"notice.profile.press": "Настроить выходы",
 
 		"tour.title":        "Быстрый старт",

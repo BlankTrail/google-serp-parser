@@ -48,6 +48,10 @@ var errNoPoolCameBack = errors.New("web: opening a pool gave back nothing, and n
 // doing nothing. So no ports are opened, the job keeps its place in the queue,
 // its page says why, and it is asked for again — calmly, see noExitsRetry, or
 // at once when a profile is saved — until the profile names somewhere to go.
+//
+// A search suggestions job is never answered with it: it keeps no sessions and
+// goes out directly on such a profile, as it always did. Which jobs need exits
+// is the raiser's to say; see needsExits in cmd/gserp.
 var ErrNoExits = errors.New("web: the proxy profile names no exits")
 
 // noExitsRetry is how long a job waiting for exits waits before its pool is
@@ -648,10 +652,19 @@ func (v *Supervisor) Resume(jobID int64) error {
 //
 // It returns as soon as the job has been told. What the job was holding is
 // written down as it lets go of it, and Running says when it has.
+//
+// A job waiting for exits is stopped too, though it is in the queue rather than
+// running: it is the one queued job that has a state of its own, and the only
+// other way out of the wait would be to give its profile exits it may not be
+// meant to have. It leaves the queue as a stopped job leaves the run —
+// unstarted, unfinished, there to be carried on.
 func (v *Supervisor) Stop(jobID int64) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.running != jobID || v.cancel == nil {
+		if v.withdrawLocked(jobID) {
+			return nil
+		}
 		return fmt.Errorf("%w: %d", ErrNotRunning, jobID)
 	}
 	v.cancel()
@@ -697,7 +710,9 @@ func (v *Supervisor) Reconnect(open OpenPool) error {
 	}
 	v.src = dialing(open, v.watch)
 	// A job written down while there was nothing to run it on has something to
-	// run on now.
+	// run on now — and a job waiting for exits may find them through the
+	// connection just saved, so it does not wait out its retry for it.
+	v.dueNowLocked()
 	v.wakeUp()
 	v.mu.Unlock()
 	v.giveUp(spent)
@@ -808,6 +823,27 @@ func (v *Supervisor) pool() poolFacts {
 	return facts
 }
 
+// Withdraw takes a job waiting for exits out of the queue and says whether it
+// did. A job that is running, or queued for its turn, is left where it is.
+func (v *Supervisor) Withdraw(jobID int64) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.withdrawLocked(jobID)
+}
+
+func (v *Supervisor) withdrawLocked(jobID int64) bool {
+	if _, waiting := v.parked[jobID]; !waiting {
+		return false
+	}
+	at := slices.Index(v.queue, jobID)
+	if at < 0 {
+		return false
+	}
+	v.queue = slices.Delete(v.queue, at, at+1)
+	delete(v.parked, jobID)
+	return true
+}
+
 // WaitingForExits says whether this job is kept in the queue because its proxy
 // profile names no exits, and which profile that is.
 func (v *Supervisor) WaitingForExits(jobID int64) (string, bool) {
@@ -824,11 +860,17 @@ func (v *Supervisor) WaitingForExits(jobID int64) (string, bool) {
 func (v *Supervisor) ExitsChanged() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.dueNowLocked()
+	v.wakeUp()
+}
+
+// dueNowLocked makes every job waiting for exits due at once. Called with mu
+// held.
+func (v *Supervisor) dueNowLocked() {
 	for id, p := range v.parked {
 		p.retryAt = time.Time{}
 		v.parked[id] = p
 	}
-	v.wakeUp()
 }
 
 // Queued is the jobs waiting their turn, in the order they will be taken.
@@ -1183,6 +1225,28 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) (int, boo
 	// long one. Without these three lines the whole wait is one silence, and
 	// every guess about which part of it is slow is as good as any other.
 	taken := time.Now()
+	var eng engine
+	if _, waiting := v.WaitingForExits(id); waiting {
+		// A job waiting for exits is asked for again every few seconds, and
+		// reading its plan back each time would load every query it has left
+		// — on a list of a hundred thousand, every fifteen seconds, for a pool
+		// that is not coming — and say so in the log each time. So the pool is
+		// asked for first, on the job's one row, and the plan is read once the
+		// pool is up. A plan that turns out to hold nothing gives the pool back
+		// the way any job's end does.
+		sum, err := v.st.Progress(ctx, id)
+		if err != nil {
+			if ctx.Err() == nil {
+				v.log.Error("a job could not be read back before it ran", "job", id, "error", err)
+			}
+			return 0, false
+		}
+		raised, parked, ok := v.raiseFor(ctx, src, sum)
+		if !ok {
+			return 0, parked
+		}
+		eng = raised
+	}
 	j, sum, err := v.plan(ctx, id)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -1194,20 +1258,14 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) (int, boo
 		return 0, false
 	}
 	read := time.Now()
-	v.log.Info("a job was read back and is about to have its identities raised",
-		"job", id, "queries", len(j.Queries), "took", read.Sub(taken).Round(time.Millisecond))
-
-	eng, err := v.raise(ctx, src, sum)
-	if errors.Is(err, ErrNoExits) {
-		return 0, true
-	}
-	if err != nil {
-		if ctx.Err() == nil {
-			v.log.Error("the identities a job asked for could not be raised, and the job is still there to be carried on",
-				"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
-				"error", err)
+	if eng == nil {
+		v.log.Info("a job was read back and is about to have its identities raised",
+			"job", id, "queries", len(j.Queries), "took", read.Sub(taken).Round(time.Millisecond))
+		raised, parked, ok := v.raiseFor(ctx, src, sum)
+		if !ok {
+			return 0, parked
 		}
-		return 0, false
+		eng = raised
 	}
 	v.log.Info("the identities are up and the first query is going out",
 		"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
@@ -1230,6 +1288,29 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) (int, boo
 	// Read before the pool is given up, which is when the run's count goes with
 	// it.
 	return eng.Pool().Checks.Met, false
+}
+
+// raiseFor raises a job's pool and says how it went: the engine, or whether the
+// job is to wait for exits, or neither — a refusal, already in the log.
+func (v *Supervisor) raiseFor(ctx context.Context, src source, sum store.JobSummary) (engine, bool, bool) {
+	eng, err := v.raise(ctx, src, sum)
+	if errors.Is(err, ErrNoExits) {
+		return nil, true, false
+	}
+	if err != nil {
+		// A list that cannot be read at all — a file gone, an address that does
+		// not answer — lands here and not among the jobs waiting for exits, even
+		// for a job that was waiting: it is a fault in the list rather than a
+		// list nobody has filled in, and the log says which. The job is left
+		// unfinished for a "Carry on", as any job whose pool would not go up.
+		if ctx.Err() == nil {
+			v.log.Error("the identities a job asked for could not be raised, and the job is still there to be carried on",
+				"job", sum.ID, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
+				"error", err)
+		}
+		return nil, false, false
+	}
+	return eng, false, true
 }
 
 // plan is the work a job has left, dressed in the settings it was created

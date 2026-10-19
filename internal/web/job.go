@@ -414,7 +414,12 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		// somebody presses until they conclude the job cannot be stopped at all.
 		// Nor to a job already told to stop: pressed again it does nothing, and
 		// offered again it reads as a press that did not work.
-		CanStop: s.sup != nil && at.Running && !at.Stopping,
+		//
+		// A job waiting for exits is offered it too, and all the time: it is
+		// taken out of the queue for an instant every few seconds to be asked
+		// for again, and a button that came and went with that would be one
+		// nobody could press.
+		CanStop: s.sup != nil && (at.Running || at.NoExits) && !at.Stopping,
 		// A job whose list never finished arriving is not offered either. The
 		// queries it holds are a fraction of a list, and nothing will run them.
 		CanResume: s.sup != nil && sum.PlanReady &&

@@ -48,6 +48,7 @@ func TestWarmCost_LiveWhatASecondRequestOnOneIdentityCosts(t *testing.T) {
 
 	want, err := o.dial(ctx, saved, web.Wanted{Profile: theFirstProfile(saved, true), Threads: 1, Ports: 6, Device: blanktrail.DeviceDesktop})
 	if err != nil {
+		skipWithoutExits(t, err)
 		t.Fatalf("opening two identities: %v", o.clean(err.Error()))
 	}
 	pool := want.Search

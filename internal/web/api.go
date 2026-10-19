@@ -190,6 +190,10 @@ func (s *Server) apiDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.sup != nil {
+		// A job waiting for exits has had nothing done to it, and is taken out
+		// of the queue the way a stop would, so it can be deleted as a stopped
+		// job can. A job queued for its turn, or running, is still refused.
+		s.sup.Withdraw(sum.ID)
 		if running, ok := s.sup.Running(); ok && running == sum.ID {
 			http.Error(w, pickLang(r).T("jobs.delete.running"), http.StatusConflict)
 			return

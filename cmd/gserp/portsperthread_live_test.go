@@ -78,6 +78,9 @@ func TestPortsPerThread_LiveWhetherASpareIdentityPaysForItself(t *testing.T) {
 	var arms sync.WaitGroup
 	var say sync.Mutex
 
+	if prof := theFirstProfile(saved, true); prof.Empty() {
+		skipWithoutExits(t, noExits(prof))
+	}
 	for i, perThread := range []int{1, spare} {
 		arms.Add(1)
 		go func(i, perThread int) {

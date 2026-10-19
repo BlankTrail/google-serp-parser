@@ -327,14 +327,37 @@ func (o serveOptions) programmable(st *store.Store, log *slog.Logger,
 	// The identities kept warm are what a search answered inside a request goes
 	// through. A machine keeping none answers that address with a refusal rather
 	// than opening a pool per request, which is what that address was never for.
+	//
+	// The set is looked up at each search rather than once here. A default
+	// profile that named no exits when this server started has no set yet, and
+	// one is brought up by itself once the profile names some (see owe); read
+	// once, the search would go on refusing until the program was started
+	// again, with a set standing ready behind it.
+	ports := 0
 	if pool := warm.Pool(); pool != nil {
-		cfg.Search = api.SearchConfig{
-			Searcher: &run.Attempt{Pool: pool, Keeper: o.Keeper, Want: sessions.Want{Device: warm.Device()}},
-			Ports:    pool.Stats().Ports,
-			Reveal:   warm.reveal,
-		}
+		ports = pool.Stats().Ports
+	}
+	cfg.Search = api.SearchConfig{
+		Searcher: warmSearch{warm: warm, keeper: o.Keeper},
+		Ports:    ports,
+		Reveal:   warm.reveal,
 	}
 	return api.New(cfg)
+}
+
+// warmSearch searches through the identities kept warm as they stand at the
+// moment of the search, and answers api.ErrNoSearcher while there are none.
+type warmSearch struct {
+	warm   *warmSet
+	keeper *sessions.Keeper
+}
+
+func (s warmSearch) Search(ctx context.Context, q google.Query) (google.SERP, error) {
+	pool := s.warm.Pool()
+	if pool == nil {
+		return google.SERP{}, api.ErrNoSearcher
+	}
+	return (&run.Attempt{Pool: pool, Keeper: s.keeper, Want: sessions.Want{Device: s.warm.Device()}}).Search(ctx, q)
 }
 
 // mount puts the two interfaces on one address: the pages at the root, and the
@@ -508,7 +531,7 @@ func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet
 		// A profile that names nowhere to go out through is answered before
 		// anything else, standing identities included: see exitsOf. A pool from
 		// the environment is not a profile's and is not asked.
-		if !fromEnv && want.Profile.Empty() {
+		if !fromEnv && want.Profile.Empty() && needsExits(want) {
 			return web.Identities{}, noExits(want.Profile)
 		}
 		// A job of the kind the standing identities were opened for runs on them,
@@ -644,6 +667,11 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	// pool hands the channels back closed, so a list being read again on its
 	// interval does not outlive a pool that never went up.
 	channels, err := o.exitsOf(ctx, client, prof)
+	if errors.Is(err, web.ErrNoExits) && !needsExits(want) {
+		// Nowhere to go out through and a job that can go without: its ports
+		// go out directly, as every job on such a profile did before.
+		channels, err = nil, nil
+	}
 	if err != nil {
 		return web.Identities{}, err
 	}
@@ -921,6 +949,23 @@ func (o serveOptions) exitsOf(ctx context.Context, client *blanktrail.Client,
 	// and on a large cheap list that is most of them.
 	o.recall(ctx, rotor)
 	return []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)}, nil
+}
+
+// needsExits says whether a job cannot run on a profile with no exits.
+//
+// A job that asks Google through sessions cannot: a session needs an address,
+// and ports with none carried nothing but calls to the service — see exitsOf.
+// A search suggestions job can. It keeps no sessions, its ports carry one
+// completion request after another, and on a profile with no exits it goes out
+// directly through the service's ports, as it always did; the user chose to
+// keep that. Its pool is the one with KeepAlive set (see web.Wanted), which is
+// what marks a suggestions job by the time it reaches here.
+//
+// This is the one switch. A kind added later that also runs without sessions
+// belongs here too, and a decision to make suggestions wait as well is this
+// function answering true.
+func needsExits(want web.Wanted) bool {
+	return !want.KeepAlive
 }
 
 // noExits is web.ErrNoExits for one profile, by its name. Only the name: the
@@ -1513,9 +1558,7 @@ func (w *warmSet) bring(ctx context.Context, want int, device string) error {
 		return nil
 	}
 
-	// The same kind, a different number. Grown ports are standing ones too: the
-	// set is what this machine keeps, and half of it kept and half given back to
-	// the next job would be a number nobody could read off the screen.
+	// The same kind, a different number.
 	switch have := pool.Stats().Ports; {
 	case want > have:
 		if err := pool.Grow(ctx, want-have); err != nil {

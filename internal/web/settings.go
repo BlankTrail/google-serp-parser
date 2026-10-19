@@ -4,6 +4,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -641,7 +642,18 @@ func (s *Server) takeIntoUse(saved settings.Settings) error {
 	if s.standing != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), standingGrace)
 		defer cancel()
-		if err := s.standing(ctx, saved); err != nil {
+		err := s.standing(ctx, saved)
+		if errors.Is(err, ErrNoExits) {
+			// The default profile names no exits, so nothing could be opened
+			// for the warm identities. That is no fault in these settings:
+			// what they ask for is owed and comes up by itself once the
+			// profile has exits. Refusing here would refuse the whole save —
+			// a new key or address would never reach the queue — over a
+			// profile this page does not edit.
+			s.log.Info("the settings were saved; the identities kept warm come up once the default proxy profile names exits")
+			err = nil
+		}
+		if err != nil {
 			return err
 		}
 	}

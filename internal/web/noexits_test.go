@@ -4,6 +4,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blanktrail/google-serp-parser/internal/settings"
 	"github.com/blanktrail/google-serp-parser/internal/store"
 )
 
@@ -233,8 +235,10 @@ func TestNoticeProfileEmpty_SaysJobsWaitForExitsRatherThanGoOutFromThisMachine(t
 	// stopped being true when jobs came to run on sessions, and it is now the
 	// opposite of what happens: nothing is opened, and the job waits.
 	cases := map[Lang]struct{ says, never []string }{
-		LangEN: {says: []string{"no exits", "wait", "Proxies"}, never: []string{"own address"}},
-		LangRU: {says: []string{"не указаны выходы", "ждут", "Прокси"}, never: []string{"с адреса этой машины"}},
+		LangEN: {says: []string{"no exits", "search jobs wait", "Proxies", "suggestion jobs go out directly"},
+			never: []string{"own address"}},
+		LangRU: {says: []string{"не указаны выходы", "поисковые задания ждут", "Прокси", "подсказок идут напрямую"},
+			never: []string{"с адреса этой машины"}},
 	}
 	for lang, c := range cases {
 		said := lang.T("notice.profile.empty")
@@ -309,4 +313,156 @@ func queued(v *Supervisor, id int64) bool {
 func running(v *Supervisor, id int64) bool {
 	got, ok := v.Running()
 	return ok && got == id
+}
+
+func TestSupervisor_ReadsAWaitingJobsPlanBackOnlyOnceItsPoolIsUp(t *testing.T) {
+	// A job waiting for exits is asked for again every few seconds. Reading its
+	// plan back each time loads every query it has left and says so in the log;
+	// it is read once when the job is first taken, and again only when its pool
+	// has gone up.
+	const retry = 40 * time.Millisecond
+	v, st, x, said, empty, _ := exitlessSupervisor(t, retry)
+	id := enqueueOn(t, v, empty, "a", "b")
+	waitUntil(t, "the job is waiting for exits", func() bool { _, ok := v.WaitingForExits(id); return ok })
+	waitUntil(t, "the job was asked for again a few times", func() bool { asked, _ := x.asked(); return asked >= 5 })
+	if n := strings.Count(said.String(), "was read back"); n != 1 {
+		t.Errorf("the plan was read back %d times while the job waited, want once:\n%s", n, said.String())
+	}
+
+	x.exits.Store(true)
+	waitUntilRunning(t, v, id)
+	x.pools.let(t, 2)
+	waitUntil(t, "the job is done", func() bool { return progress(t, st, id).Finished })
+	if got := progress(t, st, id).Done; got != 2 {
+		t.Errorf("the job recorded %d queries once its pool was up, want both", got)
+	}
+	// Once up, the pool is the one the job runs on: not raised a second time
+	// on the way through the plan.
+	if up := x.pools.up(); up != 1 {
+		t.Errorf("%d pools were raised for the job, want one", up)
+	}
+}
+
+func TestJobPage_OffersTheStopAllTheWhileAJobWaitsForExits(t *testing.T) {
+	// The job is taken out of the queue for an instant every few seconds to be
+	// asked for again; a stop that came and went with that would be one nobody
+	// could press.
+	v, st, _, _, empty, _ := exitlessSupervisor(t, 30*time.Millisecond)
+	s, err := New(Config{Store: st, Supervisor: v, Logger: quiet()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	id := enqueueOn(t, v, empty, "a")
+	waitUntil(t, "the job is waiting for exits", func() bool { _, ok := v.WaitingForExits(id); return ok })
+	for i := 0; i < 20; i++ {
+		if body := get(t, s, jobPath(id)).Body.String(); !strings.Contains(body, `action="/api/stop"`) {
+			t.Fatalf("drawing %d of a job waiting for exits offers no stop", i)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestStop_TakesAJobWaitingForExitsOutOfTheQueue(t *testing.T) {
+	// The wait has no end of its own, so it must have a way out other than
+	// giving the profile exits. A stop takes the job out as a stop leaves any
+	// job: unstarted, unfinished, there to be carried on. The retry is an hour,
+	// so the job is in the queue, not running, when the stop arrives.
+	v, st, x, _, empty, _ := exitlessSupervisor(t, time.Hour)
+	id := enqueueOn(t, v, empty, "a")
+	waitUntil(t, "the job is waiting for exits", func() bool { _, ok := v.WaitingForExits(id); return ok })
+	waitUntil(t, "the job is back in the queue", func() bool { return queued(v, id) })
+
+	if err := v.Stop(id); err != nil {
+		t.Fatalf("Stop of a job waiting for exits: %v", err)
+	}
+	if queued(v, id) || running(v, id) {
+		t.Error("the stopped job is still queued or running")
+	}
+	if _, ok := v.WaitingForExits(id); ok {
+		t.Error("a stopped job is still reported as waiting for exits")
+	}
+	asked, _ := x.asked()
+	v.ExitsChanged()
+	time.Sleep(150 * time.Millisecond)
+	if again, _ := x.asked(); again != asked {
+		t.Errorf("a stopped job was asked for %d more times", again-asked)
+	}
+	sum := progress(t, st, id)
+	if sum.Finished || sum.Pending != 1 {
+		t.Errorf("finished=%v pending=%d, want an unfinished job with its query left", sum.Finished, sum.Pending)
+	}
+}
+
+func TestDelete_RemovesAJobWaitingForExits(t *testing.T) {
+	// A job waiting for exits has had nothing done to it; refusing to delete it
+	// "because it is running or waiting to" would leave it in the list for as
+	// long as its profile is empty.
+	v, st, _, _, empty, _ := exitlessSupervisor(t, time.Hour)
+	s, err := New(Config{Store: st, Supervisor: v, Logger: quiet()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	id := enqueueOn(t, v, empty, "a")
+	waitUntil(t, "the job is waiting for exits", func() bool { _, ok := v.WaitingForExits(id); return ok })
+	if rec := postForm(t, s, "/api/delete", url.Values{"job": {strconv.FormatInt(id, 10)}}); rec.Code >= 400 {
+		t.Fatalf("deleting a job waiting for exits answered %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := st.Progress(context.Background(), id); !errors.Is(err, store.ErrNoJob) {
+		t.Errorf("the job is still in the history after the delete: %v", err)
+	}
+	if queued(v, id) {
+		t.Error("the deleted job is still in the queue")
+	}
+}
+
+func TestReconnect_AsksAtOnceForAJobWaitingForExits(t *testing.T) {
+	// A connection saved in the browser may be what the job was missing; the
+	// retry is an hour, so only the reconnect can be what asks again.
+	v, _, _, _, empty, _ := exitlessSupervisor(t, time.Hour)
+	id := enqueueOn(t, v, empty, "a")
+	waitUntil(t, "the job is waiting for exits", func() bool { _, ok := v.WaitingForExits(id); return ok })
+	var calls atomic.Int32
+	if err := v.Reconnect(func(context.Context, Wanted) (Identities, error) {
+		calls.Add(1)
+		return Identities{}, fmt.Errorf("%w: proxy profile %q", ErrNoExits, "Empty")
+	}); err != nil {
+		t.Fatalf("Reconnect: %v", err)
+	}
+	waitUntil(t, "the waiting job is asked for through the new connection", func() bool { return calls.Load() >= 1 })
+}
+
+func TestSaveSettings_SavesAndReconnectsWhileTheDefaultProfileNamesNoExits(t *testing.T) {
+	// The identities kept warm cannot be opened on a default profile with no
+	// exits, and that is no fault in the settings: refusing the save over it
+	// left a new key or address unwritten and never handed to the queue.
+	s, path := serverWithSettings(t, settings.Settings{
+		ControlURL: "http://127.0.0.1:1", APIKey: "keep-me",
+	})
+	st := testStore(t)
+	v := newSupervisor(st, nil)
+	t.Cleanup(func() { _ = v.Close() })
+	s.sup = v
+	opener := &stubConnect{}
+	s.connect = opener.open
+	var asked atomic.Int32
+	s.standing = func(context.Context, settings.Settings) error {
+		asked.Add(1)
+		return fmt.Errorf("%w: proxy profile %q", ErrNoExits, "Default")
+	}
+
+	postForm(t, s, settingsAt, url.Values{
+		"control_url": {"http://127.0.0.1:2"}, "api_key": {""}, "hot_ports": {"4"},
+	})
+	if asked.Load() != 1 {
+		t.Fatalf("the warm identities were asked for %d times, want once", asked.Load())
+	}
+	if got := loaded(t, path); got.ControlURL != "http://127.0.0.1:2" || got.HotPorts != 4 {
+		t.Errorf("the file holds %s with %d warm, want the address and the 4 just saved",
+			got.ControlURL, got.HotPorts)
+	}
+	enqueueSized(t, v, "after the save", 2, 1, "a")
+	waitUntil(t, "the job to have asked for a pool through the saved connection", func() bool {
+		built, asked := opener.asked()
+		return asked && built.ControlURL == "http://127.0.0.1:2"
+	})
 }
