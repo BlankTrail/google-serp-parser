@@ -637,6 +637,13 @@ type portLoadList struct {
 	} `json:"ports"`
 }
 
+// LightLoads reports whether PortLoads reads the light listing of connections:
+// true until the service has answered it 404, and then false for good. It is
+// one atomic load, so the caller that sets the pace of the readings (see
+// Budgets.step) can ask before every tick: the light listing is cheap enough
+// to be read every two seconds, the whole one is not.
+func (c *Client) LightLoads() bool { return !c.noConnsList.Load() }
+
 // PortLoads is what every port open on the service is carrying, by number. It
 // is every port and not only this program's; a caller sums the ones it holds.
 //

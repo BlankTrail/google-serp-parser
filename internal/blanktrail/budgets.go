@@ -17,15 +17,29 @@ import (
 // which each reading makes a better prediction of the service's by teaching it
 // how many connections the service opens per request (Budget's amplification).
 // The service is asked for what it opens on its own — retries, connections it
-// keeps, the solver's — and the asking is not free: the whole listing
-// (/api/v1/ports) is about 283 KB for 251 ports and 9-36 ms on the live
-// service (2026-10-18), a megabyte at a thousand. The light listing
-// (/api/v1/ports/conns, see Client.PortLoads) is tried first, but a reading is
-// still a request to the service and is kept rare all the same. Ten seconds
-// while every limited profile counts below seventy per cent of its limit, where
-// an extra connection or two cannot reach it; two seconds once any is at or
-// above, where it can — and two seconds is how long the spec allows a count
-// over the limit to go unseen.
+// keeps, the solver's — and what the asking costs depends on which listing
+// answers.
+//
+// The light listing (/api/v1/ports/conns, see Client.PortLoads) is about 12.5 KB
+// and 0.03 ms for 250 ports, so reading it every two seconds is cheap enough
+// to do for as long as the profile carries any traffic: the stand re-measure
+// (2026-10-18) showed that waiting for seventy per cent of the limit is too
+// late, because the service counted 31-37 upstream connections while this
+// program had 3-8 requests open, far below that threshold, the reading came
+// every ten seconds, and the service's excess was seen runs of 11-16 s after
+// it began. So on the light listing a profile is read at the fast rate
+// whenever it has attempts in flight, or the last good reading found the
+// service carrying anything on its ports (upstream connections or an excess
+// over the prediction), which is the connections that outlive the requests; and
+// at the slow rate only when it is idle in both senses.
+//
+// The whole listing (/api/v1/ports) is about 283 KB for 251 ports and 9-36 ms
+// on the live service (2026-10-18), a megabyte at a thousand, and it is what a
+// service from before the light one is read by. There the old rule stands: ten
+// seconds while every limited profile counts below seventy per cent of its
+// limit, where an extra connection or two cannot reach it; two seconds once any
+// is at or above, where it can — and two seconds is how long the spec allows a
+// count over the limit to go unseen.
 const (
 	BudgetPollSlow    = 10 * time.Second
 	BudgetPollFast    = 2 * time.Second
@@ -111,14 +125,37 @@ func (bs *Budgets) Run(ctx context.Context) {
 func (bs *Budgets) step(ctx context.Context) {
 	bs.mu.Lock()
 	busy := false
+	// Which listing is read decides the rule, and it can change once, from
+	// the light to the whole, when the first reading meets a 404. A registry
+	// that has no client yet asks nothing, so it is judged by the stricter
+	// (whole listing) rule that costs nothing to apply.
+	light := bs.client != nil && bs.client.LightLoads()
 	for _, b := range bs.byProfile {
 		r := b.Reading()
+		if r.Limit <= 0 {
+			continue
+		}
+		if light {
+			// The light listing is cheap enough to follow the traffic: fast
+			// while the profile has anything in flight, and for as long as
+			// the last good reading showed the service holding connections
+			// on its ports or more than the prediction. The second is what
+			// the 70% rule missed on the stand: connections that outlive
+			// their requests and are counted by the service alone, and a
+			// profile that has gone idle but still holds them is the one
+			// whose count has yet to be seen to fall. A reading that failed
+			// stored nought and unknown, so it keeps nothing fast.
+			if r.InFlight > 0 || r.Observed > 0 || r.Excess > 0 {
+				busy = true
+			}
+			continue
+		}
 		// Busy by what admission goes by: this program's count — k
 		// connections per attempt, the prediction of the service's — plus the
 		// excess the last reading found over it. A service that opened many
 		// connections on its own is the case the fast rate is for, and the
 		// prediction alone cannot see it.
-		if r.Limit > 0 && r.InUse()*100 >= budgetBusyPercent*r.Limit {
+		if r.InUse()*100 >= budgetBusyPercent*r.Limit {
 			busy = true
 		}
 		// Busy, too, while a profile has attempts in flight and k has not yet
@@ -130,7 +167,7 @@ func (bs *Budgets) step(ctx context.Context) {
 		// has dialled out for them, it would teach the 1 the budget starts at.
 		// A service too old to report client connections never teaches k, and
 		// a profile on it is read fast whenever it has attempts in flight.
-		if r.Limit > 0 && r.Samples < ampWarmup && r.InFlight > 0 {
+		if r.Samples < ampWarmup && r.InFlight > 0 {
 			busy = true
 		}
 	}

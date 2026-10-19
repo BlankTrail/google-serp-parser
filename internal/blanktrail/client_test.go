@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -794,5 +795,47 @@ func TestPortLoads_KeepsOnlyEntriesThatNameAPort(t *testing.T) {
 	}
 	if len(loads) != 1 || loads[20700] != (PortLoad{Client: 1, Upstream: 2}) {
 		t.Errorf("loads = %+v, want only port 20700 with 1 and 2", loads)
+	}
+}
+
+func TestPortLoads_SendsTheKeyInXAPIKeyAloneOnTheLightListing(t *testing.T) {
+	// The light listing is authenticated by X-API-Key only. An Authorization
+	// header beside it would be harmless to the service but is not this
+	// client's way: nothing in the control API wants one, so none is sent.
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte(`{"ports":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(srv.URL, "made-up-key")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := c.PortLoads(t.Context()); err != nil {
+		t.Fatalf("PortLoads: %v", err)
+	}
+	if got.Get("X-API-Key") != "made-up-key" {
+		t.Errorf("the light listing carried X-API-Key %q, want the client's key", got.Get("X-API-Key"))
+	}
+	if got.Get("Authorization") != "" {
+		t.Errorf("the light listing carried an Authorization header, want none")
+	}
+}
+
+func TestLightLoads_IsTrueUntilTheLightListingAnswers404(t *testing.T) {
+	// The pace of the readings goes by this (Budgets.step): the light listing
+	// may be read every two seconds, the whole one may not.
+	fake := fakebt.New(t)
+	fake.SetNoConnsList(true)
+	c, _, _ := openTwo(t, fake)
+	if !c.LightLoads() {
+		t.Fatal("a client that has not asked yet reports the light listing as gone")
+	}
+	if _, err := c.PortLoads(t.Context()); err != nil {
+		t.Fatalf("PortLoads: %v", err)
+	}
+	if c.LightLoads() {
+		t.Error("a client that met the 404 still reports the light listing as there")
 	}
 }
