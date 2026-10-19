@@ -70,10 +70,10 @@ const (
 // into k's sample as connections a request had opened, and they did not keep
 // the lookup pools from closing the idle connections of a port the service was
 // solving on. So a reading also brings the service's own count of its solves
-// and the ports they are on (PortLoad.Solving), and the budget counts the
-// larger of its own solves and the service's: in the prediction, in k's
-// sample, and in the excess, so a solve nobody waits for any more is held as
-// the reserve it is.
+// and the ports they are on (PortLoad.Solving), and the budget counts, port by
+// port, the larger of its own solves and the service's: in the prediction, in
+// k's sample, and in the excess, so a solve nobody waits for any more is held
+// as the reserve it is.
 //
 // An attempt for a fresh session — one Google has not answered yet in this
 // job through the exit it goes out by (run.Attempt.askingAs says which) — is
@@ -106,8 +106,11 @@ type Budget struct {
 	// possible solves, each counted as the reserve with the solves (see
 	// reservesLocked) until it is known to be one or not. They are not in
 	// inFlight; a fresh attempt is in exactly one of fresh, inFlight and
-	// solves at a time.
-	fresh int
+	// solves at a time. freshOn is how many of them are on each port (0 where
+	// the port is not known, see Acquire): a solve the service reports on a
+	// port is the attempt's there, and not one whose request has gone.
+	fresh   int
+	freshOn map[int]int
 	// observed is the service's last reading as it was read, for the job page
 	// and for telling the pools the profile is over; admission does not use
 	// it but excess.
@@ -126,13 +129,13 @@ type Budget struct {
 	// attempts in flight (see Budgets.step and ampWarmup).
 	samples int
 	// svcSolves is how many solves the last good reading found the service
-	// running on the profile's ports, and svcSolving the ports they were on;
+	// running on the profile's ports, and svcSolving how many on each port;
 	// nought and empty when the reading failed, was never taken, or came from a
 	// service too old to say. They stay as the reading left them until the
 	// next, like the excess: a solve the service runs on its own ends when the
 	// service says so, and nothing in this program sees it end.
 	svcSolves  int
-	svcSolving map[int]bool
+	svcSolving map[int]int
 	// searchWaiting is how many searches wait for room; while any does, no
 	// lookup is let in. lookupWaiting only tells the tests when a waiter has
 	// settled to wait.
@@ -156,7 +159,7 @@ type budgetHolder interface {
 // NewBudget makes a budget of limit connections, reserve of which a solve in
 // progress holds. A limit of nought or less is no limit.
 func NewBudget(limit, reserve int) *Budget {
-	b := &Budget{amp: ampFloor, solving: map[int]int{}, holders: map[budgetHolder]struct{}{}, changed: make(chan struct{})}
+	b := &Budget{amp: ampFloor, solving: map[int]int{}, freshOn: map[int]int{}, holders: map[budgetHolder]struct{}{}, changed: make(chan struct{})}
 	b.Set(limit, reserve)
 	return b
 }
@@ -253,33 +256,53 @@ func (b *Budget) wakeLocked() {
 // five connections, measured), already counted in the service's terms; for the
 // same reason the solves are taken out of a reading's sample (learnLocked).
 //
-// The solves are the counted ones (solvesLocked): this program's own, or the
-// service's at the last reading where it ran more.
-//
-// An attempt for a fresh session is counted with the solves (reservesLocked),
-// and never as less than an ordinary attempt: where the reserve is below k,
-// the difference is added for each (freshTopLocked).
+// The reserves are held for this program's own solves, its attempts for fresh
+// sessions, and the solves the service runs on ports where this program has
+// neither (reservesLocked). An attempt for a fresh session is never counted as
+// less than an ordinary attempt: where the reserve is below k, the difference
+// is added for each (freshTopLocked).
 func (b *Budget) computedLocked() float64 {
 	return b.amp*float64(b.inFlight) + float64(b.reserve*b.reservesLocked()) + b.freshTopLocked()
 }
 
 // reservesLocked is how many reserves the prediction holds: the solves this
-// program has seen begin and the attempts for fresh sessions that may turn
-// into one, or the service's solves at the last reading where it ran more.
+// program has seen begin, the attempts for fresh sessions that may turn into
+// one, and the solves the service runs whose requests have gone (abandoned).
 //
-// The service's solves are set against both and not only against the real
-// solves, because at the start of a job they are the same solves: a fresh
-// attempt meets its check and the service starts solving it at once, and says
-// so at the next reading, while the ladder learns of it only when the solve
-// outruns the request — half a minute later. Counted beside the service's,
-// every such solve would hold the reserve twice for that half minute, and the
-// slow start would be slower than the solves it is there for. The price is the
-// other way round: a solve the service runs on its own (its request gone) and
-// a fresh attempt that has met no check share one reserve until the attempt's
-// answer comes, or the next reading — the same price, and for the same
-// reason, as for the real solves (solvesLocked).
+// The service's solves are matched to this program's port by port. At the
+// start of a job a fresh attempt meets its check and the service starts
+// solving it at once, and says so at the next reading, while the ladder learns
+// of it only when the solve outruns the request — half a minute later. That
+// solve is on the port the attempt waits on, so a service solve on a port
+// where this program has a fresh attempt or a solve of its own is theirs, and
+// already holds its reserve through them: counted again, every such solve
+// would hold the reserve twice for that half minute, and the slow start would
+// be slower than the solves it is there for. A service solve on a port with
+// neither has nobody here waiting on it: the ladder gave up on it, and the
+// solver still holds its connections. That one is a reserve of its own.
+//
+// It was the larger of the two counts, whatever the ports (v0.4.32), and that
+// let S abandoned solves cover S fresh attempts that had met no check, at no
+// reserve at all: a profile with three solves left behind started three fresh
+// sessions for nothing, at the very start-up the reserve is there for. Matched
+// by port that is gone; what is left is the service's own lag, a solve that
+// begins between two readings on a port that had nothing, counted from the
+// next.
 func (b *Budget) reservesLocked() int {
-	return max(b.solves+b.fresh, b.svcSolves)
+	return b.solves + b.fresh + b.abandonedLocked()
+}
+
+// abandonedLocked is the service's solves at the last reading beyond what this
+// program has on their ports — its own solves and its fresh attempts — summed
+// over the ports. A port where the service runs two solves and this program
+// waits on one has one abandoned: a request that gave up there, and a new
+// session put on the port after it.
+func (b *Budget) abandonedLocked() int {
+	n := 0
+	for port, svc := range b.svcSolving {
+		n += max(svc-b.solving[port]-b.freshOn[port], 0)
+	}
+	return n
 }
 
 // freshTopLocked is what the fresh attempts add beyond the reserve where the
@@ -290,27 +313,30 @@ func (b *Budget) freshTopLocked() float64 {
 	return max(b.amp-float64(b.reserve), 0) * float64(b.fresh)
 }
 
-// solvesLocked is the solves the budget counts: the larger of the ones this
-// program has seen begin and not end, and the ones the service said at the
-// last good reading it was running on the profile's ports.
+// solvesLocked is the solves the budget counts as real: on each port the
+// larger of the ones this program has seen begin and not end there, and the
+// ones the service said at the last good reading it was running there.
 //
 // The larger and not the sum, because the two are mostly the same solves: a
 // solve this program waits on is one the service is running, and summed every
-// such solve would hold the reserve twice. Where the service runs more, the
-// rest are solves whose requests have gone — the ladder gave up on them — and
-// the service still holds the solver's connections for them. Where this
-// program has more, the service has not yet reported a solve that has just
-// begun, or a reading is older than it. Which ports the solves are on is not
-// compared: a reading is a snapshot and the own count moves on, and the count
-// is what admission needs.
+// such solve would hold the reserve twice. Where the service runs more on a
+// port, the rest are solves this program has not heard of yet — a fresh
+// attempt's check, solved before the ladder knows — or solves whose requests
+// have gone, and the solver's connections are open for them either way. Where
+// this program has more, the service has not yet reported a solve that has
+// just begun, or a reading is older than it.
 //
-// These are the real solves alone; the fresh attempts join them in the
-// prediction (reservesLocked) but not in k's sample nor on the job's page: an
-// attempt that may meet a check has opened what any attempt opens until it
-// does, and taken out of a reading's sample as a solve's reserve it would
-// teach a k too low for every attempt after it.
+// These are the real solves alone: a fresh attempt the service is not solving
+// for joins them in the prediction (reservesLocked) but not in k's sample nor
+// on the job's page. An attempt that may meet a check has opened what any
+// attempt opens until it does, and taken out of a reading's sample as a
+// solve's reserve it would teach a k too low for every attempt after it.
 func (b *Budget) solvesLocked() int {
-	return max(b.solves, b.svcSolves)
+	n := b.solves
+	for port, svc := range b.svcSolving {
+		n += max(svc-b.solving[port], 0)
+	}
+	return n
 }
 
 // inUseLocked is the prediction plus what the last reading found the service
@@ -346,14 +372,14 @@ func (b *Budget) inUseLocked() float64 {
 // counted as an attempt's company they would stall a small limit the same way.
 //
 // An attempt for a fresh session costs what it adds to the prediction as a
-// possible solve (freshCostLocked).
-func (b *Budget) admitsLocked(c Class, fresh bool) bool {
+// possible solve on its port (freshCostLocked); port 0 is a port not known.
+func (b *Budget) admitsLocked(c Class, fresh bool, port int) bool {
 	if b.limit <= 0 {
 		return true
 	}
 	cost := b.attemptCostLocked()
 	if fresh {
-		cost = b.freshCostLocked()
+		cost = b.freshCostLocked(port)
 	}
 	need := b.inUseLocked() + cost
 	if c == ClassLookup {
@@ -372,15 +398,21 @@ func (b *Budget) attemptCostLocked() float64 {
 	return b.amp
 }
 
-// freshCostLocked is what one more attempt for a fresh session adds to the
-// prediction: the reserve, unless the service's solves already hold one it
-// may be (reservesLocked), and beyond the reserve whatever an ordinary attempt
-// would cost more (freshTopLocked) — with an ordinary attempt's cost on an
-// empty budget being one, so that an idle profile always lets in a fresh
-// attempt when its limit is above its reserve. A limit at or below the reserve
-// the form refuses; on one, a fresh session would wait for good.
-func (b *Budget) freshCostLocked() float64 {
-	reserves := max(b.solves+b.fresh+1, b.svcSolves) - b.reservesLocked()
+// freshCostLocked is what one more attempt for a fresh session on the port
+// adds to the prediction: the reserve, unless a solve the service runs on that
+// very port with nobody here waiting on it already holds one — the solve the
+// attempt will ride, since a solve pins itself to its port (reservesLocked) —
+// and beyond the reserve whatever an ordinary attempt would cost more
+// (freshTopLocked), with an ordinary attempt's cost on an empty budget being
+// one, so that an idle profile always lets in a fresh attempt when its limit is
+// above its reserve. A limit at or below the reserve the form refuses; on one,
+// a fresh session would wait for good. A port not known (0) has no solve of
+// the service's to ride: no port the service lists is numbered nought.
+func (b *Budget) freshCostLocked(port int) float64 {
+	reserves := 1
+	if b.svcSolving[port] > b.solving[port]+b.freshOn[port] {
+		reserves = 0
+	}
 	return float64(b.reserve*reserves) + max(b.attemptCostLocked()-float64(b.reserve), 0)
 }
 
@@ -390,8 +422,18 @@ func (b *Budget) freshCostLocked() float64 {
 // returns at once with no unit, and a nil unit is safe to use.
 //
 // A ctx marked by FreshSession takes the place as a possible solve: it costs
-// the reserve until the unit is told it is a solve or that it is not.
+// the reserve until the unit is told it is a solve or that it is not. The port
+// is not known; see AcquireOn.
 func (b *Budget) Acquire(ctx context.Context, c Class) (*Unit, error) {
+	return b.AcquireOn(ctx, c, 0)
+}
+
+// AcquireOn is Acquire for an attempt that goes out through the given port.
+// The port matters to an attempt for a fresh session only: a solve the service
+// reports on that port is this attempt's, counted once (reservesLocked). The
+// ladder passes it here, at admission, and not after: a reading that landed
+// between the two would take this attempt's solve for an abandoned one.
+func (b *Budget) AcquireOn(ctx context.Context, c Class, port int) (*Unit, error) {
 	if b == nil {
 		return nil, nil
 	}
@@ -404,7 +446,7 @@ func (b *Budget) Acquire(ctx context.Context, c Class) (*Unit, error) {
 	// nothing for it.
 	fresh := freshSession(ctx)
 	waiting := false
-	for !b.admitsLocked(c, fresh) {
+	for !b.admitsLocked(c, fresh, port) {
 		if !waiting {
 			waiting = true
 			b.countWaiterLocked(c, 1)
@@ -429,12 +471,21 @@ func (b *Budget) Acquire(ctx context.Context, c Class) (*Unit, error) {
 	}
 	if fresh {
 		b.fresh++
+		b.freshOn[port]++
 	} else {
 		b.inFlight++
 	}
 	b.wakeLocked()
 	b.mu.Unlock()
-	return &Unit{b: b, fresh: fresh}, nil
+	return &Unit{b: b, port: port, fresh: fresh}, nil
+}
+
+// dropFreshLocked takes one fresh attempt off the count, and off its port's.
+func (b *Budget) dropFreshLocked(port int) {
+	b.fresh--
+	if b.freshOn[port]--; b.freshOn[port] <= 0 {
+		delete(b.freshOn, port)
+	}
 }
 
 // freshKey marks a request's context as asked for a fresh session.
@@ -475,7 +526,9 @@ func (b *Budget) countWaiterLocked(c Class, d int) {
 
 // Unit is one place held in a budget. Release gives it back, once.
 type Unit struct {
-	b    *Budget
+	b *Budget
+	// port is the port the attempt went out through (AcquireOn), or the one
+	// its solve is on (Solving); 0 when not known.
 	port int
 	// fresh is a place taken for a fresh session and not yet known to be a
 	// solve or not one: it is counted in Budget.fresh.
@@ -494,15 +547,15 @@ func (u *Unit) Solving(port int) {
 	b := u.b
 	b.mu.Lock()
 	if !u.released && !u.solving {
-		u.solving, u.port = true, port
 		// A possible solve that turns into one moves from the one count to
 		// the other: counted once, as the reserve it already was.
 		if u.fresh {
 			u.fresh = false
-			b.fresh--
+			b.dropFreshLocked(u.port)
 		} else {
 			b.inFlight--
 		}
+		u.solving, u.port = true, port
 		b.solves++
 		b.solving[port]++
 		// With a reserve below k a solve holds less than the attempt it
@@ -528,7 +581,7 @@ func (u *Unit) Release() {
 				delete(b.solving, u.port)
 			}
 		case u.fresh:
-			b.fresh--
+			b.dropFreshLocked(u.port)
 		default:
 			b.inFlight--
 		}
@@ -550,7 +603,7 @@ func (u *Unit) notASolve() {
 	b.mu.Lock()
 	if !u.released && u.fresh {
 		u.fresh = false
-		b.fresh--
+		b.dropFreshLocked(u.port)
 		b.inFlight++
 		b.wakeLocked()
 	}
@@ -717,7 +770,7 @@ func (b *Budget) solvingOn(port int) bool {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.solving[port] > 0 || b.svcSolving[port]
+	return b.solving[port] > 0 || b.svcSolving[port] > 0
 }
 
 // profileLoad is one reading of the service summed over a profile's ports.
@@ -730,8 +783,9 @@ type profileLoad struct {
 	// solve whose request still waits on the port has its connection there;
 	// one whose request has gone has none. See observeProfile.
 	clientSolving int
-	// solvingPorts is the ports with a solve on them; nil when none is.
-	solvingPorts map[int]bool
+	// solvingPorts is how many solves are on each port with any; nil when
+	// none is.
+	solvingPorts map[int]int
 }
 
 // observe records the service's count of connections to the proxy alone, with

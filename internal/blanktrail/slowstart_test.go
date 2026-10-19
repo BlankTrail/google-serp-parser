@@ -32,12 +32,32 @@ func takeFresh(t *testing.T, b *Budget, n int) []*Unit {
 	return out
 }
 
+// takeFreshOn is a place for a fresh session on each of the ports, let in at
+// once, failing the test rather than hanging.
+func takeFreshOn(t *testing.T, b *Budget, ports ...int) []*Unit {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(FreshSession(t.Context()), 5*time.Second)
+	defer cancel()
+	var out []*Unit
+	for _, port := range ports {
+		u, err := b.AcquireOn(ctx, ClassSearch, port)
+		if err != nil {
+			t.Fatalf("a fresh place on %d was not given: %v", port, err)
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
 // freshAdmitted asks the rule itself whether a fresh session's search would be
 // let in now, so a waiter's luck in being scheduled decides nothing.
-func freshAdmitted(b *Budget) bool {
+func freshAdmitted(b *Budget) bool { return freshAdmittedOn(b, 0) }
+
+// freshAdmittedOn is freshAdmitted for a search through the given port.
+func freshAdmittedOn(b *Budget, port int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.admitsLocked(ClassSearch, true)
+	return b.admitsLocked(ClassSearch, true, port)
 }
 
 func TestBudget_CountsAnAttemptForAFreshSessionAsTheReserve(t *testing.T) {
@@ -132,10 +152,10 @@ func TestBudget_AFreshAttemptThatTurnsIntoASolveIsCountedOnce(t *testing.T) {
 func TestBudget_HoldsOneReserveForAFreshAttemptTheServiceSaysItIsSolving(t *testing.T) {
 	// Six fresh sessions met four checks: the service is solving four on
 	// their ports before the ladder knows of any. Four solves of the
-	// service's and six possible ones of this program's are six reserves,
-	// not ten.
+	// service's on the ports of four of the six possible ones of this
+	// program's are six reserves, not ten.
 	b := NewBudget(30, 5)
-	held := takeFresh(t, b, 6)
+	held := takeFreshOn(t, b, 20101, 20102, 20103, 20104, 20105, 20106)
 	readSolves(b, 26, 6, 20101, 20102, 20103, 20104)
 	if r := b.Reading(); r.Reserves != 6 || r.InUse() != 30 || r.Solves != 4 || r.Fresh != 6 {
 		t.Errorf("six fresh and four of the service's solves read %+v (in use %d), want six reserves: 30", r, r.InUse())
@@ -147,34 +167,130 @@ func TestBudget_HoldsOneReserveForAFreshAttemptTheServiceSaysItIsSolving(t *test
 	if r := b.Reading(); r.Reserves != 6 || r.InUse() != 30 {
 		t.Errorf("four of them turned solves read %+v (in use %d), want still six reserves: 30", r, r.InUse())
 	}
-	// And the other way: a solve the service runs on its own and a fresh
-	// attempt are one reserve while nothing says they are two.
+	// And the other way: a solve the service runs with nobody here waiting on
+	// it, and a fresh attempt put on its port, are one reserve — the attempt
+	// rides the solve pinned there.
 	c := NewBudget(30, 5)
 	readSolves(c, 5, 0, 20201)
-	takeFresh(t, c, 1)
+	takeFreshOn(t, c, 20201)
 	if r := c.Reading(); r.Reserves != 1 || r.InUse() != 5 {
-		t.Errorf("a fresh attempt beside one solve of the service's reads %+v (in use %d), want one reserve: 5", r, r.InUse())
+		t.Errorf("a fresh attempt on the port of a solve of the service's reads %+v (in use %d), want one reserve: 5", r, r.InUse())
 	}
-	// More fresh than the service's solves: the fresh count.
-	takeFresh(t, c, 2)
+	// Fresh attempts on other ports are a reserve each: three reserves.
+	takeFreshOn(t, c, 20202, 20203)
 	if r := c.Reading(); r.Reserves != 3 || r.InUse() != 15 {
-		t.Errorf("three fresh beside one solve of the service's read %+v (in use %d), want three reserves: 15", r, r.InUse())
+		t.Errorf("two more fresh on ports of their own read %+v (in use %d), want three reserves: 15", r, r.InUse())
 	}
+}
+
+func TestBudget_HoldsAReserveForASolveLeftBehindBesideAFreshAttemptOnAnotherPort(t *testing.T) {
+	// Thirty with a reserve of five, and the service solving on three ports
+	// for requests that gave up here: fifteen held. Fresh sessions on other
+	// ports are a reserve each on top: three fit and the fourth waits. Taken
+	// as the larger of the two counts (v0.4.32), the three solves left behind
+	// would have covered three fresh attempts for nothing and let six in.
+	b := NewBudget(30, 5)
+	readSolves(b, 15, 0, 20101, 20102, 20103)
+	takeFreshOn(t, b, 20201, 20202, 20203)
+	if r := b.Reading(); r.Reserves != 6 || r.InUse() != 30 || r.Solves != 3 {
+		t.Errorf("three fresh beside three solves left behind read %+v (in use %d), want six reserves: 30", r, r.InUse())
+	}
+	if freshAdmittedOn(b, 20204) {
+		t.Error("a fourth fresh attempt on a port of its own would be let in at 30 of 30")
+	}
+	// On the port of a solve left behind it rides that solve and fits.
+	if !freshAdmittedOn(b, 20101) {
+		t.Error("a fresh attempt on the port of a solve left behind would wait")
+	}
+	// A port not known has no solve to ride.
+	if freshAdmitted(b) {
+		t.Error("a fresh attempt on a port not known would be let in at 30 of 30")
+	}
+}
+
+func TestBudget_MatchesTheServicesSolvesToItsOwnPortByPort(t *testing.T) {
+	// Two solves of the service's on one port where this program has one
+	// fresh attempt: one is the attempt's, the other a request's that gave up
+	// there before a new session was put on the port. Two reserves.
+	b := NewBudget(30, 5)
+	held := takeFreshOn(t, b, 20101)
+	b.observeProfile(profileLoad{upstream: 10, client: 1, solving: 2, clientSolving: 1, solvingPorts: map[int]int{20101: 2}}, true)
+	if r := b.Reading(); r.Reserves != 2 || r.Solves != 2 || r.Fresh != 1 {
+		t.Errorf("two solves on the port of one fresh attempt read %+v, want two reserves", r)
+	}
+	// The ladder hears of the attempt's solve: still two, counted once each.
+	held[0].Solving(20101)
+	if r := b.Reading(); r.Reserves != 2 || r.Solves != 2 || r.Fresh != 0 {
+		t.Errorf("the attempt turned solve reads %+v, want still two reserves", r)
+	}
+	// The request gives up: the service's two are both left behind now.
+	held[0].Release()
+	if r := b.Reading(); r.Reserves != 2 || r.Solves != 2 {
+		t.Errorf("after the request gave up the budget reads %+v, want the service's two held", r)
+	}
+}
+
+func TestBudget_ASolveTheServiceReportsOnAFreshAttemptsPortIsLeftBehindOnceTheAttemptEnds(t *testing.T) {
+	// A fresh attempt the service is solving for, and the request ends — given
+	// up, or answered with its place handed on. The solve it was riding has
+	// nobody waiting on it any more until a reading says it is over.
+	for _, end := range []string{"released", "answered"} {
+		b := NewBudget(30, 5)
+		held := takeFreshOn(t, b, 20101, 20102)
+		readSolves(b, 10, 2, 20101)
+		if r := b.Reading(); r.Reserves != 2 {
+			t.Fatalf("%s: two fresh, one being solved, read %+v, want two reserves", end, r)
+		}
+		if end == "released" {
+			held[0].Release()
+		} else {
+			held[0].notASolve()
+		}
+		if r := b.Reading(); r.Reserves != 2 || r.Fresh != 1 {
+			t.Errorf("%s: after the solved-for attempt ended the budget reads %+v, want the solve left behind and the other fresh: two reserves", end, r)
+		}
+		// The other fresh attempt's port has no solve on it.
+		held[1].Release()
+		if r := b.Reading(); r.Reserves != 1 {
+			t.Errorf("%s: with only the solve left behind the budget reads %+v, want one reserve", end, r)
+		}
+	}
+}
+
+func TestLadder_TakesItsPlaceOnItsOwnPort(t *testing.T) {
+	// Six with a reserve of five and the service solving on the ladder's port
+	// with nobody waiting on it: a fresh request through that port rides the
+	// solve and goes; through another it would wait.
+	b := NewBudget(6, 5)
+	readSolves(b, 5, 0, 20101)
+	rt := &fakeRT{steps: []func() (*http.Response, error){respond(200, nil, "the page")}}
+	l := &ladder{rt: rt, port: 20101, rem: &fakeRemedy{retries: 0}, budget: b, class: ClassSearch}
+	ctx, cancel := context.WithTimeout(FreshSession(t.Context()), 5*time.Second)
+	defer cancel()
+	resp, err := l.RoundTrip(newReq(t, http.MethodGet, "").WithContext(ctx))
+	if err != nil {
+		t.Fatalf("a fresh request on the port of a solve left behind was not let in: %v", err)
+	}
+	_ = resp.Body.Close()
 }
 
 func TestBudget_LetsAFreshAttemptInOnTheReserveOfASolveTheServiceAlreadyRuns(t *testing.T) {
 	// Six with a reserve of five, and the service solving once with nothing
-	// of this program's in flight: five in use. A fresh attempt may be that
-	// solve's request, so it adds no reserve of its own and goes; a second
-	// one is a reserve more and waits.
+	// of this program's in flight: five in use. A fresh attempt on that
+	// solve's port rides it, so it adds no reserve of its own and goes; a
+	// second one on the same port is a reserve more and waits, and so is one
+	// on any other port.
 	b := NewBudget(6, 5)
 	readSolves(b, 5, 0, 20101)
-	if !freshAdmitted(b) {
-		t.Fatal("a fresh attempt beside the service's one solve would wait at 5 of 6")
+	if !freshAdmittedOn(b, 20101) {
+		t.Fatal("a fresh attempt on the port of the service's one solve would wait at 5 of 6")
 	}
-	takeFresh(t, b, 1)
-	if freshAdmitted(b) {
-		t.Error("a second fresh attempt beside the service's one solve would be let in at 5 of 6")
+	if freshAdmittedOn(b, 20102) {
+		t.Error("a fresh attempt on another port than the service's one solve would be let in at 5 of 6")
+	}
+	takeFreshOn(t, b, 20101)
+	if freshAdmittedOn(b, 20101) {
+		t.Error("a second fresh attempt on the port of the service's one solve would be let in at 5 of 6")
 	}
 }
 

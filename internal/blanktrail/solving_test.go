@@ -22,9 +22,9 @@ func readSolves(b *Budget, upstream, client int, ports ...int) {
 	r := profileLoad{upstream: upstream, client: client, solving: len(ports)}
 	for _, p := range ports {
 		if r.solvingPorts == nil {
-			r.solvingPorts = map[int]bool{}
+			r.solvingPorts = map[int]int{}
 		}
-		r.solvingPorts[p] = true
+		r.solvingPorts[p]++
 	}
 	b.observeProfile(r, true)
 }
@@ -64,14 +64,25 @@ func TestBudget_CountsTheLargerOfItsOwnSolvesAndTheServicesNotTheSum(t *testing.
 	if r := b.Reading(); r.Solves != 2 || r.InUse() != 11 {
 		t.Errorf("after both requests gave up the budget reads %+v (in use %d), want the service's two solves still held", r, r.InUse())
 	}
-	// And more of this program's own than the service has reported yet: the
-	// own count.
+	// And more of this program's own on a port than the service has
+	// reported there yet: the own count, port by port. Three on ports the
+	// service said nothing of, beside its two whose requests have gone, are
+	// five solves.
 	more := take(t, b, ClassSearch, 3)
 	for i, u := range more {
 		u.Solving(20110 + i)
 	}
-	if r := b.Reading(); r.Solves != 3 {
-		t.Errorf("three own solves against the service's two read %+v, want 3", r)
+	if r := b.Reading(); r.Solves != 5 || r.Reserves != 5 {
+		t.Errorf("three own solves beside the service's two on other ports read %+v, want 5", r)
+	}
+	// On the service's own ports they are the same solves again.
+	c := NewBudget(30, 5)
+	again := take(t, c, ClassSearch, 2)
+	again[0].Solving(20101)
+	again[1].Solving(20101)
+	readSolves(c, 10, 2, 20101)
+	if r := c.Reading(); r.Solves != 2 || r.Reserves != 2 {
+		t.Errorf("two own solves on a port the service reports one on read %+v, want 2", r)
 	}
 }
 
@@ -127,7 +138,7 @@ func TestBudget_ForgetsTheServicesSolvesWhenAReadingFails(t *testing.T) {
 	// hold its reserve and pin its port for as long as the service is down.
 	b := NewBudget(30, 5)
 	readSolves(b, 10, 0, 20101, 20102)
-	b.observeProfile(profileLoad{upstream: 10, solving: 2, solvingPorts: map[int]bool{20101: true}}, false)
+	b.observeProfile(profileLoad{upstream: 10, solving: 2, solvingPorts: map[int]int{20101: 1}}, false)
 	if r := b.Reading(); r.Solves != 0 || r.ServiceSolves != 0 || b.solvingOn(20101) {
 		t.Errorf("after a failed reading the budget reads %+v (solving on 20101: %v), want no solve of the service's", r, b.solvingOn(20101))
 	}
@@ -227,7 +238,7 @@ func TestBudgets_OnTheLightListingKeepAskingEveryTwoSecondsWhileTheServiceSolves
 	bs.pollOnce(t.Context())
 	setSeen(b, 0, 0)
 	b.mu.Lock()
-	b.svcSolves, b.svcSolving = 1, map[int]bool{20101: true}
+	b.svcSolves, b.svcSolving = 1, map[int]int{20101: 1}
 	b.mu.Unlock()
 	clock.Advance(2 * time.Second)
 	before := readsAsked(fake)

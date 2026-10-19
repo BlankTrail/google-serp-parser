@@ -98,7 +98,7 @@ func simulateStand(t *testing.T, limit, reserve, threads, perRequest int, span t
 		spinUntil(t, "every thread to hold a place or settle to wait", func() bool {
 			pending := collect()
 			b.mu.Lock()
-			w, admits := b.searchWaiting, b.admitsLocked(ClassSearch, false)
+			w, admits := b.searchWaiting, b.admitsLocked(ClassSearch, false, 0)
 			b.mu.Unlock()
 			return w == pending && (w == 0 || !admits)
 		})

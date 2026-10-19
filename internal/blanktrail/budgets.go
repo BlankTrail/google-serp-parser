@@ -237,9 +237,9 @@ func (bs *Budgets) pollOnce(ctx context.Context) {
 					// Each budget gets a set of its own, made here: the
 					// budget keeps it until the next reading.
 					if r.solvingPorts == nil {
-						r.solvingPorts = map[int]bool{}
+						r.solvingPorts = map[int]int{}
 					}
-					r.solvingPorts[port] = true
+					r.solvingPorts[port] += l.Solving
 				}
 			}
 		}

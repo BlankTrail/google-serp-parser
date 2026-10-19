@@ -24,7 +24,7 @@ func TestBudget_TakesTheFreshAttemptsTheServiceIsSolvingOutOfTheSamplesClients(t
 	takeFresh(t, b, 10)
 	b.observeProfile(profileLoad{
 		upstream: 32, client: 10, solving: 4, clientSolving: 4,
-		solvingPorts: map[int]bool{20101: true, 20102: true, 20103: true, 20104: true},
+		solvingPorts: map[int]int{20101: 1, 20102: 1, 20103: 1, 20104: 1},
 	}, true)
 	if k := ampOf(b); !near(k, 2) {
 		t.Errorf("four solves with their requests waiting among ten taught k %v, want 2", k)

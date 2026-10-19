@@ -208,7 +208,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		}
 		if unit == nil {
-			got, err := t.budget.Acquire(req.Context(), t.class)
+			got, err := t.budget.AcquireOn(req.Context(), t.class, t.port)
 			if err != nil {
 				return nil, err
 			}
