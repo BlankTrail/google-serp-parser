@@ -224,15 +224,32 @@ func (b *Budget) inUseLocked() float64 {
 // most of a minute. Only the excess is held against it, not the reading as it
 // was: a reading the prediction agreed with holds nothing once requests it saw
 // have been answered.
+//
+// On an empty budget — nothing in flight, nothing being solved — the attempt
+// costs one, not k. k is learned up to four, so a small limit the form lets
+// through (seven with the reserve of five, k two) would otherwise refuse every
+// lookup with nothing running at all; no reading would then ever teach k down
+// again, and the job would stand still with no word of why. What the service
+// carries beyond the prediction still holds it: those are connections the
+// tariff counts, and the service lets them go by itself.
 func (b *Budget) admitsLocked(c Class) bool {
 	if b.limit <= 0 {
 		return true
 	}
-	need := b.inUseLocked() + b.amp
+	need := b.inUseLocked() + b.attemptCostLocked()
 	if c == ClassLookup {
 		return b.searchWaiting == 0 && need+float64(b.reserve) <= float64(b.limit)+budgetSlack
 	}
 	return need <= float64(b.limit)+budgetSlack
+}
+
+// attemptCostLocked is what one more attempt is counted as: k, or one on an
+// empty budget (see admitsLocked).
+func (b *Budget) attemptCostLocked() float64 {
+	if b.inFlight == 0 && b.solves == 0 {
+		return 1
+	}
+	return b.amp
 }
 
 // Acquire waits for a place of the given class and never refuses one: it
@@ -362,8 +379,14 @@ func (b *Budget) Free(c Class) int {
 	if c == ClassLookup {
 		room -= float64(b.reserve)
 	}
-	// Each place costs k, so the room is shared out k at a time.
-	return max(int(math.Floor(room/b.amp+budgetSlack)), 0)
+	// Each place costs k, so the room is shared out k at a time — but the
+	// first on an empty budget costs one (admitsLocked), so a set grown to
+	// what is free is not held at nought on an idle profile the first fits.
+	free := max(int(math.Floor(room/b.amp+budgetSlack)), 0)
+	if free == 0 && room+budgetSlack >= b.attemptCostLocked() {
+		free = 1
+	}
+	return free
 }
 
 // BudgetReading is a budget's figures at one moment.

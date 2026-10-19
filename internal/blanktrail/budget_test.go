@@ -852,3 +852,46 @@ func (h *lockProbe) portNumbers() []int {
 	return nil
 }
 func (h *lockProbe) overLimit() {}
+
+func TestBudget_TheFirstAttemptOnAnIdleProfileCostsOneNotK(t *testing.T) {
+	// Six with five kept for a solve, k two: a lookup counted at k needs
+	// seven. Nothing runs, so nothing would ever teach k down — without the
+	// rule the lookup waits for ever.
+	b := NewBudget(6, 5)
+	setAmp(b, 2)
+	if f := b.Free(ClassLookup); f != 1 {
+		t.Errorf("an idle profile reads %d free for lookups, want one", f)
+	}
+	u := letIn(t, acquiring(t.Context(), t, b, ClassLookup), "a lookup on an idle profile of six at k two")
+	second := waiting(t.Context(), t, b, ClassLookup, "a second lookup beside the first")
+	stillWaiting(t, b, ClassLookup, second, "a second lookup beside the first")
+	if f := b.Free(ClassLookup); f != 0 {
+		t.Errorf("with one lookup in flight free reads %d, want nought", f)
+	}
+	u.Release()
+	letIn(t, second, "the second lookup once the first was done")
+
+	// Only the first costs one: with one search in flight at k four on six, a
+	// second counted at one would fit (four and one), at k it does not.
+	k4 := NewBudget(6, 0)
+	setAmp(k4, 4)
+	take(t, k4, ClassSearch, 1)
+	stillWaiting(t, k4, ClassSearch, waiting(t.Context(), t, k4, ClassSearch, "a second search at k four on six"),
+		"a second search at k four on six")
+
+	// A search at k four on three, with two the service carries beyond the
+	// prediction: the first fits at one; with the excess at three it waits —
+	// what the service holds still counts on an idle profile.
+	s := NewBudget(3, 0)
+	setAmp(s, 4)
+	s.mu.Lock()
+	s.excess = 2
+	s.mu.Unlock()
+	first := letIn(t, acquiring(t.Context(), t, s, ClassSearch), "a search on an idle profile of three at k four")
+	first.Release()
+	s.mu.Lock()
+	s.excess = 3
+	s.mu.Unlock()
+	stillWaiting(t, s, ClassSearch, waiting(t.Context(), t, s, ClassSearch, "a search with the excess at the limit"),
+		"a search with the excess at the limit")
+}
