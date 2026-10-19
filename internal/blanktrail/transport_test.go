@@ -94,6 +94,9 @@ type fakeRemedy struct {
 	// staying says the port keeps its address, as the pool says for a port
 	// carrying a session that has answered.
 	staying bool
+	// rotateErr is what moving the port to another address answers: nil is
+	// moved.
+	rotateErr error
 }
 
 func (r *fakeRemedy) attemptFailed(int) bool {
@@ -102,7 +105,7 @@ func (r *fakeRemedy) attemptFailed(int) bool {
 }
 func (r *fakeRemedy) attemptFailedStatus(port, _ int) bool    { return r.attemptFailed(port) }
 func (r *fakeRemedy) attemptSucceeded(int)                    { r.successes++ }
-func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return nil }
+func (r *fakeRemedy) rotateEgress(context.Context, int) error { r.rotations++; return r.rotateErr }
 func (r *fakeRemedy) markBadEgress(int)                       { r.markedBad++ }
 func (r *fakeRemedy) reopenPort(int)                          { r.reopened++ }
 func (r *fakeRemedy) markDeadEgress(int)                      { r.markedDead++ }

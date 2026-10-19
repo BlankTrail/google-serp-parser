@@ -93,7 +93,9 @@ const (
 // the service says it is solving (Unit.Solving). The caller says which
 // attempts are for a fresh session through the request's context
 // (FreshSession); this layer cannot tell a session's first request from its
-// tenth.
+// tenth. It can tell one thing the caller cannot: that it carried a request to
+// another address in the middle of it, where a session the caller marked as
+// answered (KeptSession) is a stranger, and fresh from then on.
 //
 // A limit of nought is how every profile ran before there was a limit: nothing
 // waits and nothing is counted.
@@ -505,6 +507,13 @@ func (b *Budget) Acquire(ctx context.Context, c Class) (*Unit, error) {
 // ladder passes it here, at admission, and not after: a reading that landed
 // between the two would take this attempt's solve for an abandoned one.
 func (b *Budget) AcquireOn(ctx context.Context, c Class, port int) (*Unit, error) {
+	return b.acquire(ctx, c, port, false)
+}
+
+// acquire is AcquireOn for the ladder, which also says whether it has moved
+// the request to another address since it set out (moved): from then on a
+// request for a kept session (KeptSession) is a fresh session's too.
+func (b *Budget) acquire(ctx context.Context, c Class, port int, moved bool) (*Unit, error) {
 	if b == nil {
 		return nil, nil
 	}
@@ -515,7 +524,8 @@ func (b *Budget) AcquireOn(ctx context.Context, c Class, port int) (*Unit, error
 	}
 	// Read only past the limit's check, so a profile with no limit pays
 	// nothing for it.
-	fresh := freshSession(ctx)
+	mark := sessionMarkOf(ctx)
+	fresh := mark == markFresh || moved && mark == markKept
 	waiting := false
 	// starved is this search's mark among the fresh ones waiting, so the
 	// ordinary searches stop passing it once it has waited too long.
@@ -571,22 +581,51 @@ func (b *Budget) dropFreshLocked(port int) {
 	}
 }
 
-// freshKey marks a request's context as asked for a fresh session.
-type freshKey struct{}
+// sessionKey marks a request's context with the kind of session it is asked
+// for (sessionMark).
+type sessionKey struct{}
+
+// sessionMark is what the caller said of the session a request is asked for:
+// nothing (no kept session, or no limit), a kept session Google has answered
+// where it stands (KeptSession), or a fresh one (FreshSession). One value
+// under one key, so a request pays for one context whichever it is.
+type sessionMark int
+
+const (
+	markNone sessionMark = iota
+	markKept
+	markFresh
+)
 
 // FreshSession marks ctx as the context of requests for a fresh session — one
-// Google has not answered yet in this job through its current exit — so each attempt they make is counted in the profile's budget
-// as a possible solve (see Budget). It is the caller's to say: a port carries
-// one session after another, and only whoever put the session on it knows
-// whether Google has seen it. A caller on a profile with no limit need not
-// mark anything (Lease.Limited), and should not pay for the context it makes.
+// Google has not answered yet in this job through its current exit — so each
+// attempt they make is counted in the profile's budget as a possible solve
+// (see Budget). It is the caller's to say: a port carries one session after
+// another, and only whoever put the session on it knows whether Google has
+// seen it. A caller on a profile with no limit need not mark anything
+// (Lease.Limited), and should not pay for the context it makes.
 func FreshSession(ctx context.Context) context.Context {
-	return context.WithValue(ctx, freshKey{}, true)
+	return context.WithValue(ctx, sessionKey{}, markFresh)
+}
+
+// KeptSession marks ctx as the context of requests for a kept session Google
+// has answered where it stands now: ordinary attempts, until the ladder moves
+// the request to another address in the middle of it (ladder.RoundTrip). There
+// the session is a stranger again, and the attempts on the new address are
+// counted as a fresh session's. A request with neither mark carries no
+// session of the caller's — a port's own identity, a lookup — and is never
+// counted fresh, wherever it goes.
+func KeptSession(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sessionKey{}, markKept)
+}
+
+func sessionMarkOf(ctx context.Context) sessionMark {
+	m, _ := ctx.Value(sessionKey{}).(sessionMark)
+	return m
 }
 
 func freshSession(ctx context.Context) bool {
-	fresh, _ := ctx.Value(freshKey{}).(bool)
-	return fresh
+	return sessionMarkOf(ctx) == markFresh
 }
 
 // limited reports whether the budget has a limit in force.

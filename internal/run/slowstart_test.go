@@ -317,12 +317,24 @@ func TestAttempt_ASharedRecordCarriesAnswersFromOneAttemptToTheNext(t *testing.T
 
 	shared := &Answered{}
 	(&Attempt{Pool: f.Pool, Answered: shared}).answeredHere(lease, held, nil)
-	if (&Attempt{Pool: f.Pool, Answered: shared}).askingAs(ctx, lease, held) != ctx {
+	if markedFresh((&Attempt{Pool: f.Pool, Answered: shared}).askingAs(ctx, lease, held)) {
 		t.Error("a session answered through a shared record was counted as fresh by the next attempt sharing it")
 	}
-	if (&Attempt{Pool: f.Pool}).askingAs(ctx, lease, held) == ctx {
+	if !markedFresh((&Attempt{Pool: f.Pool}).askingAs(ctx, lease, held)) {
 		t.Error("an attempt with a record of its own took a session it never saw answered for an ordinary one")
 	}
+}
+
+// markedFresh is whether a budget takes a request under ctx for a fresh
+// session's: the mark read the way the budget reads it.
+func markedFresh(ctx context.Context) bool {
+	b := blanktrail.NewBudget(30, 5)
+	u, err := b.Acquire(ctx, blanktrail.ClassSearch)
+	if err != nil {
+		return false
+	}
+	defer u.Release()
+	return b.Reading().Fresh == 1
 }
 
 func TestAnswered_ARecordWithABoundForgetsAnAnswerOlderThanIt(t *testing.T) {
@@ -362,5 +374,52 @@ func TestAnswered_ARecordWithABoundForgetsAnAnswerOlderThanIt(t *testing.T) {
 	now = now.Add(24 * time.Hour)
 	if _, ok := j.at(1); !ok {
 		t.Error("a record with no bound forgot an answer")
+	}
+}
+
+func TestBoundSearcher_CountsTheAttemptsAfterTheLadderMovedARequestAsAFreshSessions(t *testing.T) {
+	// A session never answered before this job keeps no address of its own
+	// (sessions.Keeper pins only an admitted one), so the ladder may carry its
+	// request elsewhere. Answered on page one, its page two goes out as an
+	// ordinary request; the address dies under it, the ladder walks away, and
+	// the attempt that reaches Google from the new address is a stranger's.
+	b := blanktrail.NewBudget(30, 5)
+	o := watchBudget(t, b)
+	// Every answer closes its connection, so page two dials the dead address
+	// afresh rather than riding the tunnel page one left open.
+	o.Config.SetKeepAlivesEnabled(false)
+	f := poolFacing(t, o.addr(), 1, inSessions, func(c *blanktrail.PoolConfig) {
+		c.Budget = b
+		c.AddressesPerRequest = 5
+	})
+	keeper := sessions.NewKeeper(sessions.NewMemory())
+	ctx := context.Background()
+	lease, err := f.Pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer lease.Release()
+	held, err := keeper.Take(ctx, leasePort{lease}, searchDesktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	search := boundSearcher{attempt: &Attempt{Pool: f.Pool, Keeper: keeper, Want: searchDesktop}, lease: lease, held: held}
+	if _, err := search.Search(ctx, usQuery("x")); err != nil {
+		t.Fatalf("page one: %v", err)
+	}
+	first := f.Fake.UpstreamOf(lease.Port())
+	f.kill(first)
+	if _, err := search.SearchAt(ctx, usQuery("x"), "https://www.google.com/search?q=x&start=10"); err != nil {
+		t.Fatalf("page two: %v", err)
+	}
+	if moved := f.Fake.UpstreamOf(lease.Port()); moved == first {
+		t.Fatalf("the ladder did not move the request off the dead address: stood %v carried %d seen %d", f.stoodOn(lease.Port()), f.carriedBy(lease.Port()), len(o.readings()))
+	}
+	seen := o.readings()
+	if len(seen) != 2 {
+		t.Fatalf("the origin saw %d searches, want 2", len(seen))
+	}
+	if seen[1].Fresh != 1 || seen[1].InFlight != 0 {
+		t.Errorf("page two reached Google from a new address with the budget at %+v, want one fresh attempt", seen[1])
 	}
 }

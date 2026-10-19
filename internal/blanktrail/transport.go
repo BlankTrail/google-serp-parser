@@ -192,6 +192,18 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 	// solver's and are open the whole time.
 	var unit *Unit
 	handed := false
+	// moved is whether the request has been carried to another address since
+	// it set out. A kept session the caller marked as answered (KeptSession)
+	// was answered where it set out from; on the new address it is a stranger
+	// and likely to be checked, so the attempts after the move take their
+	// places as a fresh session's (Budget's slow start). Seen from the run,
+	// the move is inside one request and comes to light only at the next.
+	moved := false
+	rotate := func() {
+		if t.rem.rotateEgress(req.Context(), t.port) == nil {
+			moved = true
+		}
+	}
 	defer func() {
 		if !handed {
 			unit.Release()
@@ -208,7 +220,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 		}
 		if unit == nil {
-			got, err := t.budget.AcquireOn(req.Context(), t.class, t.port)
+			got, err := t.budget.acquire(req.Context(), t.class, t.port, moved)
 			if err != nil {
 				return nil, err
 			}
@@ -251,7 +263,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 			if t.rem.leaveAddress(t.port) {
 				t.rem.markDeadEgress(t.port)
 				if !t.rem.stays(t.port) {
-					_ = t.rem.rotateEgress(req.Context(), t.port)
+					rotate()
 				}
 			}
 			hunted++
@@ -304,7 +316,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 				if t.rem.leaveAddress(t.port) {
 					t.rem.markDeadEgress(t.port)
 					if !t.rem.stays(t.port) {
-						_ = t.rem.rotateEgress(req.Context(), t.port)
+						rotate()
 					}
 				}
 				hunted++
@@ -358,7 +370,7 @@ func (t *ladder) RoundTrip(req *http.Request) (*http.Response, error) {
 		// refused egress and a broken gateway are indistinguishable from here and
 		// have the same remedy; the caller may know better about some statuses.
 		if t.rem.attemptFailedStatus(t.port, resp.StatusCode) && !t.rem.stays(t.port) {
-			_ = t.rem.rotateEgress(req.Context(), t.port)
+			rotate()
 		}
 
 		if !Retryable(resp.StatusCode) {

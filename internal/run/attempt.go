@@ -615,9 +615,12 @@ const lostPortsPerQuery = 8
 //     rather than read from sessions.Held.Moved: Moved is worked out when the
 //     session is put on a port, and a session the run moves on in the middle
 //     of a page (MoveOn) or the ladder carries to another address is not seen
-//     by it. The ladder's own move, inside one request, is seen from the
-//     session's next request on: the request it was made for was marked from
-//     the address it set out from.
+//     by it. The ladder's own move, inside one request, is the ladder's to
+//     see: a request for a session answered where it set out goes out marked
+//     as a kept one (blanktrail.KeptSession), and the attempts the ladder
+//     makes after carrying it to another address take their places as a fresh
+//     session's. The session's next request is fresh from here as well, the
+//     lease's exit having changed.
 //
 // A time since the last answer was the other candidate, and is not used: how
 // long a rest Google forgives is not known, and a threshold guessed at would be
@@ -629,15 +632,16 @@ const lostPortsPerQuery = 8
 // The limit is asked first: a profile with no limit takes no context of its
 // own and nothing is written down for it (asking takes the budget's lock once,
 // uncontended, and allocates nothing). A port's own identity
-// (no held session) is never marked; the run that asks that way keeps no
-// sessions to tell apart.
+// (no held session) is never marked, fresh or kept; the run that asks that
+// way keeps no sessions to tell apart, and the ladder moving its request
+// changes nothing for it.
 func (a *Attempt) askingAs(ctx context.Context, lease *blanktrail.Lease, held *sessions.Held) context.Context {
 	if held == nil || !lease.Limited() {
 		return ctx
 	}
 	at, seen := a.record().at(held.ID)
 	if seen && at == lease.Exit() {
-		return ctx
+		return blanktrail.KeptSession(ctx)
 	}
 	return blanktrail.FreshSession(ctx)
 }
