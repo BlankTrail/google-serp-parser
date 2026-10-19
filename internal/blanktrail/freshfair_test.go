@@ -186,3 +186,47 @@ func TestBudget_OnlyAWaitingFreshSearchHoldsTheOthersBack(t *testing.T) {
 		u.Release()
 	}
 }
+
+func TestBudget_AFreshSearchThatCannotFitBesideWhatIsNotThisProgramsHoldsNoOneBack(t *testing.T) {
+	// Thirty with a reserve of five; the reading found 27 on the profile's
+	// ports and nothing of this program's in flight — another process on the
+	// profile, or connections the service keeps. An ordinary search fits
+	// (27 + 1), a fresh one never can (27 + 5) until that load goes, and
+	// holding the ordinary ones back for it would stand the whole job still.
+	b, clock := clocked(30, 5)
+	setAmp(b, 1)
+	b.observeLoad(27, 0, true)
+	waiting(FreshSession(t.Context()), t, b, ClassSearch, "a fresh search beside 27 of 30 not this program's")
+	clock.advance(time.Minute)
+	if u := ordinaryNow(t, b); u == nil {
+		t.Error("an ordinary search was held back behind a fresh one that cannot fit beside the excess")
+	} else {
+		u.Release()
+	}
+
+	// The same with five solves the service runs on its own (25 as their
+	// reserves) and one connection over the prediction: 26 not this
+	// program's, a fresh search needs 31.
+	c, cclock := clocked(30, 5)
+	setAmp(c, 1)
+	readSolves(c, 26, 0, 20101, 20102, 20103, 20104, 20105)
+	waiting(FreshSession(t.Context()), t, c, ClassSearch, "a fresh search beside five abandoned solves and one over")
+	cclock.advance(time.Minute)
+	if u := ordinaryNow(t, c); u == nil {
+		t.Error("an ordinary search was held back behind a fresh one that cannot fit beside the service's own solves")
+	} else {
+		u.Release()
+	}
+
+	// Room for it once that load is gone (a reading of 20): it holds them.
+	d, dclock := clocked(30, 5)
+	setAmp(d, 1)
+	d.observeLoad(20, 0, true)
+	take(t, d, ClassSearch, 6)
+	waiting(FreshSession(t.Context()), t, d, ClassSearch, "a fresh search beside 20 and six of this program's")
+	dclock.advance(freshWaitFair)
+	if u := ordinaryNow(t, d); u != nil {
+		u.Release()
+		t.Error("an ordinary search passed a fresh one that fits once this program's own drain")
+	}
+}

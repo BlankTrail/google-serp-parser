@@ -194,18 +194,31 @@ func (b *Budget) clock() time.Time {
 // freshStarvedLocked is whether a search for a fresh session has waited
 // longer than freshWaitFair, so an ordinary search is not let in ahead of it.
 //
-// Only a fresh search that can ever be let in holds the others back: one
-// that does not fit an idle profile at all (a limit below the reserve, which
-// the form refuses but Set takes) would hold them for good, and the job would
-// stand still with nothing in flight. Every other fresh search fits once the
-// ordinary ones held back have drained (attemptCostLocked: on an empty budget
-// a fresh attempt costs the reserve, or one), so holding them back always ends
-// with it let in, and then the ordinary ones go again.
+// Only a fresh search that would fit once this program had nothing in flight
+// holds the others back; holding them back is how the room is made, and room
+// this program cannot give back is not made that way. What it cannot give
+// back is what the last reading found beyond the prediction (the excess:
+// another process on the same profile, connections the service keeps) and
+// the solves the service runs with no request of this program's left on
+// their ports — all of them, as they would be with nothing of its own in
+// flight. With those, a limit below the reserve (which the form refuses but
+// Set takes) is the same case. A fresh search that cannot fit even then would
+// hold the ordinary ones until its request ran out, and the next fresh one
+// after it — the whole job standing still while room was there for them. One
+// that can fits once the ordinary ones held back have drained
+// (attemptCostLocked: on an empty budget a fresh attempt costs the reserve, or
+// one), so holding them back ends with it let in, and the ordinary ones go
+// again. The figures are the last reading's, and a reading that frees the room
+// lets the rule hold again from the next look.
 func (b *Budget) freshStarvedLocked() bool {
 	if len(b.freshWaiters) == 0 {
 		return false
 	}
-	if float64(b.reserve)+max(1-float64(b.reserve), 0) > float64(b.limit)+budgetSlack {
+	theirs := b.excess
+	for _, svc := range b.svcSolving {
+		theirs += float64(b.reserve * svc)
+	}
+	if float64(b.reserve)+max(1-float64(b.reserve), 0)+theirs > float64(b.limit)+budgetSlack {
 		return false
 	}
 	now := b.clock()
