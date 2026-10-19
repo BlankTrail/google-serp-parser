@@ -180,7 +180,7 @@ Open **Export → select a job → configure the file**. Preview result parts, c
 
 Deduplicate search results by URL or host, and suggestions by text. **Only the site** keeps the results of one site and its subdomains and leaves out every other site the search answered with; a pasted address works as well as a name. Suggestion filters (*By meaning* when the job is scored, *By words* otherwise, [see above](#collect-and-clean-keyword-suggestions)) are applied at export, so the saved results remain available without filtering too. Addresses with non-Latin letters read as letters in the results table and the History; files keep them exactly as they came.
 
-[Export and API →](docs/GUIDE.md#exports)
+[Export and API →](docs/GUIDE.md#exports) · [Export screen in PNG](assets/screenshots/export-en.png)
 
 <a id="performance"></a>
 
