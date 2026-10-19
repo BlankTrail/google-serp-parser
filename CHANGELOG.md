@@ -2,6 +2,71 @@
 
 [← Overview](README.md) · [Русский](CHANGELOG.ru.md)
 
+### 0.4.34
+
+- **A solve is counted as three connections by default, not five.** Five was
+  the most a solve was seen to open; once BlankTrail closes idle connections
+  a solving port holds about three. The reserve is also how many new sessions
+  a limit starts at once, so at a limit of 30 about ten start together
+  instead of six. A profile with no limit that still carries the old five
+  takes three on the first start (schema version 35); a profile with a limit,
+  or any other figure, is left as it is. On our stand, 20 threads at a limit
+  of 30: four seconds above it at most, the first result after 33 seconds,
+  the 200 queries in 7 min 5 s.
+
+### 0.4.33
+
+- **The service's solves are matched to the parser's port by port.** A solve
+  on a port where the parser has a request waiting is that request's, counted
+  once; one on a port the parser has left is nobody's, and holds a reserve of
+  its own. New sessions no longer start beside such leftover solves without
+  counting them.
+- **A new session waiting too long is not passed by.** Once a request for a
+  fresh session has waited ten seconds, ordinary searches stop taking the
+  places ahead of it — unless the room it needs is held by something the
+  parser cannot give back (another program on the profile, connections the
+  service keeps).
+- Sessions being kept warm, and a request carried to another address, are
+  counted as the possible solves they are; how many connections a request
+  costs is learned more accurately while checks are solved.
+
+### 0.4.32
+
+- **A job on a limited profile starts its sessions a few at a time.** A
+  session Google has not answered yet in this job — a new one, one that
+  rested since the last job, or one on another address — nearly always meets
+  a check on its first request, and the check holds the solver's own
+  connections for half a minute or more. Such a request is now counted as the
+  solve it is likely to be until its answer comes. On our stand the start no
+  longer took a profile of 30 to 52 connections: one second above the limit
+  in the whole job.
+- **Solves BlankTrail runs on its own are counted** (`solving` in
+  `/api/v1/ports/conns`): a solve whose request gave up holds the reserve, and
+  its port's connections are not closed by the parser.
+- The `/search` interface on a limited profile remembers which sessions were
+  answered for ten minutes, so its requests are not each counted as a
+  possible solve.
+
+### 0.4.31
+
+- **A proxy profile can have a connection limit.** *Connections to the proxy
+  (0 — no limit)* and *Reserve for solving a captcha* on the proxies screen.
+  Every job and the identities kept warm on the profile share it; once it is
+  reached new requests wait instead of failing — searches and captchas being
+  solved first, hidden addresses on what is left. The parser corrects its
+  count from BlankTrail's light listing `/api/v1/ports/conns` every two
+  seconds while the profile carries traffic. It is a soft limit: connections
+  the service keeps by itself can take the count briefly over it. The job
+  page shows *Connections to the proxy: U of L, captchas being solved: S*,
+  and the new-job form warns when the threads asked for are more than the
+  limit leaves room for. Nought is no limit.
+- **A profile with no exits no longer loops.** A job on such a profile asked
+  the service for a fresh fingerprint about 1500 times every two seconds, and
+  so did a list with every address at its session limit. Now no ports are
+  opened for it: its jobs wait in the queue, start once exits are added, and
+  can be stopped or deleted meanwhile. Search suggestion jobs go out directly
+  as before.
+
 ### 0.4.30
 
 - **Exits that terminate TLS themselves are no longer worked through.** Such
