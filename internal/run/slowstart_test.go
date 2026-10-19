@@ -324,3 +324,43 @@ func TestAttempt_ASharedRecordCarriesAnswersFromOneAttemptToTheNext(t *testing.T
 		t.Error("an attempt with a record of its own took a session it never saw answered for an ordinary one")
 	}
 }
+
+func TestAnswered_ARecordWithABoundForgetsAnAnswerOlderThanIt(t *testing.T) {
+	// The /search interface has no job to end its record: a session not
+	// answered again within For is a stranger once more, and the forgotten
+	// answers are swept out rather than kept for as long as the program runs.
+	now := time.Unix(1_000_000, 0)
+	r := &Answered{For: 10 * time.Minute, now: func() time.Time { return now }}
+	r.put(1, "exit-a")
+	now = now.Add(9 * time.Minute)
+	if exit, ok := r.at(1); !ok || exit != "exit-a" {
+		t.Errorf("an answer nine minutes old on a ten-minute record reads %q %v, want exit-a true", exit, ok)
+	}
+	now = now.Add(2 * time.Minute)
+	if _, ok := r.at(1); ok {
+		t.Error("an answer eleven minutes old on a ten-minute record is still remembered")
+	}
+	r.put(2, "exit-b")
+	if _, kept := r.by[1]; kept {
+		t.Error("a forgotten answer was not swept out when the next was written down")
+	}
+	if _, ok := r.at(2); !ok {
+		t.Error("the answer just written down is not remembered")
+	}
+	// Every answer starts the bound again: a session that keeps being
+	// answered is never forgotten.
+	r.put(3, "exit-c")
+	now = now.Add(9 * time.Minute)
+	r.put(3, "exit-c")
+	now = now.Add(6 * time.Minute)
+	if _, ok := r.at(3); !ok {
+		t.Error("a session answered again six minutes ago was forgotten fifteen minutes after its first answer")
+	}
+	// No bound: a job's record forgets nothing.
+	j := &Answered{now: func() time.Time { return now }}
+	j.put(1, "exit-a")
+	now = now.Add(24 * time.Hour)
+	if _, ok := j.at(1); !ok {
+		t.Error("a record with no bound forgot an answer")
+	}
+}

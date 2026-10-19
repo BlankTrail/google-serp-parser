@@ -75,9 +75,10 @@ const (
 // sample, and in the excess, so a solve nobody waits for any more is held as
 // the reserve it is.
 //
-// An attempt for a session Google has never answered is counted as a solve
-// from the moment it is let in (the slow start). A fresh session pays for a
-// check to be let in at all, and the check is solved while the request waits:
+// An attempt for a fresh session — one Google has not answered yet in this
+// job through the exit it goes out by (run.Attempt.askingAs says which) — is
+// counted as a solve from the moment it is let in (the slow start). A fresh
+// session pays for a check to be let in, and the check is solved while the request waits:
 // the ladder learns of it only when the service says the solve outran the
 // request, thirty seconds and more later. Counted as k until then, the twenty
 // requests of a job's first second all fitted a limit of thirty, fourteen of
@@ -101,7 +102,7 @@ type Budget struct {
 	reserve  int
 	inFlight int
 	solves   int
-	// fresh is the attempts in flight for sessions Google has never answered:
+	// fresh is the attempts in flight for fresh sessions (see FreshSession):
 	// possible solves, each counted as the reserve with the solves (see
 	// reservesLocked) until it is known to be one or not. They are not in
 	// inFlight; a fresh attempt is in exactly one of fresh, inFlight and
@@ -438,8 +439,8 @@ func (b *Budget) Acquire(ctx context.Context, c Class) (*Unit, error) {
 // freshKey marks a request's context as asked for a fresh session.
 type freshKey struct{}
 
-// FreshSession marks ctx as the context of requests for a session Google has
-// never answered, so each attempt they make is counted in the profile's budget
+// FreshSession marks ctx as the context of requests for a fresh session — one
+// Google has not answered yet in this job through its current exit — so each attempt they make is counted in the profile's budget
 // as a possible solve (see Budget). It is the caller's to say: a port carries
 // one session after another, and only whoever put the session on it knows
 // whether Google has seen it. A caller on a profile with no limit need not
@@ -601,7 +602,7 @@ type BudgetReading struct {
 	// Solves is the solves counted: this program's own, or the service's at
 	// the last reading where it ran more (see Budget.solvesLocked).
 	// ServiceSolves is the service's alone, as the last good reading found it.
-	// Fresh is the attempts in flight for sessions Google has never answered,
+	// Fresh is the attempts in flight for fresh sessions (see FreshSession),
 	// each a possible solve; they are not in InFlight. Reserves is how many
 	// reserves the count holds for the solves and the fresh attempts together
 	// (see Budget.reservesLocked); a reading put together by hand may leave it

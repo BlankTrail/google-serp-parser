@@ -379,6 +379,16 @@ func (s warmSearch) attempt(pool *blanktrail.Pool) *run.Attempt {
 		Answered: s.answered.of(pool)}
 }
 
+// searchAnsweredFor is how long the /search interface remembers that Google
+// answered a session. A job's record ends with the job, and the first request
+// of the next is counted as the check it is likely to meet; the interface has
+// no jobs, so a session left unasked this long is counted that way again. How
+// long a rest Google forgives is not known; ten minutes is far past the
+// session's own rest between requests (sessions.DefaultRestUpTo), so traffic
+// that keeps coming never pays for it, and short of the hours between jobs
+// that the guide reports as checked.
+const searchAnsweredFor = 10 * time.Minute
+
 // warmAnswered is the sessions Google has answered through the identities kept
 // warm, for as long as one set of them stands: what a job's Attempt keeps for
 // the job (run.Attempt.Answered). Every /search request is an Attempt of its
@@ -401,7 +411,7 @@ func (w *warmAnswered) of(pool *blanktrail.Pool) *run.Answered {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.pool != pool || w.rec == nil {
-		w.pool, w.rec = pool, &run.Answered{}
+		w.pool, w.rec = pool, &run.Answered{For: searchAnsweredFor}
 	}
 	return w.rec
 }

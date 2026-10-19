@@ -4,6 +4,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 )
@@ -35,5 +36,12 @@ func TestWarmSearch_EveryRequestOnOneSetSharesItsRecord(t *testing.T) {
 	}
 	if one.Answered == nil || one.Answered != two.Answered {
 		t.Error("two requests on one set do not share the set's record of answered sessions")
+	}
+}
+
+func TestWarmAnswered_TheSetsRecordForgetsAfterTenMinutes(t *testing.T) {
+	var w warmAnswered
+	if got := w.of(&blanktrail.Pool{}).For; got != 10*time.Minute {
+		t.Errorf("the /search record remembers answers for %v, want ten minutes", got)
 	}
 }

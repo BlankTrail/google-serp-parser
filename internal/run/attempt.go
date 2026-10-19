@@ -140,28 +140,66 @@ type Attempt struct {
 
 // Answered is a record of the kept sessions Google has answered with a page,
 // each with the exit it was last answered through, for the attempts that share
-// it (Attempt.Answered). The zero value is an empty record.
+// it (Attempt.Answered). The zero value is an empty record that forgets
+// nothing, which is what a job wants: the job is its bound.
 type Answered struct {
-	mu sync.Mutex
-	by map[int64]string
+	// For, when positive, is how long an answer is remembered: a session not
+	// answered again within it is taken for a stranger once more. A record
+	// shared with no job to end it — the /search interface's — needs a bound
+	// of its own, both because a session that rested long is checked again
+	// and so that the record does not grow for as long as the program runs.
+	For time.Duration
+
+	mu    sync.Mutex
+	by    map[int64]answer
+	swept time.Time
+	// now is the clock; nil is time.Now. Tests set it.
+	now func() time.Time
 }
 
-// at is the exit the session was last answered through, and whether it was.
+// answer is one session's last answer: through which exit, and when.
+type answer struct {
+	exit string
+	at   time.Time
+}
+
+func (r *Answered) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+// at is the exit the session was last answered through, and whether it was —
+// within For, where For is set.
 func (r *Answered) at(id int64) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	exit, ok := r.by[id]
-	return exit, ok
+	a, ok := r.by[id]
+	if ok && r.For > 0 && r.clock().Sub(a.at) > r.For {
+		return "", false
+	}
+	return a.exit, ok
 }
 
-// put writes down that the session was answered through the exit.
+// put writes down that the session was answered through the exit, and, where
+// answers are forgotten, sweeps the forgotten ones out at most once every For.
 func (r *Answered) put(id int64, exit string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	now := r.clock()
 	if r.by == nil {
-		r.by = map[int64]string{}
+		r.by = map[int64]answer{}
 	}
-	r.by[id] = exit
+	r.by[id] = answer{exit: exit, at: now}
+	if r.For > 0 && now.Sub(r.swept) > r.For {
+		r.swept = now
+		for k, a := range r.by {
+			if now.Sub(a.at) > r.For {
+				delete(r.by, k)
+			}
+		}
+	}
 }
 
 // record is the record this attempt keeps its answered sessions in.
@@ -577,7 +615,9 @@ const lostPortsPerQuery = 8
 //     rather than read from sessions.Held.Moved: Moved is worked out when the
 //     session is put on a port, and a session the run moves on in the middle
 //     of a page (MoveOn) or the ladder carries to another address is not seen
-//     by it.
+//     by it. The ladder's own move, inside one request, is seen from the
+//     session's next request on: the request it was made for was marked from
+//     the address it set out from.
 //
 // A time since the last answer was the other candidate, and is not used: how
 // long a rest Google forgives is not known, and a threshold guessed at would be
@@ -586,8 +626,9 @@ const lostPortsPerQuery = 8
 // already answered in it — Google's own rhythm — is not foreseen; it is met as
 // before, when the service says it is solving.
 //
-// The limit is asked first: a profile with no limit takes neither a lock nor a
-// context of its own, and nothing is written down for it. A port's own identity
+// The limit is asked first: a profile with no limit takes no context of its
+// own and nothing is written down for it (asking takes the budget's lock once,
+// uncontended, and allocates nothing). A port's own identity
 // (no held session) is never marked; the run that asks that way keeps no
 // sessions to tell apart.
 func (a *Attempt) askingAs(ctx context.Context, lease *blanktrail.Lease, held *sessions.Held) context.Context {
