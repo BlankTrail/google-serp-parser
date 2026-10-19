@@ -6,6 +6,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"time"
 )
 
 // Class is what a place in the budget is wanted for.
@@ -141,12 +142,77 @@ type Budget struct {
 	// settled to wait.
 	searchWaiting int
 	lookupWaiting int
-	solving       map[int]int
-	holders       map[budgetHolder]struct{}
+	// freshWaiters is when each search for a fresh session now waiting began
+	// to wait; see freshStarvedLocked.
+	freshWaiters map[*freshWaiter]struct{}
+	// now is the clock; nil is time.Now. Tests set it.
+	now     func() time.Time
+	solving map[int]int
+	holders map[budgetHolder]struct{}
 	// changed is closed and replaced whenever anything a waiter decides on
 	// moves, so every waiter looks again; a sync.Cond cannot be left on a
 	// cancelled context.
 	changed chan struct{}
+}
+
+// freshWaiter is one search for a fresh session waiting for room.
+type freshWaiter struct{ since time.Time }
+
+// freshWaitFair is how long a search for a fresh session may wait while
+// ordinary searches are let in ahead of it; past it they wait behind it.
+//
+// A fresh search needs room for the reserve and an ordinary one only k, and
+// every waiter is woken together, so on a profile kept full the ordinary
+// ones take every place that comes free — each is a few connections, and a
+// place freed is seldom five — and the fresh one can wait for as long as
+// there are ordinary searches to make. On a job that is its new sessions
+// standing still while the old ones work, and the job's own end, when there
+// are no ordinary searches left, is the first moment they start.
+//
+// Ten seconds is five readings at the fast rate, and several times what an
+// ordinary search on a warm session takes on the stand: by then the searches
+// in flight have turned over more than once, so a fresh one still waiting is
+// being passed by and not merely waiting its turn. Shorter would hold the
+// ordinary searches back at every brief wait a full profile makes anyway, and
+// the throughput the slow start leaves with them; longer, and the new
+// sessions of a long job start a minute late each. Past it the ordinary
+// searches stand back as the lookups do behind any waiting search, the
+// places they would have taken add up, and the fresh one goes when the room
+// for the reserve is there.
+const freshWaitFair = 10 * time.Second
+
+// clock is the budget's time.
+func (b *Budget) clock() time.Time {
+	if b.now != nil {
+		return b.now()
+	}
+	return time.Now()
+}
+
+// freshStarvedLocked is whether a search for a fresh session has waited
+// longer than freshWaitFair, so an ordinary search is not let in ahead of it.
+//
+// Only a fresh search that can ever be let in holds the others back: one
+// that does not fit an idle profile at all (a limit below the reserve, which
+// the form refuses but Set takes) would hold them for good, and the job would
+// stand still with nothing in flight. Every other fresh search fits once the
+// ordinary ones held back have drained (attemptCostLocked: on an empty budget
+// a fresh attempt costs the reserve, or one), so holding them back always ends
+// with it let in, and then the ordinary ones go again.
+func (b *Budget) freshStarvedLocked() bool {
+	if len(b.freshWaiters) == 0 {
+		return false
+	}
+	if float64(b.reserve)+max(1-float64(b.reserve), 0) > float64(b.limit)+budgetSlack {
+		return false
+	}
+	now := b.clock()
+	for w := range b.freshWaiters {
+		if now.Sub(w.since) >= freshWaitFair {
+			return true
+		}
+	}
+	return false
 }
 
 // budgetHolder is a pool as the budget sees it: the ports it holds, and a way
@@ -385,6 +451,11 @@ func (b *Budget) admitsLocked(c Class, fresh bool, port int) bool {
 	if c == ClassLookup {
 		return b.searchWaiting == 0 && need+float64(b.reserve) <= float64(b.limit)+budgetSlack
 	}
+	if !fresh && b.freshStarvedLocked() {
+		// An ordinary search is not let in ahead of a fresh one that has
+		// waited too long (freshWaitFair).
+		return false
+	}
 	return need <= float64(b.limit)+budgetSlack
 }
 
@@ -446,10 +517,20 @@ func (b *Budget) AcquireOn(ctx context.Context, c Class, port int) (*Unit, error
 	// nothing for it.
 	fresh := freshSession(ctx)
 	waiting := false
+	// starved is this search's mark among the fresh ones waiting, so the
+	// ordinary searches stop passing it once it has waited too long.
+	var starved *freshWaiter
 	for !b.admitsLocked(c, fresh, port) {
 		if !waiting {
 			waiting = true
 			b.countWaiterLocked(c, 1)
+			if fresh && c == ClassSearch {
+				starved = &freshWaiter{since: b.clock()}
+				if b.freshWaiters == nil {
+					b.freshWaiters = map[*freshWaiter]struct{}{}
+				}
+				b.freshWaiters[starved] = struct{}{}
+			}
 		}
 		ch := b.changed
 		b.mu.Unlock()
@@ -457,6 +538,7 @@ func (b *Budget) AcquireOn(ctx context.Context, c Class, port int) (*Unit, error
 		case <-ctx.Done():
 			b.mu.Lock()
 			b.countWaiterLocked(c, -1)
+			delete(b.freshWaiters, starved)
 			// A search that stops waiting may be the last thing the lookups
 			// were standing behind.
 			b.wakeLocked()
@@ -468,6 +550,7 @@ func (b *Budget) AcquireOn(ctx context.Context, c Class, port int) (*Unit, error
 	}
 	if waiting {
 		b.countWaiterLocked(c, -1)
+		delete(b.freshWaiters, starved)
 	}
 	if fresh {
 		b.fresh++
