@@ -323,7 +323,7 @@ func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP,
 	} else {
 		search = b.attempt.sessionFor(b.lease)
 	}
-	serp, err := search.Search(ctx, q)
+	serp, err := search.Search(askingAs(ctx, b.lease, b.held), q)
 	b.attempt.caught(serp, err)
 	return serp, err
 }
@@ -340,7 +340,7 @@ func (b boundSearcher) SearchAt(ctx context.Context, q google.Query, target stri
 	} else {
 		search = b.attempt.sessionFor(b.lease)
 	}
-	serp, err := search.SearchAt(ctx, q, target)
+	serp, err := search.SearchAt(askingAs(ctx, b.lease, b.held), q, target)
 	b.attempt.caught(serp, err)
 	return serp, err
 }
@@ -418,7 +418,7 @@ func (a *Attempt) onceWithSession(ctx context.Context, lease *blanktrail.Lease, 
 		held.PutBack()
 		return google.SERP{}, err
 	}
-	serp, err := a.searchFor(held, lease).Search(ctx, q)
+	serp, err := a.searchFor(held, lease).Search(askingAs(ctx, lease, held), q)
 	a.caught(serp, err)
 	if err != nil {
 		a.letGoAfter(ctx, held, lease, err)
@@ -502,6 +502,30 @@ const serviceAwayWait = 2 * time.Second
 // try: after a restart of the service every port is lost at once, and each is
 // opened again the moment it is found.
 const lostPortsPerQuery = 8
+
+// askingAs is the context a request for the session goes out under: marked as
+// a fresh session's (blanktrail.FreshSession) where Google has never answered
+// the session, so that in a profile with a limit each attempt of it is counted
+// as the solve it may turn into. A fresh session pays for a check to be let in
+// at all (sessions.Held.Admitted), and at the start of a job every session is
+// fresh: counted as ordinary requests, twenty of them met fourteen checks at
+// once on the stand and took the profile far over its limit for as long as
+// the solves lasted.
+//
+// Only Admitted decides, and not Moved as well, though a session moved to
+// another address pays a check there too: the user's rule is the slow start,
+// a session's first steps, and a move is one session's misfortune in the
+// middle of a job rather than twenty at once.
+//
+// The limit is asked first: a profile with no limit takes neither the keeper's
+// lock nor a context of its own. A port's own identity (no held session) is
+// never marked; the run that asks that way keeps no sessions to tell apart.
+func askingAs(ctx context.Context, lease *blanktrail.Lease, held *sessions.Held) context.Context {
+	if held == nil || !lease.Limited() || held.Admitted() {
+		return ctx
+	}
+	return blanktrail.FreshSession(ctx)
+}
 
 // searchFor is a kept session's search state, bound for this request to the port
 // it is on and to the session's own jar.

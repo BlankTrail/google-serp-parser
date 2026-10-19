@@ -75,6 +75,24 @@ const (
 // sample, and in the excess, so a solve nobody waits for any more is held as
 // the reserve it is.
 //
+// An attempt for a session Google has never answered is counted as a solve
+// from the moment it is let in (the slow start). A fresh session pays for a
+// check to be let in at all, and the check is solved while the request waits:
+// the ladder learns of it only when the service says the solve outran the
+// request, thirty seconds and more later. Counted as k until then, the twenty
+// requests of a job's first second all fitted a limit of thirty, fourteen of
+// them met a check at once, and the solver's three connections each took the
+// profile to fifty-two for thirty-eight seconds (the fourth re-measure on the
+// stand, 2026-10-19: 78% of the connections over the limit were on ports with
+// a solve). Counted as the reserve, six fresh sessions start at once on thirty
+// with a reserve of five, and the rest follow as the first are let in. Such an
+// attempt drops to k as soon as its answer comes back without a check being
+// solved for it (Unit.notASolve), and turns into a solve, counted once, when
+// the service says it is solving (Unit.Solving). The caller says which
+// attempts are for a fresh session through the request's context
+// (FreshSession); this layer cannot tell a session's first request from its
+// tenth.
+//
 // A limit of nought is how every profile ran before there was a limit: nothing
 // waits and nothing is counted.
 type Budget struct {
@@ -83,6 +101,12 @@ type Budget struct {
 	reserve  int
 	inFlight int
 	solves   int
+	// fresh is the attempts in flight for sessions Google has never answered:
+	// possible solves, each counted as the reserve with the solves (see
+	// reservesLocked) until it is known to be one or not. They are not in
+	// inFlight; a fresh attempt is in exactly one of fresh, inFlight and
+	// solves at a time.
+	fresh int
 	// observed is the service's last reading as it was read, for the job page
 	// and for telling the pools the profile is over; admission does not use
 	// it but excess.
@@ -229,8 +253,39 @@ func (b *Budget) wakeLocked() {
 //
 // The solves are the counted ones (solvesLocked): this program's own, or the
 // service's at the last reading where it ran more.
+//
+// An attempt for a fresh session is counted with the solves (reservesLocked),
+// and never as less than an ordinary attempt: where the reserve is below k,
+// the difference is added for each (freshTopLocked).
 func (b *Budget) computedLocked() float64 {
-	return b.amp*float64(b.inFlight) + float64(b.reserve*b.solvesLocked())
+	return b.amp*float64(b.inFlight) + float64(b.reserve*b.reservesLocked()) + b.freshTopLocked()
+}
+
+// reservesLocked is how many reserves the prediction holds: the solves this
+// program has seen begin and the attempts for fresh sessions that may turn
+// into one, or the service's solves at the last reading where it ran more.
+//
+// The service's solves are set against both and not only against the real
+// solves, because at the start of a job they are the same solves: a fresh
+// attempt meets its check and the service starts solving it at once, and says
+// so at the next reading, while the ladder learns of it only when the solve
+// outruns the request — half a minute later. Counted beside the service's,
+// every such solve would hold the reserve twice for that half minute, and the
+// slow start would be slower than the solves it is there for. The price is the
+// other way round: a solve the service runs on its own (its request gone) and
+// a fresh attempt that has met no check share one reserve until the attempt's
+// answer comes, or the next reading — the same price, and for the same
+// reason, as for the real solves (solvesLocked).
+func (b *Budget) reservesLocked() int {
+	return max(b.solves+b.fresh, b.svcSolves)
+}
+
+// freshTopLocked is what the fresh attempts add beyond the reserve where the
+// reserve is below k: a reserve of nought or one would otherwise count an
+// attempt that may turn into a solve as less than one that will not, and let
+// any number of fresh sessions start at once.
+func (b *Budget) freshTopLocked() float64 {
+	return max(b.amp-float64(b.reserve), 0) * float64(b.fresh)
 }
 
 // solvesLocked is the solves the budget counts: the larger of the ones this
@@ -246,6 +301,12 @@ func (b *Budget) computedLocked() float64 {
 // begun, or a reading is older than it. Which ports the solves are on is not
 // compared: a reading is a snapshot and the own count moves on, and the count
 // is what admission needs.
+//
+// These are the real solves alone; the fresh attempts join them in the
+// prediction (reservesLocked) but not in k's sample nor on the job's page: an
+// attempt that may meet a check has opened what any attempt opens until it
+// does, and taken out of a reading's sample as a solve's reserve it would
+// teach a k too low for every attempt after it.
 func (b *Budget) solvesLocked() int {
 	return max(b.solves, b.svcSolves)
 }
@@ -281,11 +342,18 @@ func (b *Budget) inUseLocked() float64 {
 // prediction, but they are not this program's attempts and do not make an
 // attempt cost k — they are the service's leftovers like the excess, and
 // counted as an attempt's company they would stall a small limit the same way.
-func (b *Budget) admitsLocked(c Class) bool {
+//
+// An attempt for a fresh session costs what it adds to the prediction as a
+// possible solve (freshCostLocked).
+func (b *Budget) admitsLocked(c Class, fresh bool) bool {
 	if b.limit <= 0 {
 		return true
 	}
-	need := b.inUseLocked() + b.attemptCostLocked()
+	cost := b.attemptCostLocked()
+	if fresh {
+		cost = b.freshCostLocked()
+	}
+	need := b.inUseLocked() + cost
 	if c == ClassLookup {
 		return b.searchWaiting == 0 && need+float64(b.reserve) <= float64(b.limit)+budgetSlack
 	}
@@ -293,18 +361,34 @@ func (b *Budget) admitsLocked(c Class) bool {
 }
 
 // attemptCostLocked is what one more attempt is counted as: k, or one on an
-// empty budget (see admitsLocked).
+// empty budget (see admitsLocked). The budget is empty only with no fresh
+// attempt in flight either: one is an attempt of this program's like any.
 func (b *Budget) attemptCostLocked() float64 {
-	if b.inFlight == 0 && b.solves == 0 {
+	if b.inFlight == 0 && b.solves == 0 && b.fresh == 0 {
 		return 1
 	}
 	return b.amp
+}
+
+// freshCostLocked is what one more attempt for a fresh session adds to the
+// prediction: the reserve, unless the service's solves already hold one it
+// may be (reservesLocked), and beyond the reserve whatever an ordinary attempt
+// would cost more (freshTopLocked) — with an ordinary attempt's cost on an
+// empty budget being one, so that an idle profile always lets in a fresh
+// attempt when its limit is above its reserve. A limit at or below the reserve
+// the form refuses; on one, a fresh session would wait for good.
+func (b *Budget) freshCostLocked() float64 {
+	reserves := max(b.solves+b.fresh+1, b.svcSolves) - b.reservesLocked()
+	return float64(b.reserve*reserves) + max(b.attemptCostLocked()-float64(b.reserve), 0)
 }
 
 // Acquire waits for a place of the given class and never refuses one: it
 // returns only when it has the place, or when ctx is done (then the error is
 // ctx's and nothing is held). Without a budget, or with a limit of nought, it
 // returns at once with no unit, and a nil unit is safe to use.
+//
+// A ctx marked by FreshSession takes the place as a possible solve: it costs
+// the reserve until the unit is told it is a solve or that it is not.
 func (b *Budget) Acquire(ctx context.Context, c Class) (*Unit, error) {
 	if b == nil {
 		return nil, nil
@@ -314,8 +398,11 @@ func (b *Budget) Acquire(ctx context.Context, c Class) (*Unit, error) {
 		b.mu.Unlock()
 		return nil, nil
 	}
+	// Read only past the limit's check, so a profile with no limit pays
+	// nothing for it.
+	fresh := freshSession(ctx)
 	waiting := false
-	for !b.admitsLocked(c) {
+	for !b.admitsLocked(c, fresh) {
 		if !waiting {
 			waiting = true
 			b.countWaiterLocked(c, 1)
@@ -338,10 +425,42 @@ func (b *Budget) Acquire(ctx context.Context, c Class) (*Unit, error) {
 	if waiting {
 		b.countWaiterLocked(c, -1)
 	}
-	b.inFlight++
+	if fresh {
+		b.fresh++
+	} else {
+		b.inFlight++
+	}
 	b.wakeLocked()
 	b.mu.Unlock()
-	return &Unit{b: b}, nil
+	return &Unit{b: b, fresh: fresh}, nil
+}
+
+// freshKey marks a request's context as asked for a fresh session.
+type freshKey struct{}
+
+// FreshSession marks ctx as the context of requests for a session Google has
+// never answered, so each attempt they make is counted in the profile's budget
+// as a possible solve (see Budget). It is the caller's to say: a port carries
+// one session after another, and only whoever put the session on it knows
+// whether Google has seen it. A caller on a profile with no limit need not
+// mark anything (Lease.Limited), and should not pay for the context it makes.
+func FreshSession(ctx context.Context) context.Context {
+	return context.WithValue(ctx, freshKey{}, true)
+}
+
+func freshSession(ctx context.Context) bool {
+	fresh, _ := ctx.Value(freshKey{}).(bool)
+	return fresh
+}
+
+// limited reports whether the budget has a limit in force.
+func (b *Budget) limited() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.limit > 0
 }
 
 func (b *Budget) countWaiterLocked(c Class, d int) {
@@ -354,8 +473,11 @@ func (b *Budget) countWaiterLocked(c Class, d int) {
 
 // Unit is one place held in a budget. Release gives it back, once.
 type Unit struct {
-	b        *Budget
-	port     int
+	b    *Budget
+	port int
+	// fresh is a place taken for a fresh session and not yet known to be a
+	// solve or not one: it is counted in Budget.fresh.
+	fresh    bool
 	solving  bool
 	released bool
 }
@@ -371,7 +493,14 @@ func (u *Unit) Solving(port int) {
 	b.mu.Lock()
 	if !u.released && !u.solving {
 		u.solving, u.port = true, port
-		b.inFlight--
+		// A possible solve that turns into one moves from the one count to
+		// the other: counted once, as the reserve it already was.
+		if u.fresh {
+			u.fresh = false
+			b.fresh--
+		} else {
+			b.inFlight--
+		}
 		b.solves++
 		b.solving[port]++
 		// With a reserve below k a solve holds less than the attempt it
@@ -390,14 +519,37 @@ func (u *Unit) Release() {
 	b.mu.Lock()
 	if !u.released {
 		u.released = true
-		if u.solving {
+		switch {
+		case u.solving:
 			b.solves--
 			if b.solving[u.port]--; b.solving[u.port] <= 0 {
 				delete(b.solving, u.port)
 			}
-		} else {
+		case u.fresh:
+			b.fresh--
+		default:
 			b.inFlight--
 		}
+		b.wakeLocked()
+	}
+	b.mu.Unlock()
+}
+
+// notASolve says the place's attempt was answered without a check being
+// solved for it: a place taken for a fresh session is from now on an ordinary
+// attempt in flight, counted as k until it is released. Its answer is still
+// being read, so the connections are still open; but the solver's are not,
+// and the room between the reserve and k is the next fresh session's.
+func (u *Unit) notASolve() {
+	if u == nil {
+		return
+	}
+	b := u.b
+	b.mu.Lock()
+	if !u.released && u.fresh {
+		u.fresh = false
+		b.fresh--
+		b.inFlight++
 		b.wakeLocked()
 	}
 	b.mu.Unlock()
@@ -415,6 +567,12 @@ func (u *Unit) waitsOnASolve() bool {
 
 // Free is how many more places of the class may go now, by the same measure
 // admission uses; with no limit there is no end.
+//
+// The places are ordinary attempts: what Free is asked for is the set of
+// lookups (Growing), and a lookup is never made for a fresh session — /goto
+// and the suggestions go through the pool's own identities, not through the
+// sessions the keeper hands a search. The fresh attempts in flight are in the
+// room it shares out all the same, as the reserve each holds.
 func (b *Budget) Free(c Class) int {
 	if b == nil {
 		return math.MaxInt
@@ -443,7 +601,12 @@ type BudgetReading struct {
 	// Solves is the solves counted: this program's own, or the service's at
 	// the last reading where it ran more (see Budget.solvesLocked).
 	// ServiceSolves is the service's alone, as the last good reading found it.
-	Limit, Reserve, InFlight, Solves, ServiceSolves, Observed int
+	// Fresh is the attempts in flight for sessions Google has never answered,
+	// each a possible solve; they are not in InFlight. Reserves is how many
+	// reserves the count holds for the solves and the fresh attempts together
+	// (see Budget.reservesLocked); a reading put together by hand may leave it
+	// nought, and then the solves are what is counted.
+	Limit, Reserve, InFlight, Solves, ServiceSolves, Fresh, Reserves, Observed int
 	// Known is whether the service's count has been read.
 	Known bool
 	// Amplification is k: the connections to the proxy the service opens for
@@ -460,18 +623,25 @@ type BudgetReading struct {
 
 // Computed is this program's own count, as a prediction of the service's:
 // k connections for every attempt in flight, rounded up once, plus the reserve
-// of each solve. An amplification below one (a reading put together by hand)
+// of each solve and each attempt for a fresh session (Reserves). An
+// amplification below one (a reading put together by hand)
 // counts as one.
 func (r BudgetReading) Computed() int {
+	return int(math.Ceil(r.attempts()-budgetSlack)) + r.Reserve*max(r.Solves, r.Reserves)
+}
+
+// attempts is what the attempts in flight are counted as, in fractions: k
+// each, and for the fresh ones what they cost beyond the reserve where the
+// reserve is below k (Budget.freshTopLocked).
+func (r BudgetReading) attempts() float64 {
 	k := max(r.Amplification, ampFloor)
-	return int(math.Ceil(k*float64(r.InFlight)-budgetSlack)) + r.Reserve*r.Solves
+	return k*float64(r.InFlight) + max(k-float64(r.Reserve), 0)*float64(r.Fresh)
 }
 
 // InUse is what admission goes by: this program's count plus the excess the
 // last reading found over it, rounded up once.
 func (r BudgetReading) InUse() int {
-	k := max(r.Amplification, ampFloor)
-	return int(math.Ceil(k*float64(r.InFlight)+r.Excess-budgetSlack)) + r.Reserve*r.Solves
+	return int(math.Ceil(r.attempts()+r.Excess-budgetSlack)) + r.Reserve*max(r.Solves, r.Reserves)
 }
 
 // Reading copies the budget's figures; a nil budget reads as zeros.
@@ -483,7 +653,8 @@ func (b *Budget) Reading() BudgetReading {
 	defer b.mu.Unlock()
 	return BudgetReading{
 		Limit: b.limit, Reserve: b.reserve, InFlight: b.inFlight,
-		Solves: b.solvesLocked(), ServiceSolves: b.svcSolves, Observed: b.observed, Known: b.known,
+		Solves: b.solvesLocked(), ServiceSolves: b.svcSolves, Fresh: b.fresh, Reserves: b.reservesLocked(),
+		Observed: b.observed, Known: b.known,
 		Amplification: b.amp, Samples: b.samples, Excess: b.excess,
 	}
 }

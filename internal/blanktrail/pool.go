@@ -2240,6 +2240,12 @@ func (p *Pool) KeepsAlive() bool { return !p.cfg.NoKeepAlives }
 // Port is the port number backing this lease.
 func (l *Lease) Port() int { return l.pt.num }
 
+// Limited says whether the leased port's requests are counted in a budget
+// with a limit in force: whether marking them (FreshSession) changes anything.
+// A caller asks before it looks at its session, so a profile with no limit
+// pays for neither.
+func (l *Lease) Limited() bool { return l != nil && l.pool.cfg.Budget.limited() }
+
 // SpecName is the named template the leased port was opened under, or the empty
 // string when the pool has a single unnamed template.
 func (l *Lease) SpecName() string { return l.pt.specName }

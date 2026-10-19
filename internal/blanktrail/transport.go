@@ -419,7 +419,14 @@ func drainAndClose(resp *http.Response) {
 // job or the program, and net/http itself keeps the connection no longer than
 // that. Without a place to hand on (no budget, or a limit of nought) the answer
 // goes out untouched, unwrapped.
+//
+// An answer handed on is the far end's, not a check still being solved: a
+// place taken for a fresh session as a possible solve is an ordinary attempt
+// from here (Unit.notASolve). Every way an answer leaves the ladder comes
+// through here, so none of them can leave a fresh session's reserve held while
+// its page is read.
 func holdUntilRead(ctx context.Context, resp *http.Response, u *Unit) *http.Response {
+	u.notASolve()
 	if u == nil || resp.Body == nil {
 		u.Release()
 		return resp

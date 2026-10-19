@@ -153,8 +153,10 @@ func (bs *Budgets) step(ctx context.Context) {
 			// connections, so the reading's upstream is mostly above nought
 			// too; the solve is asked about on its own because the two need
 			// not land in the same instant.) A reading that failed stored
-			// nought and unknown, so it keeps nothing fast.
-			if r.InFlight > 0 || r.Observed > 0 || r.Excess > 0 || r.ServiceSolves > 0 {
+			// nought and unknown, so it keeps nothing fast. The attempts for
+			// fresh sessions are attempts in flight like any (Budget): at the
+			// start of a job they are all there is.
+			if r.InFlight > 0 || r.Fresh > 0 || r.Observed > 0 || r.Excess > 0 || r.ServiceSolves > 0 {
 				busy = true
 			}
 			continue
@@ -175,8 +177,9 @@ func (bs *Budgets) step(ctx context.Context) {
 		// enough to end it: taken as the requests arrive, before the service
 		// has dialled out for them, it would teach the 1 the budget starts at.
 		// A service too old to report client connections never teaches k, and
-		// a profile on it is read fast whenever it has attempts in flight.
-		if r.Samples < ampWarmup && r.InFlight > 0 {
+		// a profile on it is read fast whenever it has attempts in flight —
+		// the fresh sessions' among them, which are all a job starts with.
+		if r.Samples < ampWarmup && (r.InFlight > 0 || r.Fresh > 0) {
 			busy = true
 		}
 	}

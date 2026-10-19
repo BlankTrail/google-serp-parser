@@ -78,7 +78,7 @@ func waiting(ctx context.Context, t *testing.T, b *Budget, c Class, what string)
 func stillWaiting(t *testing.T, b *Budget, c Class, got <-chan *Unit, what string) {
 	t.Helper()
 	b.mu.Lock()
-	admits := b.admitsLocked(c)
+	admits := b.admitsLocked(c, false)
 	b.mu.Unlock()
 	if admits {
 		t.Fatalf("%s would be let in now, want it waiting", what)
@@ -200,9 +200,9 @@ func TestBudget_ALookupIsNotLetInWhileASearchWaits(t *testing.T) {
 	b := NewBudget(10, 0)
 	b.mu.Lock()
 	b.searchWaiting = 1
-	ok := b.admitsLocked(ClassLookup)
+	ok := b.admitsLocked(ClassLookup, false)
 	b.searchWaiting = 0
-	ok2 := b.admitsLocked(ClassLookup)
+	ok2 := b.admitsLocked(ClassLookup, false)
 	b.mu.Unlock()
 	if ok || !ok2 {
 		t.Errorf("a lookup with room reads admitted=%v behind a waiting search and %v without one, want false and true", ok, ok2)
