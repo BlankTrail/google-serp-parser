@@ -17,9 +17,12 @@ import (
 	"github.com/blanktrail/google-serp-parser/internal/web"
 )
 
-func limitedProfile(id int64) store.Profile {
-	p := store.NewProfile()
-	p.ID, p.Name, p.ConnLimit = id, "limited", 30
+// limitedProfile names exits, as every profile a pool is raised on must: one
+// that names none gets no pool at all (web.ErrNoExits).
+func limitedProfile(t *testing.T, id int64) store.Profile {
+	t.Helper()
+	p := withExitsAs(t, id)
+	p.Name, p.ConnLimit = "limited", 30
 	return p
 }
 
@@ -32,7 +35,7 @@ func TestDial_PutsEveryPoolOfAProfileOnOneBudget(t *testing.T) {
 	saved, _ := opts.saved(io.Discard)
 
 	open := func() web.Identities {
-		got, err := opts.dial(t.Context(), saved, web.Wanted{Profile: limitedProfile(7), Threads: 1, Ports: 1,
+		got, err := opts.dial(t.Context(), saved, web.Wanted{Profile: limitedProfile(t, 7), Threads: 1, Ports: 1,
 			Device: blanktrail.DeviceDesktop, Addresses: true})
 		if err != nil {
 			t.Fatalf("dial: %v", err)
@@ -66,7 +69,7 @@ func TestDial_WithNoRegistryAPoolRunsOnNoBudget(t *testing.T) {
 	fake.SetCA(testCAPEM)
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	saved, _ := opts.saved(io.Discard)
-	got, err := opts.dial(t.Context(), saved, web.Wanted{Profile: limitedProfile(7), Threads: 1, Ports: 1,
+	got, err := opts.dial(t.Context(), saved, web.Wanted{Profile: limitedProfile(t, 7), Threads: 1, Ports: 1,
 		Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
