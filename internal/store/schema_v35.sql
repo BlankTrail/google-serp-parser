@@ -1,0 +1,11 @@
+-- Step 35: a profile with no connection limit takes the new reserve for a
+-- solve, three instead of five.
+--
+-- Five was the most a solve was seen to open on the stand (2026-10-18); once
+-- the service closed idle connections a solving port held about three
+-- (2026-10-19), and with the slow start the reserve is also how many new
+-- sessions a limit starts at once. A profile with no limit has never used its
+-- reserve, so its five is the old default and not a choice: it takes the new
+-- one. A profile with a limit may have kept five on purpose, and is left as
+-- it is; so is any other figure. Running it twice changes nothing.
+UPDATE proxy_profiles SET solver_reserve = 3 WHERE solver_reserve = 5 AND conn_limit = 0;

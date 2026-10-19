@@ -120,6 +120,9 @@ var schemaStep33 string
 //go:embed schema_v34.sql
 var schemaStep34 string
 
+//go:embed schema_v35.sql
+var schemaStep35 string
+
 // steps is the upgrade path, one step per version: steps[i] takes a database at
 // version i to version i+1. A database that has never been written is version 0
 // and walks the whole list.
@@ -142,7 +145,7 @@ var steps = []string{schemaStep1, schemaStep2, schemaStep3, schemaStep4, schemaS
 	schemaStep6, schemaStep7, schemaStep8, schemaStep9, schemaStep10, schemaStep11,
 	schemaStep12, schemaStep13, schemaStep14, schemaStep15, schemaStep16, schemaStep17, schemaStep18,
 	schemaStep19, schemaStep20, schemaStep21, schemaStep22, schemaStep23, schemaStep24, schemaStep25, schemaStep26, schemaStep27, schemaStep28,
-	schemaStep29, schemaStep30, schemaStep31, schemaStep32, schemaStep33, schemaStep34}
+	schemaStep29, schemaStep30, schemaStep31, schemaStep32, schemaStep33, schemaStep34, schemaStep35}
 
 // schemaVersion is what this build writes and understands. It counts the steps,
 // so a step cannot be added without the version following it.

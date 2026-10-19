@@ -126,11 +126,16 @@ type Profile struct {
 }
 
 // DefaultSolverReserve is how many connections a solve is counted as holding
-// until a profile says otherwise: five, which is the most a solve was seen to
-// open on the stand (three to five of the solver's own on top of the request,
-// 2026-10-18, port 20690). Counting too few lets a job past its tariff; too
-// many only makes it wait a little longer.
-const DefaultSolverReserve = 5
+// until a profile says otherwise: three, what a solve held on the stand once
+// the service closed idle connections (about three upstream a solving port,
+// 2026-10-19, re-measure 4). It was five, the most one was seen to open the
+// day before; with the slow start every new session is counted as a solve
+// until answered, so the reserve is also how many sessions a limit starts at
+// once — five made six checks at once fill a limit of thirty and nothing else
+// start while they were solved. Counting too few lets a job past its tariff
+// for as long as a solve outgrows it, and the service's own count corrects the
+// rest at the next reading; a profile whose solver opens more says so.
+const DefaultSolverReserve = 3
 
 // NewProfile is a profile with nothing named and everything else as it ships.
 //

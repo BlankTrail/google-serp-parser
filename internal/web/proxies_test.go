@@ -1064,7 +1064,7 @@ func TestProfileForm_OffersTheConnectionLimitAndTheReserve(t *testing.T) {
 	body := get(t, s, proxiesAt+"?"+profileField+"="+strconv.FormatInt(id, 10)).Body.String()
 	for _, want := range []string{
 		`name="conn_limit" type="number" min="0" value="0"`,
-		`name="solver_reserve" type="number" min="0" value="5"`,
+		`name="solver_reserve" type="number" min="0" value="3"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the profile form has no %s", want)

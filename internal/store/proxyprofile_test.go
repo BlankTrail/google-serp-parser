@@ -68,12 +68,12 @@ func TestProfiles_RefuseANegativeLimitOrReserve(t *testing.T) {
 	}
 }
 
-func TestNewProfile_KeepsFiveConnectionsForASolveAndHasNoLimit(t *testing.T) {
-	// Five is what a solve was seen to open on the stand: three to five of the
-	// solver's own on top of the request (2026-10-18, port 20690).
+func TestNewProfile_KeepsThreeConnectionsForASolveAndHasNoLimit(t *testing.T) {
+	// Three is what a solving port held on the stand once the service closed
+	// idle connections (2026-10-19); see DefaultSolverReserve.
 	p := NewProfile()
-	if p.ConnLimit != 0 || p.SolverReserve != 5 {
-		t.Errorf("a new profile has limit %d and reserve %d, want none and five", p.ConnLimit, p.SolverReserve)
+	if p.ConnLimit != 0 || p.SolverReserve != 3 {
+		t.Errorf("a new profile has limit %d and reserve %d, want none and three", p.ConnLimit, p.SolverReserve)
 	}
 }
 
@@ -101,8 +101,8 @@ func TestOpen_GivesEveryProfileNoLimitAndAReserveOfFiveAfterTheUpgrade(t *testin
 	if err != nil || len(all) != 1 {
 		t.Fatalf("Profiles: %v, %d", err, len(all))
 	}
-	if all[0].ConnLimit != 0 || all[0].SolverReserve != 5 {
-		t.Errorf("after the upgrade the profile has limit %d and reserve %d, want none and five",
+	if all[0].ConnLimit != 0 || all[0].SolverReserve != 3 {
+		t.Errorf("after the upgrade the profile has limit %d and reserve %d, want none and three",
 			all[0].ConnLimit, all[0].SolverReserve)
 	}
 }
@@ -712,6 +712,48 @@ func windBackToVersion24(t *testing.T, s *Store) {
 	} {
 		if _, err := s.db.ExecContext(t.Context(), statement); err != nil {
 			t.Fatalf("winding back to version 24: %v", err)
+		}
+	}
+}
+
+func TestOpen_GivesTheNewReserveOnlyToProfilesWithNoLimitThatKeptTheOldDefault(t *testing.T) {
+	// Version 34 wrote five into every profile. One with no limit never used
+	// it and takes three; one with a limit may have kept five on purpose, and
+	// any other figure was typed: both stay.
+	path := filepath.Join(t.TempDir(), "gserp.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	for _, c := range []struct {
+		name           string
+		limit, reserve int
+	}{{"no limit, old default", 0, 5}, {"a limit, five", 30, 5}, {"no limit, four", 0, 4}} {
+		p := NewProfile()
+		p.Name, p.ConnLimit, p.SolverReserve = c.name, c.limit, c.reserve
+		if _, err := s.CreateProfile(t.Context(), p); err != nil {
+			t.Fatalf("CreateProfile: %v", err)
+		}
+	}
+	if _, err := s.db.ExecContext(t.Context(), `PRAGMA user_version = 34`); err != nil {
+		t.Fatalf("winding back to version 34: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a version-34 database: %v", err)
+	}
+	defer func() { _ = again.Close() }()
+	all, err := again.Profiles(t.Context())
+	if err != nil {
+		t.Fatalf("Profiles: %v", err)
+	}
+	want := map[string]int{"no limit, old default": 3, "a limit, five": 5, "no limit, four": 4}
+	for _, p := range all {
+		if p.SolverReserve != want[p.Name] {
+			t.Errorf("profile %q has reserve %d after the upgrade, want %d", p.Name, p.SolverReserve, want[p.Name])
 		}
 	}
 }
