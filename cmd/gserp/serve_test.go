@@ -476,8 +476,10 @@ func TestServe_OpensThePortsAConnectionSavedInTheBrowserDescribes(t *testing.T) 
 	t.Setenv(envControlURL, "")
 	t.Setenv(envAPIKey, "")
 	t.Setenv(envProxyList, "")
+	// A list to go out through: a profile naming none opens nothing at all.
 	opts := configured(t, settings.Settings{
 		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 1,
+		Proxy: settings.ProxySource{Kind: "file", Location: withExits(t).Location},
 	})
 
 	st, err := store.Open(opts.DB)
@@ -596,7 +598,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 
 	// A job that named no size reaches here already stood in for, so what this end
 	// is asked for is the pair this server was started with.
-	own, err := raise(t.Context(), web.Wanted{Ports: opts.Ports, Threads: opts.Threads, Device: blanktrail.DeviceDesktop})
+	own, err := raise(t.Context(), web.Wanted{Profile: withExits(t), Ports: opts.Ports, Threads: opts.Threads, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("raising the pool of a job that named no size: %v", err)
 	}
@@ -610,7 +612,7 @@ func TestServe_RaisesAJobsPoolAtTheSizeItIsAskedForRatherThanAtOneOfItsOwn(t *te
 		t.Fatalf("%d ports are still open after that pool was given up", got)
 	}
 
-	named, err := raise(t.Context(), web.Wanted{Ports: 2, Threads: 1, Device: blanktrail.DeviceDesktop})
+	named, err := raise(t.Context(), web.Wanted{Profile: withExits(t), Ports: 2, Threads: 1, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("raising the pool a job named: %v", err)
 	}
@@ -630,8 +632,10 @@ func TestServe_KeepsThePoolTheSearchUsesWhileEveryJobRaisesItsOwn(t *testing.T) 
 	t.Setenv(envControlURL, "")
 	t.Setenv(envAPIKey, "")
 	t.Setenv(envProxyList, "")
+	// A list to go out through: a profile naming none opens nothing at all.
 	opts := configured(t, settings.Settings{
 		ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 1,
+		Proxy: settings.ProxySource{Kind: "file", Location: withExits(t).Location},
 	})
 
 	st, err := store.Open(opts.DB)
@@ -639,6 +643,10 @@ func TestServe_KeepsThePoolTheSearchUsesWhileEveryJobRaisesItsOwn(t *testing.T) 
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	saved, _ := opts.saved(io.Discard)
+	if _, err := st.CarryProxySettings(t.Context(), theFirstProfile(saved, true)); err != nil {
+		t.Fatalf("carrying the settings into a profile: %v", err)
+	}
 
 	var out bytes.Buffer
 	sup, pool := opts.jobs(t.Context(), &out, st)
@@ -871,7 +879,7 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -882,7 +890,7 @@ func TestRaise_GrowsTheStandingIdentitiesForAJobAndGivesBackOnlyTheGrowth(t *tes
 
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	pool, err := raise(t.Context(), web.Wanted{Ports: 10, Threads: 10, Device: blanktrail.DeviceDesktop})
+	pool, err := raise(t.Context(), web.Wanted{Profile: withExits(t), Ports: 10, Threads: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("raising a job of a hundred on ten standing: %v", err)
 	}
@@ -919,7 +927,7 @@ func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 4, Device: blanktrail.DeviceDesktop})
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 4, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -928,7 +936,7 @@ func TestRaise_LeavesTheStandingIdentitiesAloneForAJobOfTheOtherKind(t *testing.
 
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	own, err := raise(t.Context(), web.Wanted{Ports: 2, Threads: 1, Device: blanktrail.DeviceMobile})
+	own, err := raise(t.Context(), web.Wanted{Profile: withExits(t), Ports: 2, Threads: 1, Device: blanktrail.DeviceMobile})
 	if err != nil {
 		t.Fatalf("raising a phone job beside the standing desktops: %v", err)
 	}
@@ -955,7 +963,7 @@ func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *t
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -964,7 +972,7 @@ func TestRaise_TakesTheStandingIdentitiesAsTheyAreWhenAJobIsSmallerThanThey(t *t
 
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	raise := opts.raise(saved, false, warm)
-	if _, err := raise(t.Context(), web.Wanted{Ports: 1, Threads: 2, Device: blanktrail.DeviceDesktop}); err != nil {
+	if _, err := raise(t.Context(), web.Wanted{Profile: withExits(t), Ports: 1, Threads: 2, Device: blanktrail.DeviceDesktop}); err != nil {
 		t.Fatalf("raising a job of two: %v", err)
 	}
 	if got := len(fake.OpenPorts()); got != 10 {
@@ -1159,7 +1167,7 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 	})
 	saved, _ := opts.saved(io.Discard)
 
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -1169,7 +1177,7 @@ func TestWarmSet_LeavesAJobsIdentitiesAloneAndBringsTheNumberAboutAfterwards(t *
 	running := true
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop}
 	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, int64, error) {
-		got, err := opts.dial(ctx, saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: want, Device: device})
+		got, err := opts.dial(ctx, saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: want, Device: device})
 		if err != nil {
 			return nil, 0, err
 		}
@@ -1222,7 +1230,7 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 	saved, _ := opts.saved(io.Discard)
 
 	// Opened the way the standing set is opened: one thread, ten identities.
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 10, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
 	}
@@ -1238,7 +1246,7 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 
 	// A job that names no pause wants none: nought is nought, and the identities
 	// it was given are handed out as fast as they come free.
-	if _, err := raise(t.Context(), web.Wanted{Ports: 2, Threads: 50, Device: blanktrail.DeviceDesktop}); err != nil {
+	if _, err := raise(t.Context(), web.Wanted{Profile: withExits(t), Ports: 2, Threads: 50, Device: blanktrail.DeviceDesktop}); err != nil {
 		t.Fatalf("raising a job of fifty on two: %v", err)
 	}
 	if got := standing.Search.Cooldown(); got != 0 {
@@ -1252,7 +1260,7 @@ func TestRaiseFor_PacesTheStandingIdentitiesByTheJobRatherThanByHowTheyWereOpene
 	}
 
 	// And a job that named a pause of its own is paced by that.
-	if _, err := raise(t.Context(), web.Wanted{Ports: 2, Threads: 50, Device: blanktrail.DeviceDesktop, Cooldown: 3 * time.Second}); err != nil {
+	if _, err := raise(t.Context(), web.Wanted{Profile: withExits(t), Ports: 2, Threads: 50, Device: blanktrail.DeviceDesktop, Cooldown: 3 * time.Second}); err != nil {
 		t.Fatalf("raising a job that named its own pause: %v", err)
 	}
 	if got := standing.Search.Cooldown(); got != 3*time.Second {
@@ -1380,7 +1388,7 @@ func TestDial_OpensPlainPortsForTheAddressesOnlyOnceOneHasToBeRead(t *testing.T)
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	saved, _ := opts.saved(io.Discard)
 
-	want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.NewProfile(), Threads: 1, Ports: 2, Device: blanktrail.DeviceDesktop, Addresses: true})
+	want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 2, Device: blanktrail.DeviceDesktop, Addresses: true})
 	if err != nil {
 		t.Fatalf("opening the identities of a job that keeps addresses: %v", err)
 	}
@@ -1439,7 +1447,7 @@ func TestDial_LetsTheLookupsWidenToAPortAThreadButNoFurtherThanAHundred(t *testi
 	saved, _ := opts.saved(io.Discard)
 
 	for _, c := range []struct{ threads, want int }{{20, 20}, {101, 100}} {
-		want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.NewProfile(), Threads: c.threads, Ports: 1,
+		want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: c.threads, Ports: 1,
 			Device: blanktrail.DeviceDesktop, Addresses: true})
 		if err != nil {
 			t.Fatalf("opening the identities of a job of %d threads: %v", c.threads, err)
@@ -1485,7 +1493,7 @@ func TestDial_OpensNoAddressPortsForAJobThatKeepsNone(t *testing.T) {
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	saved, _ := opts.saved(io.Discard)
 
-	want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 2, Device: blanktrail.DeviceDesktop})
+	want, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 2, Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the identities: %v", err)
 	}
@@ -1510,7 +1518,7 @@ func TestDial_OpensThePortsThisProfileSaysToOpen(t *testing.T) {
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	saved, _ := opts.saved(io.Discard)
 
-	prof := store.NewProfile()
+	prof := withExits(t)
 	prof.Name = "exits"
 	prof.VDNSMode = blanktrail.VDNSForced
 	prof.Solver = false
@@ -1566,7 +1574,7 @@ func TestDial_SpreadsAJobsPortsOverTheBrowsersAndSystemsItNamedNoneOf(t *testing
 	saved, _ := opts.saved(io.Discard)
 
 	want, err := opts.dial(t.Context(), saved, web.Wanted{
-		Profile: store.NewProfile(), Threads: 6, Ports: 1, Device: blanktrail.DeviceDesktop,
+		Profile: withExits(t), Threads: 6, Ports: 1, Device: blanktrail.DeviceDesktop,
 	})
 	if err != nil {
 		t.Fatalf("opening the identities: %v", err)
@@ -1617,7 +1625,7 @@ func TestDial_OpensEveryPortAsTheOneIdentityAJobNamed(t *testing.T) {
 	saved, _ := opts.saved(io.Discard)
 
 	want, err := opts.dial(t.Context(), saved, web.Wanted{
-		Profile: store.NewProfile(), Threads: 4, Ports: 1, Device: blanktrail.DeviceDesktop,
+		Profile: withExits(t), Threads: 4, Ports: 1, Device: blanktrail.DeviceDesktop,
 		Worn: blanktrail.Worn{Browser: "safari", OS: "macos", Release: 26},
 	})
 	if err != nil {
@@ -1667,7 +1675,7 @@ func TestDial_GivesTheRunABrakeOnTheSolverQueue(t *testing.T) {
 	saved, _ := opts.saved(io.Discard)
 
 	want, err := opts.dial(t.Context(), saved, web.Wanted{
-		Profile: store.NewProfile(), Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop,
+		Profile: withExits(t), Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop,
 	})
 	if err != nil {
 		t.Fatalf("opening the identities: %v", err)
@@ -1696,7 +1704,7 @@ func TestDial_RaisesAPoolOfSessionsForTheProgramsKeeper(t *testing.T) {
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	opts.Keeper = sessions.NewKeeper(sessions.NewMemory())
 	saved, _ := opts.saved(io.Discard)
-	want := web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop,
+	want := web.Wanted{Profile: withExits(t), Threads: 1, Ports: 1, Device: blanktrail.DeviceDesktop,
 		Worn:     blanktrail.Worn{Browser: "chrome", Release: 153},
 		Cooldown: 7 * time.Second, RestUpTo: 11 * time.Second}
 
@@ -1735,7 +1743,7 @@ func TestRaise_HandsAJobOnTheStandingPortsTheProgramsSessions(t *testing.T) {
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	opts.Keeper = sessions.NewKeeper(sessions.NewMemory())
 	saved, _ := opts.saved(io.Discard)
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 2,
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 2,
 		Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
@@ -1744,7 +1752,7 @@ func TestRaise_HandsAJobOnTheStandingPortsTheProgramsSessions(t *testing.T) {
 	standing.Search.KeepWarm()
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop, keeper: opts.Keeper}
 
-	got, err := opts.raise(saved, false, warm)(t.Context(), web.Wanted{Profile: store.Profile{}, Threads: 1,
+	got, err := opts.raise(saved, false, warm)(t.Context(), web.Wanted{Profile: withExits(t), Threads: 1,
 		Ports: 2, Device: blanktrail.DeviceDesktop, Cooldown: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("raise: %v", err)

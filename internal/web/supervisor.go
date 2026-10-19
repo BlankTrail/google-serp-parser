@@ -36,6 +36,38 @@ var ErrNothingLeft = errors.New("web: this job has nothing left to do")
 // because nobody outside writes the raiser this happens in.
 var errNoPoolCameBack = errors.New("web: opening a pool gave back nothing, and no reason either")
 
+// ErrNoExits is what a pool raiser answers, wrapped, for a job whose proxy
+// profile names nowhere to go out through: a list with no location, a list
+// that read back with not one usable address, gateways with none ticked or
+// none of the ticked ones on the service any more.
+//
+// It is a state rather than a fault, and the supervisor treats it as one. A
+// job asks Google through sessions, and a session needs an address; ports
+// opened with none can never carry one, and on 2026-10-19 twenty threads on
+// such ports kept the service busy with thirty thousand calls in two minutes
+// doing nothing. So no ports are opened, the job keeps its place in the queue,
+// its page says why, and it is asked for again — calmly, see noExitsRetry, or
+// at once when a profile is saved — until the profile names somewhere to go.
+var ErrNoExits = errors.New("web: the proxy profile names no exits")
+
+// noExitsRetry is how long a job waiting for exits waits before its pool is
+// asked for again.
+//
+// Seconds and not less, because each asking reads the profile's list again —
+// the file, or one request to wherever the operator's list lives — though
+// nothing on the proxy service. A list that appears there is taken up within
+// this long, which is well inside the time it takes somebody to fill a list in
+// and look round at the job. A saved profile does not wait for it at all: see
+// ExitsChanged.
+const noExitsRetry = 15 * time.Second
+
+// parking is a job kept in the queue while its profile names no exits: which
+// profile, for its page and the log, and when it is asked for again.
+type parking struct {
+	profile string
+	retryAt time.Time
+}
+
 // ErrClosed is returned once the supervisor has been shut down. Work taken on
 // after that would sit in a queue nobody is reading.
 var ErrClosed = errors.New("web: the supervisor has been closed")
@@ -477,6 +509,15 @@ type Supervisor struct {
 	onProfile int64
 	// pending is a source waiting for the job in flight to end.
 	pending source
+	// parked is the jobs in the queue whose profile named no exits the last
+	// time their pool was asked for; see ErrNoExits. A job leaves it when its
+	// pool goes up or when it leaves the queue.
+	parked map[int64]parking
+	// takenAt is where in the queue the job in flight was taken from, so a job
+	// waiting for exits goes back to the place it held rather than to the back.
+	takenAt int
+	// retry is noExitsRetry, held here so a test can be quicker about it.
+	retry time.Duration
 }
 
 // NewSupervisor starts the worker and hands back the queue in front of it.
@@ -528,6 +569,8 @@ func start(st *store.Store, src source, ports, threads int) *Supervisor {
 		stopping: make(chan struct{}),
 		started:  time.Now(),
 		done:     make(chan struct{}),
+		parked:   map[int64]parking{},
+		retry:    noExitsRetry,
 	}
 	go v.work()
 	return v
@@ -765,6 +808,29 @@ func (v *Supervisor) pool() poolFacts {
 	return facts
 }
 
+// WaitingForExits says whether this job is kept in the queue because its proxy
+// profile names no exits, and which profile that is.
+func (v *Supervisor) WaitingForExits(jobID int64) (string, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	p, ok := v.parked[jobID]
+	return p.profile, ok
+}
+
+// ExitsChanged tells the supervisor that a profile has been saved, made the
+// default or removed, or a job pointed at another one: every job waiting for
+// exits is asked for again now rather than when its wait runs out, so a job
+// starts the moment somebody gives its profile somewhere to go out through.
+func (v *Supervisor) ExitsChanged() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for id, p := range v.parked {
+		p.retryAt = time.Time{}
+		v.parked[id] = p
+	}
+	v.wakeUp()
+}
+
 // Queued is the jobs waiting their turn, in the order they will be taken.
 //
 // It is a copy. The queue is what the worker takes its next job from, and a
@@ -824,25 +890,52 @@ func (v *Supervisor) Close() error {
 func (v *Supervisor) work() {
 	defer close(v.done)
 	for {
-		id, ctx, src, ok := v.next()
+		id, ctx, src, wait, ok := v.next()
 		if !ok {
-			select {
-			case <-v.wake:
-				continue
-			case <-v.stopping:
+			if !v.idle(wait) {
 				return
 			}
+			continue
 		}
-		met := v.runJob(ctx, src, id)
+		met, parked := v.runJob(ctx, src, id)
+		// Read before finished ends the context: a job told to stop while its
+		// pool was being asked for has been stopped, and is not put back.
+		keep := parked && ctx.Err() == nil
 		// Before the job is settled, because a pool the job has left holds ports
 		// for nothing and settling takes a write to a database.
 		v.release()
-		v.settle(id, met)
+		if !keep {
+			// A job put back has had nothing done to it, so there is nothing
+			// to write down — and it is asked for again every few seconds.
+			v.settle(id, met)
+		}
 		// The job stops being the one running and the swap that was waiting for
 		// it is taken, both here and both under one lock, so that a caller who
 		// finds no job in flight finds the swap already made.
-		v.finished()
+		v.finished(id, keep)
 	}
+}
+
+// idle waits for there to be something to take, and says false when the
+// supervisor is being closed.
+//
+// Every job in the queue may be waiting for exits, and then the soonest of them
+// is due in wait: the worker looks again then, or as soon as anything changes
+// the queue or a profile. Nought waits for that change alone.
+func (v *Supervisor) idle(wait time.Duration) bool {
+	var due <-chan time.Time
+	if wait > 0 {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		due = t.C
+	}
+	select {
+	case <-v.wake:
+	case <-due:
+	case <-v.stopping:
+		return false
+	}
+	return true
 }
 
 // next takes the job at the front of the queue and marks it as the one running.
@@ -864,14 +957,37 @@ func (v *Supervisor) work() {
 // source that raises a pool per job has nothing to record yet: what this job will
 // run on does not exist until raise has put it up, and nothing else can reach it
 // until raise has written it down.
-func (v *Supervisor) next() (int64, context.Context, source, bool) {
+//
+// A job waiting for exits is passed over until it is due again, and the job
+// behind it is taken instead: one profile with nothing in it is no reason for
+// jobs on another to wait. When nothing in the queue can be taken, the duration
+// is how long until the first of the waiting ones is due, and nought where
+// there is nothing to wait for but a wake.
+func (v *Supervisor) next() (int64, context.Context, source, time.Duration, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed || v.src.raise == nil || len(v.queue) == 0 {
-		return 0, nil, source{}, false
+		return 0, nil, source{}, 0, false
 	}
-	id := v.queue[0]
-	v.queue = v.queue[1:]
+	now := time.Now()
+	at := -1
+	var soonest time.Time
+	for i, id := range v.queue {
+		if p, ok := v.parked[id]; ok && now.Before(p.retryAt) {
+			if soonest.IsZero() || p.retryAt.Before(soonest) {
+				soonest = p.retryAt
+			}
+			continue
+		}
+		at = i
+		break
+	}
+	if at < 0 {
+		return 0, nil, source{}, soonest.Sub(now), false
+	}
+	id := v.queue[at]
+	v.queue = slices.Delete(v.queue, at, at+1)
+	v.takenAt = at
 	ctx, cancel := context.WithCancel(context.Background())
 	v.running, v.cancel, v.told = id, cancel, ctx
 	v.inUse = v.src.held
@@ -881,7 +997,7 @@ func (v *Supervisor) next() (int64, context.Context, source, bool) {
 	// screen asked in that moment should say it does not know, not name the
 	// wrong one.
 	v.onProfile = 0
-	return id, ctx, v.src, true
+	return id, ctx, v.src, 0, true
 }
 
 // raise puts up the pool this job asked for and records it as the one in use.
@@ -905,6 +1021,8 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 	// all, both come back as the zero profile rather than as a refusal: a job
 	// that cannot start is worse than a job that starts on the exits everything
 	// else is using, and that is what every job did before profiles existed.
+	// The zero profile names no exits, though, so on a database with none at
+	// all the job waits for one; see ErrNoExits.
 	prof, err := v.st.ProfileFor(ctx, sum.ProfileID)
 	if err != nil && !errors.Is(err, store.ErrNoProfile) {
 		return nil, err
@@ -918,7 +1036,7 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 		defaults := store.NewProfile()
 		prof.VDNSMode, prof.Solver, prof.HTTP3 = defaults.VDNSMode, defaults.Solver, defaults.HTTP3
 	}
-	eng, err := src.raise(ctx, Wanted{
+	raised, err := src.raise(ctx, Wanted{
 		Profile:   prof,
 		Ports:     asked(sum.Ports, v.ports),
 		Threads:   asked(sum.Threads, v.threads),
@@ -930,9 +1048,25 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 		Addresses: sum.Fields.Keeps(store.FieldURL),
 		KeepAlive: sum.Kind == store.KindSuggest,
 	})
+	if errors.Is(err, ErrNoExits) {
+		// Kept, not refused: see ErrNoExits. Said once, when the job starts
+		// waiting, rather than every time it is asked for again. The profile is
+		// named by its name: what its list holds, or where it lives, is not for
+		// a log.
+		v.mu.Lock()
+		_, already := v.parked[sum.ID]
+		v.parked[sum.ID] = parking{profile: prof.Name, retryAt: time.Now().Add(v.retry)}
+		v.mu.Unlock()
+		if !already {
+			v.log.Info("a job's proxy profile names no exits, so the job waits in the queue and starts once exits are added to it",
+				"job", sum.ID, "profile", prof.Name)
+		}
+		return nil, err
+	}
 	if err != nil {
 		return nil, err
 	}
+	eng := raised
 	// Written down before the job goes into it, so that a stop or a shutdown
 	// arriving now finds a pool to give back rather than one nothing points at.
 	// The profile goes with it, in the same critical section: a pool and the
@@ -942,6 +1076,7 @@ func (v *Supervisor) raise(ctx context.Context, src source, sum store.JobSummary
 	v.inUse = eng
 	v.last = v.inUse
 	v.onProfile = prof.ID
+	delete(v.parked, sum.ID)
 	v.mu.Unlock()
 	return eng, nil
 }
@@ -998,8 +1133,18 @@ func (v *Supervisor) release() {
 //
 // giveUp is called with the lock let go, as everywhere else: closing a pool
 // takes a while, and every reader of the queue would be waiting behind it.
-func (v *Supervisor) finished() {
+//
+// A job waiting for exits goes back into the queue here, at the place it was
+// taken from, in the same critical section that stops it being the one running:
+// a screen reading between the two would find it neither running nor queued,
+// and stop watching a job that is still going to start.
+func (v *Supervisor) finished(id int64, keep bool) {
 	v.mu.Lock()
+	if keep && !v.closed {
+		v.queue = slices.Insert(v.queue, min(v.takenAt, len(v.queue)), id)
+	} else {
+		delete(v.parked, id)
+	}
 	v.cancel()
 	v.running, v.cancel = 0, nil
 	var spent []engine
@@ -1026,7 +1171,10 @@ func (v *Supervisor) finished() {
 //
 // It answers with how many of Google's checks the run paid for, for settle to
 // write down.
-func (v *Supervisor) runJob(ctx context.Context, src source, id int64) int {
+//
+// The flag says the job's profile named no exits: nothing was raised and nothing
+// run, and the job is to go back where it was in the queue.
+func (v *Supervisor) runJob(ctx context.Context, src source, id int64) (int, bool) {
 	// How long each part of starting takes, said out loud.
 	//
 	// An operator who has just pressed start watches a screen of noughts, and
@@ -1040,23 +1188,26 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) int {
 		if ctx.Err() == nil {
 			v.log.Error("a job could not be read back before it ran", "job", id, "error", err)
 		}
-		return 0
+		return 0, false
 	}
 	if len(j.Queries) == 0 {
-		return 0
+		return 0, false
 	}
 	read := time.Now()
 	v.log.Info("a job was read back and is about to have its identities raised",
 		"job", id, "queries", len(j.Queries), "took", read.Sub(taken).Round(time.Millisecond))
 
 	eng, err := v.raise(ctx, src, sum)
+	if errors.Is(err, ErrNoExits) {
+		return 0, true
+	}
 	if err != nil {
 		if ctx.Err() == nil {
 			v.log.Error("the identities a job asked for could not be raised, and the job is still there to be carried on",
 				"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
 				"error", err)
 		}
-		return 0
+		return 0, false
 	}
 	v.log.Info("the identities are up and the first query is going out",
 		"job", id, "ports", asked(sum.Ports, v.ports), "threads", asked(sum.Threads, v.threads),
@@ -1078,7 +1229,7 @@ func (v *Supervisor) runJob(ctx context.Context, src source, id int64) int {
 	}
 	// Read before the pool is given up, which is when the run's count goes with
 	// it.
-	return eng.Pool().Checks.Met
+	return eng.Pool().Checks.Met, false
 }
 
 // plan is the work a job has left, dressed in the settings it was created

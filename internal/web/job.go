@@ -583,6 +583,11 @@ func stateOf(p progressJSON, listReady bool) string {
 		// Told to stop and still putting itself away, however far it had got:
 		// a job stopped while it was connecting is not connecting any more.
 		return "job.state.stopping"
+	case p.NoExits:
+		// Ahead of running: a job waiting for exits is taken out of the queue
+		// for the instant its pool is asked for again, and a page drawn in that
+		// instant would otherwise read "connecting" every few seconds.
+		return "job.state.noexits"
 	case p.Running && p.Done+p.Failed == 0:
 		// Running and nothing settled yet. What is happening is that the
 		// identities are being reached: a cold one meets a challenge on its first
@@ -627,6 +632,8 @@ func (s *Server) apiReshape(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
+		// A job waiting for exits may have just been given some.
+		s.exitsChanged()
 	}
 	err = s.store.Reshape(r.Context(), id,
 		countOf(r.FormValue("threads")), countOf(r.FormValue("tries")),

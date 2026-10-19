@@ -442,7 +442,16 @@ func (o serveOptions) jobs(ctx context.Context, out io.Writer, st *store.Store) 
 	// of result page runs on, grown to that job's size and shrunk back when it
 	// ends. None is a machine that opens a pool for each job from cold, which is
 	// what this program did until there was a choice.
-	if err := warm.bring(ctx, saved.HotPorts, deviceOr(saved.HotDevice)); err != nil {
+	if err := warm.bring(ctx, saved.HotPorts, deviceOr(saved.HotDevice)); errors.Is(err, web.ErrNoExits) {
+		// The default profile names nowhere to go out through, which is what a
+		// machine has on the day it is installed. Nothing is opened, the set is
+		// brought up by itself once the profile names exits (see owe), and the
+		// interface runs as it would otherwise: a job on another profile has
+		// somewhere to go, and one on this profile waits in the queue rather
+		// than being refused by a server that will not take jobs at all.
+		_, _ = fmt.Fprintln(out,
+			"the default proxy profile names no exits, so no identities are kept warm and its jobs wait in the queue until exits are added to it")
+	} else if err != nil {
 		_, _ = fmt.Fprintf(out,
 			"the identities to keep warm could not be opened, so this interface shows the history and runs nothing until the connection is set up in it: %s\n",
 			o.clean(err.Error()))
@@ -496,6 +505,12 @@ func deviceOr(device string) string {
 // to.
 func (o serveOptions) raise(saved settings.Settings, fromEnv bool, warm *warmSet) web.OpenPool {
 	return func(ctx context.Context, want web.Wanted) (web.Identities, error) {
+		// A profile that names nowhere to go out through is answered before
+		// anything else, standing identities included: see exitsOf. A pool from
+		// the environment is not a profile's and is not asked.
+		if !fromEnv && want.Profile.Empty() {
+			return web.Identities{}, noExits(want.Profile)
+		}
 		// A job of the kind the standing identities were opened for runs on them,
 		// grown to its own size. It gives the growth back when it ends and the
 		// standing ones stay warm for the next.
@@ -624,6 +639,22 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	if err != nil {
 		return web.Identities{}, err
 	}
+	// Where the ports go out through, read before anything is asked of the
+	// service; see exitsOf. Every way out of this function below that is not a
+	// pool hands the channels back closed, so a list being read again on its
+	// interval does not outlive a pool that never went up.
+	channels, err := o.exitsOf(ctx, client, prof)
+	if err != nil {
+		return web.Identities{}, err
+	}
+	raised := false
+	defer func() {
+		if !raised {
+			for _, ch := range channels {
+				ch.Close()
+			}
+		}
+	}()
 	threads, ports := want.Threads, want.Ports
 	if threads < 1 {
 		threads = o.Threads
@@ -692,42 +723,15 @@ func (o serveOptions) dial(ctx context.Context, saved settings.Settings, want we
 	}
 	cfg.Client = client
 	cfg.CA = report.CA
-
-	if prof.Kind == settings.ProxyGateways {
-		// The gateways are asked for now rather than kept: what is behind a name
-		// lives in BlankTrail and can be changed there between one job and the
-		// next.
-		ch, err := o.gatewayChannel(ctx, client, prof)
-		if err != nil {
-			return web.Identities{}, o.scrubbed(err)
-		}
-		cfg.Channels = []blanktrail.Channel{ch}
-	} else if prof.Kind != "" {
-		// The list is loaded here and reloaded on its own interval afterwards, so a
-		// list that changes during a run is a list this pool follows.
-		// How long a failed address is left out is the operator's, because how
-		// fast a gateway's exits turn over is a property of the list they bought
-		// and not of this program. Nought is the documented default.
-		bench := []blanktrail.RotorOption{blanktrail.WithOnBench(o.remember)}
-		// Passed as it stands, nought included: nought is an operator saying no
-		// address is ever put away, not an operator saying nothing.
-		bench = append(bench, blanktrail.WithRest(prof.Ban))
-		rotor, err := blanktrail.NewRotor(ctx, listFrom(prof), bench...)
-		if err != nil {
-			return web.Identities{}, o.scrubbed(err)
-		}
-		// What this machine already knows about the list. Without it every start
-		// walks back into the addresses the last run spent its time finding dead,
-		// and on a large cheap list that is most of them.
-		o.recall(ctx, rotor)
-		cfg.Channels = []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)}
-	}
+	cfg.Channels = channels
 
 	o.ofSessions(&cfg)
 	pool, err := blanktrail.NewPool(ctx, cfg)
 	if err != nil {
 		return web.Identities{}, o.scrubbed(err)
 	}
+	// The pool holds the channels now and closes them with itself.
+	raised = true
 	// The brake reads the challenge solver's queue through the same connection
 	// the ports were opened through. What it watches is the service's own
 	// number, which carries the work of everything on this machine rather than
@@ -861,12 +865,70 @@ func (o serveOptions) recall(ctx context.Context, rotor *blanktrail.Rotor) {
 // assumed of them.
 const listScheme = "socks5"
 
-// listFrom is where the addresses come from, as the settings describe it.
+// exitsOf is where a profile's ports go out through: the list read, or the
+// gateways it ticked as the service holds them now.
 //
-// It is one function rather than a few lines at the place a pool is opened
-// because every field of it is a box somebody filled in: a place that quietly
-// read its own interval, or its own idea of file or address, would leave a box
-// on the settings page that changes nothing and says nothing about it.
+// It is asked before anything is asked of the service, and a profile that names
+// nowhere comes back as web.ErrNoExits. Ports opened with nowhere to go are not
+// ports that go out from this machine instead: a job asks Google through
+// sessions, a session needs an address, and on 2026-10-19 twenty threads on such
+// ports sent the service about thirty thousand calls in two minutes finding that
+// out. Asked here first, a profile with no exits costs a read of its own list
+// and nothing on the service, and the supervisor keeps the job in the queue
+// until the profile names somewhere — see web.ErrNoExits.
+//
+// Nowhere is each of the ways a profile can name nothing: no source at all, a
+// list with no location, a list that reads back with not one usable address,
+// gateways with none ticked, and ticked gateways none of which the service has
+// any more. A list that cannot be read at all is not among them: that is a
+// fault in the file or the address, and it is reported as one.
+func (o serveOptions) exitsOf(ctx context.Context, client *blanktrail.Client,
+	prof store.Profile) ([]blanktrail.Channel, error) {
+	if prof.Empty() {
+		return nil, noExits(prof)
+	}
+	if prof.Kind == settings.ProxyGateways {
+		// The gateways are asked for now rather than kept: what is behind a name
+		// lives in BlankTrail and can be changed there between one job and the
+		// next.
+		ch, err := o.gatewayChannel(ctx, client, prof)
+		if errors.Is(err, errNoneOfTheGateways) {
+			return nil, noExits(prof)
+		}
+		if err != nil {
+			return nil, o.scrubbed(err)
+		}
+		return []blanktrail.Channel{ch}, nil
+	}
+	// The list is loaded here and reloaded on its own interval afterwards, so a
+	// list that changes during a run is a list this pool follows.
+	// How long a failed address is left out is the operator's, because how
+	// fast a gateway's exits turn over is a property of the list they bought
+	// and not of this program. Nought is the documented default.
+	bench := []blanktrail.RotorOption{blanktrail.WithOnBench(o.remember)}
+	// Passed as it stands, nought included: nought is an operator saying no
+	// address is ever put away, not an operator saying nothing.
+	bench = append(bench, blanktrail.WithRest(prof.Ban))
+	rotor, err := blanktrail.NewRotor(ctx, listFrom(prof), bench...)
+	if errors.Is(err, blanktrail.ErrNoUpstreams) {
+		return nil, noExits(prof)
+	}
+	if err != nil {
+		return nil, o.scrubbed(err)
+	}
+	// What this machine already knows about the list. Without it every start
+	// walks back into the addresses the last run spent its time finding dead,
+	// and on a large cheap list that is most of them.
+	o.recall(ctx, rotor)
+	return []blanktrail.Channel{blanktrail.NewListChannel("list", rotor)}, nil
+}
+
+// noExits is web.ErrNoExits for one profile, by its name. Only the name: the
+// list's location and what is in it are not for an error that ends up in a log.
+func noExits(prof store.Profile) error {
+	return fmt.Errorf("%w: proxy profile %q", web.ErrNoExits, prof.Name)
+}
+
 // firstHopOf is the road a profile's ports take to their addresses, where the
 // profile is one that has one: a list's. A profile on gateways has its road set
 // on the gateway, in the service, and one on nothing has no address to reach.
@@ -885,6 +947,12 @@ func firstHopOf(prof store.Profile) (blanktrail.FirstHop, error) {
 	return hop, nil
 }
 
+// listFrom is where the addresses come from, as the settings describe it.
+//
+// It is one function rather than a few lines at the place a pool is opened
+// because every field of it is a box somebody filled in: a place that quietly
+// read its own interval, or its own idea of file or address, would leave a box
+// on the settings page that changes nothing and says nothing about it.
 func listFrom(p store.Profile) blanktrail.Source {
 	return blanktrail.Source{
 		Kind:          p.Kind,
@@ -1278,6 +1346,9 @@ type warmSet struct {
 	// lookups are the ports the synchronous search reads hidden addresses
 	// through; nil reads them through the set's own ports.
 	lookups *blanktrail.Growing
+	// tend is how often keep looks; nought is tendRound. It is here so a test
+	// need not wait twenty seconds for it.
+	tend time.Duration
 }
 
 // standing is a number of identities of one kind: what the settings page last
@@ -1427,6 +1498,13 @@ func (w *warmSet) bring(ctx context.Context, want int, device string) error {
 
 	if pool == nil {
 		opened, profile, err := w.dial(ctx, want, device)
+		if errors.Is(err, web.ErrNoExits) {
+			// Nothing is opened on a profile that names no exits, and what was
+			// asked for is not forgotten: it is owed, and brought about once the
+			// profile names somewhere to go.
+			w.owe(want, device)
+			return err
+		}
 		if err != nil {
 			return err
 		}
@@ -1455,6 +1533,27 @@ func (w *warmSet) bring(ctx context.Context, want int, device string) error {
 	return nil
 }
 
+// owe remembers a number and a kind that could not be brought about because the
+// default profile names no exits, and sees that something comes back for them.
+//
+// keep is what comes back, as it does for a change asked for while a job was
+// running. With no set open there is no warmer and nothing tending, so one is
+// started here; the first set that does go up replaces it with its own (see
+// start). It looks every tendRound, which is calm — the asking reads the
+// profile's list and nothing on the service — and is soon enough that the
+// warm identities are there within a breath of the list being filled in.
+func (w *warmSet) owe(want int, device string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.owed = &standing{want: want, device: device}
+	if w.stop != nil {
+		return
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	w.stop = stop
+	go w.keep(ctx)
+}
+
 // start puts a pool in place and sets a warmer on it, ending whatever warmer was
 // there before.
 func (w *warmSet) start(pool *blanktrail.Pool, device string, profile int64) {
@@ -1475,6 +1574,16 @@ func (w *warmSet) start(pool *blanktrail.Pool, device string, profile int64) {
 // change. It is short against how long a job runs and long against nothing.
 const tendRound = 20 * time.Second
 
+// tendEvery is how often keep looks.
+func (w *warmSet) tendEvery() time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.tend > 0 {
+		return w.tend
+	}
+	return tendRound
+}
+
 // keep brings about what a settings page asked for while a job was running.
 //
 // It is a loop rather than a hook on the job ending, because what it applies is
@@ -1486,7 +1595,7 @@ func (w *warmSet) keep(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(tendRound):
+		case <-time.After(w.tendEvery()):
 		}
 		w.mu.Lock()
 		owed := w.owed
@@ -1497,7 +1606,9 @@ func (w *warmSet) keep(ctx context.Context) {
 		w.mu.Lock()
 		w.owed = nil
 		w.mu.Unlock()
-		if err := w.bring(ctx, owed.want, owed.device); err != nil && w.log != nil {
+		// A profile that still names no exits is not news: it was said when the
+		// set first could not go up, and bring has owed it again.
+		if err := w.bring(ctx, owed.want, owed.device); err != nil && !errors.Is(err, web.ErrNoExits) && w.log != nil {
 			w.log.Info("the identities kept warm could not be brought to what was saved",
 				"want", owed.want, "kind", owed.device, "err", err)
 		}
@@ -1566,13 +1677,17 @@ func (o serveOptions) gatewayChannel(ctx context.Context, client *blanktrail.Cli
 			"missing", gone, "running on", len(chosen))
 	}
 	if len(chosen) == 0 {
-		return nil, errors.New("blanktrail: none of the chosen gateways are on the service any more")
+		return nil, errNoneOfTheGateways
 	}
 	opts := []blanktrail.RotorOption{}
 	opts = append(opts, blanktrail.WithRest(prof.Ban))
 	rotor := blanktrail.NewStaticRotor(blanktrail.GatewayUpstreams(chosen), opts...)
 	return blanktrail.NewGatewayListChannel("gateways", rotor), nil
 }
+
+// errNoneOfTheGateways is a gateways profile whose ticked gateways the service
+// no longer has, one of the ways a profile names no exits; see exitsOf.
+var errNoneOfTheGateways = errors.New("blanktrail: none of the chosen gateways are on the service any more")
 
 // stampPatience is how long the one attribution request is given. It is short
 // on purpose: nothing waits on it, and a service that is not answering has

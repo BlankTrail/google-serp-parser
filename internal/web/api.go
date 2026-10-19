@@ -34,6 +34,12 @@ type progressJSON struct {
 	// writing, and the page goes on watching it until it has let go.
 	Stopping bool `json:"stopping"`
 	Queued   bool `json:"queued"`
+	// NoExits is a queued job kept there because its proxy profile names
+	// nowhere to go out through. It is not a fault and the job is not failed:
+	// it starts by itself once the profile names exits, and until then its
+	// page says what is missing rather than "waiting its turn", which would
+	// send the reader to wait for something that is not coming.
+	NoExits bool `json:"noExits"`
 	// Watch says whether anything is going to answer differently later. It is
 	// worked out here rather than in the browser so that the page as it is first
 	// drawn and every answer after it agree about when to stop asking.
@@ -62,6 +68,7 @@ func (s *Server) progress(sum store.JobSummary) progressJSON {
 		// it has stopped.
 		Stopping: running && s.sup.Stopping(sum.ID),
 		Queued:   queued,
+		NoExits:  s.waitingForExits(sum.ID),
 		// A job nobody is running will read at three in the morning exactly as it
 		// reads now. A page that goes on asking anyway knocks all night for an
 		// answer that cannot change until somebody presses something.
@@ -86,6 +93,24 @@ func (s *Server) holds(jobID int64) (running, queued bool) {
 		running = true
 	}
 	return running, queued
+}
+
+// waitingForExits says whether the supervisor holds this job back because its
+// profile names no exits.
+func (s *Server) waitingForExits(jobID int64) bool {
+	if s.sup == nil {
+		return false
+	}
+	_, waiting := s.sup.WaitingForExits(jobID)
+	return waiting
+}
+
+// exitsChanged tells the supervisor that where jobs go out through may have
+// changed, so a job waiting for exits is asked for again at once.
+func (s *Server) exitsChanged() {
+	if s.sup != nil {
+		s.sup.ExitsChanged()
+	}
 }
 
 // apiProgress answers with how far a job has got, for the page's own script.

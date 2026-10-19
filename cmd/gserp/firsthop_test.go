@@ -29,6 +29,26 @@ func listProfile(t *testing.T, firstHop string) store.Profile {
 	return prof
 }
 
+// withExits is a profile with somewhere to go out through: a file of two
+// addresses, and the defaults for everything else. A profile naming no exits is
+// refused before anything is opened (see exitsOf), so a test about anything
+// else that opens ports opens them on this.
+func withExits(t *testing.T) store.Profile {
+	t.Helper()
+	prof := listProfile(t, "")
+	prof.Name = "Default"
+	return prof
+}
+
+// withExitsAs is withExits under the id a test needs it to have, for the
+// tests that tell the standing identities' own profile from another.
+func withExitsAs(t *testing.T, id int64) store.Profile {
+	t.Helper()
+	prof := withExits(t)
+	prof.ID = id
+	return prof
+}
+
 // opensOf are the bodies of every port the fake was asked to open.
 func opensOf(fake *fakebt.Server) []string {
 	var out []string
@@ -165,7 +185,7 @@ func TestRaise_RunsOnlyJobsOfItsOwnProfileOnTheStandingIdentities(t *testing.T) 
 	fake.SetCA(testCAPEM)
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 2})
 	saved, _ := opts.saved(io.Discard)
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 2,
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 2,
 		Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
@@ -175,7 +195,7 @@ func TestRaise_RunsOnlyJobsOfItsOwnProfileOnTheStandingIdentities(t *testing.T) 
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop, profile: 1}
 	raise := opts.raise(saved, false, warm)
 
-	same, err := raise(t.Context(), web.Wanted{Profile: store.Profile{ID: 1, Name: "Default"}, Ports: 1, Threads: 2,
+	same, err := raise(t.Context(), web.Wanted{Profile: withExitsAs(t, 1), Ports: 1, Threads: 2,
 		Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("raising a job on the standing identities' own profile: %v", err)
@@ -215,7 +235,7 @@ func TestWarmSet_RemembersTheProfileItsIdentitiesWereOpenedOn(t *testing.T) {
 	saved, _ := opts.saved(io.Discard)
 	warm := &warmSet{log: opts.logger(io.Discard)}
 	warm.dial = func(ctx context.Context, want int, device string) (*blanktrail.Pool, int64, error) {
-		got, err := opts.dial(ctx, saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: want, Device: device})
+		got, err := opts.dial(ctx, saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: want, Device: device})
 		if err != nil {
 			return nil, 0, err
 		}
@@ -251,7 +271,7 @@ func TestRaiseFor_ServesAJobOnAnyProfileFromASetOpenedOnNone(t *testing.T) {
 	fake.SetCA(testCAPEM)
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key()})
 	saved, _ := opts.saved(io.Discard)
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 1,
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 1,
 		Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
