@@ -6,15 +6,17 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
+	"github.com/blanktrail/google-serp-parser/internal/google"
 	"github.com/blanktrail/google-serp-parser/internal/sessions"
 )
 
-// The slow start from the run's side: a request for a session Google has never
-// answered goes out marked (blanktrail.FreshSession), and the profile's budget
-// counts its attempt as a possible solve; a session that has answered goes out
-// as before.
+// The slow start from the run's side: a request for a session Google has not
+// answered in this job, where it stands now, goes out marked
+// (blanktrail.FreshSession), and the profile's budget counts its attempt as a
+// possible solve; a session answered in this job there goes out as before.
 
 // budgetWatch is an origin that writes down the profile's budget as each search
 // arrives, while the request is in flight.
@@ -71,15 +73,13 @@ func TestAttempt_CountsAFreshSessionsSearchAsAPossibleSolveInTheBudget(t *testin
 	}
 }
 
-func TestBoundSearcher_MarksTheRequestsOfASessionGoogleHasNotAnsweredYet(t *testing.T) {
+func TestBoundSearcher_MarksASessionsRequestsUntilItIsAnsweredInThisJobWhereItStands(t *testing.T) {
 	// Both doors a walk's page goes out by — the query's first page and a page
-	// at the address the one before it carried — until the session is written
-	// down as answered, and neither after.
+	// at the address the one before it carried. One Attempt is one job.
 	b := blanktrail.NewBudget(30, 5)
 	o := watchBudget(t, b)
 	f := poolFacing(t, o.addr(), 1, inSessions, func(c *blanktrail.PoolConfig) { c.Budget = b })
 	keeper := sessions.NewKeeper(sessions.NewMemory())
-	a := &Attempt{Pool: f.Pool, Keeper: keeper, Want: searchDesktop}
 	ctx := context.Background()
 	lease, err := f.Pool.Acquire(ctx)
 	if err != nil {
@@ -90,31 +90,174 @@ func TestBoundSearcher_MarksTheRequestsOfASessionGoogleHasNotAnsweredYet(t *test
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	search := boundSearcher{attempt: a, lease: lease, held: held}
 	const next = "https://www.google.com/search?q=x&start=10"
-	if _, err := search.Search(ctx, usQuery("x")); err != nil {
-		t.Fatalf("Search: %v", err)
+	ask := func(search boundSearcher, at bool) {
+		t.Helper()
+		if at {
+			_, err = search.SearchAt(ctx, usQuery("x"), next)
+		} else {
+			_, err = search.Search(ctx, usQuery("x"))
+		}
+		if err != nil {
+			t.Fatalf("asking: %v", err)
+		}
 	}
-	if _, err := search.SearchAt(ctx, usQuery("x"), next); err != nil {
-		t.Fatalf("SearchAt: %v", err)
-	}
+	// The first job: a new session's first request is fresh, its second —
+	// answered in this job, where it stands — is not.
+	job := boundSearcher{attempt: &Attempt{Pool: f.Pool, Keeper: keeper, Want: searchDesktop}, lease: lease, held: held}
+	ask(job, true)
+	ask(job, false)
 	if err := held.Save(ctx, leasePort{lease}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if _, err := search.SearchAt(ctx, usQuery("x"), next); err != nil {
-		t.Fatalf("SearchAt after the answer: %v", err)
+	// The next job: the history knows the session (Admitted), but this job has
+	// not seen it answered, and Google checks a session that rested between
+	// jobs again on its first request.
+	if !held.Admitted() {
+		t.Fatal("the session was not written down as answered")
 	}
-	if _, err := search.Search(ctx, usQuery("x")); err != nil {
-		t.Fatalf("Search after the answer: %v", err)
+	again := boundSearcher{attempt: &Attempt{Pool: f.Pool, Keeper: keeper, Want: searchDesktop}, lease: lease, held: held}
+	ask(again, false)
+	ask(again, true)
+	// Moved on to another address in the middle of a page: a stranger there,
+	// though answered in this job elsewhere; and answered there, known again.
+	if err := held.MoveOn(ctx, leasePort{lease}); err != nil {
+		t.Fatalf("MoveOn: %v", err)
 	}
+	ask(again, false)
+	ask(again, true)
 	seen := o.readings()
-	if len(seen) != 4 {
-		t.Fatalf("the origin saw %d searches, want 4", len(seen))
+	if len(seen) != 6 {
+		t.Fatalf("the origin saw %d searches, want 6", len(seen))
 	}
-	for i, want := range []bool{true, true, false, false} {
+	for i, want := range []bool{true, false, true, false, true, false} {
 		if fresh := seen[i].Fresh == 1 && seen[i].InFlight == 0; fresh != want {
 			t.Errorf("search %d went out with the budget at %+v, want counted as fresh: %v", i+1, seen[i], want)
 		}
+	}
+}
+
+func TestRunner_CountsASessionThatRestedBetweenJobsAsAPossibleSolveOnItsFirstRequest(t *testing.T) {
+	// The sessions a job on a kept history starts with have all been answered
+	// before — in an earlier job — and every one is checked again on its first
+	// request. Two jobs on one history: the first makes a session; the second
+	// takes it up again, counted fresh on its first request and as an
+	// ordinary one on its second.
+	b := blanktrail.NewBudget(30, 5)
+	o := watchBudget(t, b)
+	f := poolFacing(t, o.addr(), 1, inSessions, func(c *blanktrail.PoolConfig) { c.Budget = b })
+	h := sessions.NewMemory()
+	keeper := sessions.NewKeeper(h)
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: keeper, Want: searchDesktop}
+	ctx := context.Background()
+	if rep := r.Run(ctx, Job{Queries: []google.Query{usQuery("one")}, Pages: 1}); rep.Results[0].Err != nil {
+		t.Fatalf("the first job: %v", rep.Results[0].Err)
+	}
+	rep := r.Run(ctx, Job{Queries: []google.Query{usQuery("two"), usQuery("three")}, Pages: 1})
+	for i, res := range rep.Results {
+		if res.Err != nil {
+			t.Fatalf("the second job's query %d: %v", i+1, res.Err)
+		}
+	}
+	if all, _ := h.Sessions(ctx, "desktop", time.Time{}); len(all) != 1 {
+		t.Fatalf("the two jobs made %d sessions, want the one taken up again", len(all))
+	}
+	seen := o.readings()
+	if len(seen) != 3 {
+		t.Fatalf("the origin saw %d searches, want 3", len(seen))
+	}
+	for i, want := range []bool{true, true, false} {
+		if fresh := seen[i].Fresh == 1 && seen[i].InFlight == 0; fresh != want {
+			t.Errorf("search %d went out with the budget at %+v, want counted as fresh: %v", i+1, seen[i], want)
+		}
+	}
+}
+
+func TestRunner_CountsASessionMovedToAnotherAddressAsAPossibleSolveThere(t *testing.T) {
+	// Answered in this job, then refused by the address (a shell) and taken off
+	// it: its next request goes out from an address it was never answered on.
+	b := blanktrail.NewBudget(30, 5)
+	var mu sync.Mutex
+	var seen []blanktrail.BudgetReading
+	o := newDeepOrigin(t, 1)
+	o.shells = func(n int) bool {
+		mu.Lock()
+		seen = append(seen, b.Reading())
+		mu.Unlock()
+		return n == 2
+	}
+	f := poolFacing(t, o.addr(), 1, inSessions, func(c *blanktrail.PoolConfig) { c.Budget = b })
+	r := &Runner{Pool: f.Pool, Threads: 1, Keeper: sessions.NewKeeper(sessions.NewMemory()), Want: searchDesktop}
+	r.Run(context.Background(), Job{
+		Queries: []google.Query{usQuery("one"), usQuery("two"), usQuery("three"), usQuery("four")},
+		Pages:   1, Tries: 1})
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 4 {
+		t.Fatalf("the origin saw %d searches, want 4", len(seen))
+	}
+	for i, want := range []bool{true, false, true, false} {
+		if fresh := seen[i].Fresh == 1 && seen[i].InFlight == 0; fresh != want {
+			t.Errorf("search %d went out with the budget at %+v, want counted as fresh: %v", i+1, seen[i], want)
+		}
+	}
+}
+
+func TestBoundSearcher_KeepsMarkingASessionGoogleRefused(t *testing.T) {
+	// A shell is no answer: the session has not been let in where it stands,
+	// and its next request may meet the check again.
+	b := blanktrail.NewBudget(30, 5)
+	var mu sync.Mutex
+	var seen []blanktrail.BudgetReading
+	o := newDeepOrigin(t, 1)
+	o.shells = func(n int) bool {
+		mu.Lock()
+		seen = append(seen, b.Reading())
+		mu.Unlock()
+		return n == 1
+	}
+	f := poolFacing(t, o.addr(), 1, inSessions, func(c *blanktrail.PoolConfig) { c.Budget = b })
+	keeper := sessions.NewKeeper(sessions.NewMemory())
+	ctx := context.Background()
+	lease, err := f.Pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer lease.Release()
+	held, err := keeper.Take(ctx, leasePort{lease}, searchDesktop)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	search := boundSearcher{attempt: &Attempt{Pool: f.Pool, Keeper: keeper, Want: searchDesktop}, lease: lease, held: held}
+	if _, err := search.Search(ctx, usQuery("x")); err == nil {
+		t.Fatal("a shell came back as a page")
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := search.Search(ctx, usQuery("x")); err != nil {
+			t.Fatalf("Search %d: %v", i+2, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 3 {
+		t.Fatalf("the origin saw %d searches, want 3", len(seen))
+	}
+	for i, want := range []bool{true, true, false} {
+		if fresh := seen[i].Fresh == 1 && seen[i].InFlight == 0; fresh != want {
+			t.Errorf("search %d went out with the budget at %+v, want counted as fresh: %v", i+1, seen[i], want)
+		}
+	}
+}
+
+func TestAttempt_WritesDownNoAnswersWithoutALimit(t *testing.T) {
+	o := newCookieOrigin(t, func(int) string { return serpBody("example.com") })
+	f := poolFacing(t, o.addr(), 1, inSessions, func(c *blanktrail.PoolConfig) { c.Budget = blanktrail.NewBudget(0, 5) })
+	a := &Attempt{Pool: f.Pool, Keeper: sessions.NewKeeper(sessions.NewMemory()), Want: searchDesktop}
+	if _, err := a.Search(context.Background(), usQuery("x")); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(a.answered) != 0 {
+		t.Errorf("a profile with no limit wrote down %d answered sessions, want none", len(a.answered))
 	}
 }
 
@@ -134,7 +277,7 @@ func TestAskingAs_LeavesTheContextAloneWithoutALimitOrASessionToTellApart(t *tes
 		if err != nil {
 			t.Fatalf("Take: %v", err)
 		}
-		if got := askingAs(ctx, lease, held); got != ctx {
+		if got := (&Attempt{Pool: f.Pool}).askingAs(ctx, lease, held); got != ctx {
 			t.Errorf("with budget %v a fresh session's context was replaced", b)
 		}
 		held.PutBack()
@@ -147,7 +290,7 @@ func TestAskingAs_LeavesTheContextAloneWithoutALimitOrASessionToTellApart(t *tes
 		t.Fatalf("Acquire: %v", err)
 	}
 	defer lease.Release()
-	if ctx := context.Background(); askingAs(ctx, lease, nil) != ctx {
+	if ctx := context.Background(); (&Attempt{Pool: f.Pool}).askingAs(ctx, lease, nil) != ctx {
 		t.Error("a request with no held session was marked as a fresh session's")
 	}
 }

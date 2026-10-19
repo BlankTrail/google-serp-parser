@@ -124,6 +124,10 @@ type Attempt struct {
 	// the session goes, which is why it is keyed by the session rather than by
 	// the port.
 	searches map[int64]*google.Session
+	// answered is the kept sessions Google has answered with a page in this
+	// attempt — in this job — on a profile with a limit, each with the exit it
+	// was last answered through; see askingAs.
+	answered map[int64]string
 }
 
 // heldSession is one port's search session, tagged with the identity it was
@@ -323,7 +327,8 @@ func (b boundSearcher) Search(ctx context.Context, q google.Query) (google.SERP,
 	} else {
 		search = b.attempt.sessionFor(b.lease)
 	}
-	serp, err := search.Search(askingAs(ctx, b.lease, b.held), q)
+	serp, err := search.Search(b.attempt.askingAs(ctx, b.lease, b.held), q)
+	b.attempt.answeredHere(b.lease, b.held, err)
 	b.attempt.caught(serp, err)
 	return serp, err
 }
@@ -340,7 +345,8 @@ func (b boundSearcher) SearchAt(ctx context.Context, q google.Query, target stri
 	} else {
 		search = b.attempt.sessionFor(b.lease)
 	}
-	serp, err := search.SearchAt(askingAs(ctx, b.lease, b.held), q, target)
+	serp, err := search.SearchAt(b.attempt.askingAs(ctx, b.lease, b.held), q, target)
+	b.attempt.answeredHere(b.lease, b.held, err)
 	b.attempt.caught(serp, err)
 	return serp, err
 }
@@ -418,7 +424,8 @@ func (a *Attempt) onceWithSession(ctx context.Context, lease *blanktrail.Lease, 
 		held.PutBack()
 		return google.SERP{}, err
 	}
-	serp, err := a.searchFor(held, lease).Search(askingAs(ctx, lease, held), q)
+	serp, err := a.searchFor(held, lease).Search(a.askingAs(ctx, lease, held), q)
+	a.answeredHere(lease, held, err)
 	a.caught(serp, err)
 	if err != nil {
 		a.letGoAfter(ctx, held, lease, err)
@@ -503,28 +510,72 @@ const serviceAwayWait = 2 * time.Second
 // opened again the moment it is found.
 const lostPortsPerQuery = 8
 
-// askingAs is the context a request for the session goes out under: marked as
-// a fresh session's (blanktrail.FreshSession) where Google has never answered
-// the session, so that in a profile with a limit each attempt of it is counted
-// as the solve it may turn into. A fresh session pays for a check to be let in
-// at all (sessions.Held.Admitted), and at the start of a job every session is
-// fresh: counted as ordinary requests, twenty of them met fourteen checks at
-// once on the stand and took the profile far over its limit for as long as
-// the solves lasted.
+// askingAs is the context a request for the session goes out under: marked
+// (blanktrail.FreshSession) where the request will likely meet Google's check,
+// so that in a profile with a limit each of its attempts is counted as the
+// solve it may turn into. At the start of a job that is nearly every session:
+// counted as ordinary requests, twenty of them met fourteen checks at once on
+// the stand and took the profile far over its limit for as long as the solves
+// lasted.
 //
-// Only Admitted decides, and not Moved as well, though a session moved to
-// another address pays a check there too: the user's rule is the slow start,
-// a session's first steps, and a move is one session's misfortune in the
-// middle of a job rather than twenty at once.
+// The signal is the job's own: a session is asked as an ordinary request only
+// once Google has answered it with a page in this job, through the exit it is
+// going out by now (Attempt.answered). Anything else is likely to be checked:
+//   - A session never answered at all pays to be let in.
+//   - A session that rested between jobs is checked again on its first request
+//     of the next (docs/GUIDE.md; the run's Challenges counts that check apart
+//     for the same reason). Its history says Google knows it — Admitted — so
+//     "never answered" alone missed the very sessions a job on a kept history
+//     starts with. One Attempt is one job (Runner.Run), so a set on it is "this
+//     job" at no cost: a session is out of it with the Attempt, however long
+//     or short it rested.
+//   - A session on an address it was not answered on is a stranger there and
+//     pays a check whether or not this job has seen it answered elsewhere. The
+//     exit is compared on the lease, as it stands when the request goes out,
+//     rather than read from sessions.Held.Moved: Moved is worked out when the
+//     session is put on a port, and a session the run moves on in the middle
+//     of a page (MoveOn) or the ladder carries to another address is not seen
+//     by it.
 //
-// The limit is asked first: a profile with no limit takes neither the keeper's
-// lock nor a context of its own. A port's own identity (no held session) is
-// never marked; the run that asks that way keeps no sessions to tell apart.
-func askingAs(ctx context.Context, lease *blanktrail.Lease, held *sessions.Held) context.Context {
-	if held == nil || !lease.Limited() || held.Admitted() {
+// A time since the last answer was the other candidate, and is not used: how
+// long a rest Google forgives is not known, and a threshold guessed at would be
+// wrong one way or the other, where "the first request of the job" is what the
+// guide reports as checked. A check met in the middle of a job by a session
+// already answered in it — Google's own rhythm — is not foreseen; it is met as
+// before, when the service says it is solving.
+//
+// The limit is asked first: a profile with no limit takes neither a lock nor a
+// context of its own, and nothing is written down for it. A port's own identity
+// (no held session) is never marked; the run that asks that way keeps no
+// sessions to tell apart.
+func (a *Attempt) askingAs(ctx context.Context, lease *blanktrail.Lease, held *sessions.Held) context.Context {
+	if held == nil || !lease.Limited() {
+		return ctx
+	}
+	a.mu.Lock()
+	at, seen := a.answered[held.ID]
+	a.mu.Unlock()
+	if seen && at == lease.Exit() {
 		return ctx
 	}
 	return blanktrail.FreshSession(ctx)
+}
+
+// answeredHere writes down that Google answered the session with a page in
+// this job, and through which exit, on a profile with a limit (askingAs). A
+// refusal is no answer: the session has not been let in, and its next request
+// may meet the check again.
+func (a *Attempt) answeredHere(lease *blanktrail.Lease, held *sessions.Held, err error) {
+	if err != nil || held == nil || !lease.Limited() {
+		return
+	}
+	exit := lease.Exit()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.answered == nil {
+		a.answered = map[int64]string{}
+	}
+	a.answered[held.ID] = exit
 }
 
 // searchFor is a kept session's search state, bound for this request to the port
