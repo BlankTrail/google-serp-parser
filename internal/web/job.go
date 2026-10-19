@@ -428,7 +428,12 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 		// somebody presses until they conclude the job cannot be stopped at all.
 		// Nor to a job already told to stop: pressed again it does nothing, and
 		// offered again it reads as a press that did not work.
-		CanStop: s.sup != nil && at.Running && !at.Stopping,
+		//
+		// A job waiting for exits is offered it too, and all the time: it is
+		// taken out of the queue for an instant every few seconds to be asked
+		// for again, and a button that came and went with that would be one
+		// nobody could press.
+		CanStop: s.sup != nil && (at.Running || at.NoExits) && !at.Stopping,
 		// A job whose list never finished arriving is not offered either. The
 		// queries it holds are a fraction of a list, and nothing will run them.
 		CanResume: s.sup != nil && sum.PlanReady &&
@@ -602,6 +607,11 @@ func stateOf(p progressJSON, listReady bool) string {
 		// Told to stop and still putting itself away, however far it had got:
 		// a job stopped while it was connecting is not connecting any more.
 		return "job.state.stopping"
+	case p.NoExits:
+		// Ahead of running: a job waiting for exits is taken out of the queue
+		// for the instant its pool is asked for again, and a page drawn in that
+		// instant would otherwise read "connecting" every few seconds.
+		return "job.state.noexits"
 	case p.Running && p.Done+p.Failed == 0:
 		// Running and nothing settled yet. What is happening is that the
 		// identities are being reached: a cold one meets a challenge on its first
@@ -646,6 +656,8 @@ func (s *Server) apiReshape(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
+		// A job waiting for exits may have just been given some.
+		s.exitsChanged()
 	}
 	err = s.store.Reshape(r.Context(), id,
 		countOf(r.FormValue("threads")), countOf(r.FormValue("tries")),

@@ -484,6 +484,9 @@ func (s *Server) saveProxies(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// A job waiting for exits starts now rather than at its next look, if
+	// this profile is the one it was waiting on.
+	s.exitsChanged()
 	// Back to the list, with the form gone. It has done what it was opened for,
 	// and a form left standing after a save is one the reader has to dismiss —
 	// and one that answers "which profile is this screen about" a second time.
@@ -502,6 +505,8 @@ func (s *Server) makeProfileDefault(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SetDefaultProfile(r.Context(), id); err != nil {
 		s.log.Error("a profile could not be made the default", "profile", id, "error", err)
 	}
+	// A job naming no profile runs on the default, so it may have exits now.
+	s.exitsChanged()
 	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
 }
 
@@ -521,6 +526,8 @@ func (s *Server) dropProfile(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// Its jobs fall back to the default, which may name exits.
+	s.exitsChanged()
 	http.Redirect(w, r, proxiesAt, http.StatusSeeOther)
 }
 

@@ -8,7 +8,6 @@ import (
 
 	"github.com/blanktrail/google-serp-parser/internal/blanktrail"
 	"github.com/blanktrail/google-serp-parser/internal/settings"
-	"github.com/blanktrail/google-serp-parser/internal/store"
 	"github.com/blanktrail/google-serp-parser/internal/testutil/fakebt"
 	"github.com/blanktrail/google-serp-parser/internal/web"
 )
@@ -71,7 +70,7 @@ func TestRaise_RunsASuggestionsJobOnPortsOfItsOwnRatherThanTheStandingOnes(t *te
 	fake.SetCA(testCAPEM)
 	opts := configured(t, settings.Settings{ControlURL: fake.URL(), APIKey: fake.Key(), HotPorts: 2})
 	saved, _ := opts.saved(io.Discard)
-	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: store.Profile{}, Threads: 1, Ports: 2,
+	standing, err := opts.dial(t.Context(), saved, web.Wanted{Profile: withExits(t), Threads: 1, Ports: 2,
 		Device: blanktrail.DeviceDesktop})
 	if err != nil {
 		t.Fatalf("opening the standing identities: %v", err)
@@ -80,7 +79,7 @@ func TestRaise_RunsASuggestionsJobOnPortsOfItsOwnRatherThanTheStandingOnes(t *te
 	standing.Search.KeepWarm()
 	warm := &warmSet{pool: standing.Search, device: blanktrail.DeviceDesktop, profile: 1}
 	raise := opts.raise(saved, false, warm)
-	got, err := raise(t.Context(), web.Wanted{Profile: store.Profile{ID: 1, Name: "Default"}, Ports: 1, Threads: 1,
+	got, err := raise(t.Context(), web.Wanted{Profile: withExitsAs(t, 1), Ports: 1, Threads: 1,
 		Device: blanktrail.DeviceDesktop, KeepAlive: true})
 	if err != nil {
 		t.Fatalf("raising a suggestions job: %v", err)

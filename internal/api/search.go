@@ -24,8 +24,14 @@ var ErrTooBusy = errors.New("api: too many searches at once")
 // one may well be answered next time.
 var ErrTookTooLong = errors.New("api: the search did not finish in time")
 
-// errNoSearcher is returned by a server that was given nothing to search with.
-var errNoSearcher = errors.New("api: this server has nothing to search from")
+// ErrNoSearcher is returned by a server that was given nothing to search with,
+// and by a Searcher that has nothing to search with at the moment — the
+// identities it searches through are not up yet. Either way the caller is told
+// the server can search nothing, rather than that a search failed.
+var ErrNoSearcher = errors.New("api: this server has nothing to search from")
+
+// errNoSearcher is ErrNoSearcher under the name this file has always used.
+var errNoSearcher = ErrNoSearcher
 
 // defaultSearchDeadline is how long one search may take when nobody says
 // otherwise.

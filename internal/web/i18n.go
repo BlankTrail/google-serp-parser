@@ -112,7 +112,11 @@ var catalogue = map[Lang]map[string]string{
 		"job.state.starting":   "connecting",
 		"job.state.running":    "running",
 		"job.state.waiting":    "waiting its turn",
-		"job.state.stopping":   "stopping",
+		// A job whose proxy profile names nowhere to go out through. It is kept in
+		// the queue rather than failed, and starts by itself once the profile
+		// names exits, so the line says what to do and not that anything broke.
+		"job.state.noexits":  "waiting for exits: its proxy profile names none — add them on the Proxies screen",
+		"job.state.stopping": "stopping",
 		// Said of a job whose file stopped arriving. It names what happened and
 		// what follows from it, and it judges nothing: the queries that did arrive
 		// are there to be looked at.
@@ -484,10 +488,15 @@ var catalogue = map[Lang]map[string]string{
 		"notice.settings": "Open the settings",
 
 		// The exits a job runs through when it names none. A profile with nothing
-		// in it is what a machine has on the day it is installed, and a run on it
-		// goes out from the address the operator is sitting at.
+		// in it is what a machine has on the day it is installed. A job on it does
+		// not go out from the address the operator is sitting at — that is what
+		// this line said once, and it stopped being true when a job came to run
+		// on sessions, which need an address: it waits in the queue, and starts
+		// on its own once the profile names somewhere to go out through. A
+		// search suggestions job keeps no sessions and still goes out directly,
+		// so the line says which jobs wait.
 		"notice.profile.none":  "There is no proxy profile, so a job has nothing to go out through.",
-		"notice.profile.empty": "The default proxy profile names no exits, so a job would go out from this machine's own address.",
+		"notice.profile.empty": "The default proxy profile names no exits, so its search jobs wait in the queue and do not run until exits are added to it on the Proxies screen; search suggestion jobs go out directly.",
 		"notice.profile.press": "Set the exits up",
 
 		// The lights. The switch draws two marks and no words, so this is the name
@@ -783,6 +792,7 @@ var catalogue = map[Lang]map[string]string{
 		"job.state.starting":   "подключается",
 		"job.state.running":    "выполняется",
 		"job.state.waiting":    "ждёт очереди",
+		"job.state.noexits":    "ждёт выходов: в его профиле прокси они не указаны — добавьте их на экране «Прокси»",
 		"job.state.stopping":   "останавливается",
 
 		"job.state.listunfinished": "список загружен не полностью, задание выполняться не будет",
@@ -1126,7 +1136,7 @@ var catalogue = map[Lang]map[string]string{
 		"notice.settings": "Открыть настройки",
 
 		"notice.profile.none":  "Профилей прокси нет — заданию не через что выходить.",
-		"notice.profile.empty": "В профиле по умолчанию не указаны выходы — задание пойдёт с адреса этой машины.",
+		"notice.profile.empty": "В профиле по умолчанию не указаны выходы — его поисковые задания ждут в очереди и не запустятся, пока на экране «Прокси» в него не добавят выходы; задания подсказок идут напрямую.",
 		"notice.profile.press": "Настроить выходы",
 
 		"tour.title":        "Быстрый старт",

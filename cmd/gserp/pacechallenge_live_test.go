@@ -102,6 +102,7 @@ func TestPace_LiveWhetherRestingBuysRequestsBeforeAChallenge(t *testing.T) {
 	}
 	want, err := o.dial(ctx, saved, web.Wanted{Profile: theFirstProfile(saved, true), Threads: 1, Ports: ports, Device: blanktrail.DeviceDesktop})
 	if err != nil {
+		skipWithoutExits(t, err)
 		t.Fatalf("opening the identities: %v", o.clean(err.Error()))
 	}
 	pool := want.Search

@@ -4,6 +4,7 @@ package blanktrail
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -397,6 +398,16 @@ func WithClock(now func() time.Time) RotorOption {
 	}
 }
 
+// ErrNoUpstreams is what NewRotor answers, wrapped, for a source that was read
+// and holds not one usable address: empty, or every line of it refused.
+//
+// It is told apart from a source that could not be read at all because the two
+// call for different things. A list that will not load is a fault somebody has
+// to look at; a list that loads with nothing in it is a list nobody has filled
+// in yet, and whoever raises ports on it can wait for it to be filled rather
+// than give up.
+var ErrNoUpstreams = errors.New("blanktrail: the upstream source holds no usable proxies")
+
 // NewStaticRotor rotates over a fixed list with no background refresh.
 func NewStaticRotor(ups []Upstream, opts ...RotorOption) *Rotor {
 	return newRotor(ups, Source{}, opts...)
@@ -410,7 +421,7 @@ func NewRotor(ctx context.Context, src Source, opts ...RotorOption) (*Rotor, err
 		return nil, err
 	}
 	if len(ups) == 0 {
-		return nil, fmt.Errorf("blanktrail: upstream source %q yielded no usable proxies", src.Location)
+		return nil, fmt.Errorf("%w: upstream source %q yielded no usable proxies", ErrNoUpstreams, src.Location)
 	}
 	r := newRotor(ups, src, opts...)
 	if src.Refresh > 0 {

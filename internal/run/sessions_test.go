@@ -305,3 +305,58 @@ func TestAttempt_AShellBlamesTheAddressAndTakesTheSessionOffIt(t *testing.T) {
 		t.Error("the address was not blamed for a check it could not pass")
 	}
 }
+
+func TestRunner_WaitsOnPortsWithNoExitWithoutAskingTheServiceAnything(t *testing.T) {
+	// A profile whose list was never set up has ports that go out directly, and
+	// a session needs an address. Seen on 2026-10-19: a job of twenty threads on
+	// such a profile sent the service about fifteen thousand rotations and as
+	// many configurations in two minutes, two for every time a thread found
+	// nowhere to put a session, until somebody stopped it. A thread with nowhere
+	// to go waits — the run's convention for "no address is free" — and the
+	// waiting costs the service nothing.
+	o := newCookieOrigin(t, func(int) string { return serpBody("example.com") })
+	const threads = 20
+	f := poolFacing(t, o.addr(), threads, inSessions, func(c *blanktrail.PoolConfig) {
+		c.Channels = nil // nothing to go out through but this machine
+		c.Sleep = nil    // the run's own waits, as they are
+	})
+	before := len(f.Fake.Requests())
+	ramp := NewRamp(time.Minute)
+	r := &Runner{Pool: f.Pool, Threads: threads, Keeper: sessions.NewKeeper(sessions.NewMemory()),
+		Want: searchDesktop, Ramp: ramp}
+	var queries []google.Query
+	for i := range 40 {
+		queries = append(queries, usQuery("q"+strconv.Itoa(i)))
+	}
+
+	// The deadline is what ends the run, with or without the fix: a run that
+	// waits is a run that waits, and this one has to come back to be counted.
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	rep := r.Run(ctx, Job{Queries: queries})
+
+	calls := map[string]int{}
+	total := 0
+	for _, req := range f.Fake.Requests()[before:] {
+		if strings.Contains(req.Path, "/api/v1/port/") {
+			calls[req.Method+" "+req.Path[strings.LastIndexByte(req.Path, '/'):]]++
+			total++
+		}
+	}
+	// Measured before the fix: about 1100 of each in this second and a half.
+	// Opening the ports is done before the count begins; what is left is
+	// nothing, and the bound leaves room for a call a thread per run.
+	if total > threads {
+		t.Errorf("the run asked the service %d times about its ports while it had nowhere to go (%v), want at most %d",
+			total, calls, threads)
+	}
+	for i, res := range rep.Results {
+		if len(res.Pages) != 0 {
+			t.Errorf("query %d brought back %d pages with nowhere to send it", i, len(res.Pages))
+		}
+	}
+	// And the page says why: the run is short of addresses.
+	if !ramp.Ramping().Short {
+		t.Error("the run does not say it is short of addresses")
+	}
+}
